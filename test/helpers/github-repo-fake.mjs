@@ -11,7 +11,7 @@ const iso = ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acme', issues = 200, now = () => Date.parse('2026-11-07T12:00:00Z'), limit = 5000 } = {}) {
   const repo = repository.toLowerCase();
   const f = { repo, owner, now, limit, remaining: limit, graphqlRemaining: limit, resetAt: Math.floor(now() / 1000) + 3600,
-    calls: [], issues: new Map(), nextComment: 900000, nextEvent: 700000, linkBumpsUpdate: false, failRest: null, failRead: null };
+    branches: new Map([['main', 'base-head']]), contents: new Map(), calls: [], issues: new Map(), nextComment: 900000, nextEvent: 700000, linkBumpsUpdate: false, failRest: null, failRead: null };
   const url = n => `https://github.com/${repo}/issues/${n}`;
   const touch = issue => { issue.updated = Math.max(f.now(), issue.updated + 1000); };
   f.add = (n, extra = {}) => {
@@ -73,13 +73,34 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     const [path, query = ''] = endpoint.split('?'), params = new URLSearchParams(query);
     const route = path.startsWith(`repos/${repo}`) ? path.slice(`repos/${repo}`.length) : null;
     if (route === null) return { status: 404, body: { message: 'Not Found' } };
-    if (route === '' && method === 'GET') return { status: 200, body: { full_name: repo, owner: { login: owner } } };
+    if (route === '' && method === 'GET') return { status: 200, body: { default_branch: 'main', full_name: repo, owner: { login: owner } } };
+    if (route?.startsWith('/git/ref/heads/') && method === 'GET') {
+      const branch = decodeURIComponent(route.slice('/git/ref/heads/'.length));
+      return f.branches.has(branch) ? { status: 200, body: { object: { sha: f.branches.get(branch) } } } : { status: 404, body: {} };
+    }
+    if (route === '/git/refs' && method === 'POST') {
+      const data = JSON.parse(input), branch = data.ref.replace('refs/heads/', '');
+      if (f.branches.has(branch)) return { status: 422, body: {} };
+      f.branches.set(branch, data.sha); return { status: 201, body: { ref: data.ref } };
+    }
+    if (route === '/contents/.pdd-reviewer.json') {
+      const data = input ? JSON.parse(input) : {}, branch = data.branch ?? params.get('ref');
+      if (!f.branches.has(branch)) return { status: 404, body: {} };
+      const file = f.contents.get(branch);
+      if (method === 'GET') return file ? { status: 200, body: file } : { status: 404, body: {} };
+      if (method === 'PUT') {
+        if ((file?.sha ?? undefined) !== data.sha) return { status: 409, body: {} };
+        const saved = { sha: createHash('sha256').update(data.content).digest('hex'), encoding: 'base64', content: data.content };
+        f.contents.set(branch, saved); return { status: file ? 200 : 201, body: { content: saved } };
+      }
+    }
     if (route === '/collaborators' && method === 'GET') return { status: 200, ...page(endpoint, [{ login: owner, permissions: { admin: true, maintain: true, push: true } }]) };
     let m = /^\/collaborators\/([^/]+)\/permission$/.exec(route);
     if (m) return { status: 200, body: { permission: decodeURIComponent(m[1]).toLowerCase() === owner ? 'admin' : 'read' } };
     if (route === '/issues' && method === 'GET') {
       let list = live();
       if (params.get('state') !== 'all') list = list.filter(issue => issue.state === 'open');
+      if (params.get('labels')) list = list.filter(issue => params.get('labels').split(',').every(label => issue.labels.includes(label)));
       if (params.get('since')) list = list.filter(issue => issue.updated >= Date.parse(params.get('since')));
       list = params.get('sort') === 'updated' ? list.sort((a, b) => b.updated - a.updated || b.number - a.number) : list.sort((a, b) => b.number - a.number);
       return { status: 200, ...page(endpoint, list.map(row)) };
@@ -153,7 +174,8 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
       f.remaining--; call.status = 500;
       return { code: 1, stdout: [...headers(500), '', JSON.stringify({ message: 'Unavailable' })].join('\r\n'), stderr: 'gh: HTTP 500\n' };
     }
-    const reply = rest(method, endpoint, input), text = JSON.stringify(reply.body);
+    if (f.beforeRest) await f.beforeRest(call, input);
+    const reply = endpoint === 'user' ? { status: 200, body: { login: owner } } : rest(method, endpoint, input), text = JSON.stringify(reply.body);
     const etag = method === 'GET' && reply.status === 200 ? `W/"${createHash('sha256').update(text).digest('hex').slice(0, 16)}"` : undefined;
     if (etag && sent === etag) { call.status = 304; return { code: 1, stdout: [...headers(304, { etag }), '', ''].join('\r\n'), stderr: 'gh: HTTP 304\n' }; }
     f.remaining--; call.status = reply.status;

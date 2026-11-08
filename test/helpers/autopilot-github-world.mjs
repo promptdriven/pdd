@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createGithubRepoFake } from './github-repo-fake.mjs';
 
-export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../src', import.meta.url)), issues = 200, repository = 'acme/widgets', github, start = Date.parse('2026-11-07T12:00:00Z') } = {}) {
+export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../src', import.meta.url)), issues = 200, repository = 'acme/widgets', github, sharedGithub, machine, start = Date.parse('2026-11-07T12:00:00Z') } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-github-world-'));
   const home = join(dir, 'home'), stateRoot = join(home, 'state'), checkout = join(dir, 'repo');
   mkdirSync(checkout); mkdirSync(home);
@@ -19,7 +19,7 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
   git('add', '.'); git('-c', 'user.email=test@example.com', '-c', 'user.name=test', 'commit', '-qm', 'init');
   const cwd = realpathSync(checkout), env = { HOME: home, PATH: process.env.PATH };
   const w = { dir, cwd, home, stateRoot, repository, time: start, agent: 'idle', agentStarted: false, prompts: [], requests: [], resume: null, warnings: [] };
-  w.github = createGithubRepoFake({ repository, owner: repository.split('/')[0], issues, now: () => w.time });
+  w.github = sharedGithub ?? createGithubRepoFake({ repository, owner: repository.split('/')[0], issues, now: () => w.time });
   const runGit = (args, at) => { try { return { code: 0, stdout: execFileSync('git', args, { cwd: at ?? cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' }; } catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }; } };
   const run = async (command, args, options = {}) => {
     if (command === 'git') return runGit(args, options.cwd);
@@ -43,7 +43,7 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
     }
     return {};
   };
-  w.ports = { stateRoot, now: () => w.time, sleep: async () => {}, readRunProgress: async () => [], warn: text => w.warnings.push(text),
+  w.ports = { stateRoot, machine, now: () => w.time, sleep: async () => {}, readRunProgress: async () => [], warn: text => w.warnings.push(text),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [], timer: async () => true,
     run, herdr, wait: async () => {}, armCoordinatorIdle: (_identity, options) => { w.resume = options.resume; } };
   const launcher = await import(pathToFileURL(join(src, 'autopilot-launcher.mjs')).href);

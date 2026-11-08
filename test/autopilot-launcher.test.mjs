@@ -728,27 +728,27 @@ test('status reports the saved coordinator state without waking it or querying G
   }
 });
 
-test('status shows a working saved coordinator after stop without restarting or querying GitHub', async t => {
+test('status shows a working saved coordinator after stop without restarting and with read-only fleet observation', async t => {
   const f = await fixture(t); await f.invoke('start'); await f.invoke('stop');
   f.agentStatus = 'working';
   const timers = f.timers.length, prompts = f.prompts.length, herdrCalls = f.herdrCalls.length;
-  const gitHubCalls = f.runs.filter(([command]) => command === 'gh').length;
+  const beforeStatus = f.runs.length;
   const status = await f.invoke('status');
   assert.equal(status.exitCode, 0);
   assert.match(status.message, /Autopilot disabled/); assert.match(status.message, /timer inactive/);
   assert.match(status.message, /Herdr running/); assert.match(status.message, /coordinator working/);
   assert.ok(f.timers.slice(timers).every(([action]) => action === 'status'));
   assert.ok(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'agent' && args[1] === 'get'));
-  assert.equal(f.runs.filter(([command]) => command === 'gh').length, gitHubCalls);
+  assert.ok(f.runs.slice(beforeStatus).filter(([command]) => command === 'gh').every(([, args]) => !args.includes('--method') || args[args.indexOf('--method') + 1] === 'GET'));
   assert.equal(f.prompts.length, prompts);
   assert.equal(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'pane' && args[1] === 'run'), false);
 });
 
-test('status shows a missing saved coordinator after stop without restarting or querying GitHub', async t => {
+test('status shows a missing saved coordinator after stop without restarting and with read-only fleet observation', async t => {
   const f = await fixture(t); await f.invoke('start'); await f.invoke('stop');
   f.agentStarted = false;
   const timers = f.timers.length, prompts = f.prompts.length, herdrCalls = f.herdrCalls.length;
-  const gitHubCalls = f.runs.filter(([command]) => command === 'gh').length;
+  const beforeStatus = f.runs.length;
   const status = await f.invoke('status');
   assert.equal(status.exitCode, 0);
   assert.match(status.message, /Autopilot disabled/); assert.match(status.message, /timer inactive/);
@@ -757,7 +757,7 @@ test('status shows a missing saved coordinator after stop without restarting or 
   assert.doesNotMatch(status.message, /coordinator (?:working|starting|idle|blocked|done)/);
   assert.ok(f.timers.slice(timers).every(([action]) => action === 'status'));
   assert.ok(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'agent' && args[1] === 'get'));
-  assert.equal(f.runs.filter(([command]) => command === 'gh').length, gitHubCalls);
+  assert.ok(f.runs.slice(beforeStatus).filter(([command]) => command === 'gh').every(([, args]) => !args.includes('--method') || args[args.indexOf('--method') + 1] === 'GET'));
   assert.equal(f.prompts.length, prompts);
   assert.equal(f.herdrCalls.slice(herdrCalls).some(args => args[0] === 'pane' && args[1] === 'run'), false);
 });

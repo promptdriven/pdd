@@ -508,6 +508,10 @@ but that issue's detail coverage remains false. Mark each resource only after a
 complete successful read; failed context, execution, relationship, timeline or
 authority observation remains unknown. Never infer coverage for a legacy packet.
 
+Winning claims with a known comment author also expose optional `login`, the
+GitHub author's login. This is fleet display and shared-login evidence only;
+coordinator and machine identity still determine ownership.
+
 ## Dependencies
 
 - [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.

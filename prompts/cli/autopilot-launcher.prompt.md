@@ -12,6 +12,32 @@ issues (argv issue references), and optional runs text. Return `{exitCode,messag
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
 
+## Several machines on one repository
+
+The [reviewer lease](autopilot-reviewer.prompt.md) owns repository review authority.
+Pass the saved machine/coordinator identity to intake. Cache an authenticated
+login only after this coordinator holds the lease; a foreign reviewer login is
+never this coordinator's login. The native `machine` port may supply the hostname
+for controlled verification; the default is the actual hostname. Include its observed lease
+as `reviewer` in coordinator packets; a null or foreign reviewer allows issue work
+under existing claims, but no sorting, grouping or dependency analysis. Renew the
+lease on ordinary ticks, including ticks that defer intake for a low budget. At
+the reserve floor, preserve claim heartbeats and let the reviewer lease expire;
+pass the current reserve guard to the lease on both intake routes. The lease's
+mutation guard applies to acquisition and renewal. Stopped or Off launchers do not renew.
+
+Repository status reads current GitHub claims and the lease and shows all live
+machine/coordinator pairs, their held issues, last seen times and the reviewer.
+Without a saved repository identity, resolve the current checkout's GitHub origin
+for this read, without starting or saving a launcher. Select open `pdd:working`
+issues before reading their claim details; unclaimed issues need no detail read.
+A failed observation shows an unavailable repository view, never an empty fleet.
+`status --all` remains the local machine-only view. From live claims plus the
+lease, warn once per saved launcher when multiple coordinators share a GitHub
+login. This warning does not grant ownership and uses the existing state save
+boundary. Status is read-only and may show the warning without persisting it;
+the tick records the once-only warning. The GitHub usage ledger remains local.
+
 ## Native Codex startup
 
 For a selected Codex launcher, apply invocation-only config overrides that trust
@@ -205,12 +231,15 @@ timer definition, leaving the current step to
 finish. Stop checks and removes the owned timer even if saved installation state
 is absent or false, including after a failed start. Repeated stop is harmless. Status reads local state and timer activity;
 show enabled/disabled, timer activity, Herdr availability, coordinator state,
-repo, the folder Autopilot works in, agent, and next tick (or none), without waking AI or querying GitHub.
+repo, the folder Autopilot works in, agent, and next tick (or none), without waking AI.
+The repository fleet observation uses the live reads defined above.
 When the [GitHub call ledgers](#github-budget) on this machine have a call in the
 last hour, status adds one line, after any alert line: `githubStatusLine` of
 [GitHub calls](github-calls.prompt.md#status-line) with this repository's usage,
 the machine usage and the budget with the settings' `github` value. It reads the
-local ledgers only; an error adds nothing.
+local ledgers only; an error adds nothing. Capture this usage and remaining
+allowance before the live fleet reads of this status call. Those reads enter the
+ledger for later observations.
 Whenever Herdr is available, inspect the saved coordinator with the existing
 `agent get` operation, including when the timer is inactive. Confirm that its pane,
 workspace, repository path, provider and any saved terminal identity match saved local state. Report a missing,
@@ -961,6 +990,7 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 ## Dependencies
 
 - [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
+- [Shared reviewer](autopilot-reviewer.prompt.md): required native generation and verification context for the lease and repository machine view.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 

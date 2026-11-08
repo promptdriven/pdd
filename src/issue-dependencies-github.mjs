@@ -962,7 +962,7 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
   const server = heartbeatTime(match);
   const lastSeen = Number.isFinite(server) && Number.isFinite(now) ? Math.min(server, now) : server;
   return facts({ issue: key, owner: metadata.coordinatorId, coordinatorId: metadata.coordinatorId, machine: metadata.machine,
-    commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);
+    login: comment.user?.login ?? winner.actor.login, commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);
 }
 
 // The owning coordinator sets one top-level tick member (a time) of its own winning

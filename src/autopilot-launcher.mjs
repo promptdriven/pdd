@@ -1,4 +1,5 @@
 // Implements prompts/cli/autopilot-launcher.prompt.md.
+import { reviewerLease, repositoryMachines, repositoryMachineLines } from './autopilot-reviewer.mjs';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -70,6 +71,22 @@ function portsFor(state, ports) {
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
+async function repositoryView(state, p) {
+  const execFile = async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options });
+  const ports = createDependencyReadPorts({ cwd: state.cwd }, { execFile, env: p.env, autopilotStateRoot: p.stateRoot, now: p.now });
+  const issues = []; let cursor = `repos/${state.repo}/issues?state=open&labels=pdd%3Aworking&per_page=100`;
+  do {
+    const page = JSON.parse((await ports.github.page({ repository: state.repo, kind: 'issues', issue: '', cursor, purpose: 'claims', safety: true })).json);
+    if (!Array.isArray(page.items)) throw Error('Claims unavailable');
+    issues.push(...page.items.filter(row => !row.pull_request).map(row => row.html_url)); cursor = page.next ?? '';
+  } while (cursor);
+  const owners = issues.length ? JSON.parse((await ports.owners.read({ repository: state.repo, issues })).json) : { claims: [] };
+  const lease = await reviewerLease({ repository: state.repo }, { execFile, cwd: state.cwd, now: p.now });
+  if (lease.state === 'unknown') throw Error('Lease unavailable');
+  return repositoryMachines({ claims: owners.claims, lease: lease.lease }, p.now());
+}
+const sharedLoginWarning = view => view.sharedLogins.length ? `Warning: several Autopilots share GitHub login ${view.sharedLogins.join(', ')}; their API limit is shared and people cannot be distinguished from agents by login.` : '';
+
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
@@ -520,7 +537,7 @@ function message(state, issues, timeRules = []) {
   const workflow = { pddBin: join(state.packageRoot ?? dirname(dirname(self)), 'bin', 'pdd.mjs'), agent: state.agent.kind, home: state.environment?.HOME, configHome: path ? { variable, path } : null };
   const start = state.startAction?.mode === state.currentMode && state.startAction?.repository === state.repo ? state.startAction : null;
   const authority = start ? `The operator invoked pdd autopilot start for ${state.repo} in ${state.currentMode} mode. ${state.currentMode === 'auto' ? 'This action establishes scope for ordinary eligible work and automatic merge under the repository review, testing, strict approval and other rules.' : 'Follow observe mode limits.'} This is an operator action, not a quoted person reply or checker approval. Use the existing supported approval routes for the actual action where applicable; never treat it as a later person reply.\n` : '';
-  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}), ...(runtimePacket(state.runtime) ? { runtime: runtimePacket(state.runtime) } : {}) })}\n`;
+  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. Only the repository reviewer named in the packet may sort, group or analyse dependencies. Other coordinators reuse saved reviews and do issue work under their own claims. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ reviewer: state.reviewer ?? null, repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}), ...(runtimePacket(state.runtime) ? { runtime: runtimePacket(state.runtime) } : {}) })}\n`;
 }
 function coordinatorEnvelope(state) {
   return { version: 'pdd.autopilot-coordinator.v1', repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activation: state.activatedAt, ...(state.runs === undefined ? {} : { runs: state.runs }) };
@@ -1108,7 +1125,7 @@ async function runTick(stateFile, ports, completion) {
     if (!state.coordinatorId || !state.machine) {
       const release = await claimAdmission(state, p);
       if (!release) throw Error('Timed out waiting for automatic admission; retry.');
-      try { state = readAutopilotState(stateFile, null, ports); if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state, ports); }
+      try { state = readAutopilotState(stateFile, null, ports); if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= p.machine ?? hostname(); save(stateFile, state, ports); }
       finally { release(); }
     }
     const config = await settings(state, p);
@@ -1229,6 +1246,8 @@ async function runTick(stateFile, ports, completion) {
       && Array.isArray(savedIntake.eligible) && Array.isArray(savedIntake.claims);
     let intake;
     if (deferIntake) {
+      const lease = await reviewerLease({ repository: state.repo, identity: { ...state, login: state.reviewerLogin ?? '' }, acquire: true }, { cwd: state.cwd, now: p.now, githubFloor, execFile: (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
+      state.reviewer = lease.lease; if (lease.held) state.reviewerLogin = lease.lease.login;
       intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, queued: [], skipped: [] };
       p.warn(`GitHub budget low: Autopilot on this machine used ${budget.used} of ${budget.allowed} calls (${budget.share}%) in the last hour; the dependency re-sync waits until ${new Date(savedIntake.at + LOW_BUDGET_INTAKE_EVERY).toISOString()}.`);
     } else {
@@ -1237,7 +1256,7 @@ async function runTick(stateFile, ports, completion) {
       try {
         intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
           { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-          { ...ports, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+          { ...ports, reviewerCoordinator: { machine: state.machine, coordinatorId: state.coordinatorId, login: state.reviewerLogin ?? '' }, onReviewer: result => { state.reviewer = result.lease; if (result.held) state.reviewerLogin = result.lease.login; }, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
       } finally { etags.save(); }
       try { p.dependencySnapshot = snapshotStore.load(); } catch { p.dependencySnapshot = null; }
       if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {
@@ -1251,6 +1270,8 @@ async function runTick(stateFile, ports, completion) {
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
+    const fleet = repositoryMachines({ claims: observedClaims, lease: state.reviewer }, p.now());
+    if (!state.sharedLoginWarned && fleet.sharedLogins.length) { p.warn(sharedLoginWarning(fleet)); state.sharedLoginWarned = true; }
     // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
     // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
     const self = { coordinatorId: state.coordinatorId, machine: state.machine }, limitedFor = claim => takeoverLimited(claim, self);
@@ -1495,7 +1516,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime']) {
+        for (const key of ['retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','reviewer','reviewerLogin','sharedLoginWarned']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
@@ -1695,6 +1716,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
     p = portsFor(state, { ...ports, env: input.env });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
     if (command === 'status') {
+      if (!state.repo) {
+        try { state.repo = githubOriginRepository(await p.checked('git', ['remote', 'get-url', 'origin'])); }
+        catch { /* The repository view reports unavailable below. */ }
+      }
       const timerActive = Boolean(await timer('status', state, p));
       let serverRunning = false;
       try { serverRunning = (await herdr(['status', 'server', '--json'], p)).running === true; } catch { /* Report unavailable below. */ }
@@ -1710,7 +1735,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           ? '\nCoordinator relaunch held: the launch settings changed again after a relaunch for the same settings, so the current chat stays and gets work. Close the coordinator pane in Herdr to start a fresh chat with the current settings.' : '');
       let alerts = '';
       try { alerts = (ports.alertStatusLine ?? alertStatusLine)({ repo: state.repo, env: p.env }, { stateRoot: ports.stateRoot }); } catch { /* Alerts never change status. */ }
-      // The GitHub calls of the last hour, from the local ledgers only: status makes no GitHub call.
+      // Usage accounting stays local; the repository fleet below is read live.
       let github = '';
       try {
         if (state.repo) {
@@ -1723,9 +1748,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
           }
         }
       } catch { /* The GitHub line never changes status. */ }
+      let fleet;
+      try { const view = await (p.repositoryView ?? repositoryView)(state, p); fleet = repositoryMachineLines(view); if (!state.sharedLoginWarned && view.sharedLogins.length) fleet += '\n' + sharedLoginWarning(view); }
+      catch { fleet = 'Repository machines: unavailable (GitHub claims or reviewer lease could not be read).'; }
       const readiness = await workflowReadiness(state, p);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}`);
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}\n${fleet}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state, ports); }
@@ -1784,7 +1812,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     state.activatedAt ??= new Date(p.now()).toISOString();
     if (!pendingCustody && previousProfile && JSON.stringify(previousProfile) !== JSON.stringify(profileBinding(state, p))) state.coordinatorId = randomUUID();
-    state.coordinatorId ??= randomUUID(); state.machine ??= hostname();
+    state.coordinatorId ??= randomUUID(); state.machine ??= p.machine ?? hostname();
     state.enabled = true; state.timerInstalled = true; state.nextTick = p.now() + INTERVAL;
     state.controlRevision = randomUUID();
     if (runs !== undefined) state.runs = Number(runs); else if (!pendingCustody) delete state.runs;

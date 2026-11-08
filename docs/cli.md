@@ -212,6 +212,35 @@ without a claim check and removes `pdd:working` when its run ends. A stopped
 launcher or `off` mode lets its claims expire after 4 hours. The heartbeat moves
 claimed issues to the top of "recently updated" every 30 minutes.
 
+### Several machines on one repository
+
+Each machine has its own coordinator id. GitHub issue claims keep one owner per
+issue. Other machines can work on different issues in the same repository.
+
+One machine holds the repository reviewer lease. It sorts and groups the backlog
+and does dependency reviews. Other machines reuse the saved GitHub reviews.
+The lease is a small `.pdd-reviewer.json` file on branch
+`pdd/autopilot-reviewer`. Acquisition and renewal use the current file SHA to
+resolve races. It needs write access to that branch. It renews after 30 minutes
+and expires after 90 minutes without renewal. A stopped or Off coordinator stops
+renewing. Another machine can then take over. Keep machine clocks synchronized.
+If renewal waits past expiry, it stops. A later acquisition gets a new generation.
+Review and dependency writes recheck authority after any admission wait.
+An unreadable or refused lease stops review work until it can be read again.
+Acquisition and renewal stop at the GitHub reserve floor, including when an earlier
+read crosses it. The existing claim heartbeat exception still applies.
+Existing issue claims expire under their own four-hour rule.
+
+`pdd autopilot status` reads live GitHub claims and the lease. It shows each
+machine and coordinator, their held issues, last seen times, and the reviewer.
+This view also works before local Autopilot startup. It resolves the repository
+from the checkout's origin and reads claim details for open `pdd:working` issues.
+A failed read shows that the repository view is unavailable. `status --all` shows
+only this machine's saved coordinators. The tick warns once when several live
+coordinators share one GitHub login. Their API allowance is shared, and the login
+does not distinguish a person from an agent. Machine and coordinator identity
+still determine ownership. Required checks and merge authority stay in effect.
+
 ### GitHub API budget
 
 Autopilot uses your own `gh` sign-in, so its GitHub calls use your hourly limit
@@ -246,6 +275,8 @@ GitHub calls in the last hour: 212 (dependencies 120, claims 14, issues 60, pull
 
 "Autopilot on this machine used 61" is the counted calls of this machine: the
 tick and the counted `pdd` commands, not the chats.
+The line shows usage before this status call reads the live repository view.
+Those reads are counted in later observations.
 
 A conditional read sends the ETag of the last reply. A `304` reply means that
 nothing changed, and GitHub does not count it against the limit. The tick, the
