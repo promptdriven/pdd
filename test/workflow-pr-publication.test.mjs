@@ -1000,7 +1000,8 @@ test('#2596 PR1 refresh removes a deleted runtime scenario from its contents des
 });
 
 for(const change of ['identical','prompt','dependency','deleted']) test(`#2596 selected-source receipt publication after ${change} content`, async t=>{
-  const f=fixture(t);
+  // Authored prompt changes publish through PR 1; PR 2 forbids prompt edits.
+  const f=fixture(t,{prompt:true});
   for(const folder of ['prompts','tests','user_stories']) cpSync(join(packageRoot,'test/fixtures/harbor',folder),join(f.root,folder),{recursive:true});
   const prompt=join(f.root,'prompts/place_order.prompt.md');
   writeFileSync(prompt,readFileSync(prompt,'utf8').replace('## Dependencies\n\nNone.', '## Dependencies\n\n- [Prices](prices.md): required runtime context.'));
