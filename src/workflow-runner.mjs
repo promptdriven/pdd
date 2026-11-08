@@ -1835,10 +1835,11 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   const codePr = label !== 'PR 1';
   // Keep ownership separate from the immutable run start and the bounded display.
   // The current merge-base excludes main's integrations before this publication.
-  let sourcePaths;
+  let sourcePaths, sourceHead;
   if (!codePr) {
-    const base = await git(p,run.root,'merge-base','HEAD',`refs/remotes/origin/${run.baseBranch}`);
-    sourcePaths = [...new Set([...(existing?.sourcePaths ?? []), ...(await rawGit(p,run.root,'diff','--name-only','-z',base,'HEAD')).split('\0').filter(Boolean)])].sort();
+    sourceHead = await git(p,run.root,'rev-parse','--verify','HEAD^{commit}');
+    const base = await git(p,run.root,'merge-base',sourceHead,`refs/remotes/origin/${run.baseBranch}`);
+    sourcePaths = [...new Set([...(existing?.sourcePaths ?? []), ...(await rawGit(p,run.root,'diff','--name-only','-z',base,sourceHead)).split('\0').filter(Boolean)])].sort();
   }
   // Publication custody must survive an unavailable informational inventory.
   const candidateHead = codePr ? await git(p,run.root,'rev-parse','--verify','HEAD^{commit}') : null;
@@ -1931,6 +1932,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
       return fail(`The local head changed during publication. Retain the work and run pdd workflow open ${run.number} prompt-pr to inspect prompt changes.`);
     p.say(`Pushing ${run.branch} to ${label}…`);
     const promptHead = codePr ? null : automatic?.head ?? await git(p,run.root,'rev-parse','--verify','HEAD^{commit}');
+    if (!codePr && promptHead !== sourceHead) return fail('The publication head changed after ownership selection. No source was pushed; retry prompt publication.');
     if (automatic) { const refused = await automatic.validate(); if (refused) return refused; }
     try {
       const reply = await p.execFile('git', ['push', 'origin', `${codePr ? candidateHead : promptHead}:refs/heads/${run.branch}`], { cwd: run.root });
@@ -1990,6 +1992,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
       : `pdd could not prepare ${label} (${causeOf(error)}). Fix it, then ${retry}.`;
     return fail([...lines, why].join('\n'));
   }
+  if (!codePr && intent.headSha !== sourceHead) return fail('The publication head changed after ownership selection. No source was pushed; retry prompt publication.');
   if (automatic) {
     const changedSource = await automatic.validate(); if (changedSource) return changedSource;
     if (intent.headSha !== automatic.head) return fail('The publication head changed after validation. Run done check again.');
