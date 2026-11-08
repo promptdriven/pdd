@@ -147,7 +147,7 @@ test('help describes current gates, readiness, approval and product defaults', a
   assert.match(rootHelp, /pdd never merges/);
 
   const setup = (await pdd(['setup', '--help'])).stdout;
-  assert.match(setup, /signed-in supported agent before setup actions/);
+  assert.match(setup, /available supported agent to pass its readiness probe before setup actions/);
   for (const agent of ['Codex', 'Claude', 'Gemini', 'agy']) assert.ok(setup.includes(agent));
   assert.match(setup, /Gemini readiness uses gemini --version, which does not verify sign-in/);
   assert.match(setup, /agy uses agy models/);

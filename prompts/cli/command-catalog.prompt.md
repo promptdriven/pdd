@@ -172,7 +172,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd autopilot auto  Set the repository Autopilot mode to auto.
   pdd autopilot trust NAME...  Add explicitly trusted GitHub names.
   pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
-  pdd setup  Require an available signed-in supported agent before setup actions (Codex, Claude, Gemini or agy); Gemini readiness uses gemini --version, which does not verify sign-in, and agy uses agy models. Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.
+  pdd setup  Require an available supported agent to pass its readiness probe before setup actions (Codex, Claude, Gemini or agy); Gemini readiness uses gemini --version, which does not verify sign-in, and agy uses agy models. Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.
 ```
 
 
