@@ -488,7 +488,7 @@ async function featureToPr1(t, promptText = 'Return two.\n', base, issueBody) {
   const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
   await done('understand', 'understood'); await done('visual', 'skipped');
   writeFileSync(join(run.root, 'feature.prompt.md'), promptText); mkdirSync(join(run.root, 'tests'));
-  writeFileSync(join(run.root, 'tests', 'value.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', criteria: [], initial_world: {}, steps: [] }));
+  writeEvidenceScenario(run.root);
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt, Story and tests');
   await done('prompt-story', 'Story and cases written');
   f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
@@ -797,6 +797,15 @@ async function approveLegacyStory(f) {
 }
 
 // 0.1.4 #13: the person tries the prompt and approves before PR 1 opens.
+// Valid source for saved-evidence fixtures. Their fake results test workflow evidence, not the interpreter.
+function writeEvidenceScenario(root,name='value') {
+  mkdirSync(join(root,'user_stories'),{recursive:true});mkdirSync(join(root,'tests'),{recursive:true});
+  const criterion='The value is two.';
+  writeFileSync(join(root,`user_stories/${name}.md`),`# Value\n## Acceptance criteria\n1. ${criterion}\n`);
+  writeFileSync(join(root,`tests/${name}.json`),JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:`user_stories/${name}.md`,
+    criteria:[{id:'AC1',text:criterion}],initial_world:{},steps:[{step_id:'value',entry_path:'feature.prompt.md',operation:'value',input:{},
+      checks:[{criterion_id:'AC1',target:'result',path:'/value',op:'equals',value:2}]}]}));
+}
 async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tried = 'Try: https://rt.example.test/s/TOKEN/' } = {}) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
   const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
@@ -808,7 +817,7 @@ async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tr
   assert.equal((await f.run()).exitCode, 0);
   const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
   await done('understand', 'ok'); writeFileSync(join(run.root, 'feature.prompt.md'), prompt);
-  if (tests) { mkdirSync(join(run.root, 'tests')); writeFileSync(join(run.root, 'tests', 'value.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', criteria: [], initial_world: {}, steps: [] })); }
+  if (tests) writeEvidenceScenario(run.root);
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt');
   await done('prompt-story', 'Story'); f.tick(); await approveLegacyStory(f);
   // A later revision must be reviewed at the prompt-pr gate.
@@ -2700,7 +2709,7 @@ async function featureWithOwnResults(t, { results = true } = {}) {
   const done = async (step, input) => { f.tick(); const out = await stepDone({ step, ...input, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
   await done('understand', { summary: 'understood' }); await done('visual', { summary: 'skipped' });
   writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two.\n'); mkdirSync(join(run.root, 'tests'));
-  writeFileSync(join(run.root, 'tests', 'value.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', criteria: [], initial_world: {}, steps: [] }));
+  writeEvidenceScenario(run.root);
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt, Story and tests');
   await done('prompt-story', { summary: 'Story and cases written' });
   f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
@@ -2721,8 +2730,8 @@ test('2904: done check attaches pdd\'s own latest pdd test and pdd lint results;
   const typed = 'Prompt tests (value): ✓ 8 of 8 criteria · 20/20 checks · 2 AI calls\nPublic full suite: 4085 passed.';
   const check = await done('check', { summary: typed });
   assert.match(check.message, /^pdd recorded its own results with this step:$/m);
-  assert.match(check.message, /^pdd result: pdd test \(batch 20261027-180000-abcd, 2026-10-27T18:00:00Z, source (?:changed|unknown), engine abcdef123456, model model-one\): Prompt tests: no verdict · 0 of 8 criteria · 0\/0 checks · 1 refused · 0 AI calls; Prompt tests \(value\): no verdict · 0 of 8 criteria · 1 refused$/m);
-  assert.match(check.message, /^pdd result: pdd lint \(batch 20261027-175900-lint, 2026-10-27T17:59:00Z\): Lint: 1 of 1 tests pass\. 0 AI calls\.$/m);
+  assert.match(check.message, /^pdd result: pdd test \(batch 20261027-180000-abcd, 2026-10-27T18:00:00Z, source (?:changed|unknown), engine abcdef123456, model model-one\): Prompt tests: no verdict · 0 of 8 criteria · 0\/0 checks · 1 refused · 0 AI calls; tests\/value\.json: passed; Prompt tests \(value\): no verdict · 0 of 8 criteria · 1 refused$/m);
+  assert.match(check.message, /^pdd result: pdd lint \(batch 20261027-175900-lint, 2026-10-27T17:59:00Z\): Lint: 1 of 1 tests pass\. 0 AI calls\. tests\/value\.json: passed$/m);
   assert.match(check.message, /summary is saved as an agent note/);
   assert.doesNotMatch(check.message, /other folder|✗ 0 of 1/);
   const saved = f.record().done.check;
@@ -2773,7 +2782,7 @@ test('2904: with no agent summary, the step record and the PR trace pdd\'s resul
   assert.equal(saved.pddResults[1].state, 'unavailable');
   await done('try', { skipped: 'No person at the Try step.' });
   const top = pddPart(f.prs[0].body).split('\n')[0];
-  assert.match(top, /^pdd result: pdd test \(batch 20261027-180000-abcd, [^)]*request 11111111-1111-4111-8111-111111111111\): Prompt tests: ✓ 1 of 1 criteria · 1\/1 checks · 1 AI call; Report: https:\/\/rt\.example\.test\/r\/actual-report \(report links expire after 7 days\)$/);
+  assert.match(top, /^pdd result: pdd test \(batch 20261027-180000-abcd, [^)]*request 11111111-1111-4111-8111-111111111111\): Prompt tests: ✓ 1 of 1 criteria · 1\/1 checks · 1 AI call; tests\/value\.json: passed; Report: https:\/\/rt\.example\.test\/r\/actual-report \(report links expire after 7 days\)$/);
 });
 
 test('2904: done check with only a stale or fake proof warns, shows it plainly, says pdd:no-verdict and goes on', async t => {
@@ -2826,14 +2835,16 @@ test('2904: status counts Stories from pdd\'s own recorded pdd test results, nev
   assert.doesNotMatch(shown, /Stories pass/);
   assert.equal(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories.none, true);
   // pdd's own check fails one of two Stories; then a partial re-check passes it. Both batches count, by Story.
-  const tests = ['tests/value.json'], sha = captureSource(run.root, { tests, appMap: null }).sha256;
-  const row = { test: 'tests/value.json', story: 'user_stories/value.md', state: 'failed', request_ids: [] };
-  saveBatch(stateDir, '20261027-180000-aaaa', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check', source_sha256: sha, rows: [row] },
+  writeEvidenceScenario(run.root,'other');
+  const tests = ['tests/value.json','tests/other.json'], sha = captureSource(run.root, { tests, appMap: null }).sha256;
+  const row = { test: 'tests/value.json', story: 'user_stories/value.md', state: 'passed', request_ids: [] };
+  const other={test:'tests/other.json',story:'user_stories/other.md',state:'failed',request_ids:[]};
+  saveBatch(stateDir, '20261027-180000-aaaa', { root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check', source_sha256: sha, rows: [row,other] },
     { summary_line: 'Prompt tests: ✗ 1 of 3 criteria', rows: [{ summary_line: 'Prompt tests (value): ✓ 1 of 1 criteria' }, { summary_line: 'Prompt tests (other): ✗ 0 of 2 criteria' }] });
   await done('check', { summary: 'Prompt tests (value): ✓ 1 of 1 criteria; Prompt tests (other): ✓ 2 of 2 criteria' });
   shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
   assert.match(shown, /^Stories: 1 of 2 Stories pass \(✗ other\)$/m, 'the typed ✓ for other does not count');
-  saveBatch(stateDir, '20261027-190000-bbbb', { root: run.root, created_at: '2026-10-27T19:00:00.000Z', intent: 'check', source_sha256: sha, rows: [row] },
+  saveBatch(stateDir, '20261027-190000-bbbb', { root: run.root, created_at: '2026-10-27T19:00:00.000Z', intent: 'check', source_sha256: sha, rows: [row,{...other,state:'passed'}] },
     { summary_line: 'Prompt tests: ✓ 2 of 2 criteria', rows: [{ summary_line: 'Prompt tests (other): ✓ 2 of 2 criteria' }] });
   await done('check', { summary: 'checked other again' });
   shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
@@ -2876,7 +2887,7 @@ test('2921: named progress without step numbers keeps its accounting and cuts tr
   const { runtimeLines } = await import('../src/workflow-runner.mjs');
   const { projectAnswer, summaryLine } = await import('../src/runtime-output.mjs');
   const view = projectAnswer({ command: 'check', state: 'running', progress: { step: 'pay', calls_settled: 3, calls_open: 1 } });
-  const result = 'running · 0 of 2 criteria · 0/0 checks · running · pay · 3 AI calls so far · 1 not yet settled · 1 running';
+  const result = 'running · 0 of 2 criteria · 0/0 checks · sent (awaiting-server-verdict) · pay · 3 AI calls so far · 1 not yet settled · 1 sent (awaiting-server-verdict)';
   for (const story of [null, 's']) {
     const line = summaryLine([{ ...view, criteria_total: 2 }], story);
     assert.equal(line, `Prompt tests${story ? ` (${story})` : ''}: ${result}`);
