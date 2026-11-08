@@ -1026,6 +1026,7 @@ batches remain usable. Do not recover by a network read or change saved caches.
 Use the public result projection from runtime-outcome for every emitted lint or
 check row, saved batch and summary. Saved rows may additionally keep
 `recovery_state` with their transport state; restore it only for internal recovery.
+This also applies to earlier rows when a later submission is interrupted.
 Read older saved batches without that field. Lint metadata also carries the
 public state and reason, with its internal state in recovery_state.
 
