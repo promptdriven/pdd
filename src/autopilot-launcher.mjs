@@ -1,3 +1,4 @@
+import { environmentRecovery, environmentWakeTag, environmentHealthy, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 // Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -73,7 +74,7 @@ function portsFor(state, ports) {
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
 const gitRootIn = p => p.execute('git', ['rev-parse', '--show-toplevel'], { env: { ...p.env, LC_ALL: 'C', LANG: 'C' } });
@@ -379,6 +380,48 @@ async function readRuntimeWaits(state, p) {
     } catch { /* Missing or unreadable records supply no wait. */ }
   }
   return waits;
+}
+// Only this coordinator's own automatic environment stops are retry candidates.
+async function readEnvironmentWaits(state, p) {
+  const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+  const folder = join(commonDir, 'pdd', 'runs');
+  let names;
+  try { names = readdirSync(folder); } catch { return []; }
+  const waits = [];
+  for (const name of names.filter(name => /^[1-9][0-9]*$/.test(name))) {
+    try {
+      const run = read(join(folder, name, 'status.json')), origin = run?.automaticOrigin;
+      if (run?.v !== 1 || run.number !== Number(name) || run.repo?.toLowerCase() !== state.repo.toLowerCase()
+        || origin?.coordinatorId !== state.coordinatorId || origin.machine !== state.machine) continue;
+      const retry = environmentRecovery(run);
+      if (retry) waits.push({ number: run.number, ...retry });
+    } catch { /* Unavailable records cannot authorize a retry. */ }
+  }
+  return waits;
+}
+async function environmentTick(state, p, waits, timeRules, pendingTimes, stateRoot) {
+  for (const retry of waits.sort((a, b) => a.at - b.at || a.number - b.number)) {
+    if (retry.attempts >= ENVIRONMENT_BACKOFF.length) {
+      const send = p.sendAlert ?? (input => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...input },
+        { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now }));
+      try {
+        await send({ issue: String(retry.number), kind: 'stuck', text: JSON.stringify({
+          cause: `Environment validation failure: ${retry.reason}`,
+          tried: `${ENVIRONMENT_BACKOFF.length} bounded retries of ${retry.step}; the run and evidence are preserved.`,
+          need: `Restore the environment before resuming validation ${retry.step}. No product decision is required.` }) });
+      } catch { /* Alert custody owns failed/unconfirmed delivery; retry on a later tick. */ }
+      continue;
+    }
+    const tag = environmentWakeTag(retry), key = `environment:${retry.number}`, offer = `${tag}:${Math.floor(p.now() / INTERVAL)}`;
+    if (p.now() < retry.nextAt || state.timeSeen[key] === offer) continue;
+    let healthy = false;
+    try { healthy = await (p.environmentHealthy ?? environmentHealthy)({ env: p.env, reason: retry.reason }); } catch { /* Unknown health blocks. */ }
+    if (!healthy) continue;
+    const text = `${tag} Rerun only the failed validation step ${retry.step}, using its original command and retained evidence. Preserve completed work, area, gates, branch and claim. Do not restart the run or replay build, approvals, publication or any external operation with an unknown outcome. If it fails again, classify its actual cause and park it with --step ${retry.step}.`;
+    timeRules.push({ kind: 'environment-ready', number: retry.number, step: retry.step, attempt: retry.attempts + 1, limit: ENVIRONMENT_BACKOFF.length, nextAt: retry.nextAt,
+      reason: `Host health and suite capacity permit validation retry. As worker room allows, deliver this exact text with pdd workflow changes ${retry.number}: ${JSON.stringify(text)}` });
+    pendingTimes[key] = offer;
+  }
 }
 // The proof of a test wake: a pdd test verdict (pass or fail) of the test run, saved after the wake was offered.
 // A test run that waits again, or that ends or goes stuck with no such verdict, failed the test.
@@ -1160,11 +1203,14 @@ async function runTick(stateFile, ports, completion) {
     // observed: expiry is final, so it gets no heartbeat.
     const ownClaimsOf = claims => claims.filter(claim => claim && typeof claim.issue === 'string' && claim.active === true && claim.coordinatorId === state.coordinatorId
       && claim.machine === state.machine && claim.commentId && claim.labelEventId);
+    const environmentWaits = await (p.readEnvironmentWaits ?? readEnvironmentWaits)(state, p);
+    const environmentNumbers = new Set(environmentWaits.map(wait => wait.number));
+    const environmentPending = new Set(environmentWaits.filter(wait => wait.attempts < ENVIRONMENT_BACKOFF.length).map(wait => wait.number));
     const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
     const sendHeartbeats = async (claims, saved) => {
       for (const claim of claims) {
         // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
-        if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
+        if (stuckFor(claim) >= STUCK_CLAIM_AFTER && !environmentPending.has(Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1]))) continue;
         if (saved && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
         try {
           const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
@@ -1277,7 +1323,7 @@ async function runTick(stateFile, ports, completion) {
     const timeRules = [], pendingTimes = {};
     for (const claim of ownClaims) {
       const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]), key = `stuck:${number}`;
-      if (Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
+      if (!environmentNumbers.has(number) && Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
         // After a ceiling (the repair limit of this checkout's run, or the takeover limit), a
         // retry is refused or not allowed: the rule asks for no retry and no further comment.
         // Both ceilings can hold at once: name each one, and the cancel step whenever this checkout's run has the repair limit.
@@ -1319,11 +1365,12 @@ async function runTick(stateFile, ports, completion) {
     }
     for (const { number, changedAt } of await (p.readRunProgress ?? readRunProgress)(state, p)) {
       const key = `run:${number}`;
-      if (p.now() - changedAt >= STUCK_AFTER && state.timeSeen[key] !== changedAt) {
+      if (!environmentNumbers.has(number) && p.now() - changedAt >= STUCK_AFTER && state.timeSeen[key] !== changedAt) {
         timeRules.push({ kind: 'stuck-run', number, reason: `Run #${number} has had no progress for 60 minutes; follow the pdd:stuck rule.` });
         pendingTimes[key] = changedAt;
       }
     }
+    await environmentTick(state, p, environmentWaits, timeRules, pendingTimes, dirname(stateFile));
     await runtimeTick(state, p, completion, timeRules, pendingTimes, dirname(stateFile));
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];

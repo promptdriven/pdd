@@ -628,6 +628,12 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 `pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
+`pdd workflow park --reason TEXT --step STEP` records an environment failure of
+check, verify or formal in the current area. Environment parks require `--step`;
+pdd does not guess the failed target from unfinished steps in an older run. Autopilot retries only that validation
+after 15 minutes, 1 hour and 4 hours. It keeps the run and completed work. After
+three failed retries, it stays stuck and sends one alert naming the cause.
+
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
 
 `pdd workflow park --interpreter --reason TEXT` records that an automatic run waits for the PDD interpreter, the hosted service behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check, a refusal that names a file rule or a step that took longer than the server time limit is the issue's own work (make the step smaller). A sign-in, access or interpreter address problem needs a person, and waiting does not fix it. For these, the command exits 1, names the fix and parks nothing. If pdd cannot read the result, the outcome counts as unknown. A waiting run asks no person. `pdd workflow status` shows `waiting for the interpreter: REASON`, and `pdd graph` shows the hold `Waiting for the interpreter`. The run keeps its claim, branch, worktree and progress, and the coordinator can yield its worker slot with `pdd workflow yield N`.
@@ -641,3 +647,15 @@ While a run waits for the interpreter, or an outage or an interpreter access pro
 - interpreter healthy and no outage open: waiting runs, from one issue or from many, are a problem of their own issues. Autopilot wakes each run once to retry. If the same step waits for the interpreter again, the coordinator follows the stuck rule.
 - the interpreter back after an outage: Autopilot first wakes one waiting run as a test, the oldest. Only when that run saves a new `pdd test` result that passed or failed does Autopilot send one recovery and wake the others, oldest first, within the worker cap. A test run that waits again or goes stuck is no proof, and neither is a test with no verdict within 60 minutes of its wake, also a wake that was never delivered. Each run is the test at most once in an outage.
 - A woken worker first runs `pdd test --read BATCH`. It resends only a check that surely gave no verdict: `pdd test --retry BATCH` only when pdd names it (busy or held checks), and else the Story's check once with `pdd test STORY --max-calls N`, for another check that did not run or an AI-service refusal. It never resends an unknown outcome or a failed check; when the read of an unknown outcome now shows that nothing was sent, it checks the Story once. Each wake reaches the run at most once for each park. `--max-calls`, strict mode and the merge rules do not change.
+
+Environment validation stops show the next attempt and UTC time in workflow status.
+Autopilot classifies causes as environment, interpreter or work. Real failing
+assertions, review must-fixes and decisions follow the work rules. Unknown
+interpreter outcomes retain saved-batch reconciliation. Mixed causes with real
+work failures do not retry automatically. Missing-tool stops must name the
+executable (for example `missing tool: node`); the retry checks PATH first.
+The host preflight requires one-minute load per CPU below 1, at least 10% available
+memory, and Linux I/O and memory PSI avg10 below 10%. Unknown host or queue facts
+block retry. The optional shared suite queue is observed without changing it;
+the validation command must still use normal suite admission. An environment wake
+is offered by the next regular tick after its due time, as worker room permits.

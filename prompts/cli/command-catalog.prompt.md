@@ -9,7 +9,9 @@ Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--i
 
 Catalog `graph` (local `issue-dependency-graph`, no operands, flags `--open` and text options `--issue`, `--repo`). Show forms `pdd graph`, `pdd graph --open`, `pdd graph --issue N` and `pdd graph --open --issue N --repo OWNER/REPO`.
 
-Catalog `workflow park` as local `workflow-park`, with required text `--reason` and flag `--interpreter`; show `pdd workflow park --reason TEXT` for recording an automatic stop in its existing worktree, and `pdd workflow park --interpreter --reason TEXT` for a run that waits for the interpreter after an AI-service, busy or network result of its interpreter check: no question to a person, the worker slot can be yielded, and Autopilot wakes the run when the interpreter is back.
+Catalog `workflow park` as local `workflow-park`, with required text `--reason`, optional text `--step`, and flag `--interpreter`; show `pdd workflow park --reason TEXT` for recording an automatic stop in its existing worktree, and `pdd workflow park --interpreter --reason TEXT` for a run that waits for the interpreter after an AI-service, busy or network result of its interpreter check: no question to a person, the worker slot can be yielded, and Autopilot wakes the run when the interpreter is back.
+
+Show `pdd workflow park --reason TEXT --step STEP` for an environment failure of a named validation step.
 
 ## Authoring
 

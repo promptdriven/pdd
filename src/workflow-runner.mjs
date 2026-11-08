@@ -1,3 +1,4 @@
+import { classifyStuckCause, environmentRecovery, environmentStatus, environmentWakeTag, environmentHealthy, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
@@ -437,6 +438,7 @@ const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairL
 function describe(run, chat = null, { drafts = [], nothing = false, health = null } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
+  if (environmentStatus(run)) return environmentStatus(run);
   if (run.state === 'stuck') return `stuck: ${stuckReason(run)}`;
   if (runtimeWaiting(run)) return `waiting for the interpreter: ${run.runtimeWait.reason}. Autopilot checks the interpreter at each tick and wakes it when the interpreter is back; an Autopilot alert names any need for a person (pdd autopilot status)`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat)) return chatStatusWords(run, chat);
@@ -1982,6 +1984,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     if(round===REPAIR_REFUSED)throw Object.assign(Error('The run changed; look again.'),{code:'workflow_progress_refused'});
     if(round){latest.repairRounds={...latest.repairRounds,[area.name]:round};lines.push(`Repair round ${round} of ${REPAIR_ROUNDS} in the ${area.name} area of this Autopilot run.`);}
     endRuntimeWait(latest);
+    if (reason === null && latest.environmentRetry?.area === latest.area && latest.environmentRetry.step === step) { delete latest.environmentRetry; delete latest.stuckCause; }
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     const later=area.steps.includes(step) && latest.done[step]?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];
     if(later.length){
@@ -2558,7 +2561,7 @@ export const runtimeWakeTag = at => `Interpreter wake for the park at ${new Date
 const RUNTIME_WAKE_TAG = /^Interpreter wake for the park at [^ ]+\./;
 
 // Record an automatic stop without releasing or waking its worker.
-async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) {
+async function parkAutomaticRunCommand({ reason, runtime = false, step, cwd }, ports) {
   const p = deps(ports), run = await runForWorktree(cwd, p);
   if (!run) return fail('Park requires the existing run worktree.');
   const text = String(reason ?? '').trim();
@@ -2568,6 +2571,17 @@ async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) 
   if (explicitlyStopped(run, p)) return fail('Autopilot is stopped.');
   const ownership = await continuationOwnership(run, cwd, p);
   if (ownership) return fail(ownership);
+  const area = run.areas[run.area];
+  if (step !== undefined && (!['check', 'verify', 'formal'].includes(step) || !area.steps.includes(step))) return fail('Name a check, verify or formal validation step in the current area. Nothing was parked.');
+  const stuckCause = classifyStuckCause(text, runtime);
+  let retry = null;
+  if (stuckCause === 'environment' && !run.repairLimit) {
+    const target = step;
+    if (!target) return fail('Name the failed validation with --step STEP. Nothing was parked.');
+    const previous = run.environmentRetry;
+    const attempts = previous?.area === run.area && previous.step === target ? previous.attempts : 0;
+    retry = { at: p.now(), reason: text, step: target, area: run.area, attempts, nextAt: attempts < ENVIRONMENT_BACKOFF.length ? p.now() + ENVIRONMENT_BACKOFF[attempts] : null };
+  }
   let wait = null;
   if (runtime) {
     // A result read that fails is an outcome that is not known: never a sign that no check ran.
@@ -2580,11 +2594,13 @@ async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) 
   const selectedArea=run.area, selectedGate=structuredClone(run.gate ?? null), selectedState=run.state, selectedOrigin=structuredClone(run.automaticOrigin);
   protectProgress(run,p,{approval:true});
   const waitLine = wait && `Automatic run waits for the interpreter: ${wait.reason}. Ask no person. End your turn now; the coordinator may yield this slot. Autopilot checks the interpreter at each tick without AI and wakes this run when the interpreter is back. Then run pdd test --read${wait.batch ? ` ${wait.batch}` : ''} first and resend only a check that surely gave no verdict.`;
-  if (!runtime && run.state === 'stuck' && run.parkReason === text) return done('Automatic run is already parked.');
+  if (!runtime && run.state === 'stuck' && run.parkReason === text && (!retry || retry.step === run.environmentRetry?.step)) return done('Automatic run is already parked.');
   if (wait && runtimeWaiting(run) && run.runtimeWait.batch === wait.batch) return done(waitLine);
   commitRun(run,p,latest=>{
     if (latest.area !== selectedArea || !sameGate(latest.gate,selectedGate) || latest.state !== selectedState || !equalFact(latest.automaticOrigin,selectedOrigin) || explicitlyStopped(latest,p))
       throw Object.assign(Error('The run or Autopilot changed; look again.'),{code:'workflow_progress_refused'});
+    latest.stuckCause = stuckCause;
+    if (retry) latest.environmentRetry = retry;
     if (wait) { latest.state='paused'; latest.runtimeWait=wait; }
     else { latest.state='stuck'; latest.parkReason=text; delete latest.runtimeWait; }
   });
@@ -2651,7 +2667,7 @@ function readDeliveryJournal(run, p) {
   try { journal = JSON.parse(fs.readFileSync(join(run.runDir, 'delivery-journal.json'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; return { requests: [] }; }
   if (!journal || !Array.isArray(journal.requests) || journal.requests.some(entry => !entry || typeof entry.id !== 'string' || !entry.id ||
-    typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered'].includes(entry.state) || !['answer', 'change', 'notice'].includes(entry.kind) ||
+    typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered', 'superseded'].includes(entry.state) || !['answer', 'change', 'notice'].includes(entry.kind) ||
     typeof entry.area !== 'string' || !entry.area || typeof entry.paneId !== 'string' || !entry.paneId || !Number.isFinite(entry.at) ||
     entry.inFlight !== undefined && typeof entry.inFlight !== 'boolean') || new Set(journal.requests.map(entry => entry.id)).size !== journal.requests.length) throw Error('Malformed delivery journal');
   return journal;
@@ -2738,6 +2754,16 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
   } finally { release(); }
 }
 
+const isEnvironmentWake = text => String(text).startsWith('Environment validation wake for ');
+function currentEnvironmentWake(run, text, p) {
+  const retry = environmentRecovery(run);
+  return Boolean(retry && String(text).startsWith(environmentWakeTag(retry)) && retry.attempts < ENVIRONMENT_BACKOFF.length && p.now() >= retry.nextAt);
+}
+async function environmentWakeAllowed(run, text, p) {
+  if (!isEnvironmentWake(text)) return null;
+  if (!currentEnvironmentWake(run, text, p) || explicitlyStopped(run, p) || await continuationOwnership(run, run.root, p)) return false;
+  try { return await (p.environmentHealthy ?? environmentHealthy)({ env: p.env, reason: environmentRecovery(run).reason }) === true; } catch { return false; }
+}
 export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.packageRoot = packageRoot; const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
@@ -2745,6 +2771,7 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
   const wake = RUNTIME_WAKE_TAG.exec(String(text ?? '').trim())?.[0];
   if (wake && !(runtimeWaiting(found.run) && wake === runtimeWakeTag(found.run.runtimeWait.at)))
     return done(`Run #${found.run.number} does not wait for the interpreter park that this wake names: it was already woken, or it parked again. Nothing was sent.`);
+  if (await environmentWakeAllowed(found.run, text, p) === false) return done('Environment validation retry is not due, healthy or current. Nothing was sent.');
   return deliverRequest(found.run, text, p);
 }
 
@@ -2753,7 +2780,7 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
 async function deliverRequest(run, text, p, notice = false) {
   const selectedIdentity=runIdentity(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
-  const request = notice ? String(text) : oneLine(text), answer = !notice && Boolean(openQuestion(run)), kind = notice ? 'notice' : answer ? 'answer' : 'change';
+  const request = notice ? String(text) : oneLine(text), answer = !notice && !isEnvironmentWake(request) && Boolean(openQuestion(run)), kind = notice ? 'notice' : answer ? 'answer' : 'change';
   if (!request.trim()) return fail('Write the change request after the issue number.');
   if (!notice && !answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal.
 Nothing was sent to the chat.` };
@@ -2780,7 +2807,7 @@ Nothing was sent to the chat.` };
   let accepted;
   try {
     accepted = await deliveryJournal(run, p, journal => {
-      let entry = journal.requests.find(item => matches(item) && item.kind === kind && item.text === request && item.state !== 'delivered');
+      let entry = journal.requests.find(item => matches(item) && item.kind === kind && item.text === request && !['delivered', 'superseded'].includes(item.state));
       if (!entry) { entry = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
       return { ...entry };
     });
@@ -2788,16 +2815,29 @@ Nothing was sent to the chat.` };
   const owner = { pid: p.ownerPid ?? process.pid, hostname: deliveryHost(p), token: (p.deliveryToken ?? randomUUID)() };
   activeDeliveries.add(owner.token);
   try {
-    const snapshot = await deliveryJournal(run, p, journal => ({ accepted: { ...journal.requests.find(item => item.id === accepted.id) }, queue: journal.requests.filter(item => matches(item) && item.state !== 'delivered').map(item => ({ ...item })) }));
+    const snapshot = await deliveryJournal(run, p, journal => ({ accepted: { ...journal.requests.find(item => item.id === accepted.id) }, queue: journal.requests.filter(item => matches(item) && !['delivered', 'superseded'].includes(item.state)).map(item => ({ ...item })) }));
     accepted = snapshot.accepted; const queue = snapshot.queue;
     if (accepted.state === 'delivered') return already();
     let warnings = queue.some(entry => entry.state === 'uncertain'), sentAccepted = false;
     if (accepted.state === 'uncertain') return uncertain();
     if (accepted.inFlight) return progress(accepted);
+    const deferredEnvironment = new Set();
     for (const entry of queue) {
       if (entry.state === 'uncertain') continue;
       if (entry.inFlight) return progress(entry);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
+      if (isEnvironmentWake(entry.text) && await environmentWakeAllowed(run, entry.text, p) === false) {
+        const observed = await deliveryJournal(run, p, journal => {
+          const saved = journal.requests.find(item => item.id === entry.id);
+          if (saved?.state === 'pending' && !saved.inFlight && !currentEnvironmentWake(latest(), saved.text, p)) {
+            saved.state = 'superseded'; saved.reason = 'The environment park changed before this wake was sent.';
+          }
+          return { ...saved };
+        });
+        if (observed.inFlight) return progress(observed);
+        deferredEnvironment.add(entry.id);
+        continue;
+      }
       const message = entry.kind === 'notice' ? entry.text : entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
         : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
@@ -2813,11 +2853,13 @@ Nothing was sent to the chat.` };
       };
       const sent = await sendToChat(chat, message, { ...p, herdr: guardedHerdr, beforeSubmit: async () => {
         if (custodyFailed) return false;
+        if (entry.kind !== 'notice' && await environmentWakeAllowed(latest(), entry.text, p) === false) return false;
         try { return await deliveryJournal(run, p, journal => {
-          if (!targetCurrent(latest())) return false;
+          const current = latest();
+          if (!targetCurrent(current) || isEnvironmentWake(entry.text) && !currentEnvironmentWake(current, entry.text, p)) return false;
           const saved = journal.requests.find(item => item.id === entry.id);
           if (!saved || saved.state !== 'pending' || saved.inFlight) return false;
-          const first = journal.requests.find(item => matches(item) && item.state === 'pending');
+          const first = journal.requests.find(item => matches(item) && item.state === 'pending' && (!deferredEnvironment.has(item.id) || item.inFlight));
           if (first?.id !== saved.id) return false;
           saved.inFlight = true; saved.owner = owner; claimed = true; return true;
         }); } catch { custodyFailed = true; return false; }
@@ -2839,9 +2881,15 @@ Nothing was sent to the chat.` };
           current.changes.push({ stage: entry.area, round: current.changes.filter(change => change.stage === entry.area).length + 1, text: entry.text, at: now, ...(entry.kind === 'answer' ? { answer: true } : {}) });
           if (targetCurrent(current)) {
             endRuntimeWait(current);
-            if (equalFact(current.question,entry.question))current.question=null;
+            const retry = environmentRecovery(current);
+            if (retry && entry.text.startsWith(environmentWakeTag(retry))) {
+              current.environmentRetry = { ...retry, attempts: retry.attempts + 1, nextAt: null, deliveredAt: now };
+              current.state = current.gate || openQuestion(current) ? 'waiting' : 'running';
+              delete current.parkReason;
+            }
+            if (!isEnvironmentWake(entry.text) && equalFact(current.question,entry.question))current.question=null;
             if(entry.kind==='answer'){if(!current.gate&&!current.question)current.state='running';}
-            else if(current.gate&&equalFact(current.gate,entry.gate)){current.gate.id=p.randomUUID();current.gate.at=now;delete current.gate.promptSnapshot;}
+            else if(!entry.text.startsWith('Environment validation wake for ')&&current.gate&&equalFact(current.gate,entry.gate)){current.gate.id=p.randomUUID();current.gate.at=now;delete current.gate.promptSnapshot;}
           }
           }); return {...saved};
         });
@@ -3001,6 +3049,9 @@ function detail(run, chat = null, facts = {}) {
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
     : chat === 'cannot-work' && facts.health && run.state === 'running' ? cannotWorkWords(run, facts.health).next
+    : environmentRecovery(run) ? (environmentRecovery(run).attempts >= ENVIRONMENT_BACKOFF.length
+      ? 'Environment retries are exhausted. Inspect the environment alert in pdd autopilot status before resuming the failed validation.'
+      : 'Autopilot retries only this validation when the host is healthy; inspect pdd autopilot status for any environment alert.')
     : run.gate ? approvalGuide(run)
     : runtimeWaiting(run) ? `nothing for a person unless an Autopilot alert asks (pdd autopilot status). Autopilot wakes this run when the interpreter is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
     : ended(run) ? null : prOf(run, area?.name) ? (run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch && run.pr[0]?.state === 'open' && run.pr[0]?.ci === 'failing'
@@ -3008,6 +3059,7 @@ function detail(run, chat = null, facts = {}) {
       : `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.`) : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}${run.agentDefinition?.name ? ` ${JSON.stringify(run.agentDefinition.name)}` : ''}`,
     `State: ${describe(run, chat, facts)}`,
+    ...(['stuck', 'paused'].includes(run.state) ? [`Cause: ${run.stuckCause ?? classifyStuckCause(run.parkReason, runtimeWaiting(run))}`] : []),
     ...(pending ? [`Chat replacement pending: ${run.chatReplacement.phase}; retry pdd workflow open ${run.number} --new, or end with pdd workflow cancel ${run.number}.`] : []),
     ...(pending && run.chatReplacement.phase==='launchRequested' ? ['After startup grace, --new sends the saved launch once only if authoritative inspection proves the latest request never ran; unknown or agent processes keep it pending.'] : []),
     ...(area ? [`Area ${run.area + 1} of ${run.areas.length}: ${area.name} — ${steps.join(', ')}`] : []),
@@ -3029,11 +3081,12 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
   const cannotWork = !problem && !question && !run.gate && running && chat === 'cannot-work' && health ? health : null;
-  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
+  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : environmentRecovery(run) && environmentRecovery(run).attempts < ENVIRONMENT_BACKOFF.length ? 'working' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
     : run.state === 'stuck' || run.gate || question || cannotWork || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
+    : environmentStatus(run) ? environmentStatus(run)
     : run.state === 'stuck' ? `stuck: ${stuckReason(run)}`
     : runtimeWaiting(run) ? `waiting for the interpreter: ${run.runtimeWait.reason}`
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`

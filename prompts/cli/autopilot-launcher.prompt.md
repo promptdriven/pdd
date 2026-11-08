@@ -634,6 +634,32 @@ it), and does not touch other issues. `self` is this coordinator and machine:
 
 The 24 hours is a constant, not a setting.
 
+### Environment validation retries
+
+Persist the nonsecret PDD_SUITE_QUEUE and PDD_VM_SUITE_LOCK path overrides with
+the launcher environment, so later timer ticks observe the selected shared queue.
+Read this coordinator and machine's automatic environment-stuck runs from local
+run records, with a `readEnvironmentWaits(state,p)` port. Use the shared
+`environmentRecovery` contract, preserving interpreter and work handling. Keep
+these runs out of generic stuck-claim and no-progress time rules. While a retry
+budget remains, retain own live claim heartbeats even beyond four hours stuck.
+On each tick, offer an `environment-ready` time rule only after nextAt and healthy
+host admission (`environmentHealthy` port with native default). Its `number`,
+`step`, `attempt`, `limit` (3) and `nextAt` name the failed target and due time;
+its reason tells the coordinator to deliver the exact shared wake tag with
+`pdd workflow changes N`, oldest first as worker room allows. Rerun only that
+validation step with its original command and evidence. No whole-run restart,
+new approval, blind external resend, usage-limit change or person question.
+Use existing delivery/timeSeen custody per wake tag and 30-minute offer interval;
+reoffer an undelivered current park on a later interval, without replaying uncertain
+transport custody. Only worker delivery spends
+the attempt. At three failed retries, leave the run stuck and call the existing
+alert module with one per-issue `stuck` incident naming the environment cause,
+three attempts and the failed step. Use its delivered/unconfirmed suppression
+and failed-delivery retry rules. Send no early per-issue alert and no duplicate
+stuck-claim rule. Other work continues. Expose pending retry details in workflow
+status via its owner; do not run tests or mutate run records from a tick.
+
 ### Interpreter outage (#3039)
 
 A worker whose `pdd test` has no verdict for an interpreter cause parks its own run
@@ -959,6 +985,8 @@ Use the existing launcher ports and native defaults, including state, Git, setti
 reconcile and wake boundaries; injected substitutes reach this same path.
 
 ## Dependencies
+
+- [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
