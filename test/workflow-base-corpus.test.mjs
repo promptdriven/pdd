@@ -435,3 +435,15 @@ for (const [kind, config] of [
   assert.equal(f.record().replayEvidence.outcome,'blocked');
   assert.doesNotMatch(f.prs.at(-1).body,/^Code replay: PASS/m);
 });
+
+test('2640 integration rename: first code-space read uses saved base vectors for a rename', async t => {
+  const {f,run}=await baseRun(t,{files:{...BASE,'pdd-bindings.json':BINDINGS}});
+  f.git(run.root,'mv','tests/add.json','tests/moved.json');
+  put(run.root,'value.mjs','export const value=2;\n');
+  record(run,['tests/add.empty.json','tests/moved.json']);
+  const out=await stepDone({step:'verify',summary:'Replayed renamed code-space scenario',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.record().replayEvidence.outcome,'pass');
+  assert.ok(f.record().replayBaseline.vectors.some(v=>v.path==='tests/add.json'));
+  assert.match(f.prs.at(-1).body,/warning: Saved test values changed:/);
+});

@@ -302,6 +302,8 @@ async function refreshCodeSpaceAnchor(run,p,scenarios) {
 }
 async function currentReplayEvidence(run,p,validated=false) {
   let reason = validated ? null : await adoptionFailure(run,p);
+  // Admit saved base paths before inventory classifies deleted or renamed files.
+  if (codeSpaceAnchor(run)) await refreshCodeSpaceAnchor(run,p);
   let paths;
   try {
     paths=await scenarioInventory(run,p);

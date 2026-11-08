@@ -445,6 +445,8 @@ A problem wins over the `blocked` and normal working words. The run is in the `w
 
 Without a `<time>`, the usage-limit words have no ` until <time>`, and "After that time" is "After the limit ends". JSON status adds `chatProblem {kind, agent, until, message}` only for such a run: `until` is an ISO 8601 UTC time or null.
 
+For a first code-space replay read, select the base anchor before classifying removed or renamed JSON paths. Known base scenarios use the saved-value reader and its advisory warnings. Unclassifiable JSON outside that anchor still blocks inventory. Prompt-space removals and renames still block.
+
 ## Dependencies
 
 - [Readable PR descriptions](workflow-pr-body.prompt.md): required authoring/generation/verification/testing context for the readable part, the titles and the Details section of every PR description.
