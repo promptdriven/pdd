@@ -1,4 +1,6 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 54fa215df26ccd939d0a42a70494e5efc2005d425c776b0699bf9f264d513c9c).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 51cf866372bcd55f731acc074d225cc5e2a1e96a727dba20085b087449a171c7).
+import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
+import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -64,7 +66,7 @@ function identity(rows) {
   return { engine, model, ...(engineCached ? { engineCached } : {}), ...(modelCached ? { modelCached } : {}) };
 }
 // A prove result that is not current is shown, but it is never pdd's proof.
-export const usableResult = result => result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
+export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
 // runtime state folder, for this worktree, made at or after the run started) and the run's `pdd workflow prove` record.
@@ -77,7 +79,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   let check = null, lint = null;
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
-    if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows) || batch.rows.some(row=>!row || typeof row!=='object' || Array.isArray(row))) continue;
     let at;
     try { at = Date.parse(batch.created_at); } catch { continue; }
     if (!Number.isFinite(at) || at < since || (batch.intent !== 'check' && batch.intent !== 'lint-only')) continue;
@@ -103,18 +105,32 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     const sha256 = /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') ? batch.source_sha256 : null;
     try { if (sha256 && tests.length) source = capture(check.association?.sourceAnchor?.root ?? root, { tests, appMap: null }).sha256 === sha256 ? 'current' : 'changed'; }
     catch { source = 'unknown'; }
-    const stories = Array.isArray(summary?.rows) ? [...new Set(summary.rows.map(row => text(row?.summary_line)).filter(Boolean))] : [];
+    const states = batch.rows.map(row => ({ test: row.test, ...resultOutcome(row) }));
+    const stateEvidence = batch.rows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
+    const incomplete = states.some(row => row.state !== 'passed');
+    const recorded = text(summary?.summary_line);
+    const safeSummary = incomplete && /✓/.test(recorded) ? 'Prompt tests: no full pass' : recorded;
+    const storyName=value=>typeof value==='string'?value.split('/').at(-1).replace(/\.md$/,''):null;
+    const storyLabel=new RegExp(`^${PROMPT_TESTS_WORDS}\\s*\\(([^)]+)\\)`);
+    const summaryRows=Array.isArray(summary?.rows)?summary.rows:[];
+    const stories=[...new Set(summaryRows.filter(row=>{
+      const line=text(row?.summary_line);
+      if(!line || !incomplete || !line.includes('✓'))return !!line;
+      const story=storyName(row?.story??storyLabel.exec(line)?.[1]);
+      const owners=batch.rows.filter(saved=>story && storyName(saved.story)===story && (!row?.test || saved.test===row.test));
+      return owners.length>0 && owners.every(saved=>resultOutcome(saved).state==='passed'&&!saved.not_checked?.length);
+    }).map(row=>text(row.summary_line)))];
     results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
         stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
-      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),summary: text(summary?.summary_line) || 'result not saved (the check did not finish)', stories,
+      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence].filter(Boolean).join('; '), stories,
       ...identity(batch.rows) });
   }
   if (lint) {
     const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
-    const passing = rows.filter(row => row.state === 'passed').length, ended = ['passed', 'failed', 'refused'].includes(lint.batch.lint?.state) || rows.every(row => ['passed', 'failed', 'refused'].includes(row.state));
-    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), summary: ended ? `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.` : 'Lint: result unknown (the lint did not finish).' });
+    const passing = rows.filter(row => row.state === 'passed').length;
+    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(row => ({ test: row.test, ...resultOutcome(row) })), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => text(`${row.test}: ${outcomeText(row)}`))].join(' ') });
   }
   if (runDir) {
     const proof = proveResult(join(runDir, 'old-code-proof.json'), { runId, since, root, baseBranch }, git);
@@ -151,15 +167,15 @@ const TEMPORARY_WORDS = /\bTry again in a minute\b/;
 const signIn = row => ![row.note, row.reason].some(item => TEMPORARY_WORDS.test(words(item)))
   && (ACCESS_NOTES.has(row.note?.code ?? row.reason?.code) || [row.note, row.reason].some(item => SIGN_IN_WORDS.test(words(item))) || SIGN_IN_WORDS.test(String(row.why ?? '')));
 export function checkCause(rows) {
-  const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object' && row.state !== 'passed');
+  const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object').map(row => ({ ...row, ...resultOutcome(row) })).filter(row => row.state !== 'passed');
   if (!Array.isArray(rows) || !rows.length) return 'none';
   if (!open.length) return 'passed';
   const codes = row => (Array.isArray(row.refusals) ? row.refusals : []).map(item => item?.code);
-  if (open.some(row => row.state === 'failed' || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
-  if (open.some(row => ['not_run', 'unknown'].includes(row.state) && signIn(row))) return 'access';
+  if (open.some(row => row.state === 'failed' || row.reason?.code === 'broken-test' || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
+  if (open.some(row => ['not run', 'partial'].includes(row.state) && signIn(row))) return 'access';
   // An unknown answer that names the AI provider failure is a known end with no verdict.
-  const provider = row => row.state === 'unknown' && (SERVICE_REFUSALS.has(row.reason?.code) || SERVICE_REFUSALS.has(row.provider?.code) || codes(row).length > 0 && codes(row).every(code => SERVICE_REFUSALS.has(code)));
-  return open.every(row => ['refused', 'not_run'].includes(row.state) || provider(row)) ? 'service' : 'unknown';
+  const provider = row => row.state === 'partial' && (SERVICE_REFUSALS.has(row.reason?.code) || SERVICE_REFUSALS.has(row.provider?.code) || codes(row).length > 0 && codes(row).every(code => SERVICE_REFUSALS.has(code)));
+  return open.every(row => ['refused', 'not run'].includes(row.state) || provider(row)) ? 'service' : 'unknown';
 }
 const OPEN_ROWS = new Set(['ready', 'waiting', 'sending', 'queued', 'running']);
 const stateFolder = env => resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime'));
@@ -171,7 +187,7 @@ export function savedCheckCause(batch, { env = process.env } = {}) {
   // A named check whose rows cannot be read has an outcome that is not known.
   if (!summaryRows && !savedRows) return 'unknown';
   // A check still open, or a summary that an interrupted --retry left behind (its saved rows moved on), is not known yet.
-  const states = rows => rows.reduce((map, row) => map.set(`${row?.test}\0${row?.story}`, [...(map.get(`${row?.test}\0${row?.story}`) ?? []), row?.state]), new Map());
+  const states = rows => rows.reduce((map, row) => map.set(`${row?.test}\0${row?.story}`, [...(map.get(`${row?.test}\0${row?.story}`) ?? []), resultOutcome(row ?? {}).state]), new Map());
   if (savedRows?.some(row => OPEN_ROWS.has(row?.state))) return 'unknown';
   const shown = summaryRows && states(summaryRows);
   if (shown && savedRows && [...states(savedRows)].some(([key, list]) => shown.has(key) && shown.get(key).join() !== list.join())) return 'unknown';

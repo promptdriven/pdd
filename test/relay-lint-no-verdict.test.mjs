@@ -33,7 +33,7 @@ for (const retry of [false, true]) test(`RELAY held lint + no verdict + unknown 
   const doc = JSON.parse(readFileSync(path));
   assert.equal(doc.rows[0].phase, 'lint');
   assert.equal(doc.rows[0].calls, 0);
-  Object.assign(doc.rows[1], { request_ids: [oldId], state: 'unknown', phase: 'server', note: null, why: 'Checks failed.' });
+  Object.assign(doc.rows[1], { request_ids: [oldId], state: 'unknown', recovery_state: 'unknown', phase: 'server', note: null, why: 'Checks failed.' });
   writeFileSync(path, JSON.stringify(doc));
   lintPassed = true;
   const recover = async () => {
@@ -51,7 +51,7 @@ for (const retry of [false, true]) test(`RELAY held lint + no verdict + unknown 
   const [refused, unknown] = result.json.rows;
   assert.equal(refused.state, 'refused'); assert.equal(refused.why, why); assert.equal(refused.next_step, nextStep);
   assert.equal(refused.calls, 2, 'server usage replaces local zero'); assert.equal(refused.checks, null);
-  assert.equal(unknown.state, 'unknown'); assert.equal(unknown.request_id, oldId); assert.equal(unknown.calls, 'unknown');
+  assert.equal(unknown.state, 'partial'); assert.equal(unknown.request_id, oldId); assert.equal(unknown.calls, 'unknown');
   assert.notEqual(unknown.why, 'Checks failed.');
   const kept = JSON.parse(readFileSync(path));
   assert.equal(kept.rows[0].next_step, nextStep, 'batch persists independent no-verdict advice');
@@ -69,7 +69,7 @@ for (const retry of [false, true]) test(`RELAY held lint + no verdict + unknown 
   rmSync(join(h.state, 'batches', batch, `${lostId}.json`));
   const recovered = await recover();
   assert.equal(recovered.json.rows[0].request_id, lostId);
-  assert.equal(recovered.json.rows[0].state, 'unknown');
+  assert.equal(recovered.json.rows[0].state, 'partial');
   assert.equal(recovered.json.rows[0].calls, 'unknown');
   assert.equal(recovered.p.clock.uuids, 0);
   assert.equal(f.posts.filter(p => p.command === 'check').length, 1);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 0294198de7f2a51989ca8b93d57a46883ca38da3d08a085dd97a65c4267810ae).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b965151fcc40dbebd6173cccc5f4689706bf8507dd82b96b83e9eb0880ec2979).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -213,7 +213,12 @@ function discoverStories(root, files, strict = false, workspace=loadRuntimeWorks
       // criteria section is not listed as a Story (2048 session, 0.1.6), so it never gets a "has no test" line.
       storyFiles.push(path);
       if (stat.size > LIMITS.bytes) { warnings.push(`Warning: ${path}: discovery unavailable (too big; limit 10 MB).`); continue; }
-      const text = linked ? linkedFiles.read({path}).content : readText(root, path);
+      let text;
+      try { text = linked ? linkedFiles.read({path}).content : readText(root, path); }
+      catch (error) {
+        if (!(error instanceof PreflightError && error.exitCode === 4) && !['EACCES','EPERM','EISDIR','ENOENT'].includes(error.code)) throw error;
+        warnings.push(`Warning: ${path}: discovery unavailable (${error.code ?? error.message}).`); continue;
+      }
       titles.set(path, titleOf(text));
       if (hasAcceptance(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
     }
@@ -699,6 +704,74 @@ function firstDifference(testTexts, storyTexts) {
   return `The story has this criterion, but the test does not: "${left[0]}"`;
 }
 
+// Coverage is structural. A negative assertion with an exact calls/world check is checkable.
+const exactCheck = check => EXACT_OPS.has(check?.op) || (isObject(check) && Object.hasOwn(check, 'html') && check.op === 'exists');
+const ordinaryInexactCheck = check => isObject(check) && ['exists','contains'].includes(check.op)
+  && ['result','world','calls','error'].includes(check.target) && typeof check.path === 'string'
+  && (check.path === '' || check.path.startsWith('/')) && !/~(?![01])/.test(check.path)
+  && (check.op !== 'contains' || Object.hasOwn(check,'value'));
+function criterionPlan(doc, story) {
+  if (!Array.isArray(doc?.criteria) || !doc.criteria.length || !Array.isArray(doc.steps)
+    || Object.hasOwn(doc, 'criteria_scope')
+    || (Object.hasOwn(doc,'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))
+    || doc.criteria.some(item => !isObject(item) || !isDeepStrictEqual(Object.keys(item).sort(),['id','text']) || typeof item.id !== 'string' || !item.id || typeof item.text !== 'string')
+    || new Set(doc.criteria.map(item => item.id)).size !== doc.criteria.length) return null;
+  const remaining = [...story], criteria = doc.criteria.map(item => ({...item}));
+  for (const item of criteria) {
+    const index = remaining.indexOf(item.text);
+    if (index < 0) return null;
+    remaining.splice(index, 1);
+  }
+  const assigned = new Set(), exact = new Set();
+  const declared = new Set(doc.criteria.map(item=>item.id));
+  for (const step of doc.steps) for (const check of Array.isArray(step?.checks) ? step.checks : []) {
+    if (!isObject(check) || !declared.has(check.criterion_id)) return null;
+    assigned.add(check?.criterion_id);
+    if (exactCheck(check)) exact.add(check.criterion_id);
+  }
+  for (const step of doc.steps) for (const check of Array.isArray(step?.checks) ? step.checks : []) {
+    if (!exact.has(check.criterion_id) && !ordinaryInexactCheck(check)) return null;
+  }
+  const not_checked = criteria.filter(item => !exact.has(item.id)).map(item => ({criterion_id:item.id,text:item.text,
+    reason:assigned.has(item.id) ? 'no exact check is assigned' : 'no check is assigned'}));
+  const unmatched = [...doc.criteria.map(item => item.text)], used = new Set(criteria.map(item => item.id));
+  for (const [index, text] of story.entries()) {
+    const at = unmatched.indexOf(text);
+    if (at >= 0) { unmatched.splice(at, 1); continue; }
+    const base = `ac-${index + 1}`; let id = base;
+    for (let n = 2; used.has(id); n++) id = `${base}-${n}`;
+    used.add(id); criteria.push({id,text});
+    not_checked.push({criterion_id:id,text,reason:'the test has no criterion for this Story item'});
+  }
+  return {criteria,not_checked,checked:criteria.length-not_checked.length};
+}
+
+// This applies to authored/effective input before capture adds automatic exemptions.
+function partialTestRefusal(doc) {
+  if (Object.hasOwn(doc, 'criteria_scope') || (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))) {
+    return refusal('pdd-partial-test', Object.hasOwn(doc, 'criteria_scope') ? 'criteria_scope' : 'check_exemptions', 'In the beta a test checks the whole story. Remove criteria_scope and check_exemptions.');
+  }
+  return null;
+}
+
+function capturedCriterionPlan(doc, story, path) {
+  let broken = partialTestRefusal(doc);
+  const plan = broken ? null : criterionPlan(doc, story);
+  if (!broken && !story.length) broken = refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`);
+  if (!broken && !plan) {
+    const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
+    broken = !isDeepStrictEqual(testTexts, storyTexts)
+      ? refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts))
+      : refusal('criterion-needs-exact-check', 'criteria', 'The checks do not establish valid criterion coverage.');
+  }
+  if (!broken && !plan.checked) broken = refusal('unchecked-criteria', 'criteria', 'No criterion has an exact check.',
+    {hint:'Add an exact result, world or call-count check for an observable criterion.'});
+  if (broken) throw Object.assign(new PreflightError(4, `${path}: ${broken.message}`), broken,
+    {message:`${path}: ${broken.message}`,hint:broken.hint ?? 'Fix the test criterion text or partial-test metadata, then run the selection again.'},
+    plan ? {not_checked:plan.not_checked,criteria_total:plan.criteria.length} : {});
+  return plan;
+}
+
 // The schema rules of a prompt and of the prompts it calls, all at once (cached per prompt).
 export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
   if (!prompt || seen.has(prompt.path)) return [];
@@ -718,9 +791,48 @@ export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Se
 // A refusal that discovery alone proves: a conflict, an unreadable or invalid file, a file over the upload limit,
 // or a story_path that names another Story than the test name rule matched.
 export function discoveryRefusal(test) {
-  if (test.error) return refusal('invalid-document', 'scenario', test.error);
+  if (test.error) return refusal('invalid-document', 'scenario', test.error,
+    {hint:'Fix the named test file, make it readable, or keep one file for the Story.'});
   if (test.storyPath && isObject(test.doc) && typeof test.doc.story_path === 'string' && test.doc.story_path !== test.storyPath) {
     return refusal('pdd-story-mismatch', 'story_path', `${test.path} is the test of ${test.storyPath} by its name, but its story_path names ${test.doc.story_path}. Make them agree.`);
+  }
+  return null;
+}
+
+const criterionShape = item => isObject(item) && isDeepStrictEqual(Object.keys(item).sort(), ['id','text'])
+  && typeof item.id === 'string' && !!item.id && typeof item.text === 'string' && !!item.text;
+const stepShape = step => isObject(step) && !Object.keys(step).some(key=>!STEP_KEYS.has(key))
+  && ['step_id','entry_path','operation','input','checks'].every(key=>Object.hasOwn(step,key))
+  && ['step_id','entry_path','operation'].every(key=>typeof step[key]==='string'&&!!step[key]);
+const checkShape = check => isObject(check) && ['criterion_id','target','path','op'].every(key=>Object.hasOwn(check,key));
+function documentRefusal(doc,path) {
+  if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${path} is not a JSON object.`);
+  const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
+  if (missing.length) return refusal('invalid-document', 'scenario', `The test has no ${missing.map(key => `"${key}"`).join(', ')}.`);
+  if (extra.length) return refusal('invalid-document', 'scenario', `The test has keys the interpreter does not know: ${extra.map(key => `"${key}"`).join(', ')}.`);
+  if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
+  return null;
+}
+
+export function scenarioShapeRefusal(doc,path) {
+  const broken=documentRefusal(doc,path);if(broken)return broken;
+  if (!Array.isArray(doc.criteria)||!doc.criteria.length) return refusal('invalid-criterion','criteria','The test has no criteria.');
+  const ids=new Set();
+  for (const [index,item] of doc.criteria.entries()) {
+    if(!criterionShape(item))return refusal('invalid-criterion',`criteria[${index}]`,'Each criterion has only a nonempty "id" and "text".');
+    if(ids.has(item.id))return refusal('duplicate-criterion',`criteria[${index}]`,`The criterion ID ${item.id} is used twice.`);
+    ids.add(item.id);
+  }
+  if(!Array.isArray(doc.steps)||!doc.steps.length)return refusal('missing-steps','steps','The test has no steps.');
+  for(const [index,step] of doc.steps.entries()) {
+    const section=`steps[${index}]`;
+    if(!stepShape(step))return refusal('invalid-step',section,'A step has step_id, entry_path, operation, input and checks.');
+    if(Object.hasOwn(step,'model')&&(typeof step.model!=='string'||!step.model.trim()))return refusal('invalid-step-model',`${section}.model`,'A step model must be a model name (a string).');
+    if(!Array.isArray(step.checks))return refusal('invalid-check',`${section}.checks`,'checks must be a list.');
+    for(const [at,check] of step.checks.entries()) {
+      if(!checkShape(check))return refusal('invalid-check',`${section}.checks[${at}]`,'A check has criterion_id, target, path and op.');
+      if(!ids.has(check.criterion_id))return refusal('unknown-criterion',`${section}.checks[${at}]`,`The check names ${show(check.criterion_id)}, which is not a criterion ID.`);
+    }
   }
   return null;
 }
@@ -732,21 +844,15 @@ function checkTest(root, found, test, prompts) {
     try { doc = JSON.parse(prepared.text); } catch { /* Preserve ordinary malformed scenario handling. */ }
   }
   if (test.error) return discoveryRefusal(test);
-  if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${test.path} is not a JSON object.`);
-  const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
-  if (missing.length) return refusal('invalid-document', 'scenario', `The test has no ${missing.map(key => `"${key}"`).join(', ')}.`);
-  if (extra.length) return refusal('invalid-document', 'scenario', `The test has keys the interpreter does not know: ${extra.map(key => `"${key}"`).join(', ')}.`);
-  if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
+  const shape=documentRefusal(doc,test.path);if(shape)return shape;
   if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
   if (test.storyPath && doc.story_path !== test.storyPath) return discoveryRefusal({ ...test, doc });
-  if (Object.hasOwn(doc, 'criteria_scope') || (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))) {
-    return refusal('pdd-partial-test', Object.hasOwn(doc, 'criteria_scope') ? 'criteria_scope' : 'check_exemptions', 'In the beta a test checks the whole story. Remove criteria_scope and check_exemptions.');
-  }
+  const partial = partialTestRefusal(doc); if (partial) return partial;
   if (!Array.isArray(doc.criteria) || !doc.criteria.length) return refusal('invalid-criterion', 'criteria', 'The test has no criteria.');
   const ids = new Set();
   for (const [index, item] of doc.criteria.entries()) {
-    if (!isObject(item) || !isDeepStrictEqual(Object.keys(item).sort(), ['id', 'text']) || typeof item.id !== 'string' || !item.id || typeof item.text !== 'string' || !item.text) {
+    if (!criterionShape(item)) {
       return refusal('invalid-criterion', `criteria[${index}]`, 'Each criterion has only a nonempty "id" and "text".');
     }
     if (ids.has(item.id)) return refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${item.id} is used twice.`);
@@ -755,13 +861,12 @@ function checkTest(root, found, test, prompts) {
   const story = storyCriteria(readText(root, doc.story_path));
   if (!story.length) return refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`);
   const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
-  if (!isDeepStrictEqual(testTexts, storyTexts)) return refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts));
+  if (!isDeepStrictEqual(testTexts, storyTexts) && !criterionPlan(doc, story)) return refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts));
   if (!Array.isArray(doc.steps) || !doc.steps.length) return refusal('missing-steps', 'steps', 'The test has no steps.');
-  const checked = new Set(), exact = new Set(), inputIssues = [];
+  const exact = new Set(), inputIssues = [];
   for (const [index, step] of doc.steps.entries()) {
     const section = `steps[${index}]`, at = { step: index + 1 };
-    if (!isObject(step) || Object.keys(step).some(key => !STEP_KEYS.has(key)) || ['step_id', 'entry_path', 'operation', 'input', 'checks'].some(key => !Object.hasOwn(step, key))
-      || ['step_id', 'entry_path', 'operation'].some(key => typeof step[key] !== 'string' || !step[key])) {
+    if (!stepShape(step)) {
       return refusal('invalid-step', section, 'A step has step_id, entry_path, operation, input and checks.', at);
     }
     if (Object.hasOwn(step, 'model') && (typeof step.model !== 'string' || !step.model.trim())) {
@@ -781,11 +886,10 @@ function checkTest(root, found, test, prompts) {
     if (!Array.isArray(step.checks)) return refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at);
     let errorChecks = 0;
     for (const [checkIndex, check] of step.checks.entries()) {
-      if (!isObject(check) || ['criterion_id', 'target', 'path', 'op'].some(key => !Object.hasOwn(check, key))) {
+      if (!checkShape(check)) {
         return refusal('invalid-check', `${section}.checks[${checkIndex}]`, 'A check has criterion_id, target, path and op.', at);
       }
       if (!ids.has(check.criterion_id)) return refusal('unknown-criterion', `${section}.checks[${checkIndex}]`, `The check names ${show(check.criterion_id)}, which is not a criterion ID.`, at);
-      checked.add(check.criterion_id);
       if (EXACT_OPS.has(check.op) || (Object.hasOwn(check, 'html') && check.op === 'exists')) exact.add(check.criterion_id);
       if (check.target === 'error' && check.path === '/code' && check.op === 'equals' && check.value === step.expected_error) errorChecks += 1;
     }
@@ -795,10 +899,12 @@ function checkTest(root, found, test, prompts) {
     inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
   }
   if (inputIssues.length) return inputIssues;
-  const unchecked = [...ids].filter(id => !checked.has(id));
-  if (unchecked.length) return refusal('unchecked-criteria', 'criteria', `These criteria have no check: ${unchecked.join(', ')}.`);
-  const loose = [...ids].filter(id => !exact.has(id));
-  if (loose.length) return refusal('criterion-needs-exact-check', 'criteria', `These criteria need an exact check (equals, not_equals, one_of or count): ${loose.join(', ')}.`);
+  for (const step of doc.steps) for (const check of step.checks) {
+    if (!exact.has(check.criterion_id) && !ordinaryInexactCheck(check)) return refusal('criterion-needs-exact-check', 'criteria',
+      `The checks for ${check.criterion_id} do not establish valid criterion coverage.`, {hint:'Fix the check operation, target and JSON pointer before checking this test.'});
+  }
+  if (!exact.size) return refusal('unchecked-criteria', 'criteria', 'No criterion has an exact check.',
+    {hint:'Add an exact result, world or call-count check for an observable criterion.'});
   return null;
 }
 
@@ -808,10 +914,22 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
   const prompts = new Map(), warnings = [];
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
-    const refused = checkTest(root, found, test, prompts);
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha: reviews.length ? sha256(readFileSync(join(root,test.path))) : null, reviews }),
+    let refused, plan, testSha = null;
+    try {
+      refused = checkTest(root, found, test, prompts);
+      if (!refused || refused.code === 'unchecked-criteria') {
+        plan = criterionPlan(test.doc, storyCriteria(readText(root, test.doc.story_path)));
+      }
+      if (!refused && reviews.length) testSha = sha256(readFileSync(join(root,test.path)));
+    } catch (error) {
+      if (!(error instanceof PreflightError && error.exitCode === 4) && !['ENOENT','EACCES','EPERM','EISDIR'].includes(error.code)) throw error;
+      refused = refusal(error.code ?? 'source-unavailable', 'source', error.message,
+        {hint:'Restore the named dependency, make it readable, or correct its declared path.'});
+    }
+    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha, reviews }),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
-      criteria_total: Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0, draft: false };
+      criteria_total: plan?.criteria.length ?? (Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0),
+      ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}), draft: false };
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
     for (const [index, step] of row.steps.entries()) {
       const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
@@ -949,7 +1067,8 @@ export const formatSize = bytes => bytes < 1024 ? `${bytes} bytes` : bytes < 102
 const SOURCE_CONFIG = 'pdd-source.json';
 const sameStat = (a, b) => a && b && a.ino === b.ino && a.dev === b.dev && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 const unstableSource = Symbol('unstable source');
-const sourceProblem = (from, path, reason) => new PreflightError(4, `${from}: ${path}${reason.startsWith(':') ? '' : ' '}${reason}`);
+const sourceProblem = (from, path, reason) => Object.assign(new PreflightError(4, `${from}: ${path}${reason.startsWith(':') ? '' : ' '}${reason}`),
+  {selection:from === SOURCE_CONFIG || from === 'App map'});
 
 function sourcePath(raw, from) {
   if (typeof raw !== 'string' || !raw || raw.includes('\\') || /[\0-\x1f]/.test(raw) || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)
@@ -1210,8 +1329,8 @@ function sourceLimit(files) {
   const total = files.reduce((sum, file) => sum + file.size, 0);
   if (files.length > LIMITS.files || total > LIMITS.bytes) {
     const largest = [...files].sort((a, b) => b.size - a.size).slice(0, 5).map(file => `  ${file.path}  ${formatSize(file.size)}`);
-    throw new PreflightError(4, [`The repository is too big to send: ${files.length} files, ${formatSize(total)}. The limit is ${LIMITS.files} files and 10 MB.`,
-      'The largest files:', ...largest].join('\n'));
+    throw Object.assign(new PreflightError(4, [`The repository is too big to send: ${files.length} files, ${formatSize(total)}. The limit is ${LIMITS.files} files and 10 MB.`,
+      'The largest files:', ...largest].join('\n')), {selection:true});
   }
   return total;
 }
@@ -1428,7 +1547,22 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       if (error.code) throw new PreflightError(4, `${error.code}: ${error.message}`);
       throw error;
     }
-    const content = expanded.references.length ? Buffer.from(expanded.text,'utf8') : bytes(file);
+    let content = expanded.references.length ? Buffer.from(expanded.text,'utf8') : bytes(file);
+    if (format === 'scenario') {
+      let doc; try { doc = JSON.parse(content.toString('utf8')); } catch { /* Keep invalid-source handling. */ }
+      const expected = matchTests(names.filter(isStoryPath), names).tests.find(test=>test.path===file.path);
+      const authority = doc?.schema_version !== TEST_SCHEMA ? null : isObject(doc) && (typeof doc.story_path !== 'string' || !doc.story_path)
+        ? refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its Story.')
+        : discoveryRefusal({path:file.path,storyPath:expected?.storyPath,doc});
+      if (authority) throw Object.assign(new PreflightError(4, `${file.path}: ${authority.message}`), authority,
+        {message:`${file.path}: ${authority.message}`,hint:'Restore the Story path selected by the test name, then run the selection again.'});
+      if (typeof doc?.story_path === 'string' && !scenarioShapeRefusal(doc, file.path)) {
+        add(doc.story_path, file.path, 'story');
+        const plan = capturedCriterionPlan(doc, storyCriteria(bytes(inspect(doc.story_path, file.path)).toString('utf8')), file.path);
+        if (plan?.not_checked.length && plan.checked) content = Buffer.from(JSON.stringify({...doc,criteria:plan.criteria,
+          check_exemptions:plan.not_checked.map(item => ({criterion_id:item.criterion_id,reason:'out-of-scope',detail:item.reason}))}), 'utf8');
+      }
+    }
     const result = {...file,bytes:content,size:content.length};
     effective.set(file.path,result); provenance.set(file.path,expanded.references);
     footprintPayload.set(file.path,result);
@@ -1472,6 +1606,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       for (const path of overlay.keys()) add(path, 'prepareSource');
     }
     if (visible.has(SOURCE_CONFIG)) {
+      try {
       const config = overlay.get(SOURCE_CONFIG)??inspectRaw(SOURCE_CONFIG, SOURCE_CONFIG, false, false, true);
       let doc;
       try { doc = JSON.parse(bytes(config).toString('utf8')); } catch (error) {
@@ -1480,6 +1615,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       }
       if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
       for (const path of doc.include) { add(path, SOURCE_CONFIG); shared.add(sourcePath(path,SOURCE_CONFIG)); }
+      } catch (error) { if (error !== unstableSource) error.selection = true; throw error; }
     }
     // The test name rule over the effective source (Git-visible files and prepared files); it opens no JSON file.
     const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, names) : [];
@@ -1553,6 +1689,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
         // Footprint-only binary/plain inputs still need bounded bytes for hashes.
         if (!selecting) bytes(file);
       } catch (error) {
+        if (role === 'app-map' && error !== unstableSource) error.selection = true;
         if (selecting || reader.unstable || error === unstableSource) throw error;
         markUnavailable(path,error);
       }
@@ -1577,7 +1714,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       }
     }));
     const tar = tarFiles(entries);
-    if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
+    if (tar.length > LIMITS.bytes) throw Object.assign(new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`), {selection:true});
     const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && reader.stable() && JSON.stringify(loadRuntimeWorkspace({root}))===policyBefore;
     if (!same) return null;
     const stories = new Map();
@@ -1646,18 +1783,23 @@ export function whyNoTests(root, visible, found = discoverTests(root, [...visibl
 
 // Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).
 export function sharedSourceFiles(root, visible) {
-  const owners = new Map();
+  const owners = new Map(), warnings = [];
   for (const prompt of [...visible].filter(path => allowsRuntimePath(loadRuntimeWorkspace({root}),path)&&path.endsWith('.prompt.md')).sort()) {
     if (Number(statOf(join(root,prompt))?.size ?? 0) > LIMITS.bytes) continue;
-    const text = readText(root, prompt);
+    let text;
+    try { text = readText(root, prompt); }
+    catch (error) {
+      if (!(error instanceof PreflightError && error.exitCode === 4) && !['EACCES','EPERM','EISDIR','ENOENT'].includes(error.code)) throw error;
+      warnings.push(`Warning: ${prompt}: source ownership advice unavailable (${error.code ?? error.message}).`); continue;
+    }
     for (const match of text.matchAll(/`([^`\s]+)`/g)) {
       const path = match[1].replace(/^\.\//, '');
       if (path === prompt || path.endsWith('.md') || !visible.has(path)) continue;
       owners.set(path, new Set([...(owners.get(path) ?? []), prompt]));
     }
   }
-  return [...owners].filter(([, prompts]) => prompts.size > 1).sort(([a], [b]) => a.localeCompare(b))
-    .map(([path, prompts]) => `Warning: ${path} is named by ${prompts.size} prompts (${[...prompts].join(', ')}). One prompt should own each source file.`);
+  return [...warnings,...[...owners].filter(([, prompts]) => prompts.size > 1).sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, prompts]) => `Warning: ${path} is named by ${prompts.size} prompts (${[...prompts].join(', ')}). One prompt should own each source file.`)];
 }
 
 // Files sent that are not prompt, story or test files.

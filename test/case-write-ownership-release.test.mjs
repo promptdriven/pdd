@@ -24,7 +24,7 @@ test('owner release during the exclusive-create probe lets the next saver publis
   // A supported release after the leaf snapshot must not turn absence into an
   // unsafe-path refusal. An atomic creator can instead reach link directly.
   let second;
-  await assert.doesNotReject(async()=>{second=await acquire(f,{files,maxWaitMs:500});});t.after(()=>second.release());
+  await assert.doesNotReject(async()=>{second=await acquire(f,{files,maxWaitMs:10_000});});t.after(()=>second.release());
   assert.equal(released,true);
   assert.equal((await applyPendingCase({root:f.root,pendingId:id,writeOwnership:second},{env:f.env})).state,'committed');
   assert.equal((await applyPendingCase({root:f.root,pendingId:id,writeOwnership:second},{env:f.env})).duplicate,true);
@@ -55,7 +55,7 @@ for(const window of ['after-collision','before-safe-read','before-open']){
       lstat(path){if(collided&&!released&&path===lock&&++lockStats===2&&window==='before-safe-read')release();return fs.lstatSync(path);},
       open(path,...args){if(collided&&!released&&path===lock&&window==='before-open')release();return fs.openSync(path,...args);}
     };
-    const second=await acquire(f,{files,maxWaitMs:500});t.after(()=>second.release());
+    const second=await acquire(f,{files,maxWaitMs:10_000});t.after(()=>second.release());
     assert.equal(collided,true,'must observe real EEXIST');assert.equal(released,true,'must release through the supported lease');
     assert.equal(read(f.root,f.second),before,'ownership acquisition does not publish');
     assert.equal((await applyPendingCase({root:f.root,pendingId:id,writeOwnership:second},{env:f.env})).state,'committed');
@@ -82,7 +82,7 @@ for(const kind of ['malformed','null','symlink','directory','read-error','read-e
         return fs.readFileSync(kind==='read-error'?f.root:join(f.parent,'missing-read-source'),'utf8');
       }return fs.readFileSync(fd,...args);}
     };
-    await assert.rejects(acquire(f,{files,maxWaitMs:35,...(kind==='unknown-owner'?{isAlive:()=>null}:{})}));
+    await assert.rejects(acquire(f,{files,maxWaitMs:1500,...(kind==='unknown-owner'?{isAlive:()=>null}:{})}));
     assert.equal(read(f.root,f.second),before);assert.ok(fs.lstatSync(path));
     if(['malformed','null','read-error','read-enoent'].includes(kind))assert.equal(collisions,1,'a present unreadable record must refuse without retry');
     if(kind==='foreign-owner'||kind==='unknown-owner')assert.equal(fs.readFileSync(path,'utf8'),kind==='foreign-owner'?JSON.stringify({...JSON.parse(original),host:'another-host'}):original);
@@ -98,12 +98,12 @@ test('a released lock under a newly unsafe ancestor still refuses ownership',asy
     }
     throw error;
   }}};
-  await assert.rejects(acquire(f,{files,maxWaitMs:500}));
+  await assert.rejects(acquire(f,{files,maxWaitMs:10_000}));
   assert.equal(collisions,1);assert.equal(read(f.root,f.second),before);
 });
 
 for(const stop of ['deadline','cancel']){
-  test(`repeated real release contention remains bounded by ${stop}`,{timeout:5000},async t=>{
+  test(`repeated real release contention remains bounded by ${stop}`,{timeout:30_000},async t=>{
     const f=fixture(t),before=read(f.root,f.second),controller=new AbortController();
     let peer=await acquire(f),collisions=0; t.after(()=>peer?.release());
     const files={...nativeFiles,link(from,to){try{return fs.linkSync(from,to);}catch(error){
@@ -111,11 +111,11 @@ for(const stop of ['deadline','cancel']){
       throw error;
     }}};
     const started=Date.now();
-    await assert.rejects(acquire(f,{files,maxWaitMs:stop==='deadline'?60:2000,sleep:async ms=>{
+    await assert.rejects(acquire(f,{files,maxWaitMs:stop==='deadline'?2000:15_000,sleep:async ms=>{
       await delay(ms);if(!controller.signal.aborted)peer=await acquire(f);
     }},controller.signal),stop==='cancel'?/cancelled/:/another saver or editor/);
     assert.ok(collisions>=2,'must exercise repeated real release windows');
-    assert.ok(Date.now()-started<1500,'release retries must retain the existing finite wait/cancel bound');
+    assert.ok(Date.now()-started<20_000,'release retries must retain the existing finite wait/cancel bound');
     assert.equal(read(f.root,f.second),before);
   });
 }

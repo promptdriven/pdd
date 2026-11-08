@@ -42,21 +42,24 @@ async function read(r, batch) {
 for (const mode of ['check', 'lint', 'try']) test(`LINT-PENDING: ${mode} reports known running lint at its finite deadline`, async t => {
   const r = await pending(t, mode);
   assert.equal(r.code, 3);
-  assert.equal(r.clock.now - Date.parse('2026-10-27T16:27:47Z'), mode === 'check' ? 60_000 : mode === 'try' ? 300_000 : 90_000);
+  assert.equal(r.clock.now - Date.parse('2026-10-27T16:27:47Z'), mode === 'try' ? 300_000 : mode === 'check' ? 60_000 : 90_000);
   assert.equal(r.fake.posts.length, 2);
   const output = r.ports.stdout.text + r.ports.stderr.text;
   assert.match(output, /Lint is still running/);
   assert.doesNotMatch(output, /lint result is unknown/);
   if (mode === 'check') {
     const json = JSON.parse(r.ports.stdout.text);
-    assert.equal(json.rows[0].state, 'not_run');
+    assert.equal(json.rows[0].state, 'not run');
+    assert.equal(json.rows[0].reason.code, 'deadline');
     assert.equal(json.rows[0].calls, 0);
     assert.equal(json.rows[0].request_id, null);
     const saved = JSON.parse(readFileSync(join(r.setup.state, 'batches', json.batch, 'batch.json')));
     assert.equal(saved.lint.pending, true);
+    assert.equal(saved.lint.reason.code, 'deadline');
     const next = await read(r, json.batch);
     assert.equal(next.code, 3);
-    assert.match(next.json.rows[0].reason.message, /Lint is still running/);
+    assert.equal(next.json.rows[0].reason.code, 'timeout-flag');
+    assert.match(next.json.rows[0].reason.message, /--timeout/);
     assert.equal(next.clock.uuids, 0);
     assert.equal(r.fake.posts.length, 2);
   }

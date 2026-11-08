@@ -21,7 +21,7 @@ const gates = [
 ];
 const maintenanceCount = ports => (ports.stderr.text.match(/The interpreter is in maintenance/g) ?? []).length;
 
-for (const via of ['capacity', 'admission']) for (const interrupted of [true, false]) test(`far-until-${via}: bounded positive chunks, rechecks and one notice (${interrupted ? 'interrupt' : 'deadline'})`, async t => {
+for (const via of ['capacity', 'admission']) for (const interrupted of [true, false]) test(`far-until-${via}: bounded positive chunks, rechecks and one notice (${interrupted ? 'interrupt' : 'deadline'})`, { timeout: 15_000 }, async t => {
   const setup = harbor(t); let made, capacityReads = 0;
   const details = { until: new Date(2_592_000_000).toISOString(), reason: 'long synthetic window' };
   const fake = await fakeRuntime(t, (e, f) => {

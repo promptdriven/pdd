@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: aabfb1464b114804da61c2b8dc4bef68bb5c471cc4009bc8e8abc98cfc0259d6).
+// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: da7650e823bd24bbfb596a2dcea07657772f0f5836f74dca434ae74388274074).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -39,7 +39,8 @@ export function approvalRecords(run) {
 }
 function approvalLines(records) {
   return records.flatMap(evidence => {
-    const label = evidence.route === 'said' ? 'Approved in chat:' : evidence.route === 'chat' ? 'Approved in area chat:' : 'Approved in terminal:';
+    const label = evidence.route === 'said' ? 'Approved in chat:' : evidence.route === 'chat' ? 'Approved in area chat:'
+      : evidence.route === 'automatic-check-pass' ? 'Opened after a full check pass (no person asked):' : evidence.route === 'card-choice' ? 'Code PR chosen at the Story card:' : 'Approved in terminal:';
     const values = [evidence.words !== undefined && evidence.words !== null ? approvalValue(evidence.words) : null,
       evidence.actor ? `actor ${approvalValue(evidence.actor.kind)} ${approvalValue(evidence.actor.id)}` : null,
       evidence.at !== undefined ? `at ${approvalValue(new Date(evidence.at).toISOString())}` : null,

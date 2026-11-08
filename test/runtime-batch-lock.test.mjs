@@ -142,7 +142,7 @@ test('2675: acquisition is a runtime-faked boundary and releases after source re
   const story = join(r.setup.repo, 'user_stories/place-order.md'), original = readFileSync(story);
   writeFileSync(story, 'changed');
   const refusal = await r.run({ '--retry': r.batch }, [], extra);
-  assert.equal(refusal.code, 2); assert.equal(acquired, 1); assert.equal(released, 1);
+  assert.equal(refusal.code, 4); assert.equal(acquired, 1); assert.equal(released, 1);
   writeFileSync(story, original);
   await assert.rejects(r.run({ '--retry': r.batch }, [], { ...extra, gh: () => { throw new Error('injected auth failure'); } }), /injected auth failure/);
   assert.equal(acquired, 2); assert.equal(released, 2);
