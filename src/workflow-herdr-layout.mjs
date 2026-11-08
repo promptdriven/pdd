@@ -191,7 +191,9 @@ export async function openHerdrRunLayout(input, ports) {
     }
     if (pendingParent) {
       if (parents.some(w => w.workspace_id === pendingParent.workspace_id)) {
-        if (savedRepoRoot && [savedRepoRoot.tabId, savedRepoRoot.paneId, savedRepoRoot.terminalId, savedRepoRoot.cwd].every(id))
+        if (parent.bare && !completeParentRoot(savedRepoRoot, parent.root))
+        throw identityChanged(parentHint, 'root', 'complete saved parent root', savedRepoRoot ?? null);
+      if (savedRepoRoot && [savedRepoRoot.tabId, savedRepoRoot.paneId, savedRepoRoot.terminalId, savedRepoRoot.cwd].every(id))
           await assertParentRoot(command, parentHint, savedRepoRoot, parent.root);
         repo = pendingParent;
       } else {
@@ -280,6 +282,8 @@ export async function openHerdrRunLayout(input, ports) {
     if (pending) {
       if (!parentIdentity(pending, parent.root, commonDir))
         throw identityChanged(parentHint, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, pending.worktree ?? null);
+      if (parent.bare && !completeParentRoot(savedRepoRoot, parent.root))
+        throw identityChanged(parentHint, 'root', 'complete saved parent root', savedRepoRoot ?? null);
       if (savedRepoRoot && [savedRepoRoot.tabId, savedRepoRoot.paneId, savedRepoRoot.terminalId, savedRepoRoot.cwd].every(id))
         await assertParentRoot(command, parentHint, savedRepoRoot, parent.root);
       repo = pending;

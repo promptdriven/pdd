@@ -249,3 +249,20 @@ for (const name of BARE_IN_PROJECT) test(`2698: ${name}: after a lost run-open r
   assert.equal(f.herdr.calls.filter(isCreate).length, 1);
   assert.equal(f.herdr.paneOf(run.chats.at(-1)).cwd, run.root);
 });
+
+for (const name of BARE_IN_PROJECT) test(`2698: ${name}: partial create custody cannot clear a pending bare parent`, async t => {
+  const l = await layout(t, name), { f } = l, herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    const reply = await herdr(args);
+    return isCreate(args) ? { id: reply.id, result: { workspace: reply.result.workspace } } : reply;
+  };
+  assert.equal((await l.start()).exitCode, 1);
+  const run = l.record(), saved = run.layout;
+  assert.ok(saved.repoCreateIntent);
+  await herdr(['worktree', 'open', '--workspace', saved.repoWorkspaceId, '--path', run.root, '--no-focus']);
+  await herdr(['tab', 'create', '--workspace', saved.repoWorkspaceId, '--cwd', l.root, '--label', 'external']);
+  const launches = f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run').length;
+  assert.equal((await openAgain(l)).exitCode, 1);
+  assert.deepEqual(l.record().layout.repoCreateIntent, saved.repoCreateIntent);
+  assert.equal(f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run').length, launches);
+});
