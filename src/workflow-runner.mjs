@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 137c3c1ba0bfe80eedca301134e9bd28d2fe497b6bbf7ee0de0dfa6ceca20934).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 486a7cb6538de96a60f17d5f21c305f6d9bfc268fb76d5536a866ef1aab3e5f3).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';

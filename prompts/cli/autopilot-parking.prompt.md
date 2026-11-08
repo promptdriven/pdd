@@ -19,6 +19,6 @@ Default maximum park age is 48 hours (policy.hours); default parked count limit 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"786ebf138021a16713a5de4d940928df6008000846e037508fc55fd9e7cac4e5","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"786ebf138021a16713a5de4d940928df6008000846e037508fc55fd9e7cac4e5","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
