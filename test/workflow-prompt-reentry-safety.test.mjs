@@ -19,7 +19,7 @@ function pushPeer(f,root,branch,path,text) {
   return f.git(root,'rev-parse','HEAD');
 }
 
-for (const route of ['reply','terminal']) for (const kind of ['expected','story','bytes']) {
+for (const route of ['reply','terminal']) for (const kind of ['expected','story','bytes','deleted-story','deleted-scenario']) {
   test(`2897 fetched source: ${kind} at final fetch refuses ${route} before a code decision`,async t=>{
     const f=await prepared(t,{realRemote:true}),old=f.record(),pr1=old.pr[0],pr2=old.pr[1],other=peer(f);
     assert.equal((await reopen(f)).exitCode,0);
@@ -31,9 +31,14 @@ for (const route of ['reply','terminal']) for (const kind of ['expected','story'
     f.ports.execFile=async(file,args,options)=>{
       if(!injected&&file==='git'&&args[0]==='fetch'&&args[2]===`refs/heads/${pr1.branch}:refs/remotes/origin/${pr1.branch}`) {
         injected=true;
-        const path=kind==='story'?'user_stories/value.md':'tests/value.json';
+        const path=['story','deleted-story'].includes(kind)?'user_stories/value.md':'tests/value.json';
         const text=kind==='expected'?JSON.stringify(vector(8)):kind==='story'?'I can select a revised value.\n':JSON.stringify(vector(2),null,2)+'\n';
-        peerHead=pushPeer(f,other,pr1.branch,path,text);
+        if(kind.startsWith('deleted-')) {
+          f.git(other,'switch','-q',pr1.branch);f.git(other,'rm',path);
+          f.git(other,'commit','-qm','Remove contract file');
+          f.git(other,'push','-q','origin',`HEAD:refs/heads/${pr1.branch}`);
+          peerHead=f.git(other,'rev-parse','HEAD');
+        } else peerHead=pushPeer(f,other,pr1.branch,path,text);
       }
       return execute(file,args,options);
     };
@@ -46,6 +51,42 @@ for (const route of ['reply','terminal']) for (const kind of ['expected','story'
     assert.equal(f.git(old.root,'merge-base',peerHead,pr1.branch),peerHead);
     assert.equal(run.pr[0].url,pr1.url);assert.equal(run.pr[1].url,pr2.url);
     assert.equal(f.git(old.root,'rev-parse',pr2.branch),code);
+    if(kind.startsWith('deleted-')) {
+      assert.equal(run.gate,null);assert.equal(run.done['prompt-story'],undefined);
+      assert.equal(run.done.check,undefined);
+      const path=kind==='deleted-story'?'user_stories/value.md':'tests/value.json';
+      assert.equal(f.git(old.root,'ls-tree','--name-only','HEAD','--',path),'');
+      await f.done('prompt-story');assert.equal(f.record().gate.kind,'approve');
+      assert.equal(f.record().decisions.length,decisions);
+    }
+  });
+}
+
+for (const route of ['reply','terminal']) for (const failure of ['tree','blob','blob-enoent']) {
+  test(`2897 unavailable source: ${failure} refuses ${route} without changing code custody`,async t=>{
+    const f=await prepared(t,{realRemote:true}),old=f.record(),pr1=old.pr[0],pr2=old.pr[1];
+    await reopen(f);writeFileSync(join(old.root,'value.prompt.md'),'# Value\nCorrected prompt.\n');await f.done('check');
+    const before=f.record(),head=f.git(old.root,'rev-parse','HEAD'),code=f.git(old.root,'rev-parse',pr2.branch);
+    const execute=f.ports.execFile;let injected=false;
+    f.ports.execFile=async(file,args,options)=>{
+      const target=failure==='tree'?args[0]==='ls-tree':args[0]==='show'&&args[1]===`${head}:user_stories/value.md`;
+      if(file==='git'&&target) {
+        injected=true;
+        if(failure==='blob-enoent')throw Object.assign(Error('Git program unavailable'),{code:'ENOENT'});
+        // Exercise both rejected subprocesses and returned nonzero exits.
+        if(failure==='tree')return execute(file,[...args.slice(0,-1),'0'.repeat(40)],options);
+        return {stdout:'',stderr:'Object read failed',code:128};
+      }
+      return execute(file,args,options);
+    };
+    f.tick();
+    const out=await approveRun({ref:'17',cwd:f.source,...(route==='reply'?{said:'Continue the code PR.'}:{})},f.ports);
+    assert.equal(injected,true);assert.notEqual(out.exitCode,0,out.message);
+    const run=f.record();assert.equal(run.area,1);assert.equal(run.gate.kind,'ask-code');
+    assert.deepEqual(run.decisions,before.decisions);assert.deepEqual(run.replayBaseline,before.replayBaseline);
+    assert.equal(run.branch,pr1.branch);assert.equal(f.git(old.root,'branch','--show-current'),pr1.branch);
+    assert.equal(f.git(old.root,'rev-parse','HEAD'),head);assert.equal(f.git(old.root,'rev-parse',pr2.branch),code);
+    assert.equal(run.pr[0].url,pr1.url);assert.equal(run.pr[1].url,pr2.url);
   });
 }
 

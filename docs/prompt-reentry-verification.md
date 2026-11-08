@@ -17,4 +17,6 @@ These tests call the public workflow functions. They create temporary projects, 
 
 Check the reported test counts and exit status. Recovery must keep PR identities and code commits, place prompt edits on PR 1, clear code evidence, integrate the saved base, recheck prompt source and refresh the replay anchor before code. A peer's changed expected value at the final fetch must reopen Story work with no new code decision. A reference that moves after capture must not alter the pinned merge. Unchanged automatic recovery needs a recorded operator action and current claim ownership; strict or unscoped recovery must not advance automatically.
 
+Final-fetch deletion cases remove either the Story or scenario from the peer branch before terminal or explicit-reply code approval. Each must preserve the peer commit on PR 1, reopen the Story gate and save no code decision. Unavailable tree and present-file reads must refuse entry and keep the existing code gate and branches.
+
 The tests remove their temporary projects after each case. TAP output is native evidence. It is not prompt-interpreter evidence or a live GitHub or Herdr integration result. For an old-code control, put the same tests and fixtures into a temporary copy of the base source. Keep the failed assertions. A setup failure does not detect the defect.

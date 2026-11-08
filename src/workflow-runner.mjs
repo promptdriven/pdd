@@ -9,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 48816c7761f475c461d4c0581f91f53c5e618a7081dac3a3b41dd21ba1f8c806).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 399c3805e8122ce406e04c3749436ddf651c9b8f32ef5ec58aaf282b28e9746c).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4093,12 +4093,20 @@ async function storyContractPaths(run,p,reference) {
 async function storyContract(run,p,reference) {
   const facts=[];
   const paths=await storyContractPaths(run,p,reference);
+  // Only a successful tree inventory proves absence. A failed blob read must
+  // remain unavailable source, including ENOENT from the Git program port.
+  const treePaths=reference ? new Set((await rawGit(p,run.root,'ls-tree','-r','--name-only','-z',reference)).split('\0').filter(Boolean)) : null;
   for (const path of paths.sort()) {
     const story=isStoryPath(path);
     if(!story && !path.endsWith('.json'))continue;
     let text;
-    try {text=reference ? await rawGit(p,run.root,'show',`${reference}:${path}`) : readFileSync(join(run.root,path),'utf8');}
-    catch(error) {if(error.code==='ENOENT')continue;throw error;}
+    if (reference) {
+      if (!treePaths.has(path)) continue;
+      text=await rawGit(p,run.root,'show',`${reference}:${path}`);
+    } else {
+      try {text=readFileSync(join(run.root,path),'utf8');}
+      catch(error) {if(error.code==='ENOENT')continue;throw error;}
+    }
     if (story) facts.push([path,text]);
     else {
       try {if(isScenario(text))facts.push([path,canonical(JSON.parse(text))]);} catch {
