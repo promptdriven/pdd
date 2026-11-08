@@ -125,10 +125,10 @@ export function githubAppRunner(exec, ports = {}) {
     const wrappedPath = (env.PATH ?? '').split(delimiter).some(part => resolve(part || '.') === wrapper);
     const plainOptions = wrappedPath ? { ...options, env: { ...env, PATH: (env.PATH ?? '').split(delimiter).filter(part => resolve(part || '.') !== wrapper).join(delimiter) } } : options;
     const plainEnv = { ...env, PATH: (env.PATH ?? '').split(delimiter).filter(part => resolve(part || '.') !== wrapper).join(delimiter) };
-    let command;
+    let command, commandIndex;
     for (let at = 0; at < args.length; at++) {
       if (['-c', '-C', '--git-dir', '--work-tree', '--namespace', '--config-env'].includes(args[at])) { at++; continue; }
-      if (!args[at].startsWith('-')) { command = args[at]; break; }
+      if (!args[at].startsWith('-')) { command = args[at]; commandIndex = at; break; }
     }
     if (file === 'git' && !['push', 'fetch', 'pull', 'clone', 'ls-remote'].includes(command)) return exec(file, args, plainOptions);
     const settings = githubAppSettings({ cwd: options.cwd, env, fs: ports.fs });
@@ -140,11 +140,32 @@ export function githubAppRunner(exec, ports = {}) {
     const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
     const redact = value => typeof value === 'string' ? [token, basic].reduce((text, secret) => text.split(secret).join('[redacted]'), value) : value;
     const childEnv = { ...plainEnv, GH_TOKEN: token, GITHUB_TOKEN: token };
+    let childArgs = args;
     {
       // gh can invoke Git itself (for example, when creating a PR).
+      // Git URL matching selects the most specific header scope before considering
+      // config precedence. A host-only override cannot beat a repository URL.
+      const headers = new Map([['http.https://github.com/.extraheader', []]]);
+      const gitOptions = file === 'git' ? args.slice(0, commandIndex) : [];
+      let config;
+      try {
+        config = await exec('git', [...gitOptions, 'config', '--null', '--list'], { cwd: options.cwd, env: plainEnv, encoding: 'utf8' });
+        if (config.code && config.code !== 0) throw Error();
+      } catch { fail('cannot read Git configuration; check the checkout and Git settings.'); }
+      for (const entry of String(config.stdout ?? '').split('\0')) {
+        const split = entry.indexOf('\n');
+        if (split < 0) continue;
+        const name = entry.slice(0, split), value = entry.slice(split + 1);
+        const scope = /^http\.(.+)\.extraheader$/i.exec(name);
+        if (!scope) continue;
+        try { if (new URL(scope[1]).hostname.toLowerCase() !== 'github.com') continue; }
+        catch { continue; }
+        if (!headers.has(name) || value === '') headers.set(name, []);
+        if (value !== '' && !/^\s*authorization\s*:/i.test(value)) headers.get(name).push(value);
+      }
       const extra = [
         ['credential.helper', ''], ['credential.interactive', 'false'],
-        ['http.https://github.com/.extraheader', ''], ['http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basic}`],
+        ...[...headers].flatMap(([name, values]) => [[name, ''], ...values.map(value => [name, value]), [name, `AUTHORIZATION: basic ${basic}`]]),
         ['url.https://github.com/.insteadOf', 'git@github.com:'], ['url.https://github.com/.insteadOf', 'ssh://git@github.com/'],
         ['http.followRedirects', 'false'],
       ];
@@ -155,10 +176,25 @@ export function githubAppRunner(exec, ports = {}) {
         childEnv[`GIT_CONFIG_VALUE_${count + index}`] = extra[index][1];
       }
       childEnv.GIT_CONFIG_COUNT = String(count + extra.length);
+      // GIT_CONFIG_PARAMETERS and explicit -c settings have higher precedence
+      // than GIT_CONFIG_COUNT. Use Git's quoting and env indirection respectively;
+      // the installation credential never enters the argument vector.
+      if (childEnv.GIT_CONFIG_PARAMETERS) {
+        const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+        childEnv.GIT_CONFIG_PARAMETERS += ` ${extra.map(([name, value]) => quote(`${name}=${value}`)).join(' ')}`;
+      }
+      if (file === 'git' && gitOptions.some(arg => arg === '-c' || arg.startsWith('--config-env'))) {
+        const overrides = extra.flatMap(([name, value], index) => {
+          const variable = `PDD_GITHUB_APP_GIT_CONFIG_${index}`;
+          childEnv[variable] = value;
+          return [`--config-env=${name}=${variable}`];
+        });
+        childArgs = [...gitOptions, ...overrides, ...args.slice(commandIndex)];
+      }
       childEnv.GIT_TERMINAL_PROMPT = '0';
     }
     let result;
-    try { result = await exec(file, args, { ...options, env: childEnv }); }
+    try { result = await exec(file, childArgs, { ...options, env: childEnv }); }
     catch (error) {
       throw Object.assign(Error('GitHub App command failed.'), { code: Number.isInteger(error.code) ? error.code : 'github_app_command_failed',
         stdout: redact(error.stdout ?? ''), stderr: redact(error.stderr ?? ''), githubIdentity: identity });

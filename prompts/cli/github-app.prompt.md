@@ -58,8 +58,14 @@ creation can push through a Git subprocess.
 
 Set GH_TOKEN and GITHUB_TOKEN in the child only. For Git, supply a host-scoped
 HTTPS Authorization Basic header (x-access-token plus token) through environment
-config, overriding inherited authorization and credential helpers. Preserve
-unrelated environment config entries. Rewrite GitHub SSH URL prefixes to HTTPS
+config, overriding inherited authorization and credential helpers. The App header
+must win for the actual GitHub URL, including more-specific path or user scopes
+in repository, included, or environment config. Read effective Git config through
+the injected exec port in the command's directory and Git option context; fail
+closed with a safe App error if that read fails. Override each GitHub header scope
+only in the child, retaining its non-Authorization headers and unrelated config.
+The same overrides must reach Git started by gh. Keep stored config unchanged.
+Preserve unrelated environment config entries. Rewrite GitHub SSH URL prefixes to HTTPS
 only for the child, refuse HTTP redirects and disable credential prompts.
 Strip the wrapper directory from child PATH for both gh and Git, including local
 Git calls, to avoid recursion. Forward input and other process options.

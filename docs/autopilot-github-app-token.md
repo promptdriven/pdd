@@ -91,6 +91,22 @@ The child process uses HTTPS with an installation credential. GitHub SSH remote
 addresses are rewritten to HTTPS for that process. pdd does not edit stored Git
 remotes or credential helpers. An App-only checkout can publish its branches
 without a person's Git credential.
+Repository-specific GitHub authorization headers, including headers from included
+files or inherited Git environment settings, use the App credential in the child.
+Non-authorization headers and settings for other hosts stay in place. pdd stops
+the command if it cannot read the effective Git configuration.
+
+To check this transport locally, use Node.js 22.16 or newer, Git and OpenSSL:
+
+```sh
+node --test test/github-app-git-auth.test.mjs
+```
+
+The test creates temporary checkouts, a fake token endpoint, and a loopback HTTPS
+server and proxy. It observes the headers sent by real Git and returns HTTP 403
+before Git transfers data. It checks native calls, worker wrappers, nested gh
+calls and personal mode. It removes its temporary files and servers. It needs
+no App, personal credential, GitHub access or Herdr session.
 
 ## Token handling and API budget
 
