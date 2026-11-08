@@ -546,7 +546,7 @@ Set owners in root `pdd.json`, for example:
     "mode": "observe",
     "areas": [
       {"name": "cli", "match": {"paths": ["src/**", "skills/**", "docs/**"]}, "owner": "autopilot"},
-      {"name": "runtime", "match": {"repositories": ["promptdriven/prompt-runtime"], "keywords": ["hosted interpreter"], "labels": ["runtime"]}, "owner": "agarwal-ishaan"}
+      {"name": "runtime", "match": {"repositories": ["promptdriven/prompt-runtime"], "keywords": ["hosted interpreter"], "labels": ["runtime"]}, "owner": "agarwal-ishaan", "mixed": "whole"}
     ]
   }
 }
@@ -562,7 +562,23 @@ another repository with a link note.
 Auto closes fixed, duplicate and old-code issues with evidence and a reopen hint.
 Observe labels them `pdd:close-proposed` and proposes the close. Another login gets
 one assignment note. An unknown owner gets `pdd:needs-owner` and one question.
-Person assignees and live claims prevent close and assignment effects. Writes are
+Each area's optional `mixed` is `whole` or `split`. For promptdriven/pdd,
+Runtime defaults to `whole`: its owner receives the complete issue, including
+CLI work, with one note naming all parts. Autopilot does not start it.
+`pdd:owner-whole` and `pdd:owner-split` labels from a trusted person override
+comments and defaults. A trusted comment can use either directive or
+`mixed: whole` / `mixed: split`. Conflicting labels or unknown label authority
+need one owner question.
+
+The sort record includes `touchedAreas`, with an `{area,evidence}` row for
+every area. Split also needs `splitOrder:{first,evidence}`. Auto creates one
+issue for each of the two parts, titled `<area> part of #N`, links them as
+sub-issues, assigns the external part and adds native blocked-by links in the
+required order. Autopilot works the local part. Each part closes independently;
+the original tracker closes only after both complete. Observe retains the split
+proposal. Missing area evidence, policy or work order gets `pdd:needs-owner`
+and one question. More complex owner or order choices also need a person.
+Person assignees and live claims prevent all issue writes. Writes are
 serial and wait at least one second between effects. Each invocation routes at
 most 10 unfinished issues. Record saves, group effects and routing share a limit
 of 20 write attempts. A low or reserve GitHub budget stops further effects. The

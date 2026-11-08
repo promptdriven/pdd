@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 
 import { join, dirname } from 'node:path';
 import { validSort, selectedSort, sortInputs, sortPlan, sortSourceKey } from './issue-sort.mjs';
 import { gitContext } from './workflow-runs.mjs';
+import { currentSplitParent, readOwnerChoice } from './issue-mixed.mjs';
 import { draftAreas } from './autopilot-areas.mjs';
 const parse = x => typeof x === 'string' ? JSON.parse(x) : x;
 const WORK_LABELS = new Set(['pdd:working', 'pdd:stuck', 'pdd:code-pending', 'pdd:close-proposed', 'pdd:needs-owner']);
@@ -84,12 +85,14 @@ export async function saveSortBatch({ repository, snapshot, sorts }, ports, writ
     const issue = snapshot.issues.find(x => x.key === record.issue);
     if (JSON.stringify(selectedSort(snapshot, issue)) === JSON.stringify(record)) continue;
     const body = `Sort: ${record.belongs.kind}; ${record.status.state}; ${record.genuine.kind}.\n${record.status.evidence.join('\n')}\n\n<!-- pdd-issue-sort:v1 -->\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\``;
-    const result = parse((await write(() => ports.github.appendComment({ repository, issue: Number(record.issue.split('/').pop()), body }))).json);
+    const route = { issue: record.issue, record };
+    const result = parse((await write(async () => { if (!await sortOwnership({ repository, route, areas: snapshot.sortContext.areas }, ports)) throw Error('sort-owner-changed'); return ports.github.appendComment({ repository, issue: Number(record.issue.split('/').pop()), body, checkOwnership: () => sortOwnership({ repository, route, areas: snapshot.sortContext.areas }, ports) }); })).json);
     if (!result.id) throw Error('sort-write-pending');
     (issue.sorts ??= []).push({ id: String(result.id), authority: 'trusted', intact: true, record });
   }
 }
-async function currentSortIssue({ cwd, repository, snapshot, route }, ports) {
+export async function currentSortIssue({ cwd, repository, snapshot, route }, ports) {
+  if (snapshot.issues.find(x => x.key === route.issue)?.sortSplit) return currentSplitParent({ repository, snapshot, route }, ports, route.action === 'close');
   const issue = Number(route.issue.split('/').pop());
   const raw = parse((await ports.github.issue({ repository, issue })).json);
   const comments = []; const cursors = new Set(); let cursor = '';
@@ -119,15 +122,16 @@ async function currentSortIssue({ cwd, repository, snapshot, route }, ports) {
   await addSortContext(fresh, cwd, ports);
   if (JSON.stringify(selectedSort(fresh, subject)) !== JSON.stringify(route.record)) return false;
   // PR ownership can change while pacing, even before a work label arrives.
-  let timelineCursor = ''; const timelineSeen = new Set();
+  let timelineCursor = ''; const timelineSeen = new Set(), timeline = [];
   do {
     if (timelineSeen.has(timelineCursor)) return false;
     timelineSeen.add(timelineCursor);
     const page = parse((await ports.github.page({ repository, issue, kind: 'timeline', cursor: timelineCursor })).json);
     if (page.error || !Array.isArray(page.items) || typeof page.next !== 'string') return false;
     if (page.items.some(x => x.event === 'cross-referenced' && x.source?.issue?.pull_request && x.source.issue.state === 'open')) return false;
-    timelineCursor = page.next;
+    timeline.push(...page.items); timelineCursor = page.next;
   } while (timelineCursor);
+  if (await readOwnerChoice({ labels: subject.labels, comments, timeline }, author => ports.authority.read({ repository, author })) !== (snapshot.issues.find(x => x.key === route.issue).sortOwnerChoice ?? '')) return false;
   return sortOwnership({ repository, route, areas: fresh.sortContext.areas }, ports);
 }
 async function sortOwnership({ repository, route, areas }, ports) {
@@ -165,8 +169,9 @@ export async function routeSortIssues({ cwd, repository, snapshot, mode }, ports
     admitted++;
     const marker = `<!-- pdd-issue-route:v1 -->\n<!-- ${routeIdentity(route, mode)} -->`;
     const evidence = [...route.evidence, route.record.status.fix, route.record.genuine.duplicateOf, route.record.genuine.reason].filter(Boolean).join('\n');
+    const partsNote = route.reason === 'mixed-whole' ? `Whole issue, including all parts:\n${route.record.touchedAreas.map(x => `${x.area}: ${x.evidence.join('; ')}`).join('\n')}\n` : '';
     const note = route.action === 'close' ? `${mode === 'auto' ? 'Closing' : 'Propose closing'}: ${route.reason}.\n${evidence}\nReopen this issue with current release evidence if the problem remains.`
-      : route.action === 'assign' ? `This issue belongs to @${route.owner} (${route.area}).\n${evidence}`
+      : route.action === 'assign' ? `This issue belongs to @${route.owner} (${route.area}).\n${partsNote}${evidence}`
       : route.action === 'link' ? `Please track this work in https://github.com/${route.owner.slice(5)} (${route.area}).\n${evidence}`
       : route.record.question || 'Which area and owner should handle this issue?';
     // The native comment port recovers equal bodies and verifies their readback.
@@ -179,14 +184,14 @@ export async function routeSortIssues({ cwd, repository, snapshot, mode }, ports
     if (route.action === 'question' || route.action === 'close' && mode === 'observe') {
       if (!ports.github.sortUpdate) throw Error('sort-write-unavailable');
       if (ports.github.ensureSortLabel) await ports.github.ensureSortLabel({ repository, label: route.action === 'question' ? 'pdd:needs-owner' : 'pdd:close-proposed', write: action => mutate(action) });
-      const updated = await mutate(() => ports.github.sortUpdate({ repository, issue, label: route.action === 'question' ? 'pdd:needs-owner' : 'pdd:close-proposed' }));
+      const updated = await mutate(() => ports.github.sortUpdate({ repository, issue, label: route.action === 'question' ? 'pdd:needs-owner' : 'pdd:close-proposed', checkOwnership: unowned }));
       if (updated?.ok !== true) throw Error('sort-write-pending');
     }
-    const noted = parse((await mutate(() => ports.github.appendComment({ repository, issue, body: `${note}\n\n${marker}` }))).json);
+    const noted = parse((await mutate(() => ports.github.appendComment({ repository, issue, body: `${note}\n\n${marker}`, checkOwnership: unowned }))).json);
     if (!noted.id) throw Error('sort-write-pending');
     if (route.action === 'assign' || route.action === 'close' && mode === 'auto') {
       if (!ports.github.sortUpdate) throw Error('sort-write-unavailable');
-      const updated = await mutate(() => ports.github.sortUpdate({ repository, issue, checkOwnership: () => sortOwnership({ repository, route, areas: snapshot.sortContext.areas }, ports), ...(route.action === 'assign' ? { assignee: route.owner } : { close: true }) }));
+      const updated = await mutate(() => ports.github.sortUpdate({ repository, issue, checkOwnership: unowned, ...(route.action === 'assign' ? { assignee: route.owner } : { close: true }) }));
       if (updated?.ok !== true) throw Error('sort-write-pending');
     }
   }

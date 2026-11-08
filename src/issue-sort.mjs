@@ -1,4 +1,5 @@
 // Implements prompts/cli/issue-sort.prompt.md.
+import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea } from './autopilot-areas.mjs';
 const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/.test(x);
 const text = x => typeof x === 'string';
@@ -8,7 +9,9 @@ const fixLocator = value => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull\/[
   || /\b[a-f\d]{7,64}\b/i.test(value) || /(?:^|[\s(`])(?:[\w.-]+\/)*[\w.-]+\.[a-z\d]+:[1-9]\d*\b/i.test(value);
 export function validSort(record) {
   const r = record;
-  return !!(exact(r, 'schema_version,issue,base,inputs,belongs,status,genuine,paths,rootCause,severity,question') && r.schema_version === 'pdd.issue-sort.v1' && issueURL(r.issue)
+  return !!(exact(Object.fromEntries(Object.entries(r ?? {}).filter(([k]) => !['touchedAreas','splitOrder'].includes(k))), 'schema_version,issue,base,inputs,belongs,status,genuine,paths,rootCause,severity,question')
+    && (r.touchedAreas === undefined || Array.isArray(r.touchedAreas) && r.touchedAreas.length > 0 && new Set(r.touchedAreas.map(x => x.area)).size === r.touchedAreas.length && r.touchedAreas.every(x => exact(x, 'area,evidence') && text(x.area) && x.area.trim() && list(x.evidence) && x.evidence.length && x.evidence.every(v => v.trim())))
+    && (r.splitOrder === undefined || exact(r.splitOrder, 'first,evidence') && text(r.splitOrder.first) && r.splitOrder.first.trim() && list(r.splitOrder.evidence) && r.splitOrder.evidence.length && r.splitOrder.evidence.every(v => v.trim())) && r.schema_version === 'pdd.issue-sort.v1' && issueURL(r.issue)
     && list(r.base) && new Set(r.base).size === r.base.length && Array.isArray(r.inputs) && r.inputs.length && r.inputs.every(x => exact(x, 'key,revision') && text(x.key) && x.key && text(x.revision) && x.revision) && new Set(r.inputs.map(x => x.key)).size === r.inputs.length
     && exact(r.belongs, 'kind,area,repository') && ['area','repository','old-code','unknown'].includes(r.belongs.kind) && text(r.belongs.area) && text(r.belongs.repository)
     && (r.belongs.kind !== 'repository' || /^[\w.-]+\/[\w.-]+$/.test(r.belongs.repository))
@@ -49,11 +52,26 @@ export function sortPlan({ snapshot }) {
     routes.push(route);
     const live = issue.execution !== 'idle' || issue.sortOpenPr === true || issue.holds.some(x => /claim/i.test(x) && !/^Expired claim\b/.test(x));
     if (!Array.isArray(issue.assignees) || issue.assignees.length) { route.reason = 'owned'; continue; }
+    if (issue.sortSplit) {
+      route.record = record ?? issue.sorts?.find(x => x.authority === 'trusted' && x.intact && x.record)?.record ?? null;
+      route.reason = 'split-parts';
+      const done = issue.sortSplit.parts.every(p => snapshot.issues.some(x => x.key === p.issue && x.authority === 'trusted' && x.state === 'completed' && x.sortCompleted === true && sortCovered(snapshot, x)));
+      route.action = done && !live ? 'close' : 'hold';
+      if (done) route.evidence = issue.sortSplit.parts.map(p => `${p.area}: ${p.issue} completed`);
+      if (issue.sortOwnerChoice === 'whole' || issue.sortOwnerChoice === 'conflict') { route.action = live ? 'hold' : 'question'; route.reason = 'needs-owner'; }
+      continue;
+    }
+    if (issue.sortPart) {
+      const parent = snapshot.issues.find(x => x.key === issue.sortPart.parent);
+      if (!parent?.sortSplit?.parts.some(x => x.issue === issue.key && x.area === issue.sortPart.area)) { route.reason = 'split-pending'; continue; }
+    }
     if (!record) { if (!live) queued.push(issue.key); route.reason = 'sort-required'; continue; }
     if (live) route.reason = 'owned';
     if (record.status.state === 'fixed' || record.belongs.kind === 'old-code' || ['duplicate','not-genuine'].includes(record.genuine.kind)) {
       route.action = live ? 'hold' : 'close'; route.reason = record.belongs.kind === 'old-code' ? 'old-code' : record.genuine.kind === 'duplicate' ? 'duplicate' : record.status.state === 'fixed' ? 'fixed' : 'not-genuine'; continue;
     }
+    const mixed = resolveMixed({ snapshot, issue, record });
+    if (mixed) { Object.assign(route, mixed); if (live) { route.action = 'hold'; route.reason = 'owned'; } continue; }
     const area = resolveArea({ ...snapshot.sortContext, evidence: { paths: record.paths, keywords: [issue.title, issue.sortText ?? ''], labels: issue.labels ?? [], repository: record.belongs.kind === 'repository' ? record.belongs.repository : '', area: record.belongs.area } });
     Object.assign(route, { area: area.area, owner: area.owner });
     if (record.belongs.kind === 'unknown' || area.state === 'unsure') { route.action = live ? 'hold' : 'question'; route.reason = 'needs-owner'; continue; }
@@ -66,7 +84,7 @@ export function sortPlan({ snapshot }) {
   const umbrellaKeys = new Set(saved.filter(x => !x.merged && !x.members.includes(x.umbrella)).map(x => x.umbrella).filter(Boolean));
   const synthetic = issue => /<!-- pdd-issue-group:v1 ([a-z\d]+(?:-[a-z\d]+)*) -->/.test(issue.sortText ?? '');
   const byCause = new Map();
-  for (const route of routes.filter(x => x.action === 'work' && x.record?.rootCause && !umbrellaKeys.has(x.issue) && !synthetic(snapshot.issues.find(i => i.key === x.issue)))) {
+  for (const route of routes.filter(x => x.action === 'work' && !snapshot.issues.find(i => i.key === x.issue)?.sortPart && x.record?.rootCause && !umbrellaKeys.has(x.issue) && !synthetic(snapshot.issues.find(i => i.key === x.issue)))) {
     const key = route.record.rootCause;
     if (!byCause.has(key)) byCause.set(key, []);
     byCause.get(key).push(route);
@@ -117,7 +135,7 @@ export function projectSortGraph(snapshot, graph) {
     const members = graph.nodes.filter(x => group.members.includes(x.key));
     if (!umbrella) { for (const member of members) { unsafeGroups.add(member.key); member.eligible = false; member.reasons.push('Group umbrella pending'); } continue; }
     if (!members.length) { unsafeGroups.add(group.umbrella); umbrella.eligible = false; umbrella.reasons.push('Group has no open members'); }
-    if (uncertainSibling(group.area, group.rootCause)) { unsafeGroups.add(group.umbrella); umbrella.eligible = false; umbrella.reasons.push('Group sort pending'); }
+    if (group.members.some(key => { const member = snapshot.issues.find(x => x.key === key); return !selectedSort(snapshot, member); }) || uncertainSibling(group.area, group.rootCause)) { unsafeGroups.add(group.umbrella); umbrella.eligible = false; umbrella.reasons.push('Group sort pending'); }
     if (members.some(x => x.key === group.umbrella ? !['idle','running'].includes(x.executionState) : x.executionState !== 'idle')) unsafeGroups.add(group.umbrella);
     if (unsafeGroups.has(group.umbrella)) umbrella.eligible = false;
     const blockers = [...new Set(members.flatMap(x => x.blockers))];

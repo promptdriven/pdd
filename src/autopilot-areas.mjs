@@ -2,6 +2,7 @@
 const login = x => typeof x === 'string' && /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(x);
 const repo = x => typeof x === 'string' && /^[\w.-]+\/[\w.-]+$/.test(x);
 const owner = x => x === 'autopilot' || login(x) || typeof x === 'string' && x.startsWith('repo:') && repo(x.slice(5));
+const validAreas = areas => !(!Array.isArray(areas) || !areas.length || new Set(areas.map(a => a?.name)).size !== areas.length || areas.some(a => !a || typeof a.name !== 'string' || !a.name.trim() || !owner(a.owner) || a.mixed !== undefined && !['whole','split'].includes(a.mixed) || !a.match || Object.keys(a.match).some(k => !['paths','keywords','labels','repositories'].includes(k) || !Array.isArray(a.match[k]) || a.match[k].some(v => typeof v !== 'string' || !v))));
 const unsure = source => ({ state: 'unsure', area: '', owner: '', source });
 function glob(pattern, path) {
   if (typeof pattern !== 'string' || /[!\[\]\\]/.test(pattern)) return false;
@@ -21,7 +22,7 @@ export function resolveArea({ areas, codeowners = '', evidence = {} }) {
   const { paths = [], keywords = [], labels = [], repository = '', area = '' } = evidence;
   const resolved = (name, who, source) => ({ state: 'resolved', area: name, owner: who, source });
   if (areas !== undefined) {
-    if (!Array.isArray(areas) || !areas.length || new Set(areas.map(a => a?.name)).size !== areas.length || areas.some(a => !a || typeof a.name !== 'string' || !a.name.trim() || !owner(a.owner) || !a.match || Object.keys(a.match).some(k => !['paths','keywords','labels','repositories'].includes(k) || !Array.isArray(a.match[k]) || a.match[k].some(v => typeof v !== 'string' || !v)))) return unsure('config');
+    if (!validAreas(areas)) return unsure('config');
     const matches = areas.filter(a => (a.match.paths ?? []).some(rule => paths.some(path => glob(rule, path)))
       || (a.match.keywords ?? []).some(rule => keywords.some(text => text.toLowerCase().includes(rule.toLowerCase())))
       || (a.match.labels ?? []).some(rule => labels.includes(rule))
@@ -44,4 +45,15 @@ export function draftAreas({ codeowners = '', folders = [], labels = [], assigne
   if (!areas.length) for (const folder of folders) areas.push({ name: folder, match: { paths: [`/${folder}/`] }, owner: 'autopilot' });
   if (!areas.length) areas.push({ name: 'default', match: { paths: ['**'] }, owner: 'autopilot' });
   return { areas, signals: { folders, labels, assignees } };
+}
+
+// Keep the single-area interface conservative while mixed routing retains all matches.
+export function resolveAreas(input) {
+  if (input.areas !== undefined) {
+    if (!validAreas(input.areas)) return [];
+    const matches = input.areas.map(a => resolveArea({ ...input, areas: [a], evidence: { ...input.evidence, area: '' } })).filter(a => a.state === 'resolved');
+    if (matches.length) return matches;
+  }
+  const one = resolveArea(input);
+  return one.state === 'resolved' ? [one] : [];
 }

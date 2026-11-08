@@ -32,7 +32,15 @@ record in analysis.sorts. It has this shape (values below are illustrative):
 Copy the subject, area/release row and all trusted requirement comment revisions
 from the snapshot. Add every examined source row. `base` names the unsuperseded
 sort comment IDs on this issue. Use unknown/unclear and one question when evidence
-cannot decide. Never invent a fix or owner. Keep expected cases separate from
+cannot decide. Never invent a fix or owner. For mixed issues include touchedAreas, one
+{area,evidence:[files,commands,error text]} row for every area. For split work,
+include splitOrder:{first:<area>,evidence:[reason for the work order]}. Missing
+area evidence or order means one owner question. Whole sends every part to the
+owner; never start it. Split makes independently closable part issues under the
+original tracker. Only the local part can start, after its prerequisites. A
+trusted person can use pdd:owner-whole or pdd:owner-split (label wins), or a
+comment with one of those directives or "mixed: whole" / "mixed: split".
+Do not bypass a person assignee or live claim. Keep expected cases separate from
 code output. PDD validates the record; it does not verify the semantic assessment.
 
 PDD routes closed proposals, external owners and questions. Do not start them.

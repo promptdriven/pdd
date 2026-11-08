@@ -1,3 +1,4 @@
+import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
 import { randomUUID } from 'node:crypto';
@@ -272,6 +273,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
       await saveSortBatch({ repository: request.repository, snapshot, sorts }, ports, write);
       const settings = await ports.settings.read({ cwd, repository: request.repository });
       await syncSortGroups({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
+      await syncMixedParts({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
       await routeSortIssues({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
     } catch { return finish(pendingResult('write-unconfirmed', { stage: 'sort', reviewIds: ids, questions })); }
   }
@@ -288,6 +290,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
     try {
       const write = pacedSortWrites(ports, { cwd, repository });
       await syncSortGroups({ cwd, repository, snapshot, mode }, ports, write);
+      await syncMixedParts({ cwd, repository, snapshot, mode }, ports, write);
       await routeSortIssues({ cwd, repository, snapshot, mode }, ports, write);
     }
     catch { /* Unconfirmed effects wait; graph holds routed issues. */ }
