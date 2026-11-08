@@ -553,7 +553,7 @@ async function workspaceInventory(herdr) {
 }
 
 export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
-  const herdr = herdrCommand(ports), now = ports.now ?? Date.now;
+  const herdr = herdrCommand(ports), now = ports.now ?? Date.now, env = ports.env ?? process.env;
   await ensureServer(herdr, ports);
   const present = async () => {
     const workspace = (await workspaceInventory(herdr)).find(row => row.workspace_id === chat.workspaceId);
@@ -600,8 +600,8 @@ export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
       writeFileSync(chat.messageFile, message);
     }
     await ports.checkpoint(chat, custody(layout));
-    await herdr(['pane', 'run', chat.paneId, chatCommand({commonDir: run.commonDir, sourceRoot: run.sourceRoot,
-      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...(resumeId ? {resumeId} : {messageFile: chat.messageFile, sessionId: chat.session?.id})})]);
+    await launchInPane(herdr, chat.paneId, {commonDir: run.commonDir, sourceRoot: run.sourceRoot,
+      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...(resumeId ? {resumeId} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env});
     delete chat.startUnconfirmed;
     await ports.checkpoint(chat, custody(layout));
     return true;

@@ -172,3 +172,13 @@ test('2905: recovery verifies the saved worktree assignment before opening a rep
   assert.notEqual(result.exitCode, 0);
   assert.equal(effects(f).length, 0);
 });
+
+test('closed workspace recovery applies caller login unsets before resuming', async t => {
+  const { f, run } = await closed(t, 'codex');
+  assert.equal((await open(f)).exitCode, 0);
+  const command = launches(f)[0][3];
+  assert.ok(command.startsWith(`cd '${run.root}' && env -u OPENAI_API_KEY `));
+  for (const name of ['CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']) {
+    assert.ok(command.includes(`-u ${name} `), name);
+  }
+});
