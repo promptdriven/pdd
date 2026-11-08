@@ -14,4 +14,6 @@ As a person previewing the files for a Story, I can include documentation with c
 - The indented example must not make `miss5.svg` an upload dependency or cause a missing-file refusal.
 - Escaping `!` in `\![a](x)` leaves a navigation link outside Dependencies; it must not make `x` an upload dependency or cause a missing-file refusal.
 - Escaping `[` in `!\[a](x)` leaves neither a link nor an image; it must not make `x` an upload dependency or cause a missing-file refusal, even inside Dependencies.
+- An indented code block continues across indented and blank lines, ends at prose, and cannot interrupt a paragraph; a genuine dependency after it remains a dependency.
+- Consecutive backslashes escape punctuation in odd runs and leave it active in even runs. An escaped image marker leaves a link that counts inside Dependencies; an escaped opening bracket leaves neither link nor image.
 - Actual images and links declared in Dependencies remain upload dependencies. Missing or unsafe actual dependencies must still refuse.
