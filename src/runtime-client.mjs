@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7545c2e8cd819510317352e5108f757883d178f91ac9dc66aef4674dd56756ef).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2e547c9dc6100be7455fc7ce73bf85f7021ae049f0e104bb60b45ddee6f27c1a).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';

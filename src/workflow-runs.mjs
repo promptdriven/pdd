@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: eba280d9608bc395025961ecacc5e128fada4363776983c3ea5a43143c648fb5).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: b153af96b84b4b1836293e0377086610ba9706ef79dc9e1bc41cf923223731f2).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';

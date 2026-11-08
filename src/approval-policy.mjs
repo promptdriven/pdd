@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-policy.prompt.md (sha256: 64a7ab10f72675b3c6f459cc221300bd33557aa1521de383586fa9023367d0e6).
+// Generated from prompts/cli/approval-policy.prompt.md (sha256: 63d73958fb8c2cfe52c982421153827a9a15ded0b45b8192648f6006407a16fc).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
