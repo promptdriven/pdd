@@ -339,6 +339,8 @@ is requested. `pdd autopilot status` and `status --all` show the local identity
 counts, limits, observed machine count and deferred state. Status makes no
 GitHub request. Write records stay in the state root's `github-writes/` folder.
 Tokens are never stored there.
+Throttle observations are saved separately from reservation updates, so a busy
+reservation lock cannot discard a read's Retry-After deadline.
 An occupied host lock reports usage as unavailable and deferred. Dead write
 owners and dead recovery attempts are recoverable without a time-based lease.
 

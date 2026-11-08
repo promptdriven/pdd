@@ -14,7 +14,7 @@ const source = process.env.PDD_WRITE_REPAIR_SOURCE
 const budgetModule = new URL('github-writes.mjs', source).href;
 const runnerModule = new URL('github-write-proxy.mjs', source).href;
 const { githubWriteBudget } = await import(budgetModule);
-const { githubWriteRunner } = await import(runnerModule);
+const { githubWriteRunner, githubWriteUsages } = await import(runnerModule);
 const NOW = Date.parse('2026-11-07T00:00:00Z');
 const STATUS = '<!-- pdd:autopilot:status -->';
 function world(t) {
@@ -86,6 +86,25 @@ for (const graphql of [false, true]) test(`${graphql ? 'thrown GraphQL query' : 
   await write();
   assert.equal(dispatched, 1);
   assert.equal(githubWriteBudget(options).usage().hour, 1);
+});
+
+test('a read cooldown survives contention with another process reservation lock', async t => {
+  const root = world(t), lock = lockAt(root);
+  fs.mkdirSync(join(root, 'github-writes'));
+  fs.writeFileSync(lock, String(process.pid));
+  const options = { root, env: {}, identity: 'acme', now: () => NOW };
+  const outcome = { code: 1, stdout: 'HTTP/2.0 429\r\nRetry-After: 90\r\n\r\n{}' };
+  const reader = githubWriteRunner(async () => outcome, options);
+  assert.equal(await reader('gh', ['api', '--include', 'repos/acme/widgets/issues/1']), outcome);
+  const shorter = githubWriteRunner(async () => ({ ...outcome, stdout: outcome.stdout.replace('90', '30') }), options);
+  await shorter('gh', ['api', '--include', 'repos/acme/widgets/issues/1']);
+  fs.unlinkSync(lock);
+  // This identity has only a throttle observation, with no reservation file.
+  assert.deepEqual(githubWriteUsages(options).map(row => [row.identity, row.retryAt]), [['acme', NOW + 90_000]]);
+  let dispatched = 0;
+  const writer = githubWriteRunner(async () => { dispatched++; return { code: 0, stdout: '{}' }; }, options);
+  await assert.rejects(writer('gh', ['api', '--method', 'PATCH', 'repos/acme/widgets/issues/1']), { code: 'github_write_budget', retryAt: NOW + 90_000 });
+  assert.equal(dispatched, 0);
 });
 
 test('simultaneous status submissions from separate runners reconcile one owned comment', async t => {

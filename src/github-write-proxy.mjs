@@ -47,12 +47,15 @@ export function githubWriteUsage({ root, env = process.env, fs = nativeFs, now =
 export function githubWriteUsages({ root, env = process.env, fs = nativeFs, now = Date.now, machine } = {}) {
   root ??= env.PDD_GITHUB_ROOT || githubStateRoot(env);
   let names = [];
-  try { names = fs.readdirSync(join(root, 'github-writes')).filter(name => /^[0-9a-f]{20}\.json$/.test(name)); } catch { /* No write state yet. */ }
-  const usages = [];
+  try { names = fs.readdirSync(join(root, 'github-writes')).filter(name => /^(?:[0-9a-f]{20}|cooldown-[0-9a-f]{20}-[0-9a-f-]+)\.json$/.test(name)); } catch { /* No write state yet. */ }
+  const usages = [], seen = new Set();
   for (const name of names) {
     try {
       const value = JSON.parse(fs.readFileSync(join(root, 'github-writes', name), 'utf8'));
-      if (typeof value.identity === 'string' && typeof value.host === 'string') usages.push(githubWriteBudget({ root, identity:value.identity, host:value.host, fs, now, machine }).usage());
+      const key = `${value.host}/${value.identity}`;
+      if (typeof value.identity === 'string' && typeof value.host === 'string' && !seen.has(key)) {
+        usages.push(githubWriteBudget({ root, identity:value.identity, host:value.host, fs, now, machine }).usage()); seen.add(key);
+      }
     } catch { /* One broken identity must not hide other identities. */ }
   }
   return usages.length ? usages.sort((a,b) => `${a.host}/${a.identity}`.localeCompare(`${b.host}/${b.identity}`)) : [githubWriteUsage({root,env,fs,now,machine})];

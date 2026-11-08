@@ -122,6 +122,18 @@ export function githubWriteLock({ directory, fs = nativeFs }) {
 export function githubWriteBudget({ root, identity = 'unknown', host = 'github.com', fs = nativeFs, now = Date.now, machine = hostname() }) {
   identity = String(identity || 'unknown').toLowerCase(); host = String(host).toLowerCase();
   const directory = join(root, 'github-writes'), file = join(directory, `${digest(`${host}/${identity}`)}.json`), lock = join(directory, `${digest(host)}.lock`);
+  const cooldownPrefix = `cooldown-${digest(host)}-`;
+  const cooldowns = () => {
+    let names;
+    try { names = fs.readdirSync(directory).filter(name => name.startsWith(cooldownPrefix) && name.endsWith('.json')); }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+    return names.flatMap(name => {
+      const path = join(directory, name); let row;
+      try { row = JSON.parse(fs.readFileSync(path, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+      if (row.host !== host || typeof row.identity !== 'string' || !row.identity || !Number.isFinite(row.retryAt)) throw Error('Invalid GitHub cooldown');
+      return [{ ...row, path }];
+    });
+  };
   const empty = () => ({ identity, host, events: [], claims: {}, cooldown: 0 });
   const load = () => {
     let value;
@@ -133,6 +145,7 @@ export function githubWriteBudget({ root, identity = 'unknown', host = 'github.c
   const view = (value, count = 1) => {
     const at = now(), peers = new Set([machine]);
     let shared = {}, uncertain = [], cooldown = value.cooldown;
+    for (const row of cooldowns()) if (identity === 'unknown' || row.identity === identity || row.identity === 'unknown') cooldown = Math.max(cooldown, row.retryAt);
     if (identity !== 'unknown') {
       try { const unknown = JSON.parse(fs.readFileSync(join(directory, `${digest(`${host}/unknown`)}.json`), 'utf8')); shared = unknown.claims; uncertain = unknown.events; cooldown = Math.max(cooldown, unknown.cooldown); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -221,7 +234,14 @@ export function githubWriteBudget({ root, identity = 'unknown', host = 'github.c
       if (!/\b(?:403|429)\b/.test(text) || !/retry-after\s*:|secondary|abuse/i.test(text)) return;
       const retry = /^retry-after:\s*(.+?)\s*\r?$/im.exec(text)?.[1];
       const delay = retry && /^\d+$/.test(retry) ? now() + Number(retry) * 1000 : Date.parse(retry);
-      update(value => { value.cooldown = Math.max(value.cooldown, Number.isFinite(delay) && delay > now() ? delay : now() + MINUTE); });
+      const retryAt = Number.isFinite(delay) && delay > now() ? delay : now() + MINUTE;
+      // Immutable observations cannot overwrite a longer concurrent deadline,
+      // and do not need the reservation lock held by another local process.
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const saved = join(directory, `${cooldownPrefix}${randomUUID()}.json`), temporary = `${saved}.tmp`;
+      try { fs.writeFileSync(temporary, JSON.stringify({ host, identity, retryAt }), { flag: 'wx', mode: 0o600 }); fs.renameSync(temporary, saved); }
+      finally { try { fs.unlinkSync(temporary); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
+      for (const row of cooldowns()) if (row.retryAt <= now()) try { fs.unlinkSync(row.path); } catch (e) { if (e.code !== 'ENOENT') throw e; }
     },
   };
 }

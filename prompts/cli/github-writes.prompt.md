@@ -56,7 +56,13 @@ create a fresh allowance. A dead owner is reclaimable; a live or unreadable lock
 - `observe(outcome)` shares a 403/429 cooldown when Retry-After is present, or a
   secondary/abuse limit is reported. Use Retry-After seconds or HTTP date; absent
   valid guidance, wait at least one minute. Preserve the original outcome and
-  never retry an uncertain write automatically.
+  never retry an uncertain write automatically. Persist throttle observations
+  independently of the reservation lock, so ordinary lock contention cannot
+  lose a deadline. Admission takes the latest applicable deadline, including
+  concurrent observations, with the same known/unknown identity sharing as
+  reservations. Expired observations may be removed; an incomplete save must
+  never replace a complete observation. Status includes identities known only
+  through throttle observations.
 - `githubWriteStatus(usage)` returns one plain status line with identity, rolling
   minute/hour counts, limits, machine count, state, and retry time when deferred.
 - `githubWriteLock({directory,fs})` acquires a local process lock for a caller's
