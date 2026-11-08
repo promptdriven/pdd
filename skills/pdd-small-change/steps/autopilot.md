@@ -17,3 +17,7 @@ Still in force: product calls the issue does not settle, actions that cannot be 
 After repeated failed validation, inspect the actual failure, identify its cause and change the repair before another permitted check. Two failed rounds do not by themselves mean this issue is blocked. Keep repairing while a useful correction is available, preserving behavior expectations and required validation, for at most 5 repair rounds in one area (a round is a return to an earlier step that clears later steps; a retry of the same step is not one); pdd refuses a 6th. Then, or if a real blocker remains, record its cause and next action in the original run and take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress, and let the coordinator continue independent eligible work. Never repeat an unchanged failed check or an external action with an unknown outcome.
 
 Something runs a prompt (a test, a command or another prompt) that has no interface block: draft the block from the prompt text through pdd and save it. A prompt that nothing runs needs none.
+
+## Full-suite validation
+
+Use the current invoked pdd CLI: `pdd workflow suite --command "REPOSITORY FULL-SUITE COMMAND"`. Select the actual command from the repository. The shared machine queue admits three suites. Wait for its result; do not start a direct copy or mark slot waiting as stuck. Report a running suite failure or timeout with its specific cause and the `test-suite` alert kind. Focused checks keep their normal route. See `pdd workflow suite --help`.

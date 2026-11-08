@@ -525,6 +525,20 @@ Include an `eligible` boolean from the current intake result on every issue item
 An `eligible: false` item is monitoring context, never fresh work. Keep claimed
 issues marked `claimed: true`, never present them as unclaimed.
 
+For full-suite progress, load the required
+[shared queue contract](test-suite-queue.prompt.md). Read suite intervals for each
+active run's worktree. Subtract their union from inactivity since the run record's
+mtime. While waiting or executing, offer no stuck-run or idle-claim rule for that
+run. After success, only elapsed time outside those intervals counts. A failed,
+timed out or interrupted suite produces one `suite-failed` time rule per ticket
+completion (keyed by run and ticket, including equal completion times) with its exact queue reason, requesting the `test-suite` alert and
+failure diagnosis. It does not produce `stuck-run` or `idle-claim`. Completion is
+validation activity for the claim idle rule. Preserve the existing progress port;
+optional `suite` carries the queue public status. The coordinator instruction
+requires full-suite validation through the absolute invoked CLI's
+`workflow suite --command COMMAND`, using the repository's actual test command.
+The queue limits validation, not the number of issue workers.
+
 Elapsed time can also offer work without a GitHub change or an AI call in the
 tick. Use the clock and local run-progress reader as injectable ports. Read this
 repository's active PDD run records in the Git common directory's
@@ -959,6 +973,9 @@ Use the existing launcher ports and native defaults, including state, Git, setti
 reconcile and wake boundaries; injected substitutes reach this same path.
 
 ## Dependencies
+
+- [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
+
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 

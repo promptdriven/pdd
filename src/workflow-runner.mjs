@@ -1,7 +1,8 @@
+import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3d453475ed32491dfff636433a0d2f4198e63e0d4a8f977c3f1f7ac5ce058df0).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 72b5de5b78f5474b892ed7fbde56f644c2f177a90fff3c117cc7fc6c8383bc9f).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -315,6 +316,7 @@ async function areaMessage(run, index, p, packageRoot) {
   return [
     `Read and follow the selected workflow skill at ${JSON.stringify(resolve(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md'))} and its adjacent supporting files. This is a pdd workflow run.${index ? automatic ? ' Earlier areas have advanced.' : ' The person approved the earlier areas.' : ''}`,
     ...(automatic ? [automatic] : []),
+    ...(validSavedAutomaticOrigin(run) ? [`Run the repository full suite through ${pddCommand(packageRoot)} workflow suite --command COMMAND and wait for the queue result. Test-slot waiting is not stuck.`] : []),
     `Issue: ${run.repo}#${run.number} "${oneLine(run.issue.title)}" ${run.issue.url}`,
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
@@ -434,10 +436,11 @@ const revising = run => { const last = run.changes?.at(-1); return Boolean(last 
 // A run stopped at the repair limit keeps that one-line reason, also after a later park (#3041).
 const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.parkReason ?? 'automatic work stopped';
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
-function describe(run, chat = null, { drafts = [], nothing = false, health = null } = {}) {
+function describe(run, chat = null, { drafts = [], nothing = false, health = null, suite = null } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (run.state === 'stuck') return `stuck: ${stuckReason(run)}`;
+  if (suite && (suite.state !== 'finished' || suite.reason)) return suiteStatusWords(suite);
   if (runtimeWaiting(run)) return `waiting for the interpreter: ${run.runtimeWait.reason}. Autopilot checks the interpreter at each tick and wakes it when the interpreter is back; an Autopilot alert names any need for a person (pdd autopilot status)`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
@@ -2799,7 +2802,7 @@ Nothing was sent to the chat.` };
       if (entry.inFlight) return progress(entry);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
       const message = entry.kind === 'notice' ? entry.text : entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
-        : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
+        : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}. Run the repository full suite through ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)} workflow suite --command COMMAND and wait for the queue result. Test-slot waiting is not stuck.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
         try { return await transport(args); }
@@ -3023,7 +3026,7 @@ function detail(run, chat = null, facts = {}) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
-function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null } = {}) {
+function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, suite = null } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat);
@@ -3035,6 +3038,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
     : run.state === 'stuck' ? `stuck: ${stuckReason(run)}`
+    : suite && (suite.state !== 'finished' || suite.reason) ? suiteStatusWords(suite)
     : runtimeWaiting(run) ? `waiting for the interpreter: ${run.runtimeWait.reason}`
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)
@@ -3052,7 +3056,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
   const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
-  return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
+  return { ...(suite ? { suite } : {}), ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
     ...(cannotWork ? { chatProblem: { kind: cannotWork.kind, agent: cannotWork.agent, until: cannotWork.until !== null ? new Date(cannotWork.until).toISOString() : null, message: cannotWork.message } } : {}),
     ...((run.evidence??[]).some(e=>e.association?.stage==='pr1')?{pr1Stories:ownStoryCount(run,{stage:'pr1'})}:{}),
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
@@ -3078,7 +3082,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   for (const run of runs) {
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
     const health = {}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
-    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health });
+    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, suite: readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p) });
     const snapshot = requestSnapshot(run, p);
     all.push({ ...item, steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
@@ -3104,6 +3108,7 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   const ordinaryOwnership=readRunOwnership(found.run.runDir,p);
   if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
   const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
+  facts.suite = readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p);
   const snapshot = requestSnapshot(run, p);
   const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
   const steps = savedStepResults(run);
@@ -3469,3 +3474,6 @@ export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,r
     return{state:'eligible',reason:null,runId:null,repo:null,producerRoot,tests,stage:'current',sourceAnchor:{root,head:null},source_sha256};
   }catch(error){return{...result,reason:oneLine(error.message??error)};}
 }
+
+// An explicit full-suite command uses the machine queue, never the run mutation lock.
+export function runSuite(input, ports = {}) { return runTestSuite(input, ports); }

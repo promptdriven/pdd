@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: c354526a532f1fe6a988411af6fec1af727adcacba2f05828e89cd1908096f88).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: f1bb8ce0ddfeaf9698bce03b574077486b3bc9b772dbc141491e4b299fdf3208).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
-export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'interpreter', 'interpreter-access', 'access', 'decision', 'stuck', 'long-running', 'recovered']);
+export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'interpreter', 'interpreter-access', 'access', 'decision', 'stuck', 'test-suite', 'long-running', 'recovered']);
 // These incidents are shared by the whole machine: one incident per repository, machine and kind lists every affected issue.
 // An interpreter outage is one of them: the hosted PDD interpreter is down for every issue at once. So is interpreter-access:
 // the interpreter health check of this machine cannot be read (its gh sign-in or PDD_RUNTIME_URL).

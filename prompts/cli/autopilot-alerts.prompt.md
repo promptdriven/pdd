@@ -240,6 +240,11 @@ result says that the alert is recorded on this machine and names
 `not-configured` result is how a coordinator sends a failed alert again, so the
 coordinator may repeat the same call on a later tick while the need lasts.
 
+`test-suite` is also an accepted alert kind and recovery kind. It is one
+incident per repository, issue and kind. Its cause names the suite failure,
+timeout or interruption. Ordinary test-slot waiting creates no alert. A suite
+failure uses this kind instead of `stuck`; existing retry and readback rules apply.
+
 ## Status line
 
 `alertStatusLine({repo, env}, ports)` reads only local files: no network and no

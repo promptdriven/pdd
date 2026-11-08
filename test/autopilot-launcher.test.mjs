@@ -1623,3 +1623,54 @@ test('2903: the relaunch close compares the folder when no terminal id is saved,
   f.status = 304; f.time += 60 * 1000; await f.tick();
   assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.state().paneId, 'w2:p1');
 });
+
+for (const state of ['waiting', 'running']) test(`full-suite ${state} does not emit stuck or idle-claim rules`, async t => {
+  const f = await fixture(t);
+  const hour = 60 * 60 * 1000, changedAt = f.time - 2 * hour;
+  f.issues = [issue(101, {labels:['pdd:working'], updated_at:new Date(changedAt).toISOString()})];
+  f.runProgress = [{number:101,changedAt,suite:{state,position:state === 'waiting' ? 4 : null,queuedAt:changedAt,startedAt:state === 'running' ? changedAt : null,finishedAt:null,reason:null,pausedMs:2*hour}}];
+  const result = await f.invoke('start'); assert.equal(result.exitCode, 0, result.message);
+  const rules = f.prompts.flatMap(text => JSON.parse(text.trim().split('\n').at(-1)).timeRules ?? []);
+  assert.equal(rules.some(rule => rule.number === 101 && ['stuck-run','idle-claim'].includes(rule.kind)), false, 'suite activity pauses inactivity rules');
+});
+
+test('a suite timeout emits its own reason once, without a stuck issue rule', async t => {
+  const f = await fixture(t), hour = 60 * 60 * 1000, changedAt = f.time - 2 * hour;
+  f.issues = [issue(101, {labels:['pdd:working'],updated_at:new Date(changedAt).toISOString()})];
+  f.runProgress = [{number:101,changedAt,suite:{state:'finished',position:null,queuedAt:changedAt,startedAt:changedAt,finishedAt:f.time - 1,reason:'per-file timeout: test/slow.test.mjs',pausedMs:hour}}];
+  const result = await f.invoke('start'); assert.equal(result.exitCode, 0, result.message);
+  const rules = () => f.prompts.flatMap(text => JSON.parse(text.trim().split('\n').at(-1)).timeRules ?? []);
+  assert.equal(rules().filter(rule => rule.number === 101 && rule.kind === 'suite-failed').length, 1);
+  assert.match(rules().find(rule => rule.kind === 'suite-failed').reason, /per-file timeout.*slow/);
+  assert.equal(rules().some(rule => ['stuck-run','idle-claim'].includes(rule.kind)), false);
+  await f.tick(); assert.equal(rules().filter(rule => rule.kind === 'suite-failed').length, 1);
+});
+
+test('native progress reader pauses the stuck clock and resumes its remaining time after a suite', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0;
+  delete f.ports.readRunProgress;
+  const folder = join(f.cwd,'.git','pdd','runs','101'), worktree = join(f.dir,'worktree'), queue = join(f.dir,'suite-queue');
+  mkdirSync(folder,{recursive:true}); mkdirSync(worktree); mkdirSync(queue);
+  const changedAt=f.time, statusFile=join(folder,'status.json');
+  writeFileSync(statusFile,JSON.stringify({v:1,number:101,repo:'owner/repo',state:'running',root:worktree}));
+  utimesSync(statusFile,new Date(changedAt),new Date(changedAt));
+  const row={ticket:1,pid:process.pid,childPid:null,cwd:worktree,state:'waiting',queuedAt:changedAt+10*60_000,startedAt:null,finishedAt:null,reason:null};
+  const file=join(queue,'ticket-1.json'); writeFileSync(file,JSON.stringify(row));
+  f.ports.env={HOME:f.home,PDD_SUITE_QUEUE:queue}; f.time=changedAt+2*hour;
+  await f.tick(); assert.equal(f.prompts.length,0,'waiting time does not make a run stuck');
+  row.state='finished'; row.finishedAt=f.time; writeFileSync(file,JSON.stringify(row));
+  f.time+=49*60_000; await f.tick(); assert.equal(f.prompts.length,0,'ten minutes before waiting plus 49 after is below the threshold');
+  f.time+=60_000; await f.tick();
+  assert.equal(packet(f).timeRules.filter(rule=>rule.kind==='stuck-run'&&rule.number===101).length,1,'only time outside the queue counts');
+});
+
+
+test('different failed suite tickets with the same finish time each get one failure event', async t => {
+  const f=await fixture(t);
+  const suite={ticket:1,state:'finished',position:null,queuedAt:f.time-100,startedAt:f.time-50,finishedAt:f.time,reason:'suite exit 1',pausedMs:100};
+  f.runProgress=[{number:101,changedAt:f.time,suite}];
+  assert.equal((await f.invoke('start')).exitCode,0);
+  suite.ticket=2; await f.tick(); await f.tick();
+  const rules=f.prompts.flatMap(text=>JSON.parse(text.trim().split('\n').at(-1)).timeRules??[]);
+  assert.equal(rules.filter(rule=>rule.kind==='suite-failed').length,2);
+});

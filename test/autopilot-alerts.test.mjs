@@ -491,13 +491,13 @@ test('invalid alert input is refused with its problem named, and records and sen
     [['autopilot', 'alert', '--issue', 'twelve', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--issue', '0', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
-    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running\|recovered/],
+    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered/],
     [alert, 'not json', /JSON object on stdin with nonblank "cause", "tried", "need"\. Nothing was recorded/],
     [alert, '[]', /JSON object on stdin/],
     [alert, JSON.stringify({ cause: 'x', tried: 'y' }), /nonblank "cause", "tried", "need"/],
     [alert, JSON.stringify({ ...usage, need: '  ' }), /nonblank "cause", "tried", "need"/],
     [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: '' }), /nonblank "cause"\. Nothing was recorded/],
-    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running,/],
+    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running,/],
   ];
   for (const [argv, stdin, problem] of cases) {
     const refused = await f.pdd(argv, stdin);
@@ -670,4 +670,16 @@ test('a Discord bot check failure sends no message, and invalid bot settings sav
   assert.match(noChannel.stderr, new RegExp(`cannot read channel ${CHANNEL} \\(HTTP 403\\)`));
   assert.deepEqual(f.requests.map(f.route), ['GET /users/@me', 'GET /users/@me', `GET /channels/${CHANNEL}`], 'only read-only checks ran');
   f.noSecret();
+});
+
+// A synthetic suite incident uses the same fake HTTP delivery as other alerts.
+test('suite failures are separate per-issue incidents and can recover without stuck', async t => {
+  const f = setup(t); await f.pdd(['autopilot','alerts','set'], DISCORD);
+  const fields = {cause:'per-file timeout: test/slow.test.mjs',tried:'The queued suite ran',need:'Inspect the stalled test'};
+  await f.alert(80, 'test-suite', fields); await f.alert(81, 'test-suite', fields);
+  assert.equal(f.requests.length, 2);
+  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['80:test-suite','81:test-suite']);
+  await f.alert(80, 'test-suite', fields); assert.equal(f.requests.length, 2);
+  await f.alert(80, 'recovered', {cause:'The suite passed',kind:'test-suite'});
+  assert.deepEqual(Object.keys(f.record().incidents), ['81:test-suite']);
 });

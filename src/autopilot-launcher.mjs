@@ -1,4 +1,5 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
+import { readSuiteProgress } from './test-suite-queue.mjs';
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 15f35d56779ec0d8d93346c88b90b72a9719278adff4a95905490acdbb133236).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -349,7 +350,9 @@ async function readRunProgress(state, p) {
     try {
       const file = join(folder, name, 'status.json'), run = read(file);
       if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase() && ['running', 'waiting'].includes(run.state)) {
-        progress.push({ number: run.number, changedAt: statSync(file).mtimeMs });
+        const changedAt = statSync(file).mtimeMs;
+        const suite = (p.readSuiteProgress ?? readSuiteProgress)({cwd:run.root, since:changedAt, env:p.env}, p);
+        progress.push({ number: run.number, changedAt: changedAt + (suite?.pausedMs ?? 0), ...(suite ? {suite} : {}) });
       }
     } catch { /* Missing or unreadable records supply no progress fact. */ }
   }
@@ -523,7 +526,7 @@ function message(state, issues, timeRules = []) {
   const workflow = { pddBin: join(state.packageRoot ?? dirname(dirname(self)), 'bin', 'pdd.mjs'), agent: state.agent.kind, home: state.environment?.HOME, configHome: path ? { variable, path } : null };
   const start = state.startAction?.mode === state.currentMode && state.startAction?.repository === state.repo ? state.startAction : null;
   const authority = start ? `The operator invoked pdd autopilot start for ${state.repo} in ${state.currentMode} mode. ${state.currentMode === 'auto' ? 'This action establishes scope for ordinary eligible work and automatic merge under the repository review, testing, strict approval and other rules.' : 'Follow observe mode limits.'} This is an operator action, not a quoted person reply or checker approval. Use the existing supported approval routes for the actual action where applicable; never treat it as a later person reply.\n` : '';
-  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}), ...(runtimePacket(state.runtime) ? { runtime: runtimePacket(state.runtime) } : {}) })}\n`;
+  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. Run each repository's full-suite validation through ${quote(process.execPath)} ${quote(workflow.pddBin)} workflow suite --command COMMAND, with its actual command. Wait for the shared queue result; slot waiting is not stuck. A suite-failed rule needs diagnosis and one test-suite alert with its specific cause, not pdd:stuck. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}), ...(runtimePacket(state.runtime) ? { runtime: runtimePacket(state.runtime) } : {}) })}\n`;
 }
 function coordinatorEnvelope(state) {
   return { version: 'pdd.autopilot-coordinator.v1', repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activation: state.activatedAt, ...(state.runs === undefined ? {} : { runs: state.runs }) };
@@ -1317,7 +1320,17 @@ async function runTick(stateFile, ports, completion) {
         pendingTimes[key] = claim.takeovers;
       }
     }
-    for (const { number, changedAt } of await (p.readRunProgress ?? readRunProgress)(state, p)) {
+    const runProgress = await (p.readRunProgress ?? readRunProgress)(state, p);
+    const suiteByNumber = new Map(runProgress.filter(row => row.suite).map(row => [row.number, row.suite]));
+    for (const { number, changedAt, suite } of runProgress) {
+      if (suite && (suite.state !== 'finished' || suite.reason)) {
+        const key = `suite:${number}:${suite.ticket ?? suite.queuedAt}`;
+        if (suite.reason && state.timeSeen[key] === undefined) {
+          timeRules.push({kind:'suite-failed', number, reason:`Run #${number} full test suite failed: ${suite.reason} Diagnose the suite failure and send one test-suite alert. Do not mark the issue stuck for this validation result.`});
+          pendingTimes[key] = suite.finishedAt ?? suite.queuedAt;
+        }
+        continue;
+      }
       const key = `run:${number}`;
       if (p.now() - changedAt >= STUCK_AFTER && state.timeSeen[key] !== changedAt) {
         timeRules.push({ kind: 'stuck-run', number, reason: `Run #${number} has had no progress for 60 minutes; follow the pdd:stuck rule.` });
@@ -1354,9 +1367,12 @@ async function runTick(stateFile, ports, completion) {
         // update time to the time of a comment edit, so the issue update time counts only
         // when it is later than the newest heartbeat edit.
         const heartbeatEdit = latestTime(rows.filter(heartbeat).map(row => row.updated_at)), issueUpdate = Date.parse(issue.updated_at);
-        const claimActivity = latestTime([...(issueUpdate > heartbeatEdit + HEARTBEAT_SLACK ? [issue.updated_at] : []), ...rows.flatMap(row => heartbeat(row) ? [row.created_at] : [row.created_at, row.updated_at])]);
+        const observedClaimActivity = latestTime([...(issueUpdate > heartbeatEdit + HEARTBEAT_SLACK ? [issue.updated_at] : []), ...rows.flatMap(row => heartbeat(row) ? [row.created_at] : [row.created_at, row.updated_at])]);
+        const suite = suiteByNumber.get(issue.number);
+        const suiteHolds = suite && (suite.state !== 'finished' || suite.reason);
+        const claimActivity = Math.max(observedClaimActivity, suite?.finishedAt ?? -Infinity);
         const claimKey = `claim:${issue.number}`;
-        const claimDue = labels.includes('pdd:working') && !expiredClaim && limitedClaim?.expired !== true && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
+        const claimDue = !suiteHolds && labels.includes('pdd:working') && !expiredClaim && limitedClaim?.expired !== true && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
         const recheckReadyBaseline = previous?.waiting === true && graphEligible === true && !blocked;
         const unassigned = !issue.assignee && (!Array.isArray(issue.assignees) || issue.assignees.length === 0);
         const reconsiderReady = config.mode === 'auto' && graphEligible === true && !blocked && unassigned;

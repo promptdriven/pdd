@@ -15,6 +15,8 @@ PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff. Build
 
 Read pdd-prompting/review.md.
 
+Run full-suite validation through the current invoked pdd CLI `workflow suite --command COMMAND`, with the repository's actual command. Wait for the shared queue result. Slot waiting is not stuck; a suite failure or timeout needs its own cause and `test-suite` alert.
+
 Both PRs: the full suite is green on the head, with no new skip or only. One exception: new native tests in PR 1 may be red only for the missing behavior. Say so in the verdict; then PR 1 merges only together with its code PR.
 
 Verdict: one PR comment with a JSON block: `verdict` (PASS, FAIL or NOT SURE), `head` (the SHA you checked), `risk` (1-5, before merge), `family`, `session`, `checker_mode`, and the evidence. Then run `pdd workflow status N` to refresh the PR top. Never send a failed check again on your own.
