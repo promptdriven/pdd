@@ -1,3 +1,5 @@
+import {healthyMachine} from './helpers/healthy-machine.mjs';
+import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -50,11 +52,12 @@ async function replayStep(t, step, world, root) {
   let started = false;
   const live = () => ({ pane_id: pane.pane_id, workspace_id: 'w1', cwd, foreground_cwd: cwd, tab_id: 't1', terminal_id: 'term1', agent: 'codex', agent_status: 'idle', agent_session: 'session' });
   const ports = {
+    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(root),
     stateRoot, now: () => Date.parse('2026-11-06T00:00:00Z'), readRunProgress: async () => [], warn: () => {}, allocationCheck: async () => ({ state: 'ready', message: '' }),
     selectAgent: async () => ({ ...saved.agent, env: {} }), pathDiagnostic: () => [], timer: async () => true,
     run: async (command, args) => {
       if (command === 'git') return { code: 0, stdout: `${cwd}\n`, stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: saved.repo, url: `https://github.com/${saved.repo}` }), stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: saved.repo, defaultBranchRef: { name: 'main' }, url: `https://github.com/${saved.repo}` }), stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };

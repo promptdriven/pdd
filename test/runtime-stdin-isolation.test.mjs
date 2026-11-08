@@ -69,7 +69,7 @@ console.log(process.argv[2] === 'auth' ? ${JSON.stringify(TOKEN)} : 'octo 4242')
   try {
     const socket = await socketInput(t);
     const child = spawn(process.execPath, [process.env.PDD_STDIN_TEST_CLI || join(root, 'bin/pdd.mjs'), 'test', 'place-order', ...(lint ? ['--lint'] : ['--timeout', '10'])], {
-      cwd: repo, env: { ...process.env, HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:${process.env.PATH}` },
+      cwd: repo, env: { ...process.env, HOME: home, PDD_INTERPRETER_QUEUE: join(home, 'native-interpreter-queue'), PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:${process.env.PATH}` },
       stdio: [socket.input, 'pipe', 'pipe'],
     });
     t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });

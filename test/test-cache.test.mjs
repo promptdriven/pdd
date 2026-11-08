@@ -98,7 +98,7 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     const bin = join(ctx.sandbox, 'bin'); mkdirSync(bin);
     const shim = join(bin, 'gh');
     writeFileSync(shim, '#!/bin/sh\nif [ "$1" = auth ]; then echo gho_TESTTOKEN_never_print_7f3a; else echo "octo 4242"; fi\n'); chmodSync(shim, 0o755);
-    const editLoopEnv = { ...process.env, HOME: ctx.home, PATH: `${bin}:${process.env.PATH}`, PDD_RUNTIME_URL: ctx.fake.origin, PDD_STATE_DIR: ctx.state };
+    const editLoopEnv = { ...process.env, HOME: ctx.home, PDD_INTERPRETER_QUEUE: join(ctx.sandbox, 'native-interpreter-queue'), PATH: `${bin}:${process.env.PATH}`, PDD_RUNTIME_URL: ctx.fake.origin, PDD_STATE_DIR: ctx.state };
     delete editLoopEnv.CI; // This case exercises local edit-loop reuse; CI guards have dedicated cases.
     const cli = command => new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [new URL('../bin/pdd.mjs', import.meta.url).pathname, command, '--json'], {

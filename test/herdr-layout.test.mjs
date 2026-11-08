@@ -485,14 +485,15 @@ for(const holder of ['free owner/repo label','unrelated workspace']) {
  });
 }
 
-test('lost run-close acknowledgement retains intent and never repeats the close',async t=>{
+test('lost run-close acknowledgement reconciles absence and never repeats the close',async t=>{
  const f=await fixture(t),layout=await f.open(),command=f.ports.command,checkpoints=[];
  f.ports.checkpoint=async()=>checkpoints.push(layout.phase);
  f.ports.command=async args=>{const reply=await command(args);if(args[0]==='workspace'&&args[1]==='close')throw Error('close reply lost');return reply;};
  await assert.rejects(f.module.withHerdrLayoutLock(()=>f.close({...f.input,layout}),f.ports),/close reply lost/);
  assert.deepEqual(checkpoints,['close_intent']);assert.equal(layout.phase,'close_intent');
  f.ports.command=command;
- await assert.rejects(f.module.closeHerdrRunLayout({...f.input,layout},f.ports),{code:'layout_cleanup_uncertain'});
+ await assert.doesNotReject(f.module.closeHerdrRunLayout({...f.input,layout},f.ports));
+ assert.equal(layout.phase,'closed');
  assert.equal(f.calls.filter(a=>a[0]==='workspace'&&a[1]==='close').length,1);
 });
 test('checkpoint failure prevents the next allocation or close effect',async t=>{

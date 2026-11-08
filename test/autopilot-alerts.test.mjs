@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { fork } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { alertStatusLine } from '../src/autopilot-alerts.mjs';
+import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
+import { alertStatusLine, runAutopilotAlerts } from '../src/autopilot-alerts.mjs';
 
 // Synthetic webhook addresses. The fake HTTP port records requests; no test sends a real request.
 const DISCORD = 'https://discord.com/api/webhooks/123456789012345678/SECRET-discord_token';
@@ -54,12 +57,14 @@ function setup(t) {
     writeFileSync(join(f.ports.stateRoot, `${id}.json`), JSON.stringify({ repo: 'owner/repo', enabled: true, agent: { id: 'codex' } }));
     const stdout = capture(), stderr = capture();
     const exitCode = await runPdd(['autopilot', 'status'], { cwd, env: f.env, stdout, stderr, autopilotLauncherPorts: {
-      stateRoot: f.ports.stateRoot, timer: async () => false, herdr: async () => ({ running: false }), allocationCheck: async () => ({ state: 'ready', message: '' }),
+      checkCapacityPorts:isolatedCheckCapacity(dir), stateRoot: f.ports.stateRoot, timer: async () => false, herdr: async () => ({ running: false }), allocationCheck: async () => ({ state: 'ready', message: '' }),
       run: async command => { assert.equal(command, 'git', 'status runs only local git'); return { code: 0, stdout: `${cwd}\n`, stderr: '' }; },
     } });
     f.outputs.push(stdout.text, stderr.text);
     assert.equal(exitCode, 0, stderr.text);
-    return stdout.text.trimEnd().split('\n');
+    // Health has separate status coverage; keep these assertions scoped to alert delivery.
+    const lines = stdout.text.trimEnd().split('\n');
+    return [lines[0], ...lines.slice(1).filter(line => line.startsWith('Alerts:'))];
   };
   // The secret never reaches any output or local file other than the private destination (or no file at all for a token command).
   f.noSecret = ({ config = false } = {}) => {
@@ -491,13 +496,13 @@ test('invalid alert input is refused with its problem named, and records and sen
     [['autopilot', 'alert', '--issue', 'twelve', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--issue', '0', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
-    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running\|recovered/],
+    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered/],
     [alert, 'not json', /JSON object on stdin with nonblank "cause", "tried", "need"\. Nothing was recorded/],
     [alert, '[]', /JSON object on stdin/],
     [alert, JSON.stringify({ cause: 'x', tried: 'y' }), /nonblank "cause", "tried", "need"/],
     [alert, JSON.stringify({ ...usage, need: '  ' }), /nonblank "cause", "tried", "need"/],
     [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: '' }), /nonblank "cause"\. Nothing was recorded/],
-    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running,/],
+    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running,/],
   ];
   for (const [argv, stdin, problem] of cases) {
     const refused = await f.pdd(argv, stdin);
@@ -670,4 +675,259 @@ test('a Discord bot check failure sends no message, and invalid bot settings sav
   assert.match(noChannel.stderr, new RegExp(`cannot read channel ${CHANNEL} \\(HTTP 403\\)`));
   assert.deepEqual(f.requests.map(f.route), ['GET /users/@me', 'GET /users/@me', `GET /channels/${CHANNEL}`], 'only read-only checks ran');
   f.noSecret();
+});
+
+// A synthetic suite incident uses the same fake HTTP delivery as other alerts.
+test('suite failures are separate per-issue incidents and can recover without stuck', async t => {
+  const f = setup(t); await f.pdd(['autopilot','alerts','set'], DISCORD);
+  const fields = {cause:'per-file timeout: test/slow.test.mjs',tried:'The queued suite ran',need:'Inspect the stalled test'};
+  await f.alert(80, 'test-suite', fields); await f.alert(81, 'test-suite', fields);
+  assert.equal(f.requests.length, 2);
+  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['80:test-suite','81:test-suite']);
+  await f.alert(80, 'test-suite', fields); assert.equal(f.requests.length, 2);
+  await f.alert(80, 'recovered', {cause:'The suite passed',kind:'test-suite'});
+  assert.deepEqual(Object.keys(f.record().incidents), ['81:test-suite']);
+});
+
+test('stuck reviews with new attempt notes do not post; new causes, decisions and recovery do', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  const stuck = { cause: 'Required check unavailable', tried: 'Read check result', need: 'Restore the required check' };
+  f.replies.push(echo, echo, echo, echo, echo);
+  assert.equal((await f.alert(41, 'stuck', stuck)).exitCode, 0);
+  for (let review = 1; review <= 3; review++) {
+    f.time += 4 * 60 * 60 * 1000;
+    assert.equal((await f.alert(41, 'stuck', { ...stuck, tried: `Review ${review}: still blocked` }, '--update')).exitCode, 0);
+    assert.equal(f.requests.length, 1, 'unchanged stuck cause and decision must not post at a four-hour review');
+  }
+  const changedDecision = { ...stuck, need: 'Choose another required check' };
+  assert.equal((await f.alert(41, 'stuck', changedDecision, '--update')).exitCode, 0);
+  assert.equal(f.requests.length, 2, 'a new decision must post');
+  assert.equal((await f.alert(41, 'stuck', { ...changedDecision, cause: 'Check credentials expired' }, '--update')).exitCode, 0);
+  assert.equal(f.requests.length, 3, 'a new cause must post');
+  assert.equal((await f.alert(41, 'recovered', { cause: 'Check restored', kind: 'stuck' })).exitCode, 0);
+  assert.equal(f.requests.length, 4);
+  await f.alert(41, 'recovered', { cause: 'Check restored', kind: 'stuck' });
+  assert.equal(f.requests.length, 4, 'repeated recovery stays quiet');
+  await f.alert(41, 'stuck', stuck);
+  assert.equal(f.requests.length, 5, 'a later incident can open');
+  f.noSecret();
+});
+
+test('parallel issues retain both incidents and concurrent repeats post nothing', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  f.replies.push(echo, echo);
+  const fields = { cause: 'Missing choice', tried: 'Read the issue', need: 'Choose a policy' };
+  const results = await Promise.all([f.alert(41, 'decision', fields), f.alert(42, 'stuck', fields)]);
+  assert.deepEqual(results.map(r => r.exitCode), [0, 0]);
+  assert.equal(Object.keys(f.record().incidents).length, 2, 'parallel runs must not overwrite each other');
+  assert.equal(f.requests.length, 2);
+  await Promise.all([f.alert(41, 'decision', fields, '--update'), f.alert(42, 'stuck', fields, '--update')]);
+  assert.equal(f.requests.length, 2);
+});
+
+test('native digests combine open incidents and parallel run attention once per six hours', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  f.replies.push(echo, echo, echo, echo);
+  await f.alert(41, 'stuck', { cause: 'Required check unavailable', tried: 'Read checks', need: 'Restore checks' });
+  let attention = [{ number: 41, category: 'stuck', cause: 'Required check unavailable' },
+    { number: 42, category: 'parked', cause: 'Interpreter busy' }, { number: 43, category: 'decision', cause: 'Choose retention' }];
+  const digest = () => runAutopilotAlerts({ action: 'digest', cwd: f.cwd, env: f.env, attention }, f.ports);
+  assert.equal((await digest()).exitCode, 0);
+  assert.equal(f.requests.length, 2);
+  const text = f.requests.at(-1).body.content;
+  assert.match(text, /digest/i);
+  for (const n of [41, 42, 43]) assert.equal(text.split(`/issues/${n}`).length - 1, 1);
+  for (const category of ['stuck', 'parked', 'decision']) assert.ok(text.includes(category));
+  const first = f.time;
+  f.time += 6 * 60 * 60 * 1000 - 1;
+  assert.equal((await digest()).exitCode, 0);
+  assert.equal(f.requests.length, 2);
+  f.time++;
+  await Promise.all([digest(), digest()]);
+  assert.equal(f.requests.length, 3, 'the six-hour boundary permits one digest across concurrent ticks');
+  assert.equal(f.record().digests['test-host'].at, new Date(first + 6 * 60 * 60 * 1000).toISOString());
+  await f.alert(41, 'recovered', { cause: 'Restored', kind: 'stuck' });
+  attention = [];
+  f.time += 6 * 60 * 60 * 1000;
+  await digest();
+  assert.equal(f.requests.length, 4, 'an empty repository sends no digest');
+  f.noSecret();
+});
+
+test('digest attempts are bounded after failure and scoped to repository and machine', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  const input = { action: 'digest', cwd: f.cwd, env: f.env, attention: Array.from({ length: 15 }, (_, i) => ({ number: i + 1, category: 'parked', cause: 'x'.repeat(500) })) };
+  f.replies.push({ status: 403, text: '' }, echo, echo);
+  assert.equal((await runAutopilotAlerts(input, f.ports)).exitCode, 0);
+  assert.equal(f.record().digests['test-host'].result, 'failed');
+  assert.ok(f.requests[0].body.content.length <= 1900);
+  assert.match(f.requests[0].body.content, /5 more/);
+  await runAutopilotAlerts(input, f.ports);
+  assert.equal(f.requests.length, 1, 'delivery failure cannot cause digest flapping');
+  await runAutopilotAlerts(input, { ...f.ports, hostname: () => 'second-host' });
+  assert.equal(f.requests.length, 2);
+  await runAutopilotAlerts(input, { ...f.ports, repository: async () => ({ nameWithOwner: 'elsewhere/project' }) });
+  assert.equal(f.requests.length, 3);
+});
+
+for (const count of [10, 15]) {
+  test(`digest accounts for all omitted rows within the character budget with ${count} long-repository items`, async t => {
+    const f = setup(t);
+    const repo = `${'o'.repeat(39)}/${'r'.repeat(100)}`;
+    f.ports.repository = async () => ({ nameWithOwner: repo });
+    assert.equal((await f.pdd(['autopilot', 'alerts', 'set'], DISCORD)).exitCode, 0);
+    f.replies.push(echo);
+    const attention = Array.from({ length: count }, (_, i) => ({ number: i + 1, category: 'parked', cause: 'x'.repeat(120) }));
+    const result = await runAutopilotAlerts({ action: 'digest', cwd: f.cwd, env: f.env, attention }, f.ports);
+    assert.equal(result.exitCode, 0);
+    assert.equal(f.requests.length, 1, 'one digest request');
+    const text = f.requests[0].body.content;
+    assert.ok(text.length <= 1900, 'the complete message fits the character budget');
+    const lines = text.split('\n');
+    assert.ok(lines[0].includes('test-host'));
+    assert.ok(lines[1].includes(repo));
+    const omitted = lines.at(-1).match(/^(\d+)\b/);
+    assert.ok(omitted, 'the footer counts rows omitted by the character budget');
+    const rows = lines.slice(2, -1);
+    assert.ok(rows.length > 0 && rows.length < 10, 'the character budget limits the displayed rows');
+    assert.equal(Number(omitted[1]), count - rows.length, 'the footer counts every item not shown');
+    assert.deepEqual(rows, attention.slice(0, rows.length).map(item =>
+      `${item.category}: https://github.com/${repo}/issues/${item.number} — ${item.cause}`), 'displayed rows and issue links are complete and ordered');
+    f.noSecret();
+  });
+}
+
+test('infrastructure set, send, recovery, test and clear use a separate destination', async t => {
+  const f = setup(t);
+  const selected = ['--destination', 'infrastructure'];
+  assert.equal((await f.pdd(['autopilot', 'alerts', 'set'], DISCORD)).exitCode, 0);
+  const configured = await f.pdd(['autopilot', 'alerts', 'set', ...selected], SLACK);
+  assert.equal(configured.exitCode, 0);
+  assert.ok(configured.stdout.includes('--destination infrastructure'));
+  const infraFile = join(f.home, '.config', 'pdd', 'autopilot-infrastructure-alerts.json');
+  assert.equal(statSync(infraFile).mode & 0o777, 0o600);
+  const before = readFileSync(f.config, 'utf8');
+  f.replies.push({ status: 200, text: 'ok' }, echo, echo, { status: 200, text: 'ok' });
+  await f.alert(41, 'resource', { cause: 'Disk full', tried: 'Read disk usage', need: 'Free disk' });
+  await f.alert(41, 'decision', { cause: 'Choose retention', tried: 'Read policy', need: 'Choose days' });
+  await f.alert(41, 'recovered', { cause: 'Resolved' });
+  assert.ok(f.requests[0].url.startsWith('https://hooks.slack.com/'));
+  assert.ok(f.requests[1].url.startsWith('https://discord.com/'));
+  assert.ok(f.requests[2].url.startsWith('https://discord.com/'));
+  assert.ok(f.requests[3].url.startsWith('https://hooks.slack.com/'));
+  assert.equal(Object.keys(f.record().incidents).length, 0);
+  const logLength = f.record().log.length;
+  f.replies.push({ status: 200, text: 'ok' });
+  assert.equal((await f.pdd(['autopilot', 'alerts', 'test', ...selected])).exitCode, 0);
+  assert.equal(f.record().log.length, logLength + 1);
+  assert.equal(f.record().log.at(-1).destination, 'infrastructure', 'infrastructure tests record only their own route');
+  assert.equal((await f.pdd(['autopilot', 'alerts', 'clear', ...selected])).exitCode, 0);
+  assert.equal(existsSync(infraFile), false);
+  assert.equal(readFileSync(f.config, 'utf8'), before);
+  f.replies.push(echo);
+  await f.alert(42, 'resource', { cause: 'Disk full', tried: 'Read disk usage', need: 'Free disk' });
+  assert.ok(f.requests.at(-1).url.startsWith('https://discord.com/'), 'unset infrastructure route falls back');
+  assert.equal((await f.pdd(['autopilot', 'alerts', 'clear', '--destination', 'unknown'])).exitCode, 2);
+  assert.equal(readFileSync(f.config, 'utf8'), before);
+  // Both private destination files may hold secrets; neither output nor records may hold them.
+  f.noSecret();
+});
+
+
+test('destination tests retain concurrent alert state and clear only the selected route failure', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  await f.pdd(['autopilot', 'alerts', 'set', '--destination', 'infrastructure'], SLACK);
+  const fields = { cause: 'Missing choice', tried: 'Read policy', need: 'Choose policy' };
+  f.replies.push(echo);
+  await f.alert(40, 'decision', fields);
+  let release, entered;
+  const hold = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  f.replies.push(async request => { entered(); await hold; return echo(request); }, echo);
+  const sending = f.alert(41, 'decision', fields);
+  await started;
+  const testing = f.pdd(['autopilot', 'alerts', 'test']);
+  release();
+  assert.deepEqual((await Promise.all([sending, testing])).map(r => r.exitCode), [0, 0]);
+  assert.equal(Object.keys(f.record().incidents).length, 2);
+  assert.equal(f.record().log.at(-1).action, 'test', 'test evidence must survive the pending alert save');
+  f.replies.push({ status: 403, text: '' });
+  await f.alert(42, 'resource', fields);
+  let status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
+  assert.ok(status.includes('--destination infrastructure'));
+  f.replies.push(echo);
+  await f.pdd(['autopilot', 'alerts', 'test']);
+  status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
+  assert.ok(status.includes('403'), 'an Autopilot test must not hide an infrastructure failure');
+  f.replies.push({ status: 200, text: 'ok' });
+  await f.pdd(['autopilot', 'alerts', 'test', '--destination', 'infrastructure']);
+  status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
+  assert.equal(status.includes('403'), false, 'infrastructure test clears its old send failure');
+  assert.ok(status.includes('--destination infrastructure'), 'the open undelivered incident still needs attention');
+});
+
+test('failed digest status names the digest without inventing an issue', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  f.replies.push({ status: 403, text: '' });
+  await runAutopilotAlerts({ action: 'digest', cwd: f.cwd, env: f.env, attention: [{ number: 41, category: 'parked', cause: 'Interpreter down' }] }, f.ports);
+  const status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
+  assert.ok(status.includes('digest'));
+  assert.equal(status.includes('#undefined'), false);
+});
+
+
+test('alerts help exposes quiet review, digest cadence and separate destination rules', async t => {
+  const f = setup(t);
+  const reply = await f.pdd(['autopilot', 'alerts', '--help']);
+  assert.equal(reply.exitCode, 0);
+  for (const fact of ['cause', 'decision', 'recover', 'stuck', 'digest', 'repository', 'machine', '6 hours', '--destination', 'infrastructure'])
+    assert.ok(reply.stdout.includes(fact), `alerts help must explain ${fact}`);
+  assert.equal(f.requests.length, 0);
+});
+
+
+test('two native processes share incident custody and post the same alert once', { timeout: 10000 }, async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  const script = join(f.dir, 'synthetic-alert-worker.mjs');
+  writeFileSync(script, `
+    import { runAutopilotAlerts } from ${JSON.stringify(new URL('../src/autopilot-alerts.mjs', import.meta.url).href)};
+    import { acquireRunLock } from ${JSON.stringify(new URL('../src/workflow-runner.mjs', import.meta.url).href)};
+    const result = await runAutopilotAlerts({ action: 'alert', cwd: ${JSON.stringify(f.cwd)}, env: process.env,
+      issue: '41', kind: 'stuck', text: JSON.stringify({ cause: 'Required check unavailable', tried: 'Read checks', need: 'Restore check' }) }, {
+      stateRoot: ${JSON.stringify(f.ports.stateRoot)}, hostname: () => 'test-host', repository: async () => ({ nameWithOwner: 'owner/repo' }),
+      recordLock: (...args) => { try { return acquireRunLock(...args); } catch (error) { process.send({ type: 'contended' }); throw error; } },
+      http: async request => { process.send({ type: 'send' }); await new Promise(resolve => process.once('message', resolve));
+        return { status: 200, text: JSON.stringify({ id: '991', content: request.body.content }) }; }
+    });
+    process.send({ type: 'done', exitCode: result.exitCode });
+    process.disconnect();
+  `);
+  const start = () => {
+    const child = fork(script, [], { env: f.env, execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    t.after(() => { if (child.exitCode === null) child.kill(); });
+    const messages = [], queued = [], waiters = [];
+    child.on('message', message => { messages.push(message); const waiting = waiters.shift(); if (waiting) waiting(message); else queued.push(message); });
+    return { child, messages, ended: once(child, 'exit'), next: () => queued.length ? Promise.resolve(queued.shift()) : new Promise(resolve => waiters.push(resolve)) };
+  };
+  const first = start();
+  assert.equal((await first.next()).type, 'send');
+  const second = start();
+  const competing = await second.next();
+  assert.ok(['contended', 'send'].includes(competing.type));
+  first.child.send({ release: true });
+  if (competing.type === 'send') second.child.send({ release: true });
+  assert.deepEqual(await first.ended, [0, null]);
+  assert.deepEqual(await second.ended, [0, null]);
+  assert.deepEqual([first, second].flatMap(worker => worker.messages.filter(m => m.type === 'done').map(m => m.exitCode)), [0, 0]);
+  assert.equal([first, second].flatMap(worker => worker.messages).filter(m => m.type === 'send').length, 1,
+    'separate processes must not both post the same open incident');
+  assert.equal(Object.keys(f.record().incidents).length, 1);
+  assert.deepEqual(f.record().log.map(row => row.action), ['alert', 'repeat']);
 });

@@ -1,9 +1,12 @@
+import {healthyMachine} from './helpers/healthy-machine.mjs';
+import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import { writeRun, runDirFor } from '../src/workflow-runs.mjs';
 
@@ -18,10 +21,10 @@ test('generated timer process coalesces review and elapsed run and claim, then s
   const world = join(dir, 'world.json'), log = join(dir, 'calls.jsonl');
   const save = value => writeFileSync(world, JSON.stringify(value));
   save({issues:[row(78,{labels:[{name:'pdd:working'}]}),row(92,{body:'Fixes #78',pull_request:{}})],reviews:[]});
-  const script = `#!${process.execPath}\nconst fs=require('fs'),path=require('path');const name=path.basename(process.argv[1]),a=process.argv.slice(2),w=JSON.parse(fs.readFileSync(${JSON.stringify(world)}));fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({name,a})+'\\n');const out=x=>process.stdout.write(x);if(name==='git')out(a.includes('--git-common-dir')?${JSON.stringify(common)}:${JSON.stringify(cwd)});else if(name==='systemctl'||name==='loginctl')out('yes');else if(name==='herdr'){a.splice(0,2);if(a[0]==='status')out('{"running":true}');else if(a[0]==='workspace')out('{"result":{"root_pane":{"pane_id":"p1"},"workspace":{"workspace_id":"w1"}}}');else if(a[0]==='agent'&&a[1]==='get'){if(!fs.existsSync(${JSON.stringify(join(dir,'agent-started'))})){out('{"error":{"code":"agent_not_found","message":"agent not found"}}');process.exitCode=1;}else out('{"result":{"agent":{"agent_status":"idle","agent_session":"session"}}}');}else if(a[0]==='pane'&&a[1]==='run'){fs.writeFileSync(${JSON.stringify(join(dir,'agent-started'))},'yes');out('{}');}else if(a[0]==='pane'&&a[1]==='read')out('');else out('{}');}else if(name==='gh'){if(a[0]==='auth')out('');else if(a[0]==='repo')out('{"nameWithOwner":"owner/repo","owner":{"login":"owner"}}');else if(a.includes('--slurp'))out('[[]]');else {const e=a.find(x=>x.startsWith('repos/'))||'';let body=[];if(e.includes('/issues?'))body=w.issues;else if(e.includes('/reviews?'))body=w.reviews;else if(/pulls\\/92$/.test(e))body={state:'open',head:{sha:'a'}};else if(e.includes('/permission'))body={permission:'none'};const tag=e.includes('/reviews?')?'"reviews-'+w.reviews.length+'"':'"issues"';if(a.some(x=>x==='If-None-Match: '+tag))out('HTTP/2 304 Not Modified\\r\\n\\r\\n');else out('HTTP/2 200 OK\\r\\nETag: '+tag+'\\r\\n\\r\\n'+JSON.stringify(body));}}`;
+  const script = `#!${process.execPath}\nconst fs=require('fs'),path=require('path');const name=path.basename(process.argv[1]),a=process.argv.slice(2),w=JSON.parse(fs.readFileSync(${JSON.stringify(world)}));fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({name,a})+'\\n');const live=${JSON.stringify({pane_id:'p1',workspace_id:'w1',tab_id:'t1',terminal_id:'term1',cwd,foreground_cwd:cwd,agent:'codex',agent_status:'idle',agent_session:'session'})};const out=x=>process.stdout.write(x);if(name==='git')out(a.includes('--git-common-dir')?${JSON.stringify(common)}:${JSON.stringify(cwd)});else if(name==='systemctl'||name==='loginctl')out('yes');else if(name==='herdr'){a.splice(0,2);if(a[0]==='status')out('{"running":true}');else if(a[0]==='workspace')out('{"result":{"root_pane":{"pane_id":"p1"},"workspace":{"workspace_id":"w1"}}}');else if(a[0]==='agent'&&a[1]==='get'){if(!fs.existsSync(${JSON.stringify(join(dir,'agent-started'))})){out('{"error":{"code":"agent_not_found","message":"agent not found"}}');process.exitCode=1;}else out(JSON.stringify({result:{agent:live}}));}else if(a[0]==='pane'&&a[1]==='get')out(JSON.stringify({result:{pane:live}}));else if(a[0]==='pane'&&a[1]==='list')out(JSON.stringify({result:{type:'pane_list',panes:[live]}}));else if(a[0]==='pane'&&a[1]==='run'){fs.writeFileSync(${JSON.stringify(join(dir,'agent-started'))},'yes');out('{}');}else if(a[0]==='pane'&&a[1]==='read')out('');else out('{}');}else if(name==='gh'){if(a[0]==='auth')out('');else if(a[0]==='repo')out('{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"owner":{"login":"owner"}}');else if(a.includes('--slurp'))out('[[]]');else {const e=a.find(x=>x.startsWith('repos/'))||'';let body=[];if(e.includes('/issues?'))body=w.issues;else if(e.includes('/reviews?'))body=w.reviews;else if(/pulls\\/92$/.test(e))body={state:'open',head:{sha:'a'}};else if(e.includes('/permission'))body={permission:'none'};const tag=e.includes('/reviews?')?'"reviews-'+w.reviews.length+'"':'"issues"';if(a.some(x=>x==='If-None-Match: '+tag))out('HTTP/2 304 Not Modified\\r\\n\\r\\n');else out('HTTP/2 200 OK\\r\\nETag: '+tag+'\\r\\n\\r\\n'+JSON.stringify(body));}}`;
   for (const name of ['git','gh','herdr','systemctl','loginctl']) writeFileSync(join(bin,name),script,{mode:0o755});
-  const env = {HOME:home,PATH:`${bin}:/usr/bin:/bin`,XDG_CONFIG_HOME:join(home,'.config')};
-  const start = await runAutopilotLauncher({command:'start',cwd,env,packageRoot:resolve('.'),issues:[]},{now:()=>now-2*3600000,selectAgent:async()=>({id:'codex',kind:'codex',command:'codex',env:{}}),pathDiagnostic:()=>[],allocationCheck:async()=>({state:'ready',message:''})});
+  const env = {PDD_SUITE_QUEUE:join(dir,'suite-queue'),PDD_INTERPRETER_QUEUE:join(dir,'interpreter-queue'),HOME:home,PATH:`${bin}:/usr/bin:/bin`,XDG_CONFIG_HOME:join(home,'.config')};
+  const start = await runAutopilotLauncher({command:'start',cwd,env,packageRoot:resolve('.'),issues:[]},{...healthyMachine,checkCapacityPorts:isolatedCheckCapacity(dir),now:()=>now-2*3600000,selectAgent:async()=>({id:'codex',kind:'codex',command:'codex',env:{}}),pathDiagnostic:()=>[],allocationCheck:async()=>({state:'ready',message:''})});
   assert.equal(start.exitCode,0,start.message);
   const serviceDir=join(home,'.config/systemd/user');
   const service=readFileSync(join(serviceDir,readdirSync(serviceDir).find(x=>x.endsWith('.service'))),'utf8');
@@ -32,17 +35,25 @@ test('generated timer process coalesces review and elapsed run and claim, then s
   const calls=()=>readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);
   const prompts=()=>calls().filter(x=>x.name==='herdr'&&x.a[2]==='agent'&&x.a[3]==='prompt');
   const baseline=prompts().length;
-  const tick=()=>execFileSync(entry[0],entry.slice(1),{cwd,env,encoding:'utf8',timeout:15000});
+  // Execute the generated command, including its executable entry guard.
+  // A child-only loader supplies observations; native dispatch is unchanged.
+  const preload=fileURLToPath(new URL('./helpers/autopilot-timer-preload.mjs',import.meta.url));
+  const tick=()=>execFileSync(entry[0],entry.slice(1),
+    {cwd,env:{...env,NODE_OPTIONS:`--import=${JSON.stringify(preload)}`},encoding:'utf8',timeout:15000});
   save({issues:[row(78,{labels:[{name:'pdd:working'}]}),row(92,{body:'Fixes #78',pull_request:{}})],reviews:[{id:1,state:'CHANGES_REQUESTED',body:'Please revise',user:{login:'owner'},submitted_at:new Date(now).toISOString()}]});
   tick();
   assert.equal(prompts().length,baseline+1);
+  const health=JSON.parse(readFileSync(entry[2],'utf8')).health;
+  assert.equal(health.paused,false);
+  assert.equal(health.resource.resources.cpuCount,40);
+  assert.equal(health.usage.usedPercent,25);
   const instruction=prompts().at(-1).a.at(-1), match=/Artifact path: (.+)/.exec(instruction);
   const packetText=match?readFileSync(JSON.parse(match[1]),'utf8'):instruction;
   const packet=JSON.parse(packetText.trim().split('\n').at(-1));
   assert.deepEqual(packet.timeRules.map(x=>[x.kind,x.number]).sort(),[['idle-claim',78],['stuck-run',101]]);
   assert.equal(packet.issues[0].pullRequests[0].reviews[0].body,'Please revise');
   tick(); tick(); assert.equal(prompts().length,baseline+1);
-  const restarted = await runAutopilotLauncher({command:'start',cwd,env,packageRoot:resolve('.'),issues:[]},{selectAgent:async()=>({id:'codex',kind:'codex',command:'codex',env:{}}),pathDiagnostic:()=>[],allocationCheck:async()=>({state:'ready',message:''})});
+  const restarted = await runAutopilotLauncher({command:'start',cwd,env,packageRoot:resolve('.'),issues:[]},{...healthyMachine,checkCapacityPorts:isolatedCheckCapacity(dir),selectAgent:async()=>({id:'codex',kind:'codex',command:'codex',env:{}}),pathDiagnostic:()=>[],allocationCheck:async()=>({state:'ready',message:''})});
   assert.equal(restarted.exitCode,0,restarted.message);
   tick(); assert.equal(prompts().length,baseline+1, 'delivered events stay quiet after restart');
   assert.ok(calls().some(x=>x.name==='gh'&&x.a.includes('If-None-Match: "issues"')));

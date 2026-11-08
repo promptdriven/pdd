@@ -1081,7 +1081,7 @@ test('CALLS: a status refresh reads each PR once (with its description, head and
   const prs = f.data().prs; prs[0].statusCheckRollup = [{ conclusion: 'SUCCESS' }]; f.configure({ prs });
   const changed = status(), same = status();
   const views = list => list.filter(call => call.startsWith('pr view'));
-  assert.deepEqual(views(same), [`pr view ${url(22)} --json state,mergedAt,statusCheckRollup,baseRefName`, `pr view ${url(23)} --json state,mergedAt,statusCheckRollup,baseRefName,body,headRefOid,comments`], same.join('\n'));
+  assert.deepEqual(views(same), [`pr view ${url(22)} --json state,mergedAt,statusCheckRollup,baseRefName,headRefOid`, `pr view ${url(23)} --json state,mergedAt,statusCheckRollup,baseRefName,headRefOid,body,comments`], same.join('\n'));
   assert.deepEqual(same.filter(call => !call.startsWith('pr view')), [], 'No change: no other GitHub call (no comments read, no second view, no edit).');
   assert.deepEqual(changed.filter(call => !views(same).includes(call)), [`pr view ${url(23)} --json body,headRefOid`, `pr edit ${url(23)} --body-file -`], changed.join('\n'));
 });

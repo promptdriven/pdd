@@ -1,6 +1,8 @@
-// Generated from prompts/cli/workflow-prove.prompt.md (sha256: c3f82e0ec441132a3f1f5b63402b4a36ec917c1ac9876e63a15a6a30f958e4da).
+// Generated from prompts/cli/workflow-prove.prompt.md (sha256: 73b84b0a85e19d4dcba3f91cba18e6e11b689b6bd926e786b6e8cc1f514a34fd).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
+import { updateRun } from './workflow-runs.mjs';
+import { applyCostMeasurement } from './cost-ledger.mjs';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -232,7 +234,10 @@ export async function proveRun({ref,test,expect,cwd,timeoutMinutes=DEFAULT_PHASE
         if(record.paths.length && !interruptSignal){const copied=await p.overlay({root:run.root,headSha:record.headSha,worktree:worktrees[0],paths:record.paths});if(copied.error)throw Error(copied.error);}
         for(const [index,phase] of ['base','head'].entries()) {
           if(interruptSignal)break;
+          const suiteNow = ports.suiteNow ?? (() => performance.now()), suiteStarted = suiteNow();
           let response;try {const input={command:test,cwd:worktrees[index],timeoutMs:timeoutMinutes*60000,killGraceMs:2000,outputLimitBytes:1048576};response=await (ports.runProcess ? p.runProcess(input) : runProcess(input,controller.signal));}catch(error){response={result:{exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:diagnostic(error),setupError:''}};}
+          try { const measurement = { id: `prove-${randomUUID()}`, suiteMinutes: Math.max(0, suiteNow() - suiteStarted) / 60000 };
+            await (ports.recordSuiteCost ?? (input => updateRun(run.runDir, latest => applyCostMeasurement(latest, input, Date.now()))))(measurement); } catch {}
           record[phase]=phaseRecord(response.result,expect);record.setupError ||= record[phase].error || record[phase].setupError;
         }
       }

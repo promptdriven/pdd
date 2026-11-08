@@ -130,8 +130,15 @@ test('2907 HOME fallback uses the existing home expansion policy', () => {
 test('2907 full replacement expands tilde with OS home when HOME is absent', async t => {
   const f = await started(t);
   delete f.ports.env.HOME; f.ports.env.CODEX_HOME = '~';
+  // Test expansion and shell quoting without opening the host's account config.
+  const configReads = [];
+  f.ports.profileFs = {readFileSync(path) {
+    configReads.push(path);
+    throw Object.assign(Error('No synthetic account config'), {code:'ENOENT'});
+  }};
   const result = await open(f, { newSession: true });
   assert.equal(result.exitCode, 0, result.message);
+  assert.deepEqual(configReads, [join(homedir(), 'config.toml')]);
   assert.equal(f.record().configDir, homedir());
   assert.equal(f.record().chatReplacement.configDir, homedir());
   assert.equal(f.record().chats.at(-1).configDir, homedir());
@@ -413,7 +420,10 @@ test('2907 unconfirmed replacement session lookup uses Work5 despite retry Work6
   assert.equal((await open(f, { newSession: true })).exitCode, 1);
   const pending = f.record().chatReplacement;
   f.herdr.paneOf(pending.replacement).agent = null;
-  f.tick(31_000); f.ports.env.CODEX_HOME = f.work6; f.ports.herdr = healthy;
+  f.tick(31_000); f.ports.env.CODEX_HOME = f.work6; f.ports.herdr = async args => {
+    if (args[0] === 'pane' && args[1] === 'process-info') throw Object.assign(Error('unavailable process proof'), {code:'herdr_failed'});
+    return healthy(args);
+  };
   const lookups = [];
   f.ports.findNativeSessions = async (stage, options) => { lookups.push({ stage, options }); return []; };
   f.herdr.calls.length = 0;
@@ -486,7 +496,7 @@ for (const action of ['advance', 'cancel']) test(`2907 historical ${action} reco
   else assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
   const before = f.record(); f.herdr.calls.length = 0;
   const result = await open(f, { newSession: true });
-  assert.equal(result.exitCode, action === 'cancel' ? 1 : 0, result.message);
+  assert.equal(result.exitCode, 0, result.message);
   assert.deepEqual(progress(f.record()), progress(before));
   assert.equal(f.record().configDir, f.oldConfig);
   assert.deepEqual(effects(f), []);

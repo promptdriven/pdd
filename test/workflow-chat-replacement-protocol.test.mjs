@@ -17,16 +17,16 @@ const lost = () => Object.assign(Error('Synthetic reply lost'), { code: 'server_
 const copy = value => JSON.parse(JSON.stringify(value));
 const effect = args => args[0] === 'pane' && args[1] === 'run' || ['tab', 'workspace', 'worktree'].includes(args[0]) && ['create', 'close', 'open'].includes(args[1]);
 const calls = (f, group, verb) => f.herdr.calls.filter(a => a[0] === group && a[1] === verb);
-async function started(t) {
-  const f = await fixture(t);
+async function started(t, options) {
+  const f = await fixture(t, options);
   assert.equal((await f.run()).exitCode, 0);
   f.herdr.calls.length = 0;
   f.saved = f.record(); f.original = f.saved.chats.at(-1);
   return f;
 }
-async function protocolStarted(t) {
+async function protocolStarted(t, options) {
   assert.equal(typeof chatModule.restartChat, 'function', 'AC2 requires public module function restartChat');
-  return started(t);
+  return started(t, options);
 }
 async function restart(f, ports = {}) {
   assert.equal(typeof chatModule.restartChat, 'function', 'AC2 requires public module function restartChat');
@@ -383,9 +383,7 @@ for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-
 
 
 test('Gemini replacement uses the run external directories', async t => {
- const f=await protocolStarted(t);
- f.saved.agent='gemini'; f.original.agent='gemini';
- const native=f.herdr.paneOf(f.original).agent; native.agent='gemini'; if(native.agent_session)native.agent_session.agent='gemini';
+ const f=await protocolStarted(t, {agent:'gemini'});
  const replacement=await restart(f);
  assert.equal(replacement.agent,'gemini');
  const command=calls(f,'pane','run')[0][3];
@@ -396,10 +394,7 @@ test('Gemini replacement uses the run external directories', async t => {
 });
 
 test('Gemini interrupted replacement resumes with both external directories', async t => {
- const f=await protocolStarted(t);
- f.saved.agent='gemini'; f.original.agent='gemini';
- const native=f.herdr.paneOf(f.original).agent; native.agent='gemini'; if(native.agent_session)native.agent_session.agent='gemini';
- const disk=f.record(); disk.agent='gemini'; disk.chats.at(-1).agent='gemini'; writeFileSync(join(disk.runDir,'status.json'),JSON.stringify(disk));
+ const f=await protocolStarted(t, {agent:'gemini'});
  await assert.rejects(() => restart(f,{checkpoint:async record=>{
   const saved=f.record();saved.chatReplacement=copy(record);saved.abandonedChats=[{...record.original,replacementId:record.id,abandonedAt:record.at,reason:'explicit-new-session'}];
   writeFileSync(join(saved.runDir,'status.json'),JSON.stringify(saved));throw Error('interrupted');

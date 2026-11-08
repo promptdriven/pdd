@@ -1,4 +1,5 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 734f28fdf2a21cf1703b2c2ccb66c032ff7f2021fee24f03b6203f48b33c05ec).
+import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: a7a6cdc982da6bc1ad172fd13e722d322f8fd7fcfb20115aed1f7a0b15af1342).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -8,12 +9,13 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const PACKAGE_BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin/pdd.mjs');
 import { promisify } from 'node:util';
-import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
+import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, samePath } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { tomlString } from './toml-string.mjs';
 import { lookupIssueWorktree } from './workflow-worktree.mjs';
 import { LOGIN_VARIABLES, reservedEnvMessage } from './workflow-agents.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
+import { interpreterQueueEnvironment } from './interpreter-queue.mjs';
 
 // The one shared startup grace: Herdr sees a new agent only after it starts.
 export const START_GRACE_MS = 30_000;
@@ -54,6 +56,7 @@ export const launchAnchor = chat => { const times = [chat?.startedAt, chat?.resu
 // never evidence; an unconfirmed launch stays starting.
 export function observeLifecycle(chat, live, at, agent = chat?.agent, ran = null) {
   const state = chatLifecycle(chat);
+  if (chat.closed && !live.alive && ['agent_not_found','pane_not_found','tab_not_found'].includes(live.code)) return {state: 'ended'};
   // Running is the live agent in the saved pane; it is exact unless it shows another session than the saved one.
   if (live.alive) return { state: 'running', exact: !validSessionId(chat.session?.id) || !live.sessionId || live.sessionId === chat.session.id,
     ...(live.sessionId ? { session: { agent, id: live.sessionId } } : {}) };
@@ -73,20 +76,27 @@ export function sessionEvidenceDue(chat, live, at) {
   return !live.alive && ABSENT.has(live.code) && !chat.startUnconfirmed && !['ended', 'failed', 'running'].includes(state)
     && anchor !== null && at >= anchor + START_GRACE_MS;
 }
-// The native session of one chat or attempt: Claude by its saved id, Codex by the worktree and the window since the latest
-// launch or resume request. An unreadable, ambiguous or unrelated result is never evidence and never authorizes a launch.
-export async function ownSession({ run, chat, since, ports = {} }) {
-  const env = ports.env ?? process.env, kind = chat.agent ?? run.agent, folder = expandHome(chat.configDir, env);
+// The native session of one chat or attempt: Claude by its saved id, Codex by worktree and caller's time window.
+// Naming a known resumed UUID uses its original window and an exact sessionId. Discovery keeps the latest launch window.
+// An unreadable, ambiguous or unrelated result is never evidence and never authorizes a launch.
+export async function ownSession({ run, chat, since, sessionId, ports = {} }) {
+  const env = ports.env ?? process.env, kind = chat.agent ?? run.agent;
   if (kind === 'gemini' || kind === 'agy') return { kind: 'unknown' };
-  const saved = kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null;
+  // A saved default selection unsets the config variable at launch. Evidence must use that same account.
+  const folder = expandHome(chat.configDir, env) ?? join(env.HOME || homedir(), kind === 'claude' ? '.claude' : '.codex');
+  if (sessionId !== undefined && !validSessionId(sessionId)) return { kind: 'unknown' };
+  const saved = sessionId ?? (kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null);
   let sessions;
   try {
-    sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: (ports.now ?? Date.now)(), ...(saved ? { sessionId: saved } : {}) },
+    sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: (ports.now ?? Date.now)(), ...(saved && kind === 'claude' ? { sessionId: saved } : {}) },
       { env, ...(folder ? (kind === 'claude' ? { claudeConfigDir: folder } : { codexHome: folder }) : {}) });
   } catch { return { kind: 'unknown' }; }
   if (!Array.isArray(sessions)) return { kind: 'unknown' };
+  // Codex discovery admits rollout filenames without a UUID. Select its parsed identity,
+  // rather than using the reader's optional filename filter for a known resumed session.
+  if (kind === 'codex' && saved) sessions = sessions.filter(session => session?.id === saved);
   if (!sessions.length) return { kind: 'none' };
-  if (sessions.length !== 1 || !validSessionId(sessions[0]?.id) || kind === 'claude' && sessions[0].id !== saved) return { kind: 'unknown' };
+  if (sessions.length !== 1 || !validSessionId(sessions[0]?.id) || (kind === 'claude' || saved) && sessions[0].id !== saved) return { kind: 'unknown' };
   return { kind: 'match', id: sessions[0].id };
 }
 export function applyLifecycle(chat, observed) {
@@ -117,17 +127,18 @@ export function herdrCommand(ports = {}) {
 }
 
 // `unset`, `loginFile` and `program` come from chatLaunch: the caller's login and the run's agents.json command.
-export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null }) {
+export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null, queueEnv = {}, model = null, codexThreads = null }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (typeof cwd !== 'string' || !cwd) throw problem('invalid_worktree', 'The chat has no worktree folder, so pdd will not start it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
   if (unset.some(name => !ENV_NAME.test(name))) throw problem('invalid_login_variable', 'A login variable name is not a plain name, so pdd will not start the chat.');
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
-  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
+  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...Object.entries(queueEnv).map(([name, value]) => `${name}=${quote(value)}`), ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
   // A child sh opens the private login file, deletes it, then reads the values and becomes the agent: no login value is
   // in this line, and no value from the file can keep the file. Any failed step stops the sh before the agent starts.
   const start = [...(loginFile ? ['sh', '-c', quote(LOGIN_SCRIPT), quote(loginFile)] : []), program ? quote(program) : agent];
+  if (model !== null && agent !== 'codex') start.push('--model', quote(model));
   // agy asks "Do you trust the contents of this project?" in a new worktree; --settings trusts it for this session only.
   if (agent === 'agy') return [...env, ...start, '--dangerously-skip-permissions', '--settings', quote(JSON.stringify({ trustedWorkspaces: [cwd] })),
     ...[...new Set(addDirs)].flatMap(dir => ['--add-dir', quote(dir)]),
@@ -136,9 +147,10 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   if (agent === 'gemini') return [...env, ...start, '--yolo', ...included.flatMap(dir => ['--include-directories', quote(dir)]), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   if (agent === 'claude') return [...env, ...start, '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
-  return [...env, ...start, ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
+  return [...env, ...start, ...(resumeId ? ['resume', resumeId] : []), ...(model !== null ? ['--model', quote(model)] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
-    '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`), ...message].join(' ');
+    '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`),
+    ...Object.entries(queueEnv).flatMap(([name, value]) => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(value)}`)]), ...(codexThreads !== null ? ['-c', quote(`features.multi_agent_v2.max_concurrent_threads_per_session=${codexThreads}`)] : []), ...message].join(' ');
 }
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -177,23 +189,50 @@ export function savedAgentEntry(run, agent, env = process.env) {
 // Each listed name that gets no value is unset, and so is the config-folder variable when the run saves none, so the
 // Herdr server's old environment never decides the login. Values go only in a new private file that the chat reads once.
 export function chatLaunch({ run, agent, configDir, env = process.env }) {
+  const queueEnv = interpreterQueueEnvironment(env);
   const entry = savedAgentEntry(run, agent, env), names = LOGIN_VARIABLES[agent] ?? [], home = homeVariable(agent), values = {};
   for (const name of names) if (typeof env[name] === 'string' && env[name] !== '') values[name] = env[name];
   for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
-  const unset = [...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
+  const queueNames = ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'];
+  for (const name of queueNames) if (!Object.hasOwn(values, name) && typeof env[name] === 'string') values[name] = env[name];
+  Object.assign(queueEnv, Object.fromEntries(queueNames.filter(name => Object.hasOwn(values, name)).map(name => [name, values[name]])));
+  const unset = [...queueNames.filter(name => !Object.hasOwn(values, name)), ...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
   let loginFile = null;
   if (Object.keys(values).length) {
     loginFile = join(run.runDir, `login-${randomUUID()}.env`);
     writeFileSync(loginFile, Object.entries(values).map(([name, value]) => `export ${name}=${quote(value)}\n`).join(''), { mode: 0o600, flag: 'wx' });
   }
-  return { unset, loginFile, program: entry?.command ?? null };
+  return { unset, loginFile, program: entry?.command ?? null, queueEnv };
+}
+// A chat snapshot, never the current terminal, decides invocation settings.
+function launchSettings(run, chat) {
+  const profile = launchProfile(run, chat);
+  return {model: profile.model, codexThreads: profile.codexThreads, namingChat: chat,
+    herdrAgentName: chat?.herdrAgentName ?? chatAgentName(profile, chat?.area ?? run.areas?.[run.area]?.name ?? 'chat', run)};
+}
+// Detection follows pane dispatch; bind the name now or on the next positive observation.
+async function bindAgentName(herdr, paneId, name) {
+  if (!name) return;
+  await herdr(['agent', 'rename', paneId, name]);
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
-async function launchInPane(herdr, paneId, options, { run, env }) {
+async function launchInPane(herdr, paneId, options, { run, env, ports = {}, beforeLaunch }) {
   removeStaleLoginFiles(run.runDir);
   const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
-  try { return await herdr(['pane', 'run', paneId, chatCommand({ ...options, ...launch })]); }
-  catch (error) { if (launch.loginFile) rmSync(launch.loginFile, { force: true }); throw error; }
+  try {
+    const command = chatCommand({ ...options, ...launch });
+    await beforeLaunch?.();
+    const reply = await herdr(['pane', 'run', paneId, command]);
+    if (options.namingChat) {
+      const live = await chatSession(options.namingChat, {...ports, run, env, herdr});
+      if (options.retainNaming !== false) {
+        if (live.namingError) options.namingChat.namingError = live.namingError;
+        else delete options.namingChat.namingError;
+      }
+      if (live.namingError) ports.say?.(`Herdr name was not bound (${live.namingError.code}); inspect the chat pane and retry open or status.`);
+    }
+    return reply;
+  } catch (error) { if (launch.loginFile) rmSync(launch.loginFile, { force: true }); throw error; }
 }
 
 function spawnServer(env) {
@@ -224,12 +263,14 @@ export async function startChat({ run, area, message }, ports = {}) {
   savedAgentEntry(run, run.agent, env);
   await ensureServer(herdr, ports);
   const messageFile = join(run.runDir, `${area}-start.md`);
+  const profile = launchProfile(run), herdrAgentName = chatAgentName(profile, area, run);
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
   const configDir = expandHome(run.configDir !== undefined ? run.configDir : env[homeVariable(run.agent)], env);
+  profile.configDir = configDir;
   let startedAt;
   const identity = layout => {
     if (startedAt === undefined) { writeFileSync(messageFile, message); startedAt = now(); }
-    return { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
+    return { area, agent: run.agent, launchProfile: profile, herdrAgentName, tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
     label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile, state: 'starting' };
   };
   const checkpoint = async layout => {
@@ -240,16 +281,17 @@ export async function startChat({ run, area, message }, ports = {}) {
       workspaceId: layout.workspaceId, ...layout.root} : layout;
     await ports.checkpoint(layout.tabId ? identity(layout) : null, custody);
   };
+  await ensurePaneBudget(1, ports);
   const {layout, chat} = await withHerdrLayoutLock(async () => {
     const layout = await openHerdrRunLayout({ repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run },
-    { command: herdr, checkpoint, directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
+    { command: allocationCommand(herdr,ports), checkpoint, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}), directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
     const chat = identity(layout);
     // Keep exact starting-chat custody durable under the same find/create lock.
     await checkpoint(layout);
     return {layout, chat};
   }, { directory: ports.layoutDirectory });
-  try { await launchInPane(herdr, layout.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir }, { run, env }); }
+  try { await launchInPane(herdr, layout.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir, ...launchSettings(run, chat) }, { run, env, ports }); }
   catch (error) {
     const failed = problem(error.code ?? 'herdr_failed', error.message);
     failed.chat = { ...chat, startUnconfirmed: true };
@@ -505,7 +547,7 @@ function screenProblem(screen, agent, context) {
 }
 export async function chatHealth({ run, chat, live }, ports = {}) {
   const agent = chat?.agent ?? run?.agent;
-  if (!live?.alive || !['claude', 'codex'].includes(agent)) return null;
+  if (!live || !['claude', 'codex'].includes(agent)) return null;
   try {
     const env = ports.env ?? process.env, now = (ports.now ?? Date.now)(), fs = ports.sessionFs ?? nodeFs, context = { now, timeZone: ports.timeZone };
     const home = env.HOME || homedir(), id = validSessionId(live.sessionId) ? live.sessionId : validSessionId(chat.session?.id) ? chat.session.id : null;
@@ -533,7 +575,24 @@ export async function chatSession(chat, ports = {}) {
   try {
     const agent = (await herdrCommand(ports)(['agent', 'get', chat.paneId])).result?.agent;
     const value = agent?.agent_session?.kind === 'id' ? agent.agent_session.value : null;
-    return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: validSessionId(value) ? value : null };
+    let namingError;
+    if (agent && chat.herdrAgentName && agent.name !== chat.herdrAgentName) {
+      let verified = agent.agent === chat.agent && validSessionId(value) && (!validSessionId(chat.session?.id) || value === chat.session.id);
+      if (verified && chat.agent === 'codex') {
+        // Resume retains the original native metadata. Keep the latest launch time for grace/discovery,
+        // but prove this known resumed UUID against its original identity in the saved account.
+        const resumed = Number.isFinite(chat.resumedAt) && validSessionId(chat.session?.id);
+        const own = ports.run ? await ownSession({run:ports.run, chat,
+          since:resumed ? chat.startedAt : launchAnchor(chat), ...(resumed ? {sessionId:chat.session.id} : {}), ports}) : null;
+        verified = own?.kind === 'match' && own.id === value;
+      } else if (verified) verified = chat.agent === 'claude' && validSessionId(chat.session?.id) && value === chat.session.id;
+      if (verified) {
+        try { await bindAgentName(herdrCommand(ports), chat.paneId, chat.herdrAgentName); }
+        catch (error) { namingError = {code: error.code ?? 'herdr_failed'}; }
+      } else namingError = {code:'chat_name_unverified'};
+    }
+    return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: validSessionId(value) ? value : null,
+      ...(namingError ? {namingError} : {}) };
   } catch (error) {
     const missing = { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message };
     if (['agent_not_found', 'pane_not_found'].includes(error.code) && chat.workspaceId) {
@@ -552,7 +611,8 @@ async function workspaceInventory(herdr) {
   return rows;
 }
 
-export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
+export async function rebuildClosedChat({ run, chat, message, resumeMessage }, ports = {}) {
+  ports = {...ports, run};
   const herdr = herdrCommand(ports), now = ports.now ?? Date.now, env = ports.env ?? process.env;
   await ensureServer(herdr, ports);
   const present = async () => {
@@ -585,7 +645,7 @@ export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
       ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
     const layout = await openHerdrRunLayout({repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run},
-    {command: herdr, directory: ports.layoutDirectory, execFile: ports.execFile,
+    {command: allocationCommand(herdr,ports), directory: ports.layoutDirectory, execFile: ports.execFile, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}),
       checkpoint: async value => ports.checkpoint(null, custody(value))});
     const live = await chatSession({...chat, paneId: layout.paneId, workspaceId: layout.workspaceId}, ports);
     if (live.alive || live.code !== 'agent_not_found') throw problem('chat_identity_changed', 'The rebuilt area pane is occupied or cannot be inspected. No chat was started.');
@@ -601,8 +661,8 @@ export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
     }
     await ports.checkpoint(chat, custody(layout));
     await launchInPane(herdr, chat.paneId, {commonDir: run.commonDir, sourceRoot: run.sourceRoot,
-      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...(resumeId ? {resumeId} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env});
-    delete chat.startUnconfirmed;
+      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...launchSettings(run, chat), ...(resumeId ? {resumeId, ...resumeInput(run, chat, resumeMessage)} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env, ports, beforeLaunch: ports.beforeLaunch});
+    delete chat.startUnconfirmed; if (!ports.background) { delete chat.closed; chat.openedAt = now(); }
     await ports.checkpoint(chat, custody(layout));
     return true;
   }, {directory: ports.layoutDirectory});
@@ -616,8 +676,16 @@ function attachSession() {
   });
 }
 
+function resumeInput(run, chat, message) {
+  if (!message) return {};
+  const messageFile = join(run.runDir, `${chat.area}-resume.md`);
+  writeFileSync(messageFile, message, {mode: 0o600});
+  return {messageFile};
+}
+
 // Returns {resumed, attached}; it may change chat.tabId/paneId/terminalId/session/resumedAt, and the caller saves the run.
-export async function openChat({ run, chat }, ports = {}) {
+export async function openChat({ run, chat, resumeMessage }, ports = {}) {
+  ports = {...ports, run};
   const herdr = herdrCommand(ports), env = ports.env ?? process.env, now = ports.now ?? Date.now, configDir = expandHome(chat.configDir, env);
   const sleep = ports.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const elapsedNow = ports.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
@@ -631,7 +699,10 @@ export async function openChat({ run, chat }, ports = {}) {
       if (!observed.alive && ['agent_not_found', 'pane_not_found'].includes(observed.code)) return { restartAvailable: true };
       throw problem('chat_start_unconfirmed', 'The earlier launch was not confirmed and its saved tab is unavailable. Inspect the original Herdr tab and pane before starting another agent.');
     }
-    const created = await herdr(['tab', 'create', '--workspace', chat.workspaceId, '--cwd', run.root, '--label', chat.area, '--no-focus']);
+    await ensurePaneBudget(1, ports);
+    let created;
+    try { created = await herdr(['tab', 'create', '--workspace', chat.workspaceId, '--cwd', run.root, '--label', chat.area, '--no-focus']); }
+    catch (error) { throw await allocationFailure(error, ports); }
     const terminalId = created.result?.root_pane?.terminal_id;
     if (!created.result?.tab?.tab_id || !created.result?.root_pane?.pane_id || typeof terminalId !== 'string' || !terminalId) throw problem('herdr_tab_failed', 'Herdr did not make a new tab for the chat.');
     chat.tabId = created.result.tab.tab_id; chat.paneId = created.result.root_pane.pane_id; chat.terminalId = terminalId;
@@ -666,6 +737,8 @@ export async function openChat({ run, chat }, ports = {}) {
   if (observed.state === 'starting') throw problem('chat_start_unconfirmed', `The ${chat.area} chat is starting, not confirmed: Herdr shows no agent in its tab, and pdd sent no new launch or resume. Look at the "${chat.area}" tab in Herdr session pdd, then run pdd workflow open ${run.number} again.`);
   if (observed.state === 'failed') throw problem('chat_start_failed', `The ${chat.area} chat did not start (${chat.code ?? 'error'}). Start a fresh session with: pdd workflow open ${run.number} --new`);
   let resumed = false;
+  if (live.namingError) chat.namingError = live.namingError;
+  else delete chat.namingError;
   if (observed.state === 'ended') {
     let id = validSessionId(chat.session?.id) ? chat.session.id : null;
     if (!id) {
@@ -678,15 +751,16 @@ export async function openChat({ run, chat }, ports = {}) {
     savedAgentEntry(run, run.agent, env);
     // Herdr sees the agent only after it starts; the shared grace counts from this resume request.
     chat.resumedAt = now(); applyLifecycle(chat, { state: 'starting' });
-    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir }, { run, env }); }
+    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir, ...launchSettings(run, chat), ...resumeInput(run, chat, resumeMessage) }, { run, env, ports, beforeLaunch: ports.beforeLaunch }); }
     catch (error) { chat.startUnconfirmed = true; throw error; }
     resumed = true;
   }
-  await herdr(['tab', 'focus', chat.tabId]);
-  const attach = (ports.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)) && env.HERDR_ENV !== '1';
+  if (!ports.background) await herdr(['tab', 'focus', chat.tabId]);
+  if (!ports.background) { delete chat.closed; chat.openedAt = now(); }
+  const attach = !ports.background && (ports.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)) && env.HERDR_ENV !== '1';
   if (ports.beforeAttach) await ports.beforeAttach(chat);
   if (attach) await (ports.attach ?? attachSession)();
-  return { resumed, attached: attach };
+  return { resumed, attached: attach, ...(chat.namingError ? {namingError:chat.namingError} : {}) };
 }
 
 // A cleanup failure as its code, or `code: first message line` with the code once (a layout identity refusal says what changed).
@@ -694,26 +768,185 @@ const warningReason = error => {
   const code = error?.code ?? 'error', text = String(error?.message ?? '').split('\n')[0].trim(), rest = text.startsWith(`${code}: `) ? text.slice(code.length + 2) : text;
   return !rest || rest === code ? code : `${code}: ${rest}`;
 };
-export async function closeChats(run, ports = {}) {
-  const herdr = herdrCommand(ports), warnings = [];
-  const chats = run.chats ?? [];
-  for (const chat of chats) {
-    try { await herdr(['tab', 'close', chat.tabId]); }
-    catch (error) { if (error.code !== 'tab_not_found') warnings.push(`warning: Herdr did not close tab ${chat.tabId} (${error.code ?? 'error'}).`); }
+// The durable close mark is shared with automatic stopped-chat recovery (#3068).
+const endedRun = run => ['completed', 'cancelled'].includes(run.state);
+export function finishedChats(run) {
+  const chats = run.chats ?? [], current = [...chats].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
+  return chats.filter(chat => endedRun(run) || chat !== current);
+}
+export function finishedAt(run, chat) {
+  return chat.endedAt ?? (endedRun(run) ? run.cancelled?.at ?? run.updatedAt :
+    (run.chats ?? []).find(next => next.startedAt > chat.startedAt)?.startedAt) ?? run.updatedAt ?? run.startedAt;
+}
+
+export async function paneUsage(ports = {}) {
+  const value = (ports.env ?? process.env).PDD_HERDR_PANE_BUDGET;
+  const budget = value === undefined ? 56 : Number(value);
+  if (value !== undefined && !/^[0-9]+$/.test(value) || !Number.isSafeInteger(budget) || budget < 0)
+    throw problem('invalid_pane_budget', 'PDD_HERDR_PANE_BUDGET must be a nonnegative integer.');
+  let reply;
+  try { reply = await herdrCommand(ports)(['pane', 'list']); }
+  catch (error) { if (error.code === 'server_not_running') return {panes: 0, budget}; throw error; }
+  const panes = reply?.result?.panes;
+  if (reply?.result?.type !== 'pane_list' || !Array.isArray(panes) ||
+      panes.some(p => !p?.pane_id || !p.workspace_id || !p.tab_id || !p.terminal_id) ||
+      new Set(panes.map(p => p.pane_id)).size !== panes.length) throw problem('invalid_pane_inventory');
+  ports.onPaneUsage?.(panes);
+  return {panes: panes.length, budget};
+}
+export async function ensurePaneBudget(need, ports = {}) {
+  let closed = 0;
+  if (ports.sweepFinished) closed += (await ports.sweepFinished({graceMs: 15 * 60_000}))?.closed ?? 0;
+  let rows;
+  const countPorts = {...ports,onPaneUsage:value=>{rows=value;ports.onPaneUsage?.(value);}};
+  let usage = await paneUsage(countPorts);
+  if (usage.budget && usage.panes + need > usage.budget) {
+    if (ports.sweepFinished) closed += (await ports.sweepFinished({graceMs: 0, need}))?.closed ?? 0;
+    usage = await paneUsage(countPorts);
+    if (usage.panes + need > usage.budget) throw problem('herdr_pane_budget',
+      `herdr_pane_budget: Herdr session pdd has ${usage.panes} panes and the budget is ${usage.budget}. This start needs ${need}. pdd closed ${closed} finished chats; no other chat is safe to close.\n${ports.describePaneOwners?.(rows ?? []) ?? ''}\nThe count includes personal panes. Close unused tabs, or raise PDD_HERDR_PANE_BUDGET (0 disables it).`);
   }
-  const last = chats.at(-1);
-  if (last?.workspaceId) {
+  return {...usage, closed};
+}
+function allocationCommand(herdr, ports) {
+  return async args => {
+    try { return await herdr(args); }
+    catch (error) {
+      if ((['workspace','tab'].includes(args[0]) && args[1] === 'create') || args[0] === 'worktree' && args[1] === 'open')
+        throw await allocationFailure(error,ports);
+      throw error;
+    }
+  };
+}
+async function allocationFailure(error, ports) {
+  if (error.code === 'herdr_pane_budget') return error;
+  try { const {panes} = await paneUsage(ports); error.message += `\nHerdr refused a new pane at ${panes} panes. This can be a Herdr limit.`; } catch {}
+  return error;
+}
+
+export async function closeFinishedChats(run, ports = {}) {
+  const herdr = herdrCommand(ports), now = ports.now ?? Date.now, warnings = [], kept = [];
+  let closed = 0;
+  const checkpoint = async chat => {
+    if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
+    await ports.checkpoint(chat, null);
+  };
+  const inventory = async (kind, workspace) => {
+    const reply = await herdr([kind, 'list', ...(workspace ? ['--workspace', workspace] : [])]);
+    const rows = reply?.result?.[`${kind}s`], key = `${kind}_id`;
+    if (reply?.result?.type !== `${kind}_list` || !Array.isArray(rows) ||
+        rows.some(row => typeof row?.[key] !== 'string' || !row[key]) ||
+        new Set(rows.map(row => row[key])).size !== rows.length) throw problem('invalid_cleanup_inventory');
+    return rows;
+  };
+  const assertEmptyForeground = async paneId => {
+    let reply;
+    try { reply = await herdr(['pane', 'process-info', '--pane', paneId]); }
+    catch { throw problem('pane-unknown'); }
+    const info = reply?.result?.process_info, rows = info?.foreground_processes;
+    if (reply?.result?.type !== 'pane_process_info' || info?.pane_id !== paneId ||
+        !Number.isSafeInteger(info.shell_pid) || info.shell_pid <= 0 ||
+        !Number.isSafeInteger(info.foreground_process_group_id) || info.foreground_process_group_id <= 0 ||
+        !Array.isArray(rows) || !rows.length || rows.some(row => !Number.isSafeInteger(row?.pid) || row.pid <= 0 || typeof row.name !== 'string' || !row.name))
+      throw problem('pane-unknown');
+    if (info.foreground_process_group_id !== info.shell_pid || rows.length !== 1 || rows[0].pid !== info.shell_pid)
+      throw problem('pane-busy');
+    if (!SHELLS.has(rows[0].name)) throw problem('pane-unknown');
+  };
+  const finished = ports.force ? run.chats ?? [] : finishedChats(run);
+  const candidates = ports.onlyChat ? finished.filter(chat => chat.paneId === ports.onlyChat.paneId && chat.terminalId === ports.onlyChat.terminalId) : finished;
+  for (const chat of [...candidates].sort((a,b) => finishedAt(run,a) - finishedAt(run,b))) {
+    const keep = reason => kept.push({area: chat.area, reason});
     try {
-      const custody = run.layout;
-      const layoutPorts = { command: herdr, checkpoint: async () => {if (ports.checkpoint) await ports.checkpoint(null, custody);}, directory: ports.layoutDirectory };
-      await withHerdrLayoutLock(async () => {
-        await closeHerdrRunLayout({ runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody }, layoutPorts);
-        try { await closeHerdrRepoLayoutIfIdle({ repository: run.repo, commonDir: run.commonDir }, layoutPorts); }
-        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${warningReason(error)}).`); }
-      }, { directory: ports.layoutDirectory });
-    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${warningReason(error)}).`); }
+      if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
+      const grace = ports.force ? 0 : ports.graceMs ?? 15 * 60_000, end = finishedAt(run, chat);
+      if (!ports.force && !chat.closed && (!Number.isFinite(end) || now() < Math.max(end, chat.openedAt ?? 0) + grace)) { keep('grace'); continue; }
+      const workspaces = await inventory('workspace'), workspace = workspaces.find(w => w.workspace_id === chat.workspaceId);
+      if (!workspace) {
+        // A missing workspace is not a license to close IDs on another server.
+        if (!chat.closed) keep('workspace-absent');
+        else if (!ports.dryRun && !Number.isFinite(chat.closed.confirmedAt)) { chat.closed.confirmedAt = now(); await checkpoint(chat); }
+        continue;
+      }
+      if (!samePath(workspace.worktree?.checkout_path, run.root) || !samePath(workspace.worktree?.repo_key, run.commonDir) || workspace.worktree?.is_linked_worktree !== true)
+        { keep('workspace-identity'); continue; }
+      const tabs = await inventory('tab', chat.workspaceId), panes = await inventory('pane', chat.workspaceId);
+      const tab = tabs.find(t => t.tab_id === chat.tabId), rows = panes.filter(p => p.tab_id === chat.tabId);
+      if (!tab && !rows.length && chat.closed) {
+        if (!ports.dryRun && !Number.isFinite(chat.closed.confirmedAt)) { chat.closed.confirmedAt = now(); await checkpoint(chat); }
+        continue;
+      }
+      if (!tab || tab.workspace_id !== chat.workspaceId || rows.length !== 1 || rows[0].workspace_id !== chat.workspaceId ||
+          rows[0].pane_id !== chat.paneId || !chat.terminalId || rows[0].terminal_id !== chat.terminalId)
+        { keep('chat-identity'); continue; }
+      let native;
+      try { native = (await herdr(['agent', 'get', chat.paneId])).result?.agent; if (!native) throw problem('invalid_agent_reply'); }
+      catch (error) { if (error.code !== 'agent_not_found') throw error; }
+      const agent = chat.agent ?? run.agent;
+      if (native && (native.pane_id !== chat.paneId || native.agent !== agent ||
+          validSessionId(chat.session?.id) && native.agent_session?.kind === 'id' && native.agent_session.value !== chat.session.id))
+        { keep('agent-identity'); continue; }
+      if (!ports.force && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
+      if (!ports.force && !native) await assertEmptyForeground(chat.paneId);
+      let id = validSessionId(chat.session?.id) ? chat.session.id : null;
+      if (!id && agent === 'codex') {
+        if (native?.agent_session?.kind === 'id' && validSessionId(native.agent_session.value)) id = native.agent_session.value;
+        else { const own = await ownSession({run, chat, since: launchAnchor(chat), ports}); if (own.kind === 'match') id = own.id; }
+      }
+      if (!ports.force && !id) { keep('no-saved-session'); continue; }
+      if (ports.dryRun) { closed++; continue; }
+      let screen = null;
+      try {
+        const text = await herdr(['pane', 'read', chat.paneId, '--source', 'recent-unwrapped', '--lines', '5000']);
+        const folder = join(run.runDir, 'chats'); mkdirSync(folder, {recursive: true, mode: 0o700});
+        screen = join(folder, `${chat.area}-${chat.startedAt}.txt`);
+        writeFileSync(screen, text, {mode: 0o600});
+      } catch { /* A saved native session retains history if screen capture fails. */ }
+      if (id) chat.session = {agent, id};
+      chat.closed ??= {at: now(), reason: ports.reason ?? (ports.force ? 'cancel' : endedRun(run) ? 'run-end' : 'area-end'), screen};
+      chat.state = 'ended';
+      await checkpoint(chat);
+      const finalWorkspace = (await inventory('workspace')).find(w => w.workspace_id === chat.workspaceId);
+      const finalTabs = await inventory('tab', chat.workspaceId), finalPanes = await inventory('pane', chat.workspaceId);
+      const finalRows = finalPanes.filter(p => p.tab_id === chat.tabId);
+      if (!finalWorkspace || !samePath(finalWorkspace.worktree?.checkout_path,run.root) || !samePath(finalWorkspace.worktree?.repo_key,run.commonDir) || finalWorkspace.worktree?.is_linked_worktree !== true ||
+          !finalTabs.some(t => t.tab_id === chat.tabId && t.workspace_id === chat.workspaceId) || finalRows.length !== 1 || finalRows[0].workspace_id !== chat.workspaceId || finalRows[0].pane_id !== chat.paneId || finalRows[0].terminal_id !== chat.terminalId)
+        { keep('chat-identity'); continue; }
+      let finalNative;
+      try { finalNative = (await herdr(['agent','get',chat.paneId])).result?.agent; if (!finalNative) throw problem('invalid_agent_reply'); }
+      catch (error) { if (error.code !== 'agent_not_found') throw error; }
+      if (finalNative && (finalNative.pane_id !== chat.paneId || finalNative.agent !== agent || id && finalNative.agent_session?.kind === 'id' && finalNative.agent_session.value !== id))
+        { keep('agent-identity'); continue; }
+      if (!ports.force && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
+      if (!ports.force && !finalNative) await assertEmptyForeground(chat.paneId);
+      if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
+      try { await herdr(['tab', 'close', chat.tabId]); }
+      catch (error) { if (error.code !== 'tab_not_found') throw error; }
+      // Require absence, including after a lost acknowledgement on a later sweep.
+      if ((await inventory('tab', chat.workspaceId)).some(t => t.tab_id === chat.tabId)) throw problem('chat_close_unconfirmed');
+      chat.closed.confirmedAt = now(); await checkpoint(chat);
+      closed++;
+    } catch (error) {
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      keep(error.code ?? 'cleanup-unavailable'); warnings.push(`warning: Herdr kept ${chat.area} (${warningReason(error)}).`);
+    }
   }
-  return { warnings };
+  if (!ports.dryRun && (ports.force || endedRun(run)) && !kept.length && (run.chats ?? []).every(chat => chat.closed) && run.layout?.workspaceId && run.layout.phase !== 'closed') {
+    try {
+      const custody = {...run.layout};
+      await withHerdrLayoutLock(() => closeHerdrRunLayout({runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody},
+        {command: herdr, env: ports.env, force: ports.force, checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
+      {directory: ports.layoutDirectory});
+    } catch (error) {
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      kept.push({area:'run shell', reason:error.code ?? 'cleanup-unavailable'});
+      warnings.push(`warning: the run workspace stays open (${warningReason(error)}).`);
+    }
+  }
+  return {closed, kept, warnings};
+}
+export async function closeChats(run, ports = {}) {
+  return closeFinishedChats(run, {...ports, force: true, reason: 'cancel'});
 }
 
 
@@ -747,6 +980,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
   const savedConfig = original => expandHome(run.configDir !== undefined ? run.configDir : original.configDir, env);
   const validConfig = value => value === null || typeof value === 'string' && value.length > 0;
   const legacyConfig = record && !Object.hasOwn(record, 'configDir');
+  const legacyProfile = record && !Object.hasOwn(record, 'launchProfile');
   if (record) {
     if (legacyConfig) {
       record.configDir = record.replacement?.configDir !== undefined ? expandHome(record.replacement.configDir, env) : savedConfig(record.original);
@@ -754,6 +988,18 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     }
     if (!validConfig(record.configDir) || record.replacement && record.replacement.configDir !== record.configDir)
       throw problem('invalid_replacement_configuration', 'The saved replacement configuration is malformed or inconsistent. Inspect it before replacing a chat.');
+  }
+  if (record) {
+    if (legacyProfile || legacyConfig) {
+      record.launchProfile = {...launchProfile(run, record.replacement ?? record.original), configDir: record.configDir};
+      if (record.replacement) {
+        record.replacement.launchProfile = structuredClone(record.launchProfile);
+        record.replacement.herdrAgentName = chatAgentName(record.launchProfile, record.area, run);
+      }
+    }
+    if (!validLaunchProfile(record.launchProfile) || record.launchProfile.configDir !== record.configDir
+      || record.replacement && JSON.stringify(record.replacement.launchProfile) !== JSON.stringify(record.launchProfile))
+      throw problem('invalid_replacement_configuration', 'The saved replacement launch profile is malformed or inconsistent.');
   }
   const requireHome = target => {
     const dir = expandHome(target.configDir, env), variable = homeVariable(target.agent ?? run.agent);
@@ -764,7 +1010,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
   return await withHerdrLayoutLock(async () => {
     let original = record?.original ?? chat;
     // Older envelopes acquire the same immutable snapshot before any native effect.
-    if (legacyConfig) await save(record.phase);
+    if (legacyConfig || legacyProfile) await save(record.phase);
     const workspace = (await inventory('workspace')).find(row => row.workspace_id === original.workspaceId);
     if (!workspace || !samePath(workspace.worktree?.checkout_path, run.root) || !samePath(workspace.worktree?.repo_key, run.commonDir) || workspace.worktree?.is_linked_worktree !== true) throw invalid();
     let tabs = await inventory('tab',original.workspaceId), panes = await inventory('pane',original.workspaceId);
@@ -887,7 +1133,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       fs.writeFileSync(archive,bytes,{flag:'wx',mode:0o600});
       const messageFile=join(run.runDir,`${chat.area}-restart-${id}-start.md`);
       fs.writeFileSync(messageFile,message,{flag:'wx',mode:0o600});
-      record={id,area:chat.area,phase:'intent',at,configDir,original:{...chat,...(native?.agent_session?.value?{session:{agent:chat.agent??run.agent,id:native.agent_session.value}}:{}),originalMessageFile:chat.messageFile,messageFile:archive}};
+      record={id,area:chat.area,phase:'intent',at,configDir,launchProfile:{...launchProfile(run),configDir},original:{...chat,...(native?.agent_session?.value?{session:{agent:chat.agent??run.agent,id:native.agent_session.value}}:{}),originalMessageFile:chat.messageFile,messageFile:archive}};
       original=record.original;
       await save('intent');await reconcileHistorical(); await save('closeRequested');await reconcileHistorical();
       const closed=await herdr(['tab','close',chat.tabId]);
@@ -906,7 +1152,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
           requireHome(original);
           record.recovery={...record.recovery,resumeRequested:true};
           await save(record.phase);await reconcileHistorical();
-          await launchInPane(herdr,original.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent:original.agent??run.agent,cwd:run.root,addDirs:agentDirs(run),resumeId:original.session.id,configDir:expandHome(original.configDir,env)},{run,env});
+          await launchInPane(herdr,original.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent:original.agent??run.agent,cwd:run.root,addDirs:agentDirs(run),resumeId:original.session.id,configDir:expandHome(original.configDir,env),...launchSettings(run,original),retainNaming:false},{run,env,ports});
         }
         await save('rolledBack');return {...original,messageFile:original.originalMessageFile};
       }
@@ -927,8 +1173,8 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       requireHome({ agent, configDir });
       await reconcileHistorical();
       const layout=await openHerdrRunLayout({repository:run.repo,issueNumber:run.number,runId:run.runId,workflowName:run.workflow,stageId:record.recovery.allocationLabel,sourceRoot:run.sourceRoot,cwd:run.root,commonDir:run.commonDir,run},
-        {command:herdr,checkpoint:async()=>{await save(record.phase);await reconcileHistorical();},directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
-      record.replacement={...record.replacement,area:record.area,agent,tabId:layout.tabId,paneId:layout.paneId,terminalId:layout.terminalId,workspaceId:layout.workspaceId,repoWorkspaceId:layout.repoWorkspaceId,label:original.label,startedAt:record.replacement?.startedAt??now(),session:record.replacement?.session??(agent==='claude'?{agent,id:uuid()}:null),configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
+        {command:allocationCommand(herdr,ports),beforeCreate:need=>ensurePaneBudget(need,{...ports,sweepFinished:null}),checkpoint:async()=>{await save(record.phase);await reconcileHistorical();},directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
+      record.replacement={...record.replacement,area:record.area,agent,launchProfile:structuredClone(record.launchProfile),herdrAgentName:chatAgentName(record.launchProfile,record.area,run),tabId:layout.tabId,paneId:layout.paneId,terminalId:layout.terminalId,workspaceId:layout.workspaceId,repoWorkspaceId:layout.repoWorkspaceId,label:original.label,startedAt:record.replacement?.startedAt??now(),session:record.replacement?.session??(agent==='claude'?{agent,id:uuid()}:null),configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
     };
     if(record.phase==='closed') {
       requireHome({ agent, configDir });
@@ -943,7 +1189,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         if(unexplained.length!==1 || matching.length!==1) throw uncertain();
         const rows=panes.filter(row=>row.tab_id===matching[0].tab_id);
         if(rows.length!==1||rows[0].workspace_id!==original.workspaceId) throw invalid();
-        record.replacement={area:record.area,agent,tabId:matching[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
+        record.replacement={area:record.area,agent,launchProfile:structuredClone(record.launchProfile),herdrAgentName:chatAgentName(record.launchProfile,record.area,run),tabId:matching[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
       }
       await save('prepared');
     }
@@ -969,7 +1215,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
           requestIntent();
           requireHome(target);
           await save('launchRequested');await reconcileHistorical();
-          try {await launchInPane(herdr,target.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:target.messageFile,sessionId:target.session?.id,configDir},{run,env});}
+          try {await launchInPane(herdr,target.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:target.messageFile,sessionId:target.session?.id,configDir,...launchSettings(run,target)},{run,env,ports});}
           catch(error){error.chat={...target};throw error;}
           delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
         }
@@ -981,7 +1227,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         requireHome(record.replacement);
         record.replacement.resumedAt=now();
         await save('launchRequested');await reconcileHistorical();
-        try { await launchInPane(herdr,record.replacement.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),resumeId:found.id,configDir},{run,env}); }
+        try { await launchInPane(herdr,record.replacement.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),resumeId:found.id,configDir,...launchSettings(run,record.replacement)},{run,env,ports}); }
         catch(error) {error.chat={...record.replacement};throw error;}
       }
       if(native?.agent_session?.value) record.replacement.session={agent,id:native.agent_session.value};
@@ -994,7 +1240,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     // The checkpoint rereads cancellation. Legacy cancel may still arrive after that check.
     requireHome(record.replacement);
     record.replacement.startUnconfirmed=true;requestIntent();await save('launchRequested');await reconcileHistorical(true);
-    try {await launchInPane(herdr,record.replacement.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir},{run,env});}
+    try {await launchInPane(herdr,record.replacement.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir,...launchSettings(run,record.replacement)},{run,env,ports});}
     catch(error){error.chat={...record.replacement};throw error;}
     delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
   },{directory:ports.layoutDirectory});

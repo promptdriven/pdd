@@ -1,3 +1,5 @@
+import { isolatedCheckCapacity } from './check-machine.mjs';
+import { healthyMachine } from './healthy-machine.mjs';
 // An Autopilot world for GitHub call counts: a real Git checkout, the real launcher tick, the real dependency intake
 // and `pdd dependencies complete`, a fake Herdr coordinator and the counting fake GitHub of github-repo-fake.mjs.
 // `src` selects the source tree, so the same world measures another version of the code.
@@ -43,7 +45,7 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
     }
     return {};
   };
-  w.ports = { stateRoot, now: () => w.time, sleep: async () => {}, readRunProgress: async () => [], warn: text => w.warnings.push(text),
+  w.ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot, autopilotStateRoot: stateRoot, now: () => w.time, sleep: async () => {}, readRunProgress: async () => [], warn: text => w.warnings.push(text),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [], timer: async () => true,
     run, herdr, wait: async () => {}, armCoordinatorIdle: (_identity, options) => { w.resume = options.resume; } };
   const launcher = await import(pathToFileURL(join(src, 'autopilot-launcher.mjs')).href);
@@ -87,5 +89,19 @@ export function analysisFor(request) {
     return { analysis: `Checked ${issue}: it needs no other open issue first.`, base, continuation: '', issue, inputs: [...inputs].map(([key, revision]) => ({ key, revision })),
       candidates, outcome: 'complete', dependencies: [], questions: [], effects: 'none' };
   });
-  return { reviews, impactJson: '' };
+  // #3053 requires one current sort alongside each dependency review.
+  // These synthetic issues belong to the fixture's src area and remain open.
+  const sorts = snapshot.sortContext ? request.issues.map(key => {
+    const issue = snapshot.issues.find(row => row.key === key);
+    const previous = (issue.sorts ?? []).filter(row => row.authority !== 'outsider');
+    const superseded = new Set(previous.filter(row => row.intact).flatMap(row => row.record?.base ?? []));
+    return { schema_version: 'pdd.issue-sort.v1', issue: key,
+      base: previous.filter(row => !superseded.has(row.id)).map(row => row.id),
+      inputs: [{key, revision: issue.revision}, ...snapshot.inputs.filter(row =>
+        row.key === snapshot.sortContext.key || row.key === `${key}#sort-labels` || row.key.startsWith(`${key}#issuecomment-`))],
+      belongs: {kind: 'area', area: 'src', repository: ''},
+      status: {state: 'still-happens', release: snapshot.sortContext.release, fix: '', evidence: ['Synthetic open widget issue.']},
+      genuine: {kind: 'bug', duplicateOf: '', reason: ''}, paths: [], rootCause: '', severity: 'medium', question: '' };
+  }) : [];
+  return { reviews, impactJson: '', ...(snapshot.sortContext ? {sorts} : {}) };
 }

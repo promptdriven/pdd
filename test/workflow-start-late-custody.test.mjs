@@ -48,7 +48,10 @@ for (const lost of [false, true]) test(`2627 late dispatched startup ${lost ? 'l
   assert.equal(historical.tabId, pane.tab_id);
   assert.equal(historical.terminalId, pane.terminal_id);
   assert.equal(historical.session.id, pane.agent.agent_session.value);
-  assert.equal(Boolean(historical.startUnconfirmed), lost);
+  // The newer area transition may already have positively observed this native session.
+  // A late lost reply must retain that evidence rather than reinstate uncertainty.
+  const observed = expected.chats.find(chat => chat.area === 'plan' && chat.paneId === originalPane);
+  assert.equal(Boolean(historical.startUnconfirmed), Boolean(observed.startUnconfirmed));
   const launches = f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run').length;
   const opened = await openRun({ ref: '17', area: 'plan', cwd: f.source, packageRoot }, f.ports);
   assert.equal(opened.exitCode, 0, opened.message);

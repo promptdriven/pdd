@@ -36,7 +36,7 @@ async function setup(t, edit) {
     job.result.report.evaluation.requested_model = identity.requested_model;
     return { status: 200, json: job };
   });
-  const env = { HOME: fixture.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: fixture.state };
+  const env = { HOME: fixture.home, PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '8', PDD_STATE_DIR: fixture.state };
   const { ports, clock } = portsFor(env);
   const invokeWith = async (p, words = [], options = {}, cache = true) => {
     p.stdout.text = ''; p.stderr.text = '';
@@ -48,6 +48,12 @@ async function setup(t, edit) {
   const invoke = (words, options) => invokeWith(ports, words, options);
   const readBatch = async (name, p = ports, options = {}) => { p.stdout.text = ''; p.stderr.text = ''; return runCheck({ words: [name], options: { '--read': true, '--json': true, ...options }, cwd: fixture.repo, cache: true }, p); };
   return { ...fixture, fake, ports, clock, env, invoke, invokeWith, readBatch, state };
+}
+// Cache actors share cache files, while each actor owns its admission queue.
+// Busy adaptation in one actor must not turn this cache barrier into a queue test.
+function actorPorts(ctx, extra = {}) {
+  ctx.actors = (ctx.actors ?? 0) + 1;
+  return portsFor({...ctx.env, PDD_INTERPRETER_QUEUE: join(ctx.env.PDD_STATE_DIR, `interpreter-actor-${ctx.actors}`)}, extra);
 }
 function bump(ctx, file) { const path = join(ctx.repo, file), doc = read(path); doc.initial_world.changed = (doc.initial_world.changed ?? 0) + 1; write(path, doc); }
 function findBatch(dir, name) {
@@ -63,8 +69,8 @@ const interleavings = [
   { name: 'overlap and older writer', run: async ctx => {
   assert.equal((await ctx.invoke()).sent, 3);
   bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
-  const p = portsFor(ctx.env); p.ports.interactive = true; p.clock.now = ctx.clock.now + 1000;
-  const q = portsFor(ctx.env); q.clock.now = ctx.clock.now + 60000;
+  const p = actorPorts(ctx); p.ports.interactive = true; p.clock.now = ctx.clock.now + 1000;
+  const q = actorPorts(ctx); q.clock.now = ctx.clock.now + 60000;
   let released = false; const held = new Set(); let phase = 'p';
   ctx.state.reply = (id, entry, fake) => {
     if (entry.method === 'POST') { if (phase === 'p') held.add(id); }
@@ -183,9 +189,9 @@ for (const part of ['engine', 'model']) test(`TEST-CACHE-R3 multiple stored ${pa
 test('TEST-CACHE-V1 short run inside a longer run cannot reuse a pass', async t => {
   const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3);
   bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
-  const p = portsFor(ctx.env); p.ports.interactive = true; p.clock.now = ctx.clock.now + 1000;
-  const q = portsFor(ctx.env); q.clock.now = ctx.clock.now + 30000;
-  const r = portsFor(ctx.env); r.clock.now = ctx.clock.now + 60000;
+  const p = actorPorts(ctx); p.ports.interactive = true; p.clock.now = ctx.clock.now + 1000;
+  const q = actorPorts(ctx); q.clock.now = ctx.clock.now + 30000;
+  const r = actorPorts(ctx); r.clock.now = ctx.clock.now + 60000;
   let released = false, phase = 'p'; const held = new Set();
   ctx.state.reply = (id, entry, fake) => {
     if (entry.method === 'POST' && phase === 'p') held.add(id);
@@ -210,7 +216,7 @@ test('TEST-CACHE-V1 short run inside a longer run cannot reuse a pass', async t 
 test('TEST-CACHE-V2 crash before finish leaves a mark that forces a run', async t => {
   const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3);
   bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
-  const deadPid = 987654321, c = portsFor(ctx.env, { pid: deadPid, isAlive: () => true }); c.clock.now = ctx.clock.now + 1000;
+  const deadPid = 987654321, c = actorPorts(ctx, { pid: deadPid, isAlive: () => true }); c.clock.now = ctx.clock.now + 1000;
   let first = true;
   ctx.state.reply = (id, entry, fake) => {
     const job = fake.check(id, first && entry.method === 'POST' ? 'passed' : 'running'); first = false;
@@ -230,7 +236,7 @@ test('TEST-CACHE-V2 crash before finish leaves a mark that forces a run', async 
 const DEAD = 987654321;
 const wait = () => new Promise(done => setTimeout(done, 5));
 function round4Other(ctx, offset, extra = {}) {
-  const other = portsFor(ctx.env, { isAlive: pid => pid !== DEAD, ...extra });
+  const other = actorPorts(ctx, { isAlive: pid => pid !== DEAD, ...extra });
   other.clock.now = ctx.clock.now + offset; return other;
 }
 const job = (fake, id, identity, state = 'passed') => {
@@ -333,7 +339,7 @@ function watchSendOwnership(ctx) {
   };
   let sequence = 0;
   const actor = offset => {
-    const pid = 40000 + ++sequence, item = portsFor(ctx.env, { pid, isAlive: () => true });
+    const pid = 40000 + ++sequence, item = actorPorts(ctx, { pid, isAlive: () => true });
     item.clock.now = ctx.clock.now + offset;
     return { ...item, pid, use: () => { expectedPid = pid; } };
   };

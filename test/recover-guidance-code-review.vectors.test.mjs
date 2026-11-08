@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {fixture, inventory, nativeCase, reviewedPr1, missingCompletedReview, success} from './helpers/recover-guidance-cli-fixture.mjs';
+import {fixture, inventory, nativeCase, reviewedPr1, missingCompletedReview, success, assertReviewCosts} from './helpers/recover-guidance-cli-fixture.mjs';
 
 const recovery = () => [...nativeCase('recover-current-review').commands[0]];
 const approval = () => [...nativeCase('approve-after-recovery').commands[0]];
@@ -47,8 +47,9 @@ test('approved native guidance recovery cases replay through bin/pdd.mjs', async
     // The run-record owner mirrors gate review into its status projection.
     expected.waitingDecision.promptSnapshot=row.expected.reviewed_selection;
     // Only ordinary save metadata and the review itself may change.
-    delete expected.updatedAt;delete expected.journalSeq;
-    const actual=structuredClone(reviewed);delete actual.updatedAt;delete actual.journalSeq;
+    assertReviewCosts(before, reviewed);
+    delete expected.updatedAt;delete expected.journalSeq;delete expected.cost;
+    const actual=structuredClone(reviewed);delete actual.updatedAt;delete actual.journalSeq;delete actual.cost;
     assert.deepEqual(actual,expected);assert.deepEqual(f.effects(),effects);
     assert.equal(f.git('rev-parse','HEAD'),f.git('rev-parse','guidance-topic'));
     assert.equal(readFileSync(join(f.root,'guidance.md'),'utf8'),'Reviewed guidance.\n');

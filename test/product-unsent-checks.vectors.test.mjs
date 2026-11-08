@@ -181,7 +181,7 @@ for (const stop of authentic.stop_variants) for (const intent of ['check', 'abse
     return { status: 200, json: server.check(entry.request.requestId, 'passed', checks) };
   });
   f.fake = fake;
-  const env = { ...process.env, HOME: f.home, PDD_STATE_DIR: f.state, PDD_RUNTIME_URL: fake.origin };
+  const env = { ...process.env, HOME: f.home, PDD_STATE_DIR: f.state, PDD_INTERPRETER_QUEUE: join(f.state, 'interpreter-queue'), PDD_RUNTIME_URL: fake.origin };
   const first = portsFor(env);
   assert.equal(await runtime.runCheck({ words: f.selected, options: { '--json': true }, cwd: f.repo }, first.ports), 0, first.ports.stderr.text);
   assert.equal(fake.posts.filter(row => row.command === 'check').length, 4);

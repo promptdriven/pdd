@@ -1,3 +1,5 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
@@ -9,6 +11,7 @@ import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { loadAgentDefinitions } from '../src/agent-config.mjs';
 import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
+import { automaticFixture } from './helpers/autopilot-run-base-fixture.mjs';
 
 const root = resolve('.');
 const capture = () => ({ text: '', write(s) { this.text += s; } });
@@ -20,7 +23,7 @@ async function fixture(t, options = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: options.mode ?? 'auto', trust: ['helper'] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
-    stateRoot: join(home, 'state'), now: () => f.time,
+    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time,
     // These fakes stand for a checkout where pdd workflows can start (#3050).
     allocationCheck: async () => ({ state: 'ready', message: '' }),
     readRunProgress: async () => f.runProgress ?? [],
@@ -30,7 +33,7 @@ async function fixture(t, options = {}) {
     run: async (command, args) => {
       f.runs.push([command, args]);
       if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"trunk"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
@@ -77,7 +80,7 @@ async function nativeStartup(t, { kind = 'codex', custom = false, cwdName, body 
   const record = join(f.dir, 'native.jsonl');
   const script = `#!${process.execPath}\nconst fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({command:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),env:{CODEX_HOME:process.env.CODEX_HOME,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR,STARTUP_TEST_VALUE:process.env.STARTUP_TEST_VALUE,PDD_AUTOPILOT_CONTEXT:process.env.PDD_AUTOPILOT_CONTEXT}})+'\\n');\n`;
   for (const name of ['codex', 'fake-provider', 'chosen codex wrapper']) writeFileSync(join(bin, name), script, { mode: 0o755 });
-  const env = { HOME: f.home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: profile, XDG_CONFIG_HOME: join(f.home, '.config') };
+  const env = { PDD_SUITE_QUEUE: undefined, PDD_VM_SUITE_LOCK: undefined, HOME: f.home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: profile, XDG_CONFIG_HOME: join(f.home, '.config') };
   if (!codexHome) delete env.CODEX_HOME;
   const value = 'a b\'c"d\\e$HOME';
   env.CLAUDE_CONFIG_DIR = join(f.home, value);
@@ -272,7 +275,7 @@ test('a GitHub owner spelled with capitals matches the canonical lowercase eligi
   const f = await fixture(t);
   const run = f.ports.run;
   f.ports.run = async (command, args, opts) => command === 'gh' && args[0] === 'repo'
-    ? { code: 0, stdout: '{"nameWithOwner":"Serhan-Asad/PDD-Sandbox","url":"https://github.com/Serhan-Asad/PDD-Sandbox"}', stderr: '' }
+    ? { code: 0, stdout: '{"nameWithOwner":"Serhan-Asad/PDD-Sandbox","defaultBranchRef":{"name":"main"},"url":"https://github.com/Serhan-Asad/PDD-Sandbox"}', stderr: '' }
     : run(command, args, opts);
   // GitHub spells html_url with the owner's capitals; the dependency graph stores canonical lowercase keys.
   const mixed = number => issue(number, { user: { login: 'Serhan-Asad' }, html_url: `https://github.com/Serhan-Asad/PDD-Sandbox/issues/${number}` });
@@ -1012,7 +1015,7 @@ test('time rule uses cached comment activity and never adds a GitHub query on un
   f.time += hour / 2; await f.tick(); assert.equal(f.prompts.length, 1);
   await f.tick(); assert.equal(f.prompts.length, 1);
   assert.equal(f.comments.length, commentReads);
-  assert.ok(f.runs.slice(processes).every(([command]) => command === 'git'), 'No extra network or model process');
+  assert.ok(f.runs.slice(processes).every(([command,args]) => command === 'git' || command === 'herdr' && JSON.stringify(args) === JSON.stringify(['--session','pdd','pane','list'])), 'No extra network or model process');
 });
 
 test('time rule revalidates trust on a cached due claim without forwarding stranger text', async t => {
@@ -1025,11 +1028,20 @@ test('time rule revalidates trust on a cached due claim without forwarding stran
 
 test('time rules read active status file modification times from the Git common directory', async t => {
   const f = await fixture(t); delete f.ports.readRunProgress;
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  const invoke = f.invoke;
+  f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra});
   const changedAt = f.time;
+  // A foreign finished ticket must not hide this checkout's progress.
+  mkdirSync(f.ports.env.PDD_SUITE_QUEUE, { recursive: true });
+  writeFileSync(join(f.ports.env.PDD_SUITE_QUEUE, 'ticket-1.json'), JSON.stringify({
+    ticket: 1, pid: process.pid, cwd: join(f.dir, 'unrelated'), state: 'finished',
+    queuedAt: changedAt - hour, startedAt: changedAt - hour, finishedAt: changedAt - 1, reason: null,
+  }));
   const record = (number, state = 'running', repo = 'owner/repo') => {
     const folder = join(f.cwd, '.git', 'pdd', 'runs', String(number)); mkdirSync(folder, { recursive: true });
     const file = join(folder, 'status.json');
-    writeFileSync(file, JSON.stringify({ v: 1, number, repo, state, updatedAt: changedAt - hour }));
+    writeFileSync(file, JSON.stringify({ v: 1, number, repo, root: join(f.dir, `run-${number}`), state, updatedAt: changedAt - hour }));
     utimesSync(file, new Date(changedAt), new Date(changedAt));
     return file;
   };
@@ -1622,4 +1634,468 @@ test('2903: the relaunch close compares the folder when no terminal id is saved,
   f.saveState(state => { delete state.ownerLaunch.fingerprint; });
   f.status = 304; f.time += 60 * 1000; await f.tick();
   assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.state().paneId, 'w2:p1');
+});
+
+for (const state of ['waiting', 'running']) test(`full-suite ${state} does not emit stuck or idle-claim rules`, async t => {
+  const f = await fixture(t);
+  const hour = 60 * 60 * 1000, changedAt = f.time - 2 * hour;
+  f.issues = [issue(101, {labels:['pdd:working'], updated_at:new Date(changedAt).toISOString()})];
+  f.runProgress = [{number:101,changedAt,suite:{state,position:state === 'waiting' ? 4 : null,queuedAt:changedAt,startedAt:state === 'running' ? changedAt : null,finishedAt:null,reason:null,pausedMs:2*hour}}];
+  const result = await f.invoke('start'); assert.equal(result.exitCode, 0, result.message);
+  const rules = f.prompts.flatMap(text => JSON.parse(text.trim().split('\n').at(-1)).timeRules ?? []);
+  assert.equal(rules.some(rule => rule.number === 101 && ['stuck-run','idle-claim'].includes(rule.kind)), false, 'suite activity pauses inactivity rules');
+});
+
+test('a suite timeout emits its own reason once, without a stuck issue rule', async t => {
+  const f = await fixture(t), hour = 60 * 60 * 1000, changedAt = f.time - 2 * hour;
+  f.issues = [issue(101, {labels:['pdd:working'],updated_at:new Date(changedAt).toISOString()})];
+  f.runProgress = [{number:101,changedAt,suite:{state:'finished',position:null,queuedAt:changedAt,startedAt:changedAt,finishedAt:f.time - 1,reason:'per-file timeout: test/slow.test.mjs',pausedMs:hour}}];
+  const result = await f.invoke('start'); assert.equal(result.exitCode, 0, result.message);
+  const rules = () => f.prompts.flatMap(text => JSON.parse(text.trim().split('\n').at(-1)).timeRules ?? []);
+  assert.equal(rules().filter(rule => rule.number === 101 && rule.kind === 'suite-failed').length, 1);
+  assert.match(rules().find(rule => rule.kind === 'suite-failed').reason, /per-file timeout.*slow/);
+  assert.equal(rules().some(rule => ['stuck-run','idle-claim'].includes(rule.kind)), false);
+  await f.tick(); assert.equal(rules().filter(rule => rule.kind === 'suite-failed').length, 1);
+});
+
+test('native progress reader pauses the stuck clock and resumes its remaining time after a suite', async t => {
+  const f = await fixture(t); await f.invoke('start'); f.prompts.length = 0;
+  delete f.ports.readRunProgress;
+  const folder = join(f.cwd,'.git','pdd','runs','101'), worktree = join(f.dir,'worktree'), queue = join(f.dir,'suite-queue');
+  mkdirSync(folder,{recursive:true}); mkdirSync(worktree); mkdirSync(queue);
+  const changedAt=f.time, statusFile=join(folder,'status.json');
+  writeFileSync(statusFile,JSON.stringify({v:1,number:101,repo:'owner/repo',state:'running',root:worktree}));
+  utimesSync(statusFile,new Date(changedAt),new Date(changedAt));
+  const row={ticket:1,pid:process.pid,childPid:null,cwd:worktree,state:'waiting',queuedAt:changedAt+10*60_000,startedAt:null,finishedAt:null,reason:null};
+  const file=join(queue,'ticket-1.json'); writeFileSync(file,JSON.stringify(row));
+  f.ports.env={HOME:f.home,PDD_SUITE_QUEUE:queue}; f.time=changedAt+2*hour;
+  await f.tick(); assert.equal(f.prompts.length,0,'waiting time does not make a run stuck');
+  row.state='finished'; row.finishedAt=f.time; writeFileSync(file,JSON.stringify(row));
+  f.time+=49*60_000; await f.tick(); assert.equal(f.prompts.length,0,'ten minutes before waiting plus 49 after is below the threshold');
+  f.time+=60_000; await f.tick();
+  assert.equal(packet(f).timeRules.filter(rule=>rule.kind==='stuck-run'&&rule.number===101).length,1,'only time outside the queue counts');
+});
+
+
+test('different failed suite tickets with the same finish time each get one failure event', async t => {
+  const f=await fixture(t);
+  const suite={ticket:1,state:'finished',position:null,queuedAt:f.time-100,startedAt:f.time-50,finishedAt:f.time,reason:'suite exit 1',pausedMs:100};
+  f.runProgress=[{number:101,changedAt:f.time,suite}];
+  assert.equal((await f.invoke('start')).exitCode,0);
+  suite.ticket=2; await f.tick(); await f.tick();
+  const rules=f.prompts.flatMap(text=>JSON.parse(text.trim().split('\n').at(-1)).timeRules??[]);
+  assert.equal(rules.filter(rule=>rule.kind==='suite-failed').length,2);
+});
+
+for (const selector of ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK']) test(`shared suite selector ${selector} survives native launch and a later tick`, async t => {
+  const f = await fixture(t, {mode:'observe'}), selected = join(f.dir, "shared 'queue' $()"), bin = join(f.dir,'bin');
+  mkdirSync(bin);
+  const output = join(f.dir,'native-queue.json');
+  writeFileSync(join(bin,'codex'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(output)},JSON.stringify({queue:process.env.PDD_SUITE_QUEUE??null,legacy:process.env.PDD_VM_SUITE_LOCK??null,argv:process.argv.slice(2)}));\n`, {mode:0o755});
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    const result = await herdr(args);
+    if (args[0] === 'pane' && args[1] === 'run') execFileSync('/bin/sh',['-c',args[3]],{cwd:f.cwd,env:{HOME:f.home,PATH:`${bin}:/usr/bin:/bin`,PDD_SUITE_QUEUE:'/stale-server-queue',PDD_VM_SUITE_LOCK:'/stale-server-lock'},timeout:10000});
+    return result;
+  };
+  const result = await f.invoke('start',{env:{HOME:f.home,PATH:`${bin}:/usr/bin:/bin`,PDD_SUITE_QUEUE:undefined,PDD_VM_SUITE_LOCK:undefined,[selector]:selected}});
+  assert.equal(result.exitCode,0,result.message);
+  const actual = JSON.parse(readFileSync(output,'utf8'));
+  assert.equal(actual[selector === 'PDD_SUITE_QUEUE' ? 'queue' : 'legacy'],selected,'native coordinator inherits the exported queue selector');
+  assert.equal(actual[selector === 'PDD_SUITE_QUEUE' ? 'legacy' : 'queue'],null,'the other selector cannot come from the Herdr server');
+  assert.equal(codexConfigs(actual.argv).set[selector],selected,'coordinator commands forward the queue selector to worker launches');
+  assert.equal(f.state().environment[selector],selected,'saved environment retains queue selection');
+  assert.equal(f.timers.find(([action])=>action==='start')[1].environment[selector],selected,'timer retains queue selection');
+  const folder=join(f.cwd,'.git','pdd','runs','101'),worktree=join(f.dir,'worktree');
+  const queue=selector==='PDD_SUITE_QUEUE'?selected:`${selected}.queue`;
+  mkdirSync(folder,{recursive:true}); mkdirSync(worktree); mkdirSync(queue);
+  const changedAt=f.time-2*hour,statusFile=join(folder,'status.json');
+  writeFileSync(statusFile,JSON.stringify({v:1,number:101,repo:'owner/repo',state:'running',root:worktree}));
+  utimesSync(statusFile,new Date(changedAt),new Date(changedAt));
+  writeFileSync(join(queue,'ticket-1.json'),JSON.stringify({ticket:1,pid:process.pid,childPid:null,cwd:worktree,state:'waiting',queuedAt:changedAt,startedAt:null,finishedAt:null,reason:null}));
+  delete f.ports.readRunProgress; f.prompts.length=0;
+  // Only saved startup state selects the queue. Mask the unrelated ambient selector.
+  f.ports.env = {[selector === 'PDD_SUITE_QUEUE' ? 'PDD_VM_SUITE_LOCK' : 'PDD_SUITE_QUEUE']: undefined};
+  await f.tick();
+  const rules=f.prompts.flatMap(text=>JSON.parse(text.trim().split('\n').at(-1)).timeRules??[]);
+  assert.equal(rules.some(rule=>rule.number===101&&['stuck-run','idle-claim'].includes(rule.kind)),false,'later tick observes the configured queue');
+});
+
+for (const damage of ['malformed', 'unreadable']) test(`unavailable suite queue (${damage}) retains progress and defers inactivity until recovery`, async t => {
+  const f=await fixture(t); await f.invoke('start'); f.prompts.length=0;
+  delete f.ports.readRunProgress;
+  const worktree=join(f.dir,'worktree'),queue=join(f.dir,'queue'),folder=join(f.cwd,'.git','pdd','runs','101');
+  mkdirSync(worktree); mkdirSync(queue); mkdirSync(folder,{recursive:true});
+  const changedAt=f.time-2*hour,statusFile=join(folder,'status.json');
+  writeFileSync(statusFile,JSON.stringify({v:1,number:101,repo:'owner/repo',state:'running',root:worktree}));
+  utimesSync(statusFile,new Date(changedAt),new Date(changedAt));
+  const ticket=join(queue,'ticket-unrelated.json');
+  if(damage==='malformed') writeFileSync(ticket,'{'); else mkdirSync(ticket);
+  f.ports.env={HOME:f.home,PDD_SUITE_QUEUE:queue};
+  f.issues=[issue(101,{labels:['pdd:working'],updated_at:new Date(changedAt).toISOString()})];
+  await f.tick();
+  const rules=()=>f.prompts.flatMap(text=>JSON.parse(text.trim().split('\n').at(-1)).timeRules??[]);
+  assert.equal(rules().some(rule=>rule.number===101&&['stuck-run','idle-claim','suite-failed'].includes(rule.kind)),false,'unknown queue activity cannot establish inactivity or a failed suite');
+  assert.ok(f.warnings.some(text=>/101/.test(text)&&/queue.*unavailable/i.test(text)),'queue uncertainty and affected run are visible');
+  assert.ok(f.warnings.some(text=>damage==='malformed'?/JSON|Unexpected/i.test(text):/EISDIR|directory/i.test(text)),'warning retains the read cause');
+  const before=readFileSync(statusFile); rmSync(ticket,{recursive:true});
+  await f.tick();
+  assert.ok(rules().some(rule=>rule.number===101&&rule.kind==='stuck-run'),'recovered queue restores normal run inactivity checks');
+  assert.ok(rules().some(rule=>rule.number===101&&rule.kind==='idle-claim'),'recovered queue restores claim inactivity checks');
+  assert.deepEqual(readFileSync(statusFile),before,'observing queue uncertainty does not mutate run progress');
+});
+
+test('native timer definitions retain both exported shared suite selectors', async t => {
+  for (const platform of ['linux','darwin']) {
+    const f=await fixture(t,{mode:'observe'}); delete f.ports.timer; f.ports.platform=platform; f.ports.uid=123;
+    const selectors={PDD_SUITE_QUEUE:join(f.dir,'selected-queue'),PDD_VM_SUITE_LOCK:join(f.dir,'legacy-lock')};
+    const env={HOME:f.home,PATH:'/fixture/bin',XDG_CONFIG_HOME:join(f.home,'.config'),...selectors};
+    const run=f.ports.run;
+    f.ports.run=async(command,args,options)=>['systemctl','launchctl','loginctl'].includes(command)
+      ? {code:0,stdout:command==='loginctl'?'yes\n':'',stderr:''} : run(command,args,options);
+    const result=await f.invoke('start',{env}); assert.equal(result.exitCode,0,result.message);
+    const folder=platform==='linux'?join(f.home,'.config','systemd','user'):join(f.home,'Library','LaunchAgents');
+    const file=readdirSync(folder).find(name=>name.endsWith(platform==='linux'?'.service':'.plist'));
+    const definition=readFileSync(join(folder,file),'utf8');
+    for(const [name,value] of Object.entries(selectors)) {
+      assert.ok(definition.includes(name),`${platform} timer records ${name}`);
+      assert.ok(definition.includes(value),`${platform} timer records the selected path`);
+    }
+  }
+});
+
+// #3067: capacity reads use the same fake machine on start, tick and status.
+test('machine capacity follows resize on an empty tick without an AI wake', async t => {
+  const f=await fixture(t), {checkMachine}=await import('./helpers/check-machine.mjs');
+  const fake=checkMachine({count:64});
+  f.ports.checkCapacityPorts={...fake.ports,queueRoot:join(f.dir,'machine-checks')};
+  assert.equal((await f.invoke('start')).exitCode,0);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[5,10]);
+  const owner=f.state().ownerLaunch, prompts=f.prompts.length;
+  fake.machine.count=8;f.status=304;
+  assert.equal((await f.tick()).exitCode,0);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[1,2]);
+  assert.deepEqual(f.state().ownerLaunch,owner,'capacity does not change coordinator custody');
+  assert.equal(f.prompts.length,prompts,'an empty resize tick makes no AI call');
+  const status=await f.invoke('status');
+  assert.match(status.message,/check slots:\s*0 busy of 1, 0 waiting, cores per check 8/);
+  assert.match(status.message,/checks:\s*calculated 1, chosen 1; runs:\s*calculated 2, chosen 2/);
+});
+
+test('start saves check and run overrides and CLI forwards checks', async t => {
+  const f=await fixture(t);
+  for(const value of ['0','-1','1.2','9007199254740992','Infinity']) assert.equal((await f.invoke('start',{checks:value})).exitCode,2);
+  assert.equal((await f.invoke('start',{checks:'2',runs:'9'})).exitCode,0);
+  assert.deepEqual([f.state().checks,f.state().runs,f.state().checkCapacity.checks,f.state().checkCapacity.runs],[2,9,2,9]);
+  f.status=304;await f.tick();
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[2,9]);
+  const status=await f.invoke('status');assert.match(status.message,/checks:\s*calculated 3, chosen 2; runs:\s*calculated 4, chosen 9/);
+  let received;
+  const code=await runPdd(['autopilot','start','--checks','4','--runs','11'],{cwd:f.cwd,stdout:capture(),stderr:capture(),
+    autopilotLauncher:{runAutopilotLauncher:async input=>{received=input;return {exitCode:0,message:'started'};}},
+    autopilotGithub:{checkAutopilotSettings:async()=>({warning:''})}});
+  assert.equal(code,0);assert.deepEqual([received.checks,received.runs],['4','11']);
+  assert.equal((await f.invoke('start')).exitCode,0);
+  assert.equal(f.state().checks,undefined);assert.equal(f.state().runs,undefined);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[3,6]);
+});
+
+test('stopping a launcher removes its shared capacity while leaving check tickets alone',async t=>{
+  const f=await fixture(t);
+  assert.equal((await f.invoke('start',{checks:'1'})).exitCode,0);
+  const capacityFile=join(f.ports.checkCapacityPorts.queueRoot,'capacity.json');
+  assert.equal(JSON.parse(readFileSync(capacityFile)).owner,f.stateFile());
+  const ticketFile=join(f.ports.checkCapacityPorts.queueRoot,'ticket-1.json');
+  const ticket={ticket:1,pid:process.pid,childPid:process.pid,cwd:f.cwd,state:'running',queuedAt:f.time,startedAt:f.time,finishedAt:null,reason:null,cpuIds:[0]};
+  writeFileSync(ticketFile,JSON.stringify(ticket));
+  assert.equal((await f.invoke('stop')).exitCode,0);
+  assert.equal(existsSync(capacityFile),false);assert.deepEqual(JSON.parse(readFileSync(ticketFile)),ticket);
+});
+
+
+test('repair 1: repository status displays the latest shared owner limits',async t=>{
+  const a=await fixture(t), b=await fixture(t), {checkMachine}=await import('./helpers/check-machine.mjs');
+  const shared={...checkMachine({count:64}).ports,queueRoot:join(a.dir,'shared-checks')};
+  a.ports.checkCapacityPorts=shared;b.ports.checkCapacityPorts=shared;
+  assert.equal((await a.invoke('start',{checks:'1',runs:'7'})).exitCode,0);
+  assert.equal((await b.invoke('start',{checks:'3',runs:'19'})).exitCode,0);
+  const before=readFileSync(join(shared.queueRoot,'capacity.json'));
+  const status=await a.invoke('status');assert.equal(status.exitCode,0);
+  const numbers=/check slots:\s*(\d+) busy of (\d+), (\d+) waiting, cores per check (\d+)/.exec(status.message);
+  assert.ok(numbers);assert.deepEqual(numbers.slice(1).map(Number),[0,3,0,21]);
+  assert.match(status.message,/checks:\s*calculated 5, chosen 3; runs:\s*calculated 6, chosen 19/);
+  assert.match(status.message,/repository overrides: checks 1, runs 7/);
+  assert.deepEqual(readFileSync(join(shared.queueRoot,'capacity.json')),before);
+});
+
+test('native attention digest includes parallel automatic runs without waking the coordinator', async t => {
+  const f = await fixture(t);
+  const digests = [];
+  f.ports.sendDigest = async (input, ports) => {
+    digests.push(structuredClone(input));
+    assert.equal((await ports.repository()).nameWithOwner, 'owner/repo');
+    assert.equal(ports.hostname(), f.state().machine);
+    return { exitCode: 0, message: 'recorded' };
+  };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const machine = f.state().machine, common = join(f.cwd, '.git');
+  const seed = (number, extra = {}) => {
+    const runDir = join(common, 'pdd', 'runs', String(number));
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'status.json'), JSON.stringify({ v: 1, number, runDir, repo: 'owner/repo', state: 'running',
+      automaticOrigin: { machine }, ...extra }));
+    return { number, runDir };
+  };
+  const runs = [seed(41, { state: 'stuck', parkReason: 'Required check unavailable' }),
+    seed(42, { state: 'paused', runtimeWait: { reason: 'Interpreter busy' } }),
+    seed(43, { state: 'question', question: { at: 2, text: 'Choose retention' } }),
+    seed(44, { automaticOrigin: null, state: 'stuck' }),
+    seed(45, { state: 'stuck', automaticOrigin: { machine: 'other-machine' } }),
+    seed(46, { repo: 'other/project', state: 'stuck' }),
+    seed(47, { state: 'cancelled' }), seed(48, { state: 'completed' }),
+    seed(49, { state: 'completed', gate: { kind: 'ask-code', at: 3 }, question: { at: 1, text: 'Old question' } })];
+  const index = join(f.home, '.local', 'state', 'pdd');
+  mkdirSync(index, { recursive: true });
+  writeFileSync(join(index, 'runs.json'), JSON.stringify({ version: 1, runs }));
+  const prompts = f.prompts.length;
+  f.time += 30 * 60 * 1000;
+  assert.equal((await f.tick()).exitCode, 0);
+  assert.equal(digests.length, 2, 'every enabled tick must attempt the native digest before considering AI work');
+  assert.deepEqual(digests.at(-1).attention, [
+    { number: 41, category: 'stuck', cause: 'Required check unavailable' },
+    { number: 42, category: 'parked', cause: 'Interpreter busy' },
+    { number: 43, category: 'decision', cause: 'Choose retention' },
+    { number: 49, category: 'decision', cause: 'ask-code' }]);
+  assert.equal(f.prompts.length, prompts, 'digest collection must not wake an AI agent');
+  const saved = JSON.parse(readFileSync(join(common, 'pdd', 'runs', '41', 'status.json'), 'utf8'));
+  assert.equal(saved.state, 'stuck');
+  assert.equal(saved.parkReason, 'Required check unavailable');
+});
+
+test('digest runs before rate-limit retry and its failure does not stop the launcher', async t => {
+  const f = await fixture(t);
+  let attempts = 0;
+  f.ports.readAttention = () => [{ number: 41, category: 'stuck', cause: 'Check unavailable' }];
+  f.ports.sendDigest = async input => { attempts++; assert.equal(input.attention[0].number, 41); throw Error('synthetic delivery failure'); };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const saved = f.state(); saved.retryAt = f.time + 60 * 60 * 1000;
+  writeFileSync(f.stateFile(), JSON.stringify(saved));
+  const polls = f.polls.length;
+  assert.equal((await f.tick()).exitCode, 0);
+  assert.equal(attempts, 2, 'a GitHub retry must not suppress the native attention digest');
+  assert.equal(f.polls.length, polls);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'off', trust: [] } }));
+  await f.tick();
+  assert.equal(attempts, 2, 'off mode must not send a digest');
+});
+for (const state of ['running', 'waiting']) test(`cost polling cannot postpone the native stalled-run rule for ${state} runs`, async t => {
+  const f = await fixture(t); delete f.ports.readRunProgress;
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  const invoke = f.invoke;
+  f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra}); f.ports.skipMetricsDelivery = true;
+  const { updateRun } = await import('../src/workflow-runs.mjs');
+  const changedAt = f.time, commonDir = join(f.cwd, '.git'), runDir = join(commonDir, 'pdd', 'runs', '117');
+  mkdirSync(runDir, { recursive: true });
+  const file = join(runDir, 'status.json');
+  const original = { v: 1, number: 117, repo: 'owner/repo', state, runDir, commonDir, root: f.cwd, sourceRoot: f.cwd,
+    runId: 'cost-polling', startedAt: changedAt, updatedAt: changedAt, journalSeq: 4, areas: [], area: 0, done: {}, chats: [] };
+  writeFileSync(file, JSON.stringify(original)); utimesSync(file, new Date(changedAt), new Date(changedAt));
+  const saved = () => JSON.parse(readFileSync(file, 'utf8'));
+  f.ports.costRuns = async () => [saved()];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  for (const minute of [20, 40, 59]) {
+    f.time = changedAt + minute * 60000;
+    assert.equal((await f.invoke('status', { json: true })).exitCode, 0);
+    await f.tick(); assert.equal(f.prompts.length, 0);
+  }
+  f.time = changedAt + hour; await f.tick();
+  assert.equal(f.prompts.length, 1);
+  assert.deepEqual(packet(f).timeRules.map(event => event.number), [117]);
+  assert.equal(saved().updatedAt, original.updatedAt); assert.equal(saved().journalSeq, original.journalSeq);
+  assert.deepEqual(saved().done, original.done); assert.equal(saved().state, state);
+  updateRun(runDir, run => { run.done = { build: { at: f.time, summary: 'completed' } }; return run; }, { ...f.ports, env: { HOME: f.home } });
+  utimesSync(file, new Date(f.time), new Date(f.time));
+  const progressedAt = f.time;
+  assert.equal(saved().progressAt, undefined);
+  f.time = progressedAt + hour - 1;
+  assert.equal((await f.invoke('status', { json: true })).exitCode, 0);
+  await f.tick(); assert.equal(f.prompts.length, 1);
+  f.time++; await f.tick(); assert.equal(f.prompts.length, 2);
+});
+test('interpreter queue waiting and unavailable ownership cannot trigger the stuck rule', async t => {
+  const f = await fixture(t), changedAt = f.time;
+  f.runProgress = [{ number: 3066, changedAt, interpreter: { state: 'waiting', position: 2, pausedMs: 0 } }];
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  f.time += 2 * hour; await f.tick();
+  assert.equal(f.prompts.length, 0, 'machine queue waiting must pause the stuck rule');
+  f.runProgress[0].interpreter.state = 'unavailable'; await f.tick();
+  assert.equal(f.prompts.length, 0, 'unreadable queue ownership cannot prove no progress');
+  f.runProgress[0] = { number: 3066, changedAt: f.time - hour / 2, interpreter: { state: 'finished', pausedMs: 1.5 * hour } };
+  await f.tick(); assert.equal(f.prompts.length, 0);
+  f.time += hour / 2; await f.tick();
+  assert.deepEqual(packet(f).timeRules.filter(row => row.kind === 'stuck-run').map(row => row.number), [3066]);
+});
+
+test('native run progress subtracts saved interpreter waiting after a launcher restart', async t => {
+  const f = await fixture(t); delete f.ports.readRunProgress;
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  const invoke = f.invoke;
+  f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra});
+  const changedAt = f.time, folder = join(f.cwd, '.git', 'pdd', 'runs', '3066'); mkdirSync(folder, { recursive: true });
+  const file = join(folder, 'status.json');
+  writeFileSync(file, JSON.stringify({ v: 1, number: 3066, repo: 'owner/repo', state: 'running', root: f.cwd }));
+  utimesSync(file, new Date(changedAt), new Date(changedAt));
+  f.ports.readInterpreterProgress = ({ cwd, since }) => {
+    assert.equal(cwd, f.cwd); assert.equal(since, changedAt);
+    return { state: 'finished', position: null, pausedMs: hour };
+  };
+  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
+  f.time += hour; await f.tick();
+  assert.equal(f.prompts.length, 0, 'saved interpreter wait must be excluded after restart');
+  f.time += hour; await f.tick();
+  assert.deepEqual(packet(f).timeRules.filter(row => row.kind === 'stuck-run').map(row => row.number), [3066]);
+});
+test('2709: a full pane budget holds fresh intake and the next tick can release the hold', async t => {
+  const f = await fixture(t), warnings = [];
+  let count = 56, sweeps = 0;
+  f.ports.warn = text => warnings.push(text);
+  f.ports.tidyRuns = async () => {sweeps++; return {closed:0,kept:0,exitCode:0,message:'sweep'};};
+  f.ports.workflowHerdr = async args => {
+    assert.deepEqual(args,['pane','list']);
+    return {result:{type:'pane_list',panes:Array.from({length:count},(_,i)=>({pane_id:`p${i}`,workspace_id:`w${i}`,tab_id:`t${i}`,terminal_id:`term${i}`}))}};
+  };
+  f.issues = [issue(2709)];
+  assert.equal((await f.invoke('start')).exitCode,0);
+  assert.deepEqual(f.state().githubIntake.eligible,[]);
+  assert.ok(warnings.some(text=>text.includes('panes'))); assert.ok(sweeps >= 1);
+  count = 1; f.status = 304;
+  assert.equal((await f.tick()).exitCode,0);
+  assert.deepEqual(f.state().githubIntake.eligible,[f.issues[0].html_url]);
+});
+test('status shows saved group size, cause and umbrella without GitHub reads', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const group = { area: 'cli', rootCause: 'shared-context', umbrella: 'https://github.com/owner/repo/issues/100', members: ['https://github.com/owner/repo/issues/1','https://github.com/owner/repo/issues/2','https://github.com/owner/repo/issues/3'] };
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: [], queued: [], skipped: [], groups: [group] });
+  await f.tick();
+  const before = f.runs.filter(([file]) => file === 'gh').length;
+  const result = await f.invoke('status');
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.message.includes('3 issues'));
+  assert.ok(result.message.includes(group.rootCause));
+  assert.ok(result.message.includes(group.umbrella));
+  assert.equal(f.runs.filter(([file]) => file === 'gh').length, before);
+});
+
+for (const configured of [undefined, 'develop/topic']) test(`3071 launcher selects and caches base ${configured ?? 'default'}`, async t => {
+  const f = await fixture(t);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({autopilot:{mode:'auto', ...(configured ? {base:configured} : {})}}));
+  writeFileSync(join(f.cwd, 'CONTRIBUTING.md'), 'Use alpha for all PRs.');
+  const expected = configured ?? 'trunk';
+  const start = await f.invoke('start');
+  assert.equal(start.exitCode, 0, start.message);
+  assert.equal(f.state().baseBranch, expected);
+  assert.equal(f.state().defaultBranch, 'trunk');
+  assert.ok(start.message.includes(expected));
+  const packet = JSON.parse(f.prompts[0].trimEnd().split('\n').at(-1));
+  assert.equal(packet.baseBranch, expected); assert.equal(packet.workflow.baseBranch, expected);
+  const reads = () => f.runs.filter(([command,args]) => command === 'gh' && args[0] === 'repo').length;
+  assert.equal(reads(), 1);
+  f.status = 304;
+  await f.tick(); await f.tick();
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0); assert.ok(status.message.includes(expected)); assert.equal(reads(), 1);
+  const all = await f.invoke('status', {all:true}); assert.ok(all.message.includes(expected)); assert.equal(reads(),1);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({autopilot:{mode:'auto',base:'integration'}}));
+  await f.tick();
+  assert.equal(f.state().baseBranch, 'integration'); assert.equal(reads(),1);
+  const updated = JSON.parse(f.prompts.at(-1).trimEnd().split('\n').at(-1));
+  assert.equal(updated.baseBranch, 'integration');
+});
+
+test('3071 old launcher state reads default metadata once on tick', async t => {
+  const f = await fixture(t); assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(); delete state.defaultBranch; delete state.baseBranch;
+  writeFileSync(f.stateFile(),JSON.stringify(state));
+  f.status=304;
+  await f.tick(); await f.tick();
+  assert.equal(f.state().baseBranch,'trunk');
+  assert.equal(f.runs.filter(([cmd,args])=>cmd==='gh' && args[0]==='repo').length,2);
+});
+
+for (const stop of [false, true]) for (const configured of [undefined, 'integration/topic']) {
+  test(`3071 repair start refreshes default with stop=${stop}, base=${configured ?? 'default'}`, async t => {
+    const f = await fixture(t);
+    writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', ...(configured ? { base: configured } : {}) } }));
+    assert.equal((await f.invoke('start')).exitCode, 0);
+    const original = f.ports.run;
+    let metadataReads = 0;
+    f.ports.run = async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'repo') {
+        metadataReads++;
+        return { code: 0, stdout: JSON.stringify({ nameWithOwner: 'owner/repo', defaultBranchRef: { name: 'new-default' } }), stderr: '' };
+      }
+      return original(command, args, options);
+    };
+    f.status = 304;
+    const packetsBefore = f.prompts.length;
+    if (stop) assert.equal((await f.invoke('stop')).exitCode, 0);
+    const started = await f.invoke('start');
+    assert.equal(started.exitCode, 0, started.message);
+    assert.equal(f.state().defaultBranch, 'new-default');
+    const expected = configured ?? 'new-default';
+    assert.equal(f.state().baseBranch, expected);
+    assert.ok(started.message.includes(expected));
+    if (!configured) assert.equal(f.prompts.length, packetsBefore + 1, 'changed base reaches the coordinator with unchanged issues');
+    const packet = JSON.parse(f.prompts.at(-1).trimEnd().split('\n').at(-1));
+    assert.equal(packet.baseBranch, expected);
+    assert.equal(packet.workflow.baseBranch, expected);
+    await f.tick(); await f.tick();
+    for (const all of [false, true]) {
+      const status = await f.invoke('status', { all });
+      assert.equal(status.exitCode, 0, status.message);
+      assert.ok(status.message.includes(expected));
+    }
+    assert.equal(metadataReads, 1, 'one refresh per explicit start; ticks and status reuse it');
+  });
+}
+
+test('3071 repair failed default refresh refuses restart without using saved metadata', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  const saved = f.state(), packets = f.prompts.length, starts = f.timers.filter(([action]) => action === 'start').length;
+  const original = f.ports.run;
+  f.ports.run = (command, args, options) => command === 'gh' && args[0] === 'repo'
+    ? Promise.resolve({ code: 1, stdout: '', stderr: 'synthetic metadata failure' })
+    : original(command, args, options);
+  assert.equal((await f.invoke('start')).exitCode, 1);
+  assert.deepEqual(f.state(), saved);
+  assert.equal(f.prompts.length, packets);
+  assert.equal(f.timers.filter(([action]) => action === 'start').length, starts);
+});
+
+test('3071 repair refreshed packet base agrees with automatic workflow startup', async t => {
+  const f = await fixture(t), workflow = await automaticFixture(t);
+  const original = f.ports.run;
+  let defaultBranch = 'main';
+  f.ports.run = (command, args, options) => command === 'gh' && args[0] === 'repo'
+    ? Promise.resolve({ code: 0, stdout: JSON.stringify({ nameWithOwner: 'example/project', defaultBranchRef: { name: defaultBranch } }), stderr: '' })
+    : original(command, args, options);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  assert.equal((await f.invoke('stop')).exitCode, 0);
+  defaultBranch = 'new-default'; f.status = 304;
+  workflow.git(workflow.source, 'update-ref', 'refs/remotes/origin/new-default', workflow.git(workflow.source, 'rev-parse', 'HEAD'));
+  const workflowExec = workflow.automaticPorts.execFile;
+  workflow.automaticPorts.execFile = (file, args, options) => file === 'gh' && args[0] === 'repo'
+    ? Promise.resolve({ stdout: JSON.stringify({ nameWithOwner: 'example/project', defaultBranchRef: { name: defaultBranch }, url: 'https://github.com/example/project' }) })
+    : workflowExec(file, args, options);
+  const restarted = await f.invoke('start');
+  assert.equal(restarted.exitCode, 0, restarted.message);
+  const packet = JSON.parse(f.prompts.at(-1).trimEnd().split('\n').at(-1));
+  const started = await workflow.begin({ base: packet.workflow.baseBranch });
+  assert.equal(started.exitCode, 0, started.message);
+  assert.equal(workflow.record().baseBranch, 'new-default');
+  assert.equal(packet.baseBranch, workflow.record().baseBranch);
+  assert.equal(workflow.record().baseSha, workflow.git(workflow.source, 'rev-parse', 'refs/remotes/origin/new-default'));
 });

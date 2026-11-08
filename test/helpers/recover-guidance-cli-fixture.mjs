@@ -20,7 +20,7 @@ export function fixture(t) {
   for (const dir of [root, bin, join(home, '.codex')]) mkdirSync(dir, {recursive:true});
   const route = `url.file://${remote}.insteadOf=https://github.com/example/project.git`;
   const env = {...process.env, HOME:home, CODEX_HOME:join(home, '.codex'), CLAUDE_CONFIG_DIR:join(home, '.claude'),
-    XDG_CONFIG_HOME:join(home, '.config'), PATH:`${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, PDD_AGENT_SESSION:'1',
+    XDG_CONFIG_HOME:join(home, '.config'), PDD_SUITE_QUEUE:join(base, 'suite-queue'), PDD_INTERPRETER_QUEUE:join(base, 'interpreter-queue'), PATH:`${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, PDD_AGENT_SESSION:'1',
     GIT_CONFIG_NOSYSTEM:'1', GIT_CONFIG_GLOBAL:join(base, 'gitconfig')};
   writeFileSync(env.GIT_CONFIG_GLOBAL, '');
   const git = (...args) => execFileSync('/usr/bin/git', ['-c', route, ...args], {cwd:root, env, encoding:'utf8', stdio:['ignore','pipe','pipe']}).trim();
@@ -69,7 +69,7 @@ import fs from 'node:fs';
 import {fakeHerdr} from ${JSON.stringify(fakeHerdrPath)};
 const file=${JSON.stringify(herdrState)},h=fakeHerdr();
 if(fs.existsSync(file))Object.assign(h,JSON.parse(fs.readFileSync(file)));
-else {h.tabs=[{tab_id:'synthetic-tab',workspace_id:'synthetic-workspace'}];h.panes=[{pane_id:'synthetic-pane',tab_id:'synthetic-tab',workspace_id:'synthetic-workspace',agent:{agent:'codex',agent_status:'idle',agent_session:{agent:'codex',kind:'id',value:'00000000-0000-4000-8000-000000000017'},prompts:[]}}];}
+else {h.tabs=[{tab_id:'synthetic-tab',workspace_id:'synthetic-workspace'}];h.panes=[{pane_id:'synthetic-pane',tab_id:'synthetic-tab',workspace_id:'synthetic-workspace',terminal_id:'synthetic-terminal',cwd:${JSON.stringify(root)},agent:{agent:'codex',agent_status:'idle',agent_session:{agent:'codex',kind:'id',value:'00000000-0000-4000-8000-000000000017'},prompts:[]}}];}
 try{process.stdout.write(JSON.stringify(await h.herdr(process.argv.slice(4))));}
 catch(e){process.stdout.write(JSON.stringify({error:{code:e.code??e.message,message:e.message}}));process.exitCode=1;}
 finally{fs.writeFileSync(file,JSON.stringify(h));}
@@ -133,4 +133,25 @@ export function missingCompletedReview(f) {
   f.merge(); success(f.cli(row.commands[1]));
   assert.equal(f.read().state, row.expected.state); assert.equal(f.read().doneAt, row.expected.done_at);
   return f.read();
+}
+
+// #3061 adds cumulative cost observations to every ordinary save. A review
+// refresh may observe the seeded question and elapsed wait, but cannot spend,
+// approve or discard prior measurements. Keep these checks beside the full
+// workflow-state comparisons in the recovery tests.
+export function assertReviewCosts(before, after) {
+  const old = before.cost, current = after.cost;
+  assert.equal(current.schema, 'pdd.cost.v1');
+  assert.ok(current.capturedAt >= old.capturedAt);
+  for (const key of ['outcome', 'outcomeAt', 'tokens', 'sessions', 'measurements', 'suiteMinutes', 'ciMinutes'])
+    assert.deepEqual(current[key], old[key], key);
+  for (const key of ['answers', 'approvals', 'activeMinutes'])
+    assert.deepEqual(current.person[key], old.person[key], key);
+  assert.ok(current.githubCalls >= old.githubCalls);
+  const question = before.question;
+  const newQuestion = question && !old.waits[`q:${question.at}:${question.area}`] ? 1 : 0;
+  assert.equal(current.person.questions, old.person.questions + newQuestion);
+  assert.ok(current.person.waitingMinutes >= old.person.waitingMinutes);
+  assert.deepEqual(current.events.slice(0, old.events.length), old.events);
+  for (const [key, value] of Object.entries(old.waits)) assert.deepEqual(current.waits[key], value, key);
 }

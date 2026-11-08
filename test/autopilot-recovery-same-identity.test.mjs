@@ -1,3 +1,5 @@
+import {healthyMachine} from './helpers/healthy-machine.mjs';
+import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -106,6 +108,7 @@ async function launcherHarness(f) {
   let coordinatorSnapshot = graph.snapshot;
   const ownerPorts = {read: async () => reply({localOwner: 'launcher-coordinator', claims: [], runs: [], runsKnown: true})};
   const ports = {
+    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir),
     env: {HOME: home, PATH: process.env.PATH},
     stateRoot,
     now: () => now,
@@ -136,7 +139,7 @@ async function launcherHarness(f) {
         if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return {code: 0, stdout: cwd + '/.git\n', stderr: ''};
         return {code: 0, stdout: cwd + '\n', stderr: ''};
       }
-      if (command === 'gh' && args[0] === 'repo') return {code: 0, stdout: JSON.stringify({nameWithOwner: repository}), stderr: ''};
+      if (command === 'gh' && args[0] === 'repo') return {code: 0, stdout: JSON.stringify({nameWithOwner: repository, defaultBranchRef: { name: 'main' }}), stderr: ''};
       if (command === 'gh' && args[0] === 'api' && args.at(-1).endsWith('/permission')) return {code:0, stdout:'HTTP/1.1 200 OK\r\n\r\n{\"permission\":\"admin\"}', stderr:''};
       if (command === 'gh' && args[0] === 'auth') return {code: 0, stdout: '', stderr: ''};
       if (command === 'herdr' && args[0] === '--version') return {code: 0, stdout: 'fixture', stderr: ''};
@@ -202,7 +205,7 @@ test('public start recovers v2 with real intake', async t => {
  h.graph=built.snapshot; h.graph.coverage.scope=true; const local=h.graph.issues[0]; h.graph.issues.push({...local,key:external.html_url,nodeId:'900',title:'Unrelated external'}); h.graph.coverage.issues.push({...h.graph.coverage.issues[0],key:external.html_url,comments:false,missing:['comments']}); h.graph.warnings=['Unrelated external comments unavailable'];h.issueRows=[{...h.oldIssue,assignees:[],author_association:'OWNER'}];
  console.log('snapshot',JSON.stringify(h.graph));
  let atSend; const originalRun=h.ports.run,originalHerdr=h.ports.herdr;
- h.ports.run=async (cmd,args)=>cmd==='gh'&&args[0]==='repo'?{code:0,stdout:JSON.stringify({nameWithOwner:repository,url:`https://github.com/${repository}`}),stderr:''}:originalRun(cmd,args);
+ h.ports.run=async (cmd,args)=>cmd==='gh'&&args[0]==='repo'?{code:0,stdout:JSON.stringify({nameWithOwner:repository, defaultBranchRef: { name: 'main' },url:`https://github.com/${repository}`}),stderr:''}:originalRun(cmd,args);
  const live={pane_id:state.paneId,workspace_id:state.workspaceId,cwd:h.cwd,foreground_cwd:h.cwd,tab_id:'tab',terminal_id:'terminal',agent:state.agent.kind,agent_status:'idle',agent_session:{kind:'id',value:'offline-session-1'}};
  h.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='prompt') atSend=JSON.parse(readFileSync(h.stateFile)); return args[0]==='agent'&&args[1]==='get'?{result:{type:'agent_info',agent:live}}:args[0]==='pane'&&args[1]==='get'?{result:{type:'pane_info',pane:live}}:args[0]==='workspace'&&args[1]==='get'?{result:{type:'workspace_info',workspace:{workspace_id:state.workspaceId}}}:originalHerdr(args)};
  const origIntake=h.ports.reconcileDependencyIntake; h.ports.reconcileDependencyIntake=async (...args)=>{const result=await origIntake(...args);console.log('REAL INTAKE RESULT',JSON.stringify(result));return result};

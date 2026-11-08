@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 8102daf832ac8efa77608fb6723ea9355d60b5a79e61d2f5509b6b2fc5e97188).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: c014464d7cb75dec3322d853b6234b29c0d1d334693f81931e1f23cec2ac4f68).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { causeText } from './runtime-output.mjs';
@@ -293,7 +293,7 @@ export async function readWorkflowPrStatus(input, ports = {}) {
     const { cwd, url, view = false } = structuredClone(input ?? {});
     if (!text(url) || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url)) fail('workflow_github_pr_url_invalid');
     // With `view`, the same one read also gives the description, the head and the comments (a readable-top refresh).
-    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', `state,mergedAt,statusCheckRollup,baseRefName${view ? ',body,headRefOid,comments' : ''}`]));
+    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', `state,mergedAt,statusCheckRollup,baseRefName,headRefOid${view ? ',body,comments' : ''}`]));
     const state = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[row?.state];
     if (!state) fail('workflow_github_pr_state_invalid');
     const checks = Array.isArray(row.statusCheckRollup) ? row.statusCheckRollup : [];
@@ -302,6 +302,7 @@ export async function readWorkflowPrStatus(input, ports = {}) {
       : checks.some(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check))) ? 'failing'
       : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
     return { state, ci, ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
+      ...(text(row.headRefOid) ? { headSha: row.headRefOid } : {}),
       ...(view ? { view: { body: typeof row.body === 'string' ? row.body : null, head: text(row.headRefOid) ? row.headRefOid : null, comments: Array.isArray(row.comments) ? row.comments : null } } : {}) };
   } catch { return { state: 'unknown', ci: 'unknown' }; }
 }

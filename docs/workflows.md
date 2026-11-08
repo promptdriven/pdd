@@ -301,4 +301,52 @@ The pdd CLI has no merge command. In manual workflows, ask your agent to merge u
 
 Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
 
+In auto mode, each Autopilot tick resumes a stopped current-area chat through the same recovery used by `pdd workflow open`. It rebuilds a closed workspace and resumes the saved conversation. Delivered change requests that have no agent acknowledgement appear in the resumed chat. Login failures and usage limits require a person and prevent automatic resume. Gates, questions, uncertain launches and paused or ended runs stay on hold. Each area can resume automatically up to three times in a rolling hour. If it stops again within that hour, the run becomes stuck with a reason and one alert. Manual open does not use that allowance.
+
+Recovery can use a unique matching native session to confirm that an acknowledged launch ran, even if status never saw it running. A saved launch UUID alone does not prove that Claude ran. A run layout that pdd is deliberately closing or has closed stays closed. A chat with a saved intentional-close mark also stays closed, including when closure is pending or the server restarts. It uses no automatic resume allowance and sends no resume-exhaustion alert. After a successful automatic resume, status shows `resumed after the chat stopped (1 of 3)` with that attempt's number. The notice lasts for one hour for the same current chat. A newer gate, question or chat problem keeps its own status. Failed or uncertain dispatches use an attempt but do not report a successful recovery.
+
 `pdd workflow open ISSUE [AREA] [--new]` focuses or resumes the current area's saved session by default. AREA opens a recorded current or earlier area's chat without moving the run or changing its gate and approvals; this does not enforce read-only execution. `--new` replaces only the current area's verified owned chat with one fresh session in the same worktree and saved agent configuration. It archives the old chat, native session identity and original first message, and the continuation explains completed work and any pending gate. Run it from another terminal: replacement refuses from an agent session, from the pane it would close and for an earlier area. Eligibility or ownership refusal before replacement intent leaves the saved run unchanged. Once intent is saved, an interruption retains the pending recovery record. Repeat `pdd workflow open ISSUE --new` to inspect and continue the same current-area attempt or roll it back without a duplicate native session. If its area differs from the current area, recovery only restores a verified usable original or safely ends the attempt; it never launches a fresh agent or resumes a stopped historical agent. Both status State and Next lines name the pending phase and this resolving command. If external inspection is temporarily unavailable or ambiguous, retry that command later; cancel remains available, as do the usual progress and approval commands. Plain open, AREA open and `--new` share the same short run lock; status holds no lock during external calls. Replacement keeps completed work, decisions, approvals and PRs and never approves new work.
+
+Full-suite validation in parallel runs uses `pdd workflow suite --command COMMAND`
+with the repository's actual test command. The machine queue sizes running slots from CPU and memory observations and reports each waiter's position. Waiting and suite execution
+pause stuck detection. A failed or timed out suite is reported as a `test-suite`
+incident with its cause. See [the queue command](cli.md#shared-full-suite-queue).
+
+## Finished chat cleanup
+
+Run `pdd workflow tidy --dry-run` to count eligible finished chat tabs, then
+`pdd workflow tidy` to close them. A live run keeps its current area chat,
+including a gate waiting for a person. Finished chats need verified Herdr IDs,
+a saved native session and safe occupancy. The grace period is 15 minutes from
+area/run end and from the last explicit open. Budget pressure can remove the
+grace period. Personal tabs and busy chats remain protected. An idle or done
+agent is safe. If the agent has
+exited, cleanup also requires process information that proves only the shell
+occupies the foreground. Foreground work or uncertain inspection keeps the tab.
+These checks repeat after the saved close intent, before the close request.
+
+After its last chat closes, an ended run can release its original shell workspace.
+Cleanup keeps the shell if it is the caller's pane, has live work, or cannot be
+checked. Tidy counts retained shells and status shows the reason. A failed shell
+close stays pending. The next tidy confirms absence or retries only after it
+checks the same workspace, original shell IDs and occupancy again. This also
+applies when startup failed before the run recorded its first area chat.
+
+An intentional close saves `chats[].closed = {at, reason, screen, confirmedAt?}` in status.json
+before sending the close request. This is the integration contract for automatic
+stopped-chat recovery (#3068): skip any chat with `closed`, even when a close
+request failed or the process/server restarted. `at` is epoch milliseconds;
+`reason` is `area-end`, `run-end`, `budget` or `cancel`; `screen` is the private
+screen file path, or null if capture failed. Optional `confirmedAt` is the epoch-ms time when inventory confirms absence. Without it, status shows a pending close. Keep this mark until an explicit
+successful open clears it and saves `openedAt`. Run state or an absent pane alone
+does not remove it. Keep the saved native session, account folder, worktree,
+branch and first message. A failed close can be retried safely by tidy. Native `openRun` with an
+`automaticResume` context returns `recovery: "skipped"` for a marked chat before
+Herdr effects. Keep this guard and a fresh mark check at automatic dispatch when
+integrating the stopped-chat recovery branch.
+
+Open an ended run to read the saved screen path and a shell-quoted native resume
+command. For a live run, open can resume a closed historical area chat. A manual
+start of the same completed issue makes a fresh run and retains the prior run.
+A replaced agent must stop; commands from its worktree show both run identities.
+To close retained busy chats, cancel from that retained worktree.

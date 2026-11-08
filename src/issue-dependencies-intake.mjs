@@ -1,3 +1,7 @@
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: ed8ec3fb4a14583c22eca59635186aaa076e287aba0036ab44ad4f376a091c94).
+import { syncMixedParts } from './issue-mixed.mjs';
+import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
+import { sortPlan } from './issue-sort.mjs';
 import { randomUUID } from 'node:crypto';
 import { execFile as nodeExecFile } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -77,7 +81,11 @@ function sameImpactRecord(saved, issue, impact) {
 // Semantic packets carry observations, but text without verified authority is not instructions.
 function packetSnapshot(snapshot) {
   const copy = structuredClone(snapshot);
-  copy.issues = copy.issues.map(issue => issue.authority === 'trusted' ? issue : {
+  copy.issues = copy.issues.map(issue => issue.authority === 'trusted' ? {
+    ...issue,
+    // #3053: identity can explain a conflict; outsider sort prose is not instructions.
+    ...(issue.sorts ? { sorts: issue.sorts.map(s => s.authority === 'trusted' && s.intact ? s : { ...s, record: null }) } : {}),
+  } : {
     key: issue.key, nodeId: issue.nodeId, title: '', revision: issue.revision,
     state: issue.state, authority: issue.authority, conditions: [], execution: issue.execution,
     holds: issue.holds, ...(issue.executionClaim ? { executionClaim: issue.executionClaim } : {}),
@@ -112,6 +120,7 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     ]);
     const owners = json(ownerReply.json); const snapshot = read.snapshot;
     if (settings.mode === 'off') return { allowed: false, reason: 'off' };
+    if (settings.healthPaused === true) return { allowed: false, reason: 'health' };
     const key = issueKey(issue);
     const selected = key && root(key, repository) ? key : null;
     const claim = selected && (owners.claims || []).find(x => issueKey(x.issue) === selected && x.active);
@@ -119,13 +128,14 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     if (settings.activation !== coordinator.activation || settings.runs !== coordinator.runs) return { allowed: false, reason: 'stale' };
     if (owners.runsKnown !== true || !Array.isArray(owners.runs)) return { allowed: false, reason: 'runs' };
     const occupied = owners.runs.filter(run => !(['waiting', 'paused', 'stuck', 'question'].includes(run.state) && run.occupied === false));
-    if (settings.runs !== undefined) {
-      if (!Number.isSafeInteger(settings.runs) || settings.runs < 1) return { allowed: false, reason: 'runs' };
+    const runCap = settings.runs ?? settings.capacityRuns;
+    if (runCap !== undefined) {
+      if (!Number.isSafeInteger(runCap) || runCap < 1) return { allowed: false, reason: 'runs' };
       const slots = new Map();
       for (const run of occupied) {
         slots.set(run.runId || run.issue, run);
       }
-      if (slots.size + ([...slots.values()].some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > settings.runs) return { allowed: false, reason: 'runs' };
+      if (slots.size + ([...slots.values()].some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > runCap) return { allowed: false, reason: 'runs' };
     }
     if (occupied.some(run => selected && issueKey(run.issue) === selected)) return { allowed: false, reason: 'dependency' };
     const copy = structuredClone(snapshot); const subject = copy.issues.find(x => selected && issueKey(x.key) === selected);
@@ -134,6 +144,10 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     }
     const node = projectIssueGraph({ snapshot: copy }).nodes.find(x => selected && issueKey(x.key) === selected);
     if (!node || node.reasons.includes('Incomplete relevant observations')) return { allowed: false, reason: 'unknown' };
+    if (node.eligible && ports.checkPaneCapacity) {
+      try { await ports.checkPaneCapacity(); }
+      catch (error) { return {allowed:false,reason:error.code === 'herdr_pane_budget' ? 'panes' : 'unknown'}; }
+    }
     return node.eligible ? { allowed: true, reason: 'ok' } : { allowed: false, reason: 'dependency' };
   } catch { return { allowed: false, reason: 'unknown' }; }
 }
@@ -155,7 +169,7 @@ function headIds(snapshot, graph = projectIssueGraph({ snapshot })) {
 function selectSubjects(graph, snapshot, repository, issue) {
   const number = key => Number(key.split('/').pop());
   const outsider = new Set(snapshot.issues.filter(i => i.authority === 'untrusted').map(i => issueKey(i.key)));
-  return graph.nodes.filter(x => root(x.key, repository) && x.nativeState === 'open' && !outsider.has(x.key) && (issue ? x.key === issue || x.key.endsWith(`/issues/${issue}`) : ['unchecked', 'stale'].includes(x.reviewState)))
+  return graph.nodes.filter(x => root(x.key, repository) && x.nativeState === 'open' && !outsider.has(x.key) && (issue ? x.key === issue || x.key.endsWith(`/issues/${issue}`) : (['unchecked', 'stale'].includes(x.reviewState) || sortSubjects(snapshot).includes(x.key))))
     .sort((a, b) => (a.reviewState === 'unchecked' ? 0 : 1) - (b.reviewState === 'unchecked' ? 0 : 1) || number(b.key) - number(a.key));
 }
 
@@ -169,7 +183,8 @@ export async function prepareDependencyIntake({ cwd = '', repository, issue }, p
   const skipped = selected.filter(x => x.reasons.includes('Incomplete relevant observations') || ownedElsewhere(owners, x.key)).map(x => x.key);
   // Small batches: one new issue never waits for a large review.
   const queued = selected.filter(x => !skipped.includes(x.key)).map(x => x.key).slice(0, REVIEW_BATCH);
-  const contextJson = queued.length ? (await ports.evidence.read({ cwd, repository, issues: queued })).json : JSON.stringify({ source: [], requirements: [] });
+  let contextJson = queued.length ? (await ports.evidence.read({ cwd, repository, issues: queued })).json : JSON.stringify({ source: [], requirements: [] });
+  contextJson = JSON.stringify({ ...json(contextJson), ...prepareSortContext(snapshot) });
   const evidence = json(contextJson);
   if (!Array.isArray(evidence.source) || !Array.isArray(evidence.requirements) || evidence.requirements.some(x => x.authority !== 'trusted')) throw Error('invalid-input');
   const current = rows(snapshot);
@@ -188,7 +203,7 @@ const sameReview = (saved, review) => saved.issue === review.issue && saved.auth
 
 export async function completeDependencyIntake({ cwd = '', request, analysis }, ports = {}) {
   ports = createDependencyReadPorts({ cwd }, ports);
-  if (!exact(request, ['id','repository','issues','snapshotJson','contextJson']) || !request.id || typeof request.repository !== 'string' || !strings(request.issues) || new Set(request.issues).size !== request.issues.length || !exact(analysis, ['reviews','impactJson']) || !Array.isArray(analysis.reviews) || typeof analysis.impactJson !== 'string') throw invalidAnalysis();
+  if (!exact(request, ['id','repository','issues','snapshotJson','contextJson']) || !request.id || typeof request.repository !== 'string' || !strings(request.issues) || new Set(request.issues).size !== request.issues.length || !(exact(analysis, ['reviews','impactJson']) || exact(analysis, ['reviews','impactJson','sorts'])) || !Array.isArray(analysis.reviews) || typeof analysis.impactJson !== 'string') throw invalidAnalysis();
   for (const r of analysis.reviews) if (!exact(r, ['analysis','base','continuation','issue','inputs','candidates','outcome','dependencies','questions','effects']) || typeof r.analysis !== 'string' || !r.analysis || !strings(r.base) || typeof r.continuation !== 'string' || typeof r.issue !== 'string' || !validRows(r.inputs) || !validRows(r.candidates) || !Array.isArray(r.dependencies) || !r.dependencies.every(d => exact(d, ['key','reason','evidence']) && typeof d.key === 'string' && typeof d.reason === 'string' && strings(d.evidence)) || !strings(r.questions)) throw invalidAnalysis();
   const prepared = json(request.snapshotJson); const context = json(request.contextJson);
   if (prepared.repository.toLowerCase() !== request.repository.toLowerCase()) throw invalidAnalysis();
@@ -196,7 +211,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   // Code owns each subject's link row: drop a carried copy and add the current one before saving.
   const links = (snapshot, issue, dependencies) => { try { return dependencyLinks({ snapshot, issue, dependencies }); } catch { throw invalidAnalysis(); } };
   analysis = { ...analysis, reviews: analysis.reviews.map(r => ({ ...r, inputs: r.inputs.filter(x => !/#dependencies$/i.test(x.key)) })) };
-  const extra = [...(prepared.inputs || []), ...analysis.reviews.flatMap(r => r.inputs || []).filter(x => !prepared.issues.some(i => i.key === x.key))];
+  const extra = [...(prepared.inputs || []).filter(x => !/#(?:autopilot-areas|sort-labels)$/.test(x.key)), ...(analysis.sorts ?? []).flatMap(r => r.inputs ?? []).filter(x => !/#(?:autopilot-areas|sort-labels)$/.test(x.key) && !prepared.issues.some(i => i.key === x.key)), ...analysis.reviews.flatMap(r => r.inputs || []).filter(x => !prepared.issues.some(i => i.key === x.key))];
   const inputMap = new Map(extra.map(x => [x.key, x]));
   const args = { cwd, repository: request.repository }; if (inputMap.size) args.inputs = [...inputMap.values()];
   // Each pending result is kept as a note, so a later delivery of these subjects can name its reason. A pending result
@@ -281,6 +296,11 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
     // The proposed state holds this intent, so its links are PDD links in every saved link row.
     if (review.dependencies.length) proposed.reviews.push({ ...review, id: '', authority: 'trusted', intact: true });
   }
+  // #3053: validate all sorts after ordinary review validation, before effects.
+  let sorts;
+  try { sorts = validateSortBatch({ snapshot, prepared, issues: request.issues, sorts: analysis.sorts }); }
+  catch (error) { if (error.message === 'input-changed') return finish(pendingResult('input-changed')); throw error; }
+  if (prepared.sortContext && !['auto','observe'].includes((await ports.settings.read({ cwd, repository: request.repository })).mode)) return finish(pendingResult('input-changed'));
   // Persist fully validated impact before unrelated per-subject saves/effects.
   // Exact current local-host records make normal retries append-free.
   const impactIssue = request.issues[0];
@@ -316,6 +336,17 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   if (analysis.reviews.length && ports.dependencyReads?.stored(request.repository) && !ports.snapshots) {
     try { await snapshotRead(ports, { cwd, repository: request.repository }); } catch { /* The next tick reads the changes. */ }
   }
+  // #3053: one paced effect stream; route only after complete validation.
+  if (prepared.sortContext) {
+    try {
+      const write = pacedSortWrites(ports, { cwd, repository: request.repository });
+      await saveSortBatch({ repository: request.repository, snapshot, sorts }, ports, write);
+      const settings = await ports.settings.read({ cwd, repository: request.repository });
+      await syncSortGroups({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
+      await syncMixedParts({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
+      await routeSortIssues({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
+    } catch { return finish(pendingResult('write-unconfirmed', { stage: 'sort', reviewIds: ids, questions })); }
+  }
   return finish({ state: questions.length ? 'question' : 'complete', reviewIds: ids, eligible: [], questions });
 }
 
@@ -334,6 +365,16 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   if (await resumeCompletion({ cwd, repository }, ports)) ({ snapshot } = await snapshotRead(ports, { cwd, repository }));
   if (!ports.snapshots && reads?.owners?.repository === repository.toLowerCase() && reads.owners.json === null)
     return { queued: [], eligible: [], skipped: [], pending: true, claims: [] };
+  // #3053: current records can finish a route without another semantic call.
+  if (snapshot.sortContext) {
+    try {
+      const write = pacedSortWrites(ports, { cwd, repository });
+      await syncSortGroups({ cwd, repository, snapshot, mode }, ports, write);
+      await syncMixedParts({ cwd, repository, snapshot, mode }, ports, write);
+      await routeSortIssues({ cwd, repository, snapshot, mode }, ports, write);
+    }
+    catch { /* Unconfirmed effects wait; graph holds routed issues. */ }
+  }
   let graph = projectIssueGraph({ snapshot });
   const subjects = graph.nodes.filter(n => root(n.key, repository) && n.nativeState === 'open').map(n => n.key);
   // The claim scan of the snapshot gives the claims: the open issues are not read again.
@@ -353,14 +394,14 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   const eligible = graph.nodes.filter(n => subjects.includes(n.key) && !skipped.includes(n.key) && n.eligible).map(n => n.key);
   // The observed winning claims, with heartbeat and expiry facts, for the tick.
   const claims = Array.isArray(owners.claims) ? owners.claims : [];
-  if (!queued.length || !ports.pending) return { queued, eligible, skipped, pending: Boolean(queued.length || incomplete.length), claims };
+  if (!queued.length || !ports.pending) return { queued, eligible, skipped, pending: Boolean(queued.length || incomplete.length), claims, groups: snapshot.sortContext ? sortPlan({ snapshot }).groups : [] };
   const prepared = await prepareDependencyIntake({ cwd, repository }, { ...ports, snapshots: { read: async () => ({ snapshot }) }, owners: { read: async () => ({ json: JSON.stringify(owners) }) } });
   const order = a => a.slice().sort((x,y) => x.key.localeCompare(y.key) || x.revision.localeCompare(y.revision));
   const selectedSnapshot = JSON.parse(prepared.request.snapshotJson);
   const context = JSON.parse(prepared.request.contextJson);
   const relevant = new Set([...(context.source || []).filter(x => x.issues?.some(i => prepared.queued.includes(i))).map(x => x.key), ...(context.requirements || []).filter(x => prepared.queued.includes(x.issue)).map(x => x.key), ...selectedSnapshot.reviews.filter(r => prepared.queued.includes(r.issue)).flatMap(r => r.inputs.map(x => x.key))]);
   const linkRows = prepared.queued.map(issue => dependencyLinks({ snapshot: selectedSnapshot, issue }).row);
-  const fingerprint = JSON.stringify({ repository: repository.toLowerCase(), issues: prepared.queued.slice().sort(), inputs: order([...selectedSnapshot.inputs.filter(x => relevant.has(x.key)), ...selectedSnapshot.issues.filter(i => root(i.key, repository)).map(i => ({ key: i.key, revision: i.revision })), ...linkRows]), heads: headIds(selectedSnapshot) });
+  const fingerprint = JSON.stringify({ repository: repository.toLowerCase(), issues: prepared.queued.slice().sort(), inputs: order([...selectedSnapshot.inputs.filter(x => relevant.has(x.key)), ...selectedSnapshot.issues.filter(i => root(i.key, repository)).map(i => ({ key: i.key, revision: i.revision })), ...linkRows]), heads: headIds(selectedSnapshot), sort: sortRequestFingerprint(selectedSnapshot, prepared.queued) });
   const now = Date.parse((await ports.clock.now({})).iso), subjectSet = JSON.stringify(prepared.queued.slice().sort());
   const save = async () => (await ports.pending.save({ repository, json: JSON.stringify(pending) })).ok;
   // One delivery through the existing route. `redelivery` marks a repeated request
@@ -380,7 +421,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
     return true;
   };
   if (fingerprint !== pending.delivered || trigger === 'refresh') {
-    if (!await send(null)) return { queued, eligible, skipped, pending: true, claims };
+    if (!await send(null)) return { queued, eligible, skipped, pending: true, claims, groups: snapshot.sortContext ? sortPlan({ snapshot }).groups : [] };
   } else if (pending.subjects !== subjectSet || !Number.isFinite(pending.deliveredAt)) {
     // A delivery saved without its time or subjects: the wait starts now.
     Object.assign(pending, { subjects: subjectSet, deliveredAt: now, redelivered: 0 });
@@ -396,7 +437,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
       await save();
     }
   }
-  return { queued, eligible, skipped, pending: Boolean(incomplete.length || pending.requested !== pending.delivered), claims };
+  return { queued, eligible, skipped, pending: Boolean(incomplete.length || pending.requested !== pending.delivered), claims, groups: snapshot.sortContext ? sortPlan({ snapshot }).groups : [] };
 }
 
 // Finish a kept completion: the same request and analysis, with the reviews that are already saved skipped. True when

@@ -215,6 +215,20 @@ try {
     };
     const capped = await checkDependencyStart({ cwd, repository: repo, issue: startIssue, coordinator }, startPorts);
     assert.deepEqual(capped, { allowed: true, reason: 'ok' });
+    let paneChecks = 0;
+    const full = await checkDependencyStart({cwd,repository:repo,issue:startIssue,coordinator}, {
+      ...startPorts, checkPaneCapacity: async () => { paneChecks++; throw Object.assign(Error('capacity'),{code:'herdr_pane_budget'}); }
+    });
+    assert.deepEqual(full,{allowed:false,reason:'panes'});
+    assert.equal(paneChecks,1);
+    const available = await checkDependencyStart({cwd,repository:repo,issue:startIssue,coordinator}, {
+      ...startPorts, checkPaneCapacity: async () => { paneChecks++; }
+    });
+    assert.deepEqual(available,{allowed:true,reason:'ok'}); assert.equal(paneChecks,2);
+    const unavailable = await checkDependencyStart({cwd,repository:repo,issue:startIssue,coordinator}, {
+      ...startPorts, checkPaneCapacity: async () => { throw Object.assign(Error('inventory'),{code:'herdr_failed'}); }
+    });
+    assert.deepEqual(unavailable,{allowed:false,reason:'unknown'});
 
     const uncapped = await checkDependencyStart({
       cwd,
@@ -238,4 +252,30 @@ try {
   rmSync(workspace, { recursive: true, force: true });
 }
 
+});
+
+test('native admission reads the saved health hold without turning off progress settings', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-health-admission-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', root]); execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/owner/repo.git'], { cwd: root });
+  writeFileSync(join(root, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
+  const folder = join(root, 'state'); mkdirSync(folder);
+  const file = join(folder, createHash('sha256').update(root).digest('hex').slice(0, 20) + '.json');
+  const saved = { repo: 'owner/repo', cwd: root, enabled: true, activatedAt: 'activation', health: { paused: true } };
+  writeFileSync(file, JSON.stringify(saved));
+  const ports = createDependencyReadPorts({ cwd: root }, { autopilotStateRoot: folder,
+    execFile: async (command, args, options) => {
+      if (command === 'gh' && args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: 'owner/repo', url: 'https://github.com/owner/repo', defaultBranchRef: { name: 'main' } }) };
+      assert.equal(command, 'git'); return { stdout: execFileSync(command, args, { cwd: options.cwd, encoding: 'utf8' }) };
+    } });
+  const settings = await ports.settings.read({ cwd: root, repository: 'owner/repo' });
+  assert.equal(settings.mode, 'auto'); assert.equal(settings.healthPaused, true);
+  const decision = await checkDependencyStart({ cwd: root, repository: 'owner/repo', issue: 'https://github.com/owner/repo/issues/12' }, {
+    settings: { read: async () => settings }, snapshots: { read: async () => ({ snapshot: null }) },
+    owners: { read: async () => ({ json: JSON.stringify({ claims: [] }) }) },
+  });
+  assert.deepEqual(decision, { allowed: false, reason: 'health' });
+  assert.deepEqual(JSON.parse(readFileSync(file)), saved);
+  writeFileSync(file, JSON.stringify({ ...saved, health: { paused: false } }));
+  assert.equal((await ports.settings.read({ cwd: root, repository: 'owner/repo' })).healthPaused, undefined);
 });

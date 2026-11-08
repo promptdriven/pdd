@@ -1,7 +1,15 @@
+import { selectAutopilotBase } from './autopilot-base.mjs';
+import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
+
+import { classifyStuckCause, environmentRecovery, environmentStatus, environmentWakeTag, environmentHealthy, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
+import { readInterpreterProgress, interpreterStatusWords } from './interpreter-queue.mjs';
+import { launchProfile, selectLaunchProfile, validLaunchProfile } from './workflow-launch-profile.mjs';
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
-import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ce73402855991da70f13d11cab559b5157a5d13f428ce80c7b080168fdebcf77).
+import { projectIssueGraph } from './issue-dependencies.mjs';
+import { sortClosingReferences } from './issue-sort.mjs';
+import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 29204dbd66bef20604c92d39abdc8d1d45f06c97d481400710285e93f5c5f28f).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -18,9 +26,10 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrChecker, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
-import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
+import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
+import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -34,6 +43,8 @@ import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinR
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
+
+import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -87,15 +98,24 @@ const APPROVAL = /^\W*(?:(?:yes|ok(?:ay)?)\W+)?(?:i\W+)?(?:approve[ds]?|lgtm|loo
 const CHANGE_WORDS = /\b(?:but|however|except|instead|change[ds]?|rename[ds]?|add|remove|delete|fix|use|make|move|replace|drop|update|should|need|must|want|not|don'?t|without|only)\b/i;
 const looksLikeApproval = text => APPROVAL.test(text) && !CHANGE_WORDS.test(text.replace(APPROVAL, ''));
 
+function describePaneOwners(rows, ports) {
+  const runs = allRuns({cancelled:true},ports), chats = new Set(), shells = new Set(), refs = new Set();
+  const matches = (pane,saved) => pane.workspace_id === saved?.workspaceId && pane.pane_id === saved.paneId && pane.terminal_id === saved.terminalId;
+  for (const run of runs) {
+    for (const chat of run.chats ?? []) for (const pane of rows) if (matches(pane,chat)) { chats.add(pane.pane_id); refs.add(`${run.repo}#${run.number} (${String(run.runId ?? 'unknown').slice(0,8)})`); }
+    for (const pane of rows) if (matches(pane,run.layout)) shells.add(pane.pane_id);
+  }
+  return `Open: ${chats.size} run chats (${[...refs].join(', ') || 'none'}), ${shells.size} run shells, ${rows.filter(pane=>!chats.has(pane.pane_id)&&!shells.has(pane.pane_id)).length} other panes.`;
+}
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
   // The native runner records each gh call in the GitHub call ledger of its repository.
   const execFile = ports.execFile ?? nativeGithubCounter((file, args, options = {}) => execute(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...options }), { env });
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
-    isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
+    isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}), describePaneOwners: ports.describePaneOwners ?? (rows=>describePaneOwners(rows,ports)), sweepFinished: ports.sweepFinished ?? (options => tidyRuns(options, {...ports, progressGuard: undefined})) };
 }
 // This run lock is independent of the shared Herdr layout lock. Never wait on a live owner.
-const lockProblem = () => Object.assign(Error('Another open operation holds this run, or its ownership cannot be verified. Wait for it to finish and retry.'), { code: 'run_busy' });
+const lockProblem = cause => Object.assign(new Error('Another open operation holds this run, or its ownership cannot be verified. Wait for it to finish and retry.', cause ? { cause } : undefined), { code: 'run_busy' });
 function readLock(path) {
   if (!lstatSync(path).isFile() || lstatSync(path).size > 4096) throw lockProblem();
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -116,7 +136,7 @@ export function acquireRunLock(runDir, filename = 'chat-replacement.lock') {
     try { writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd); } finally { closeSync(fd); }
   };
   try { create(); } catch (error) {
-    if (error.code !== 'EEXIST') throw lockProblem();
+    if (error.code !== 'EEXIST') throw lockProblem(error);
     let prior, claimFd;
     try {
       prior = readLock(path);
@@ -192,7 +212,7 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
 const sameFact = (a,b) => JSON.stringify(canonical(a ?? null)) === JSON.stringify(canonical(b ?? null));
 const lastChat = (run, area) => [...(run.chats ?? [])].reverse().find(chat => chat.area === area);
 // The chat identity and lifecycle fields that one observation may change.
-const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code'];
+const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code', 'closed', 'openedAt', 'endedAt', 'launchProfile', 'herdrAgentName', 'namingError', 'idleSince', 'idleAnchor', 'continueAnchor'];
 const sameChat = (a,b) => a.area === b.area && a.paneId === b.paneId;
 // Publication transports only the named fields produced by this observation.
 // PR entries and metadata are applied separately by their actual publishers.
@@ -380,8 +400,10 @@ async function areaMessage(run, index, p, packageRoot) {
   return [
     `Read and follow the selected workflow skill at ${JSON.stringify(resolve(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md'))} and its adjacent supporting files. This is a pdd workflow run.${index ? automatic ? ' Earlier areas have advanced.' : ' The person approved the earlier areas.' : ''}`,
     ...(automatic ? [automatic] : []),
+    ...(validSavedAutomaticOrigin(run) ? [`Run the repository full suite through ${pddCommand(packageRoot)} workflow suite --command COMMAND and wait for the queue result. Test-slot waiting is not stuck.`] : []),
     `Issue: ${run.repo}#${run.number} "${oneLine(run.issue.title)}" ${run.issue.url}`,
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
+    `Saved base: ${run.baseBranch}. Use this base for this run; do not take a base from documents or ask which document to follow. PR 2 may stack on PR 1 as directed by pdd.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
     ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => !area.optional.includes(step) ? step : normal && step === 'try' && area.before === 'approve' ? `${step} (optional: pdd skips it; do not ask)` : `${step} (optional: ask the person)`).join(', ')}.`,
@@ -500,11 +522,49 @@ function clearChatFailure(run) {
 const revising = run => { const last = run.changes?.at(-1); return Boolean(last && !last.answer && last.stage === run.gate.area && last.at >= run.gate.at); };
 // A run stopped at the repair limit keeps that one-line reason, also after a later park (#3041).
 const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.parkReason ?? 'automatic work stopped';
+// Read saved facts only. The digest must not probe or wake native workers.
+export function automaticAttention({ repo, machine }, ports = {}) {
+  return (ports.readRuns ? ports.readRuns() : allRuns({}, ports)).flatMap(run => {
+    if (run.repo?.toLowerCase() !== repo?.toLowerCase() || !run.automaticOrigin || run.automaticOrigin.machine !== machine
+      || run.state === 'cancelled' || run.state === 'completed' && run.gate?.kind !== 'ask-code') return [];
+    const question = openQuestion(run);
+    const item = run.state === 'stuck' ? { category: 'stuck', cause: stuckReason(run) }
+      : run.state === 'paused' ? { category: 'parked', cause: run.runtimeWait?.reason ?? run.parkReason ?? 'automatic work paused' }
+      : question || run.gate ? { category: 'decision', cause: question?.text ?? run.gate.kind } : null;
+    return item ? [{ number: run.number, ...item }] : [];
+  }).sort((a, b) => a.number - b.number);
+}
+const layoutClosing = run => ['close_intent', 'closed'].includes(run.layout?.phase);
+function automaticResumeWords(run, now) {
+  const success = run.chatResumeSuccess, chat = currentChat(run);
+  if (!success || !chat || !Number.isFinite(now) || !Number.isFinite(success.at)
+    || success.at > now || success.at <= now - 3600000 || ![1, 2, 3].includes(success.count)
+    || success.area !== chat.area || success.paneId !== chat.paneId
+    || success.sessionId !== chat.session?.id || success.resumedAt !== chat.resumedAt) return null;
+  return `resumed after the chat stopped (${success.count} of 3)`;
+}
+const IDLE_WAIT_MS = 600000;
+const idleAgent = (chat, live) => live.alive && ['idle', 'done'].includes(live.status)
+  && validSessionId(chat.session?.id) && live.sessionId === chat.session.id;
+function observeIdle(chat, live, now) {
+  const next = structuredClone(chat);
+  if (idleAgent(chat, live)) {
+    if (!Number.isFinite(chat.idleSince) || chat.idleSince > now || chat.idleAnchor !== launchAnchor(chat)) next.idleSince = now;
+    next.idleAnchor = launchAnchor(chat);
+  } else { delete next.idleSince; delete next.idleAnchor; }
+  return next;
+}
+const idleWords = (run, timeZone = 'UTC') => `agent idle since ${new Intl.DateTimeFormat('en-GB', {
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone,
+}).format(new Date(currentChat(run).idleSince))}`;
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
-function describe(run, chat = null, { drafts = [], nothing = false, health = null, normal = false } = {}) {
+function describe(run, chat = null, { drafts = [], nothing = false, health = null, now = null, normal = false, suite = null, interpreter = null, timeZone } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
+  if (environmentStatus(run)) return environmentStatus(run);
   if (run.state === 'stuck') return `stuck: ${stuckReason(run)}`;
+  if (suite && (suite.state !== 'finished' || suite.reason)) return suiteStatusWords(suite);
+  if (run.state === 'running' && interpreter?.state === 'waiting') return interpreterStatusWords(interpreter);
   if (runtimeWaiting(run)) return `waiting for the interpreter: ${run.runtimeWait.reason}. Autopilot checks the interpreter at each tick and wakes it when the interpreter is back; an Autopilot alert names any need for a person (pdd autopilot status)`;
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
@@ -523,6 +583,9 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. ${codeLater(run)}`;
   if (run.gate) return `waiting for you: approve the ${run.gate.area} area or ask for changes`;
   if (prOf(run, area?.name) && area.gate === 'pr') return `waiting for you: review and merge ${prLabel(run, area)} on GitHub`;
+  if (run.state === 'running' && chat === 'idle' && area?.steps.some(step => !run.done[step])) return idleWords(run, timeZone);
+  const recovery = run.state === 'running' && automaticResumeWords(run, now);
+  if (recovery) return recovery;
   const step = area?.steps.find(item => !run.done[item]);
   return step ? `the agent works on ${step}` : 'the agent works';
 }
@@ -593,7 +656,7 @@ function validAutomaticContext(value) {
     && (envelope || exactKeys(value.claim, ['commentId', 'labelEventId']) && nonempty(value.claim.commentId) && nonempty(value.claim.labelEventId));
 }
 
-async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, through, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgentName, codexThreads, base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, through, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const automatic = coordinator !== undefined || Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT');
   if (Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) {
@@ -616,7 +679,10 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
   // Save the initial profile for later chats; explicit Codex replacement may select another.
   const variable = homeVariable(agent), configDir = variable && profileEnv[variable] ? resolve(cwd, expandHome(profileEnv[variable], profileEnv)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
-  const explicitBase = base !== undefined;
+  let initialProfile;
+  try { initialProfile = selectLaunchProfile({run: {agent, configDir}, model, herdrAgentName, codexThreads: codexThreads ?? (agent === 'codex' ? 5 : undefined)}, p); }
+  catch (error) { return fail(error.message); }
+  let explicitBase = base !== undefined;
   const badBase = () => fail('Use --base with a branch name, for example feature/checkout.');
   if (explicitBase && (typeof base !== 'string' || !base || base === 'HEAD' || base.startsWith('-') || base.startsWith('refs/'))) return badBase();
   const context = await gitContext(cwd, p);
@@ -664,7 +730,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
       // Intake is a separate owner. A missing binding is never a manual start.
       const check = p.checkDependencyStart ?? (await import('./issue-dependencies-intake.mjs')).checkDependencyStart;
       if (typeof check !== 'function') throw Error('missing intake');
-      const readPorts = createDependencyReadPorts({ cwd: context.toplevel }, p);
+      const readPorts = createDependencyReadPorts({ cwd: context.toplevel }, {...p,checkPaneCapacity:()=>ensurePaneBudget(3,p)});
       const observation = JSON.parse((await readPorts.owners.read({ repository: binding.repository, issues: [binding.issue.url] })).json);
       const claims = observation.claims.filter(c => c.issue === binding.issue.url && c.active === true);
       if (claims.length !== 1 || observation.localOwner !== coordinator.coordinatorId || coordinator.repository.toLowerCase() !== binding.repository.toLowerCase()) return fail('Automatic start deferred: owner.');
@@ -680,7 +746,13 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
   }
   if (existing?.draft !== undefined && typeof existing.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
   if (existing && !ended(existing) && draft && existing.draft !== true) return fail(`Issue #${number} already has a nondraft run. Use pdd workflow approve ${number} --draft at its ready unpublished gate; starting again cannot change that policy.`);
-  if (existing?.state === 'completed' && !automatic) return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
+  if (automatic) {
+    let selected;
+    try { selected = await selectAutopilotBase({ cwd: context.toplevel, defaultBranch: binding.defaultBranch }, { execFile: p.execFile }); }
+    catch (error) { return fail(error.message); }
+    if (explicitBase && base !== selected) return fail(`Automatic base is ${selected}; --base ${base} conflicts with the configured selection. Do not select a base from documents.`);
+    base = selected; explicitBase = true;
+  }
   const warnings = [...(workflow.warnings ?? [])], baseBranch = explicitBase ? base : binding.defaultBranch;
   // A requested origin branch must be usable before releasing a cancelled run's claim.
   if (explicitBase) {
@@ -708,19 +780,32 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
       writeFileSync(join(frozenFolder,'declaration.json'),declarationBytes,{mode:0o600});
     } catch(error) {const code=/^[A-Z0-9_-]{1,32}$/.test(String(error.code ?? '')) ? error.code : 'local-operation-failed';return {exitCode:2,message:`Cannot adopt the approved corpus (unavailable: source selection or declaration freezing failed; ${code}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};}
   }
+  try { await ensurePaneBudget(3, p); }
+  catch (error) {
+    if (['herdr_pane_budget','invalid_pane_budget'].includes(error.code)) return fail([
+      ...(automatic && error.code === 'herdr_pane_budget' ? ['Automatic start deferred: panes.'] : []),
+      failureReason(error), ...failureDetails(error)].join('\n'));
+    // Unknown capacity is not evidence of a full server. Startup retains its
+    // normal durable recovery path if Herdr itself is unavailable.
+  }
+  const runId = randomUUID();
+  if (existing?.pr?.length && !ended(existing)) await refreshPr(existing, p);
   if (existing) {
     // An active run never blocks a new one (#2871): mark it replaced, name it once, then free it like a cancelled run.
     const replacing = !ended(existing);
     if (replacing) {
       const last = existing.updatedAt ?? existing.startedAt, minutes = Number.isFinite(last) ? Math.max(0, Math.floor((p.now() - last) / 60000)) : null;
-      try { commitRun(existing, p, latest => { latest.state = 'cancelled'; latest.cancelled = { state: 'replaced', at: p.now() }; latest.gate = null; }); }
+      try { commitRun(existing, p, latest => { latest.state = 'cancelled'; latest.cancelled = { state: 'replaced', at: p.now() }; latest.replacedBy = runId; latest.gate = null; for (const chat of latest.chats ?? []) chat.endedAt ??= p.now(); }); }
       catch (error) { return fail(`Issue #${number} has an active run ${existing.runId}, but pdd could not mark it replaced (${oneLine(error.message)}). Retry in a moment.`); }
       warnings.push(`warning: Issue #${number} had an active run ${existing.runId} (${existing.workflow}). pdd marked it replaced and starts a new run.`
         + ` Its worktree stays at ${existing.root} (branch ${existing.branch}), from checkout ${existing.sourceRoot}. Last activity: ${minutes === null ? 'unknown' : `${minutes} min ago`}.`
-        + (minutes === null || minutes < 60 ? ' It may still be working; close its chat if it is.' : ''));
+        + (minutes === null || minutes < 60 ? ' It may still be working; close its chat if it is.' : '')
+        + ` Cleanup retries with pdd workflow tidy. To stop retained busy chats, run pdd workflow cancel ${number} from ${existing.root}.`);
     }
     const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
     if (released.state !== 'released') return fail(`Issue #${number} has a ${replacing ? 'replaced' : existing.state} run, but pdd could not free the issue: ${released.message}`);
+    const cleanup = await cleanupRunChats(existing, {...p, progressGuard: undefined}, {graceMs:0});
+    warnings.push(...cleanup.warnings);
     if (!replacing) warnings.push(`Issue #${number} had a ${existing.state} run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
   if (!explicitBase && adoptCorpus === undefined) {
@@ -728,7 +813,6 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
     try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
     catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
   }
-  const runId = randomUUID();
   p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
@@ -746,7 +830,15 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
     } finally {rmSync(frozenFolder,{recursive:true,force:true});}
   }
   // Keep the ended run's record next to the new one; only a plain issue number names the active run.
-  if (existing) renameSync(runDir, `${runDir}-cancelled-${existing.runId.slice(0, 8)}`);
+  if (existing) {
+    const archived = `${runDir}-cancelled-${existing.runId.slice(0, 8)}`;
+    renameSync(runDir, archived);
+    const relocate = value => typeof value === 'string' && (value === runDir || value.startsWith(runDir + '/'))
+      ? archived + value.slice(runDir.length) : Array.isArray(value) ? value.map(relocate)
+      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key,v]) => [key,relocate(v)])) : value;
+    const retained = relocate(existing);
+    writeRun(retained, p);
+  }
   const productMarkers = [...new Set(String(binding.issue.body ?? '').match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? [])];
   if (productMarkers.length > 1) warnings.push('Warning: The issue has multiple planned-run markers; its product association is unverified.');
   const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
@@ -759,6 +851,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
+  run.launchProfile = { ...initialProfile, herdrAgentName: herdrAgentName ?? launchProfile(run).herdrAgentName };
   mkdirSync(runDir, { recursive: true });
   if(adoption) {
     writeFileSync(join(runDir,'replay-adoption.json'),declarationBytes,{mode:0o600,flag:'wx'});
@@ -1684,6 +1777,14 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     commitRun(run,p,latest=>{applyPublication(latest);if(last&&latest.done[last])latest.done[last].replayEvidence=evidence;});
   }
 
+  // #3053: current shared-cause members travel with the umbrella's PR pair.
+  if (run.automaticOrigin) {
+    try {
+      const { snapshot } = await (p.readDependencySnapshot ?? readDependencySnapshot)({ cwd: run.sourceRoot || run.root, repository: run.repo }, p);
+      const references = sortClosingReferences({ snapshot, issue: `https://github.com/${run.repo.toLowerCase()}/issues/${run.number}`, code: label !== 'PR 1', graph: projectIssueGraph({ snapshot }) });
+      prepared = { ...prepared, issueReference: [prepared.issueReference, ...references].join('\n') };
+    } catch { /* Unproved members get no closing promise. */ }
+  }
   const bodyBase = run.prBase ?? run.baseBranch;
   const bodyDrafts = label === 'PR 1' ? await draftPrompts(run, p, run.branch, bodyBase) : [];
   const bodyTests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
@@ -2278,7 +2379,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
-  if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
+  if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? fail(stoppedRunMessage(run)) : done(stoppedRunMessage(run));
   if (run.state === 'completed') return canRefreshCodeReview(run, step)
     ? refreshCompletedCodeReview(run, step, p, packageRoot) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
@@ -2318,6 +2419,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     if(round===REPAIR_REFUSED)throw Object.assign(Error('The run changed; look again.'),{code:'workflow_progress_refused'});
     if(round){latest.repairRounds={...latest.repairRounds,[area.name]:round};lines.push(`Repair round ${round} of ${REPAIR_ROUNDS} in the ${area.name} area of this Autopilot run.`);}
     endRuntimeWait(latest);
+    if (reason === null && latest.environmentRetry?.area === latest.area && latest.environmentRetry.step === step) { delete latest.environmentRetry; delete latest.stuckCause; }
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     const later=area.steps.includes(step) && latest.done[step]?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];
     // A step that pdd skipped itself is cleared without a warning; pdd skips it again below.
@@ -2351,7 +2453,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   if(!currentArea)return doneWithRequests(done(`pdd recorded ${step}.`),run,p);
   if(autoSkipped)lines.push(`pdd skipped the optional try step (${TRY_SKIP}). Do not ask the person about it.`);
   if (next) {
-    lines.push(`pdd recorded ${step}.`, area.optional.includes(next)
+    lines.push(`Saved base: ${run.baseBranch}. Use this saved base; never take a base from documents.`, `pdd recorded ${step}.`, area.optional.includes(next)
       ? `Next step: ${next} (optional). Ask the person if they want it. If they do not, run: ${p.pdd} workflow done ${next} --summary "skipped"`
       : `Next step: ${next}.`, `When it is done, run: ${p.pdd} workflow done ${next} --summary "one line"`);
     return doneWithRequests(done(lines.join('\n')), run, p);
@@ -2913,7 +3015,7 @@ ${approvalGuide(run)}`, p, true);
     if(storyRecord&&latest.area===areaIndex){latest.storyApproval=storyRecord;if(through!==undefined)latest.through=through;}
     if(askCode){latest.branch=branch;latest.prBase=prBase;}
     if(equalFact(latest.question,observedQuestion))latest.question=null;
-    if(latest.area===areaIndex){if(askCode)latest.metricsOrigin={...(latest.metricsOrigin ?? {origin:'unknown'}),requiredOutcome:'code'};if(sameGate(latest.gate,selectedGate))latest.gate=null;latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
+    if(latest.area===areaIndex){if(askCode)latest.metricsOrigin={...(latest.metricsOrigin ?? {origin:'unknown'}),requiredOutcome:'code'};if(sameGate(latest.gate,selectedGate))latest.gate=null;for (const chat of latest.chats ?? []) if (chat.area === latest.areas[areaIndex].name) chat.endedAt ??= p.now();latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
   });
   approvalRecorded();
   const next = run.areas[run.area];
@@ -2922,7 +3024,8 @@ ${approvalGuide(run)}`, p, true);
   try { chat = await startNextChat(run, p, packageRoot); }
   catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${failureReason(error)}). Start it: pdd workflow open ${run.number}\n${[...failureDetails(error), ...finalNotices].join("\n")}`); }
-  return done([...carried, ...finalNotices, `Approved the ${area.name} area of ${label}.${said}${based}`,
+  const cleanup = await cleanupRunChats(run, p);
+  return done([...cleanup.warnings, ...carried, ...finalNotices, `Approved the ${area.name} area of ${label}.${said}${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
   } finally { releaseAdmission?.(); }
@@ -2948,7 +3051,7 @@ export const runtimeWakeTag = at => `Interpreter wake for the park at ${new Date
 const RUNTIME_WAKE_TAG = /^Interpreter wake for the park at [^ ]+\./;
 
 // Record an automatic stop without releasing or waking its worker.
-async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) {
+async function parkAutomaticRunCommand({ reason, runtime = false, step, cwd }, ports) {
   const p = deps(ports), run = await runForWorktree(cwd, p);
   if (!run) return fail('Park requires the existing run worktree.');
   const text = String(reason ?? '').trim();
@@ -2958,6 +3061,17 @@ async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) 
   if (explicitlyStopped(run, p)) return fail('Autopilot is stopped.');
   const ownership = await continuationOwnership(run, cwd, p);
   if (ownership) return fail(ownership);
+  const area = run.areas[run.area];
+  if (step !== undefined && (!['check', 'verify', 'formal'].includes(step) || !area.steps.includes(step))) return fail('Name a check, verify or formal validation step in the current area. Nothing was parked.');
+  const stuckCause = classifyStuckCause(text, runtime);
+  let retry = null;
+  if (stuckCause === 'environment' && !run.repairLimit) {
+    const target = step;
+    if (!target) return fail('Name the failed validation with --step STEP. Nothing was parked.');
+    const previous = run.environmentRetry;
+    const attempts = previous?.area === run.area && previous.step === target ? previous.attempts : 0;
+    retry = { at: p.now(), reason: text, step: target, area: run.area, attempts, nextAt: attempts < ENVIRONMENT_BACKOFF.length ? p.now() + ENVIRONMENT_BACKOFF[attempts] : null };
+  }
   let wait = null;
   if (runtime) {
     // A result read that fails is an outcome that is not known: never a sign that no check ran.
@@ -2970,11 +3084,13 @@ async function parkAutomaticRunCommand({ reason, runtime = false, cwd }, ports) 
   const selectedArea=run.area, selectedGate=structuredClone(run.gate ?? null), selectedState=run.state, selectedOrigin=structuredClone(run.automaticOrigin);
   protectProgress(run,p,{approval:true});
   const waitLine = wait && `Automatic run waits for the interpreter: ${wait.reason}. Ask no person. End your turn now; the coordinator may yield this slot. Autopilot checks the interpreter at each tick without AI and wakes this run when the interpreter is back. Then run pdd test --read${wait.batch ? ` ${wait.batch}` : ''} first and resend only a check that surely gave no verdict.`;
-  if (!runtime && run.state === 'stuck' && run.parkReason === text) return done('Automatic run is already parked.');
+  if (!runtime && run.state === 'stuck' && run.parkReason === text && (!retry || retry.step === run.environmentRetry?.step)) return done('Automatic run is already parked.');
   if (wait && runtimeWaiting(run) && run.runtimeWait.batch === wait.batch) return done(waitLine);
   commitRun(run,p,latest=>{
     if (latest.area !== selectedArea || !sameGate(latest.gate,selectedGate) || latest.state !== selectedState || !equalFact(latest.automaticOrigin,selectedOrigin) || explicitlyStopped(latest,p))
       throw Object.assign(Error('The run or Autopilot changed; look again.'),{code:'workflow_progress_refused'});
+    latest.stuckCause = stuckCause;
+    if (retry) latest.environmentRetry = retry;
     if (wait) { latest.state='paused'; latest.runtimeWait=wait; }
     else { latest.state='stuck'; latest.parkReason=text; delete latest.runtimeWait; }
   });
@@ -2987,7 +3103,7 @@ async function askPersonCommand({ text, cwd }, ports) {
   const p = deps(ports);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow ask works only in a run worktree. cd to the worktree that pdd made for this run.');
-  if (ended(run)) return done(`The run for #${run.number} is ${run.state}. Stop working on it.`);
+  if (ended(run)) return done(stoppedRunMessage(run));
   protectProgress(run,p);
   const question = String(text ?? '').trim().slice(0, 500);
   if (!question) return fail('Write the question after pdd workflow ask.');
@@ -3041,7 +3157,7 @@ function readDeliveryJournal(run, p) {
   try { journal = JSON.parse(fs.readFileSync(join(run.runDir, 'delivery-journal.json'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; return { requests: [] }; }
   if (!journal || !Array.isArray(journal.requests) || journal.requests.some(entry => !entry || typeof entry.id !== 'string' || !entry.id ||
-    typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered'].includes(entry.state) || !['answer', 'change', 'notice'].includes(entry.kind) ||
+    typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered', 'superseded'].includes(entry.state) || !['answer', 'change', 'notice'].includes(entry.kind) ||
     typeof entry.area !== 'string' || !entry.area || typeof entry.paneId !== 'string' || !entry.paneId || !Number.isFinite(entry.at) ||
     entry.inFlight !== undefined && typeof entry.inFlight !== 'boolean') || new Set(journal.requests.map(entry => entry.id)).size !== journal.requests.length) throw Error('Malformed delivery journal');
   return journal;
@@ -3128,6 +3244,39 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
   } finally { release(); }
 }
 
+// Shared lexical admission for a person's explicit continuation request. Trust belongs to the caller.
+export function isRetryRequest(text) {
+  const value = String(text ?? '').trim().replace(/\s+/g, ' ');
+  // Negative continuation instructions win, even after an otherwise direct request.
+  if (/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|cannot|can['’]t|not|no)\b[^.;!?]*\b(?:retr(?:y(?:ing)?|ies)|resum(?:e|ing|ption)|try\s+again|continu(?:e|ing|ation)|proceed|restart)\b/i.test(value)) return false;
+  if (/\b(?:stop|hold|wait)\b/i.test(value)
+    || /\b(?:retr(?:y(?:ing)?|ies)|resum(?:e|ing|ption)|try\s+again|continu(?:e|ing|ation)|proceed|restart)\b[^.;!?]*\b(?:blocked|disabled|unsafe|forbidden|prohibited|not)\b/i.test(value)) return false;
+  // A repaired-machine preface may precede the command. Arbitrary diagnostic or log
+  // prefixes cannot turn a quoted/reported command into the person's instruction.
+  // Whitespace also admits the saved one-line form of a multiline repair request.
+  const request = value.replace(/^(?:the\s+)?(?:machine|host|environment|server|disk|tool)\s+(?:(?:is|was|has\s+been)\s+)?(?:fixed|repaired|healthy|ready|available|restored)(?:\s+now)?[.;!,:\s]+/i, '');
+  const command = request.split(/[.;!]/, 1)[0].trim();
+  // Admit commands with known continuation targets, not noun phrases such as
+  // "retry budget" or status reports such as "resume remains unsafe".
+  return /^(?:please\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:retry|resume|try\s+again)(?:\s+(?:(?:(?:the|this|that)\s+)?(?:(?:failed|original|retained|stuck|paused)\s+)?(?:validation(?:\s+step)?|step|run|work|check|tests?|build|verify|formal)|it))?(?:\s+(?:again|now|please))?(?:\s+(?:from\s+(?:the\s+)?retained\s+evidence|using\s+(?:the|its)\s+original\s+command|after\s+(?:the\s+)?(?:machine|host|environment)\s+repair))?\s*\??$/i.test(command);
+}
+const isPersonRetry = (run, text) => run.state === 'stuck' && isRetryRequest(text);
+async function personRetryRefusal(run, text, p, savedRetry = false) {
+  if (!(run.state === 'stuck' && savedRetry) && !isPersonRetry(run, text)) return null;
+  if (run.repairLimit) return 'The repair limit requires the existing cancel and new-run route.';
+  if (explicitlyStopped(run, p)) return 'Automatic continuation refused: Autopilot is stopped.';
+  return await continuationOwnership(run, run.root, p);
+}
+const isEnvironmentWake = text => String(text).startsWith('Environment validation wake for ');
+function currentEnvironmentWake(run, text, p) {
+  const retry = environmentRecovery(run);
+  return Boolean(retry && String(text).startsWith(environmentWakeTag(retry)) && retry.attempts < ENVIRONMENT_BACKOFF.length && p.now() >= retry.nextAt);
+}
+async function environmentWakeAllowed(run, text, p) {
+  if (!isEnvironmentWake(text)) return null;
+  if (!currentEnvironmentWake(run, text, p) || explicitlyStopped(run, p) || await continuationOwnership(run, run.root, p)) return false;
+  try { return await (p.environmentHealthy ?? environmentHealthy)({ env: p.env, reason: environmentRecovery(run).reason }) === true; } catch { return false; }
+}
 export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.packageRoot = packageRoot; const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
@@ -3135,6 +3284,9 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
   const wake = RUNTIME_WAKE_TAG.exec(String(text ?? '').trim())?.[0];
   if (wake && !(runtimeWaiting(found.run) && wake === runtimeWakeTag(found.run.runtimeWait.at)))
     return done(`Run #${found.run.number} does not wait for the interpreter park that this wake names: it was already woken, or it parked again. Nothing was sent.`);
+  if (await environmentWakeAllowed(found.run, text, p) === false) return done('Environment validation retry is not due, healthy or current. Nothing was sent.');
+  const retryRefusal = await personRetryRefusal(found.run, text, p);
+  if (retryRefusal) return fail(retryRefusal);
   return deliverRequest(found.run, text, p);
 }
 
@@ -3143,7 +3295,8 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
 async function deliverRequest(run, text, p, notice = false) {
   const selectedIdentity=runIdentity(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
-  const request = notice ? String(text) : oneLine(text), answer = !notice && Boolean(openQuestion(run)), kind = notice ? 'notice' : answer ? 'answer' : 'change';
+  const retryRequested = !notice && isPersonRetry(run, text);
+  const request = notice ? String(text) : oneLine(text), answer = !notice && !isEnvironmentWake(request) && !retryRequested && Boolean(openQuestion(run)), kind = notice ? 'notice' : answer ? 'answer' : 'change';
   if (!request.trim()) return fail('Write the change request after the issue number.');
   if (!notice && !answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal.
 Nothing was sent to the chat.` };
@@ -3151,7 +3304,8 @@ Nothing was sent to the chat.` };
   if (!chat) return fail(`The ${area.name} area has no chat${notice ? ', so pdd did not send its notice' : ''}. Start it: pdd workflow open ${run.number}`);
   const what = notice ? 'the pdd notice' : 'your request', What = notice ? 'The pdd notice' : 'Your request';
   const latest = () => readRun(run.runDir), matches = entry => entry.area === area.name && entry.paneId === chat.paneId;
-  const targetCurrent = saved => saved && runIdentity(saved)===selectedIdentity && !ended(saved) && saved.areas[saved.area]?.name === area.name && currentChat(saved)?.paneId === chat.paneId;
+  const targetCurrent = saved => saved && runIdentity(saved)===selectedIdentity && !ended(saved) && saved.areas[saved.area]?.name === area.name && currentChat(saved)?.paneId === chat.paneId
+    && (!p.deliveryGuard || p.deliveryGuard(saved));
   const retry = notice ? `It goes to the chat first with your next pdd workflow changes ${run.number}.` : `Retry: pdd workflow changes ${run.number} '${request.replace(/'/g, `'\\''`)}'`;
   const kept = `${What} is kept. Wait briefly or open it: pdd workflow open ${run.number}. ${retry}`;
   const warning = `An earlier request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`;
@@ -3170,26 +3324,45 @@ Nothing was sent to the chat.` };
   let accepted;
   try {
     accepted = await deliveryJournal(run, p, journal => {
-      let entry = journal.requests.find(item => matches(item) && item.kind === kind && item.text === request && item.state !== 'delivered');
-      if (!entry) { entry = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
+      if (notice && !targetCurrent(latest())) throw Error('The run changed before notice delivery');
+      let entry = journal.requests.find(item => matches(item) && item.kind === kind && item.text === request && !['delivered', 'superseded'].includes(item.state));
+      if (!entry) { entry = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), ...(retryRequested ? { personRetry: true } : {}), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
       return { ...entry };
     });
   } catch (error) { return fail(error.code === 'delivery_busy' ? `Another command is saving a request. Wait briefly, then retry. ${retry}` : `Could not save ${what}; it was not sent. Check the run folder and retry. ${retry}`); }
   const owner = { pid: p.ownerPid ?? process.pid, hostname: deliveryHost(p), token: (p.deliveryToken ?? randomUUID)() };
   activeDeliveries.add(owner.token);
   try {
-    const snapshot = await deliveryJournal(run, p, journal => ({ accepted: { ...journal.requests.find(item => item.id === accepted.id) }, queue: journal.requests.filter(item => matches(item) && item.state !== 'delivered').map(item => ({ ...item })) }));
+    const snapshot = await deliveryJournal(run, p, journal => ({ accepted: { ...journal.requests.find(item => item.id === accepted.id) }, queue: journal.requests.filter(item => matches(item) && !['delivered', 'superseded'].includes(item.state)).map(item => ({ ...item })) }));
     accepted = snapshot.accepted; const queue = snapshot.queue;
     if (accepted.state === 'delivered') return already();
     let warnings = queue.some(entry => entry.state === 'uncertain'), sentAccepted = false;
     if (accepted.state === 'uncertain') return uncertain();
     if (accepted.inFlight) return progress(accepted);
+    const deferredEnvironment = new Set();
     for (const entry of queue) {
       if (entry.state === 'uncertain') continue;
       if (entry.inFlight) return progress(entry);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
+      if (isEnvironmentWake(entry.text) && await environmentWakeAllowed(run, entry.text, p) === false) {
+        const observed = await deliveryJournal(run, p, journal => {
+          const saved = journal.requests.find(item => item.id === entry.id);
+          if (saved?.state === 'pending' && !saved.inFlight && !currentEnvironmentWake(latest(), saved.text, p)) {
+            saved.state = 'superseded'; saved.reason = 'The environment park changed before this wake was sent.';
+          }
+          return { ...saved };
+        });
+        if (observed.inFlight) return progress(observed);
+        deferredEnvironment.add(entry.id);
+        continue;
+      }
+      const personRetry = entry.kind === 'change' && run.state === 'stuck' && isRetryRequest(entry.text);
+      const retryRefusal = personRetry && await personRetryRefusal(run, entry.text, p, true);
+      if (retryRefusal) return fail(retryRefusal);
+      const retryTarget = environmentRecovery(run)?.step;
+      const retryInstruction = personRetry ? ` Resume only ${retryTarget ? `the failed validation step ${retryTarget}` : 'the failed step identified in the retained evidence'}, using its original command. Preserve completed work, gates, questions, branch and claim. Never replay an external operation with an unknown outcome.` : '';
       const message = entry.kind === 'notice' ? entry.text : entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
-        : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
+        : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text}${retryInstruction} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}. Run the repository full suite through ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)} workflow suite --command COMMAND and wait for the queue result. Test-slot waiting is not stuck.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
         try { return await transport(args); }
@@ -3203,11 +3376,15 @@ Nothing was sent to the chat.` };
       };
       const sent = await sendToChat(chat, message, { ...p, herdr: guardedHerdr, beforeSubmit: async () => {
         if (custodyFailed) return false;
+        if (personRetry && await personRetryRefusal(latest(), entry.text, p, true)) return false;
+        if (entry.kind !== 'notice' && await environmentWakeAllowed(latest(), entry.text, p) === false) return false;
+        if (p.beforeDeliverySubmit && !await p.beforeDeliverySubmit()) return false;
         try { return await deliveryJournal(run, p, journal => {
-          if (!targetCurrent(latest())) return false;
+          const current = latest();
+          if (!targetCurrent(current) || isEnvironmentWake(entry.text) && !currentEnvironmentWake(current, entry.text, p)) return false;
           const saved = journal.requests.find(item => item.id === entry.id);
           if (!saved || saved.state !== 'pending' || saved.inFlight) return false;
-          const first = journal.requests.find(item => matches(item) && item.state === 'pending');
+          const first = journal.requests.find(item => matches(item) && item.state === 'pending' && (!deferredEnvironment.has(item.id) || item.inFlight));
           if (first?.id !== saved.id) return false;
           saved.inFlight = true; saved.owner = owner; claimed = true; return true;
         }); } catch { custodyFailed = true; return false; }
@@ -3229,9 +3406,19 @@ Nothing was sent to the chat.` };
           current.changes.push({ stage: entry.area, round: current.changes.filter(change => change.stage === entry.area).length + 1, text: entry.text, at: now, ...(entry.kind === 'answer' ? { answer: true } : {}) });
           if (targetCurrent(current)) {
             endRuntimeWait(current);
-            if (equalFact(current.question,entry.question))current.question=null;
+            const retry = environmentRecovery(current);
+            if (retry && entry.text.startsWith(environmentWakeTag(retry))) {
+              current.environmentRetry = { ...retry, attempts: retry.attempts + 1, nextAt: null, deliveredAt: now };
+              current.state = current.gate || openQuestion(current) ? 'waiting' : 'running';
+              delete current.parkReason;
+            }
+            if (personRetry && current.state === 'stuck' && !current.repairLimit) {
+              current.state = current.gate || openQuestion(current) ? 'waiting' : 'running';
+              delete current.parkReason;
+            }
+            if (!personRetry && !isEnvironmentWake(entry.text) && equalFact(current.question,entry.question))current.question=null;
             if(entry.kind==='answer'){if(!current.gate&&!current.question)current.state='running';}
-            else if(current.gate&&equalFact(current.gate,entry.gate)){current.gate.id=p.randomUUID();current.gate.at=now;delete current.gate.promptSnapshot;}
+            else if(!personRetry&&!entry.text.startsWith('Environment validation wake for ')&&current.gate&&equalFact(current.gate,entry.gate)){current.gate.id=p.randomUUID();current.gate.at=now;delete current.gate.promptSnapshot;}
           }
           }); return {...saved};
         });
@@ -3256,26 +3443,93 @@ Nothing was sent to the chat.` };
   finally { activeDeliveries.delete(owner.token); }
 }
 
+function cleanupLines(run) {
+  const closed = (run.chats ?? []).filter(chat => Number.isFinite(chat.closed?.confirmedAt)).map(chat => chat.area);
+  const pending = (run.chats ?? []).filter(chat => chat.closed && !Number.isFinite(chat.closed.confirmedAt)).map(chat => chat.area);
+  return [...(pending.length ? [`Close pending: ${pending.join(', ')}. Retry: pdd workflow tidy`] : []), ...(closed.length ? [`Closed chats: ${closed.join(', ')}. Reopen one: pdd workflow open ${run.number} ${closed[0]}`] : []),
+    ...(run.cleanupKept ?? []).map(item => `Kept open: ${item.area} (${item.reason})`)];
+}
+function stoppedRunMessage(run) {
+  return `Run ${run.runId} for #${run.number} is ${run.cancelled?.state ?? run.state}${run.replacedBy ? ` by run ${run.replacedBy}` : ''}. Stop working on it. The retained worktree is ${run.root}.`;
+}
+function endedChatHelp(run) {
+  const lines = [stoppedRunMessage(run)];
+  for (const chat of run.chats ?? []) {
+    if (chat.closed?.screen) lines.push(`Read ${chat.area}: ${chat.closed.screen}`);
+    if (!validSessionId(chat.session?.id)) continue;
+    const agent = chat.agent ?? run.agent, variable = homeVariable(agent);
+    const command = agent === 'codex' ? `codex resume ${shell(chat.session.id)}` : agent === 'claude' ? `claude --resume ${shell(chat.session.id)}` : null;
+    if (command) lines.push(`Resume ${chat.area} yourself: cd ${shell(run.root)} && ${variable && chat.configDir ? `${variable}=${shell(chat.configDir)} ` : ''}${command}`);
+  }
+  return done(lines.join('\n'));
+}
+async function cleanupRunChats(run, p, options = {}) {
+  const snapshot = structuredClone(run);
+  for (const chat of finishedChats(snapshot)) chat.endedAt ??= finishedAt(snapshot,chat);
+  const result = await closeFinishedChats(snapshot, {...p, ...options, checkpoint: async (chat, layout) => {
+    commitRun(run, p, latest => {
+      if (chat) {
+        const target = latest.chats?.find(item => sameChat(item,chat) && item.terminalId === chat.terminalId);
+        if (!target || !options.force && !finishedChats(latest).includes(target)) throw Object.assign(Error('Cleanup target changed'), {code:'workflow_progress_refused'});
+        Object.assign(target, structuredClone(chat));
+      }
+      if (layout) latest.layout = structuredClone(layout);
+    });
+  }});
+  if (!options.dryRun) {
+    const shellKept = run.layout?.phase !== 'closed' && !result.kept.some(item => item.area === 'run shell')
+      ? (run.cleanupKept ?? []).filter(item => item.area === 'run shell') : [];
+    const nextKept = [...(options.onlyChat ? (run.cleanupKept ?? []).filter(item => item.area !== options.onlyChat.area && item.area !== 'run shell') : []), ...shellKept, ...result.kept];
+    if (!equalFact(run.cleanupKept ?? [],nextKept) || snapshot.chats?.some(chat => chat.endedAt !== run.chats?.find(item => sameChat(item,chat))?.endedAt))
+      commitRun(run, p, latest => {
+        latest.cleanupKept = nextKept;
+        for (const chat of finishedChats(latest)) chat.endedAt ??= snapshot.chats?.find(item => sameChat(item,chat))?.endedAt;
+      });
+  }
+  return result;
+}
+export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {}, ports = {}) {
+  const p = deps(ports), runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
+  let closed = 0;
+  const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
+  const candidates = runs.flatMap(run => {
+    const chats = finishedChats(run).filter(chat => !Number.isFinite(chat.closed?.confirmedAt));
+    if (chats.length) return chats.map(chat => ({run,chat,at:finishedAt(run,chat)}));
+    return ended(run) && run.layout?.workspaceId && run.layout.phase !== 'closed'
+      ? [{run,chat:null,at:run.cancelled?.at ?? run.updatedAt ?? run.startedAt}] : [];
+  }).sort((a,b) => a.at - b.at);
+  for (const [index,{run,chat}] of candidates.entries()) {
+    if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); break; }
+    if (readRunOwnership(run.runDir,p)) { kept.push({runId:run.runId,reason:'run-busy'}); continue; }
+    let release;
+    try {
+      release = acquireRunLock(run.runDir);
+      const latest = readRun(run.runDir);
+      if (!latest || latest.runId !== run.runId) continue;
+      const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
+        ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
+      closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
+      if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) break; }
+    } catch (error) {
+      kept.push({runId:run.runId,reason:error.code ?? 'cleanup-unavailable'});
+      if (error.code !== 'run_busy') warnings.push(failureReason(error));
+    } finally { release?.(); }
+  }
+  return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}.`, ...warnings].join('\n')),closed,kept:kept.length};
+}
+
 async function cancelRunCommand({ ref, cwd }, ports) {
   const p = deps(ports);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
-  if (run.state === 'cancelled') return done(`The run for ${run.repo}#${run.number} is already cancelled.`);
   p.say('Closing the chat tabs in Herdr…');
-  const { warnings } = await closeChats(run, {...p, checkpoint: async (_chat, layout) => {
-    if (layout) {
-      // Sample the outside clock before ordinary ownership so concurrent progress
-      // is visible to the checkpoint's fresh read rather than a nested save.
-      const at = p.now();
-      commitRun(run,{...p,now:()=>at},latest=>{latest.layout=structuredClone(layout);});
-    }
-  }});
+  const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
   // No chat of a cancelled run may still read a login file.
   removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
   const cancelled={state:'cancelled',at:p.now()};
-  commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=cancelled;latest.gate=null;});
-  return done([...warnings, `Cancelled the run for ${run.repo}#${run.number} and closed its Herdr tabs.`,
+  commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=latest.cancelled?.state==='replaced'?latest.cancelled:cancelled;latest.gate=null;for(const chat of latest.chats ?? [])chat.endedAt ??= cancelled.at;});
+  return done([...warnings, `Cancelled the run for ${run.repo}#${run.number}.${kept.length ? ` Kept open: ${kept.map(item=>`${item.area} (${item.reason})`).join(', ')}. Retry: pdd workflow tidy, or cancel from another terminal.` : ' Closed its Herdr tabs.'}`,
     `The worktree stays at ${run.root} (branch ${run.branch}).`].join('\n'));
 }
 
@@ -3285,6 +3539,7 @@ async function refreshPr(run, p) {
   // #3042: the read of a PR that pdd published with readable facts also gives its description, head and comments
   // (`view`), so that the refresh below of its readable top needs no other read when nothing changed.
   for(const pr of run.pr){const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{})},p.commandPorts);observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view});}
+  await captureClosedCi({ ...run, pr: observations.map(row => ({ ...run.pr.find(pr => pr.url === row.url), ...row.fields, ...(row.view?.head ? { headSha: row.view.head } : {}) })) }, p);
   const refreshTops=async()=>{
     const observed=new Map(observations.map(observation=>[observation.url,{...observation.fields,view:observation.view}]));
     for(const pr of run.pr) if(pr.readable?.facts && observed.get(pr.url)?.state==='open') for(const line of await refreshReadableTop(run,pr,p,{observed,cwd})) p.say(line);
@@ -3305,6 +3560,7 @@ async function refreshPr(run, p) {
     if(latest.state==='cancelled')return;
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
+    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt ??= checkedAt;
   });
   await refreshTops();
 }
@@ -3312,7 +3568,7 @@ async function refreshPr(run, p) {
 // What Herdr shows for the current chat of a running run or a run at a gate, with one Herdr call: 'blocked' (a question
 // dialog), 'working', 'stopped' (the saved chat state is ended: evidence, never "not seen yet"), 'starting' (an unconfirmed
 // start after the shared grace), 'unavailable', 'cannot-work' (the agent is alive, but its login or usage limit stops every
-// turn; the chat owner's chatHealth result goes into facts.health), or null (idle, still within the grace, or pdd cannot
+// turn; the chat owner's chatHealth result goes into facts.health), 'idle' (an exact idle/done session), or null (still within the grace, or pdd cannot
 // tell, and status keeps its words). A lifecycle change is saved into the same chat of the run record.
 async function chatState(run, p, facts = {}) {
   if (run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return 'unconfirmed';
@@ -3320,7 +3576,8 @@ async function chatState(run, p, facts = {}) {
   const area = run.areas[run.area], failure = activeChatFailure(run), chat = currentChat(run);
   if (!chat) return failure || !run.gate && !prOf(run, area?.name) ? 'unconfirmed' : null;
   if (!(run.state === 'running' || run.gate || failure)) return null;
-  const live = await chatSession(chat, p);
+  const live = await chatSession(chat, {...p, run});
+  if (live.namingError) facts.namingError = live.namingError;
   if (live.workspaceClosed) return 'closed';
   // A never-seen chat after the grace counts as ended only when its own native session shows that the agent ran.
   const own = sessionEvidenceDue(chat, live, p.now()) && !observedSession(chat, chat.agent ?? run.agent) ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
@@ -3340,9 +3597,13 @@ async function chatState(run, p, facts = {}) {
     } catch { /* Missing evidence leaves coverage unknown. */ }
   }
   // Status saves only positive facts: the exact live agent (running) or end evidence. An unclear observation changes nothing.
-  const next = structuredClone(chat);
+  let next = structuredClone(chat);
+  if (live.namingError) next.namingError = live.namingError;
+  else delete next.namingError;
+  facts.timeZone = p.timeZone;
   if (observed.state === 'ended' || observed.state === 'running' && observed.exact) applyLifecycle(next, observed);
   if (live.alive) delete next.startUnconfirmed;
+  next = observeIdle(next, live, p.now());
   const recovered = live.alive && failure;
   const nativeChange = !sameFact(next, chat) || recovered;
   if (nativeChange || metricsStartAt !== null) {
@@ -3365,6 +3626,9 @@ async function chatState(run, p, facts = {}) {
     // An alive agent can still fail every turn on its login or usage limit (#2902); a gate or question keeps its words.
     const health = run.state === 'running' && !run.gate && !openQuestion(run) && !failure ? await chatHealth({ run, chat: next, live }, p) : null;
     if (health) { facts.health = { ...health, at: p.now(), timeZone: p.timeZone }; return 'cannot-work'; }
+    const saved = currentChat(run);
+    if (idleAgent(next, live) && saved?.paneId === next.paneId && saved.session?.id === next.session?.id
+      && saved.idleAnchor === launchAnchor(next) && Number.isFinite(saved.idleSince)) return 'idle';
     return ['blocked', 'working'].includes(live.status) ? live.status : null;
   }
   if (failure) return 'unconfirmed';
@@ -3377,6 +3641,9 @@ async function chatState(run, p, facts = {}) {
 }
 
 // What status needs to know about the gate: PR 1's draft prompts at the code gate, nothing to try before the PR.
+function interpreterFacts(run, p) {
+  return { interpreter: (p.readInterpreterProgress ?? readInterpreterProgress)({ cwd: run.root, env: p.env }, { now: p.now, ...p.interpreterQueuePorts }) };
+}
 async function gateFacts(run, p) {
   const normal = normalRun(run, p);
   if (run.gate?.kind === 'ask-code') return { normal, drafts: await pr1Drafts(run, p) };
@@ -3392,6 +3659,9 @@ function detail(run, chat = null, facts = {}) {
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
     : chat === 'cannot-work' && facts.health && run.state === 'running' ? cannotWorkWords(run, facts.health).next
+    : environmentRecovery(run) ? (environmentRecovery(run).attempts >= ENVIRONMENT_BACKOFF.length
+      ? 'Environment retries are exhausted. Inspect the environment alert in pdd autopilot status before resuming the failed validation.'
+      : 'Autopilot retries only this validation when the host is healthy; inspect pdd autopilot status for any environment alert.')
     : facts.normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run) ? `pdd workflow done check --summary \"Prompt tests line\"`
     : facts.normal && run.storyApproval && run.gate?.kind === 'ask-code' ? run.through === 'code' ? 'Fix the reported code entry problem, then run pdd workflow done check.' : codeLater(run)
     : run.gate ? approvalGuide(run)
@@ -3401,6 +3671,11 @@ function detail(run, chat = null, facts = {}) {
       : `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.`) : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}${run.agentDefinition?.name ? ` ${JSON.stringify(run.agentDefinition.name)}` : ''}`,
     `State: ${describe(run, chat, facts)}`,
+    ...(['stuck', 'paused'].includes(run.state) ? [`Cause: ${run.stuckCause ?? classifyStuckCause(run.parkReason, runtimeWaiting(run))}`] : []),
+    ...cleanupLines(run),
+    `Launch: model ${launchProfile(run).model ?? 'account default'}; account ${launchProfile(run).configDir ?? 'default folder'}; Codex threads ${launchProfile(run).codexThreads ?? 'account default'}`,
+    ...(tab?.herdrAgentName ? [`Herdr agent: ${tab.herdrAgentName}; pane ${tab.paneId}`] : []),
+    ...(facts.namingError ? [`Herdr name is not bound (${facts.namingError.code}); inspect the saved pane.`] : []),
     ...(pending ? [`Chat replacement pending: ${run.chatReplacement.phase}; retry pdd workflow open ${run.number} --new, or end with pdd workflow cancel ${run.number}.`] : []),
     ...(pending && run.chatReplacement.phase==='launchRequested' ? ['After startup grace, --new sends the saved launch once only if authoritative inspection proves the latest request never ran; unknown or agent processes keep it pending.'] : []),
     ...(area ? [`Area ${run.area + 1} of ${run.areas.length}: ${area.name} — ${steps.join(', ')}`] : []),
@@ -3416,19 +3691,22 @@ function detail(run, chat = null, facts = {}) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
-function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, normal = false } = {}) {
+function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, normal = false, suite = null, interpreter = null, now = null, namingError = null } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const cardRun = normal && Boolean(run.storyApproval);
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
   const cannotWork = !problem && !question && !run.gate && running && chat === 'cannot-work' && health ? health : null;
-  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
+  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : environmentRecovery(run) && environmentRecovery(run).attempts < ENVIRONMENT_BACKOFF.length ? 'working' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
     : run.state === 'stuck' || run.gate || question || cannotWork || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
+    : environmentStatus(run) ? environmentStatus(run)
     : run.state === 'stuck' ? `stuck: ${stuckReason(run)}`
+    : suite && (suite.state !== 'finished' || suite.reason) ? suiteStatusWords(suite)
+    : running && interpreter?.state === 'waiting' ? interpreterStatusWords(interpreter)
     : runtimeWaiting(run) ? `waiting for the interpreter: ${run.runtimeWait.reason}`
     : replacementPending ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new`
     : problem ? chatStatusWords(run, chat)
@@ -3444,11 +3722,14 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : run.gate?.kind === 'approve-pr' ? `waiting for you: ${nothing ? '' : 'try it, then '}approve to open ${area.then === 'ask-code' ? 'PR 1' : 'the PR'}`
     : run.gate ? `waiting for you: approve the ${run.gate.area}`
     : group === 'pr-open' ? `${!ask ? 'PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2'} open`
+    : running && chat === 'idle' && step ? idleWords(run, timeZone)
+    : running && automaticResumeWords(run, now) ? automaticResumeWords(run, now)
     : step ? `agent working on ${step}` : 'agent working';
   const ref = `${run.repo}#${run.number}`;
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
   const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
-  return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories, waitingForStory: normal && atStoryGate(run),
+  return { ...(suite ? { suite } : {}), ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories, waitingForStory: normal && atStoryGate(run),
+    launchProfile: launchProfile(run), chat: lastChat(run, area?.name) ? {herdrAgentName: lastChat(run, area?.name).herdrAgentName ?? null, paneId: lastChat(run, area?.name).paneId, ...(namingError ? {namingError} : {})} : null,
     ...(cannotWork ? { chatProblem: { kind: cannotWork.kind, agent: cannotWork.agent, until: cannotWork.until !== null ? new Date(cannotWork.until).toISOString() : null, message: cannotWork.message } } : {}),
     ...((run.evidence??[]).some(e=>e.association?.stage==='pr1')?{pr1Stories:ownStoryCount(run,{stage:'pr1'})}:{}),
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
@@ -3474,17 +3755,19 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   for (const run of runs) {
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
     const health = {}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
-    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health });
+    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, now: p.now(), ...interpreterFacts(run, p), suite: readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p) });
     const snapshot = requestSnapshot(run, p);
-    all.push({ ...item, steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
+    all.push({ ...item, chats: run.chats ?? [], steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...cleanupLines(run), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  if (json) return done(JSON.stringify({ runs: shown.map(({ line, ...item }) => item) }, null, 2));
+  let herdr = null, inventory = [];
+  try { herdr = {...await paneUsage({...p,onPaneUsage:rows=>{inventory=rows;}}), finishedOpen: runs.reduce((n,run) => n + finishedChats(run).filter(chat => !Number.isFinite(chat.closed?.confirmedAt)).length,0)}; } catch {}
+  if (json) return done(JSON.stringify({ herdr, runs: shown.map(({ line, ...item }) => item) }, null, 2));
   if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
   const cards = shown.filter(item => item.waitingForStory).map(item => item.ref);
-  return done([...shown.map(item => item.line),
+  return done([...(herdr ? [`Herdr session pdd: ${herdr.panes} of ${herdr.budget} panes. ${herdr.finishedOpen} finished chats: pdd workflow tidy. ${p.describePaneOwners(inventory)}`] : []), ...shown.map(item => item.line),
     ...(cards.length ? [`Waiting for Story approval: ${cards.join(', ')}. Show each card: pdd workflow card N.`] : []),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
     `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
@@ -3513,11 +3796,13 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
   const ordinaryOwnership=readRunOwnership(found.run.runDir,p);
   if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
-  const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
+  const run = found.run, facts = { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...interpreterFacts(run, p) }, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
+  facts.suite = readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p);
+  facts.now = p.now();
   const snapshot = requestSnapshot(run, p);
   const nativeResults=ownResults(run,p).filter(result=>result.kind==='native evidence');
   const steps = savedStepResults(run);
-  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, steps, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
+  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, chats: run.chats ?? [], steps, ...snapshot, ordinaryOwnership, nativeResults }] }, null, 2)); }
   return done([detail(run, chat, facts), ...steps.flatMap(({ step, area, pddResults }) =>
     [`Step: ${area ?? 'unknown'} / ${step}`, ...resultLines(pddResults).map(line => `  ${line}`)]),
     ...(nativeResults.length?resultLines(nativeResults):[]), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n'));
@@ -3525,9 +3810,11 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
 function validReplacement(record, run) {
-  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'configDir', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
+  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'configDir', 'launchProfile', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
   if (Object.hasOwn(record, 'configDir') && (record.configDir !== null && (typeof record.configDir !== 'string' || !record.configDir.length)
     || record.replacement && record.replacement.configDir !== record.configDir)) return false;
+  if (record.launchProfile !== undefined && (!validLaunchProfile(record.launchProfile) || record.launchProfile.agent !== run.agent
+    || record.launchProfile.configDir !== record.configDir || record.replacement && !sameFact(record.replacement.launchProfile, record.launchProfile))) return false;
   const recovery = record.recovery;
   if (recovery !== undefined && (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)
     || Object.keys(recovery).some(key => !['closeAcknowledged','resumeRequested','allocationLabel','tabIdsBefore','latestLaunchRequest','unsentProof'].includes(key))
@@ -3567,8 +3854,9 @@ function saveAreaObservations(run, original, observed, p) {
     fresh => copyObservation(lastChat(fresh, original.area), observed));
 }
 // Default open and startup own chat observations, never a stale workflow snapshot.
-function saveChatObservations(run, original, observed, p, { error, phase = 'open', reset = false, checkpoint = false, layout = null } = {}) {
+function saveChatObservations(run, original, observed, p, { error, phase = 'open', reset = false, checkpoint = false, layout = null, automatic = false, resumeSuccess = null } = {}) {
   const area = original?.area ?? observed?.area ?? run.areas[run.area].name;
+  if (observed && original?.resumedAt !== observed.resumedAt) { delete observed.idleSince; delete observed.idleAnchor; }
   // A late reset cannot retire historical custody; a dispatched start retains it.
   return conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && !ended(fresh) && sameFact(lastChat(fresh, area), original) && !(reset && fresh.area !== run.area), fresh => {
     const selected = lastChat(fresh, area);
@@ -3580,6 +3868,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     // Verified live custody supersedes stale hints; partial allocation saves retain known fields.
     if (layout) fresh.layout = { ...fresh.layout, ...structuredClone(layout) };
     if (checkpoint) return;
+    if (resumeSuccess && observed && !observed.startUnconfirmed && fresh.state === 'running' && fresh.areas[fresh.area].name === area)
+      fresh.chatResumeSuccess = {...resumeSuccess, area, paneId: observed.paneId, sessionId: observed.session?.id, resumedAt: observed.resumedAt};
     // A late failed open of an area that is no longer current keeps its own record, but never replaces a current failure.
     if (error && phase === 'open' && fresh.areas[fresh.area].name !== area && !activeChatFailure(fresh))
       fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: firstLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
@@ -3588,7 +3878,7 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
       const unchanged = stateFields.every(key => sameFact(fresh[key], run[key]));
       if (error) {
         fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: firstLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
-        if (unchanged) fresh.state = 'waiting';
+        if (unchanged && !automatic) fresh.state = 'waiting';
       } else if (fresh.chatFailure) {
         if (unchanged) clearChatFailure(fresh);
         else delete fresh.chatFailure;
@@ -3596,17 +3886,64 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     }
   });
 }
-async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot = PACKAGE_ROOT }, ports) {
+async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrAgentName, codexThreads, packageRoot = PACKAGE_ROOT, automaticResume = null }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
-  if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. Its worktree is ${run.root}.`);
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
+  let beforeLaunch, resumeSuccess = null;
+  if (automaticResume) {
+    const skipped = () => ({...done(''), recovery: 'skipped'});
+    if (!validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== automaticResume.coordinatorId
+      || run.automaticOrigin.machine !== automaticResume.machine || !samePath(run.sourceRoot, cwd)) return skipped();
+    if (layoutClosing(run) || chat?.closed) return skipped();
+    if (run.state === 'stuck' && run.chatResumeLimit) return {...done(run.parkReason), recovery: 'stuck', area: run.chatResumeLimit.area};
+    if (run.state !== 'running' || run.gate || openQuestion(run) || !chat || chat.startUnconfirmed
+      || !validSessionId(chat.session?.id)
+      || run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return skipped();
+    const selectedChat = structuredClone(chat);
+    const stillEligible = fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
+      && !layoutClosing(fresh) && !lastChat(fresh, selectedChat.area)?.closed
+      && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
+      && sameFact(lastChat(fresh, selectedChat.area), selectedChat) && sameFact(fresh.done, run.done)
+      && sameFact(fresh.automaticOrigin, run.automaticOrigin) && sameFact(fresh.chatReplacement, run.chatReplacement);
+    const live = await chatSession(chat, p);
+    if (live.alive || !['agent_not_found', 'pane_not_found', 'server_not_running'].includes(live.code)) return skipped();
+    const absent = live.code === 'pane_not_found' ? {...live, code: 'agent_not_found'} : live;
+    const own = sessionEvidenceDue(chat, absent, p.now()) && !observedSession(chat, chat.agent ?? run.agent)
+      ? await ownSession({run, chat, since: launchAnchor(chat), ports: p}) : null;
+    const observed = observeLifecycle(chat, absent, p.now(), chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
+    if (observed.state !== 'ended') return skipped();
+    if (await chatHealth({run, chat, live}, p)) return skipped();
+    const name = run.areas[run.area].name, at = p.now();
+    const attempts = (run.chatResumes?.[name] ?? []).filter(time => Number.isFinite(time) && time > at - 3600000);
+    if (attempts.length >= 3) {
+      const reason = `The ${name} chat stopped after 3 automatic resume attempts in one hour. Inspect the chat before resuming this run.`;
+      const saved = conditionalCommit(run, p, stillEligible, fresh => {fresh.state = 'stuck'; fresh.parkReason = reason; fresh.chatResumeLimit = {area: name, at};});
+      return saved ? {...done(reason), recovery: 'stuck', area: name} : skipped();
+    }
+    beforeLaunch = async () => {
+      const saved = conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && fresh.state === 'running'
+        && !layoutClosing(fresh) && !lastChat(fresh, name)?.closed
+        && sameFact(lastChat(fresh, name), defaultOriginal)
+        && fresh.area === selected && !fresh.gate && !openQuestion(fresh)
+        && sameFact(fresh.automaticOrigin, run.automaticOrigin), fresh => {
+          const at = p.now(), recent = (fresh.chatResumes?.[name] ?? []).filter(time => Number.isFinite(time) && time > at - 3600000);
+          if (recent.length >= 3) throw Object.assign(Error('Automatic resume limit reached.'), {code: 'chat_resume_limit'});
+          (fresh.chatResumes ??= {})[name] = [...recent, at];
+          resumeSuccess = {at, count: recent.length + 1};
+        });
+      if (!saved) throw Object.assign(Error('The run changed before automatic resume.'), {code: 'chat_target_changed'});
+    };
+  }
   if (selected < 0) return fail(`Unknown area ${area}. Valid areas: ${run.areas.map(item => item.name).join(', ')}.`);
+  if (ended(run)) return endedChatHelp(run);
   if (selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
   const historical = selected < run.area;
+  const profileOptions = [model, herdrAgentName, codexThreads].some(value => value !== undefined);
+  if (profileOptions && (!newSession || historical)) return fail('Launch settings require --new for the current area.');
   if (!historical && run.area > 0 && (newSession || !chat)) {
     const ownershipFailure = await continuationOwnership(run, cwd, p);
     if (ownershipFailure) return fail(ownershipFailure);
@@ -3621,18 +3958,29 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     if (!['launched', 'rolledBack', 'ended'].includes(pending.phase) && !newSession) return fail(`Chat replacement is pending at ${pending.phase}. Retry: pdd workflow open ${run.number} --new`);
   }
   const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
-  const incoming = newSession && !recovering && run.agent === 'codex' && typeof p.env.CODEX_HOME === 'string' && p.env.CODEX_HOME.length ? p.env.CODEX_HOME : null;
-  const replacementConfig = incoming ? resolve(cwd, expandHome(incoming, p.env)) : run.configDir;
-  if (incoming && !isFolder(replacementConfig)) return fail(`CODEX_HOME is "${replacementConfig}", but that folder does not exist. Fix CODEX_HOME and run the command again.`);
+  const variable = homeVariable(run.agent);
+  const incoming = newSession && !recovering && variable && typeof p.env[variable] === 'string' && p.env[variable].length ? p.env[variable] : null;
+  const replacementConfig = incoming ? resolve(cwd, expandHome(incoming, p.env)) : launchProfile(run).configDir;
+  if (incoming && !isFolder(replacementConfig)) return fail(`${variable} is "${replacementConfig}", but that folder does not exist. Fix ${variable} and run the command again.`);
+  let replacementProfile;
+  try { replacementProfile = recovering ? pending.launchProfile : newSession
+    ? selectLaunchProfile({run, configDir: replacementConfig, model, herdrAgentName, codexThreads}, p) : launchProfile(run); }
+  catch (error) { return fail(error.message); }
   // Pending recovery checks the profile of each effect, which may be the original
   // chat's folder rather than either the current run or the retrying terminal.
   const missing = !recovering && missingHome({ ...run, configDir: replacementConfig }, p.env);
   if (missing) return fail(missing);
 
+  const snapshot = requestSnapshot(run, p);
+  if (automaticResume && snapshot.requestWarning) return fail(snapshot.requestWarning);
+  const requests = (snapshot.requests ?? []).filter(entry => entry.area === chat?.area && entry.ackedAt == null
+    && !(snapshot.inFlightRequests ?? []).some(active => active.id === entry.id));
+  const resumeMessage = requests.length ? ['Continue this same run. Keep completed steps and approvals. These requests are not approval.',
+    ...requestLines({requests, pendingRequests: [], uncertainRequests: [], inFlightRequests: []}, {agent: true, p})].join('\n') : undefined;
   try {
     if (newSession) assertRestartCaller({chat, pending}, p);
     if (chat && !recovering) {
-      rebuilt = await rebuildClosedChat({run, chat, message: await areaMessage(run, selected, p, packageRoot)}, {...p,
+      rebuilt = await rebuildClosedChat({run, chat, resumeMessage, message: await areaMessage(run, selected, p, packageRoot) + (resumeMessage ?? '')}, {...p, beforeLaunch,
         checkpoint: async (observed, layout) => {
           if (!saveChatObservations(run, defaultOriginal, observed, p, {checkpoint: true, layout}))
             throw Object.assign(Error('The run changed during workspace recovery.'), {code: 'chat_target_changed'});
@@ -3657,13 +4005,14 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         ...(run.gate ? [`Open gate: ${run.gate.kind} for ${run.gate.area ?? currentArea.name}. Wait for the person to decide whether to approve or request changes; do not treat this new session as approval.`] : []),
         ...(openQuestion(run) ? [`Pending question: ${openQuestion(run).text}`] : []),
       ].join('\n') + '\n';
-      const replacementRun = { ...run, configDir: replacementConfig };
+      const replacementRun = { ...run, configDir: replacementConfig, launchProfile: replacementProfile };
       const checkpoint = async record => {
         if (!validReplacement(record, run)) throw Object.assign(Error('Invalid replacement checkpoint'), { code: 'invalid_replacement_checkpoint' });
         const admit = fresh => {
           if (!fresh || ended(fresh)) throw Object.assign(Error('The run ended during replacement.'), {code:'run_ended'});
           const prior = fresh.chatReplacement;
           const sameAttempt = prior && prior.id === record.id && prior.at === record.at && sameFact(prior.original, record.original);
+          if (sameAttempt && prior.launchProfile && !sameFact(prior.launchProfile, record.launchProfile)) throw Error('Replacement launch profile changed');
           if (sameAttempt && Object.hasOwn(prior, 'configDir') && prior.configDir !== record.configDir) throw Error('Replacement configuration changed');
           if (record.phase === 'intent' && !sameAttempt) {
             if (prior && !['launched','rolledBack','ended'].includes(prior.phase)) throw Error('Replacement already pending');
@@ -3679,7 +4028,10 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
           // Only the first current-area installation selects later-area inheritance.
           // Observation/recovery checkpoints must not retarget a newer saved account.
           if (record.phase === 'launchRequested' && record.area === fresh.areas[fresh.area]?.name
-            && !['launchRequested','launched'].includes(priorPhase)) fresh.configDir = record.configDir;
+            && !['launchRequested','launched'].includes(priorPhase)) {
+            fresh.configDir = record.configDir;
+            if (record.launchProfile) fresh.launchProfile = structuredClone(record.launchProfile);
+          }
           if (['launchRequested', 'launched', 'rolledBack'].includes(record.phase)) {
             fresh.chats = fresh.chats.filter(item => item.area !== record.area);
             fresh.chats.push(record.phase === 'rolledBack' ? {...record.original, messageFile: record.original.originalMessageFile} : {...record.replacement});
@@ -3689,20 +4041,23 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         Object.assign(replacementRun, run);
       };
       chat = await restartChat({ run: replacementRun, chat, message, pending: recovering ? pending : undefined }, { ...p, checkpoint });
-      if (run.chatReplacement?.phase === 'ended') return done(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
-      if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
+      const replacementResult = message => done([...(chat.namingError ? [`Herdr name is not bound (${chat.namingError.code}); inspect the saved pane.`] : []), message].join('\n'));
+      if (run.chatReplacement?.phase === 'ended') return replacementResult(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
+      if (run.chatReplacement?.phase === 'rolledBack') return replacementResult(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
       if (run.chatReplacement?.phase === 'launched' && chat.area === run.areas[run.area]?.name && !chat.startUnconfirmed) armCurrentAutomaticChat(run, p);
-      if (run.chatReplacement?.recovery?.resumeRequested) return done(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
-      return done(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
+      if (run.chatReplacement?.recovery?.resumeRequested) return replacementResult(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
+      return replacementResult(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
     }
     if (!chat) { chat = await startNextChat(run, p, packageRoot); defaultOriginal = structuredClone(chat); started = true; }
     p.say(`Opening the ${chat.area} chat in Herdr…`);
     const priorResumeAnchor = launchAnchor(chat);
-    const opened = await openChat({ run, chat }, { ...p, beforeAttach: async () => {
+    const opened = await openChat({ run, chat, resumeMessage }, { ...p, background: Boolean(automaticResume), beforeLaunch, beforeAttach: async () => {
       const saved = areaOriginal ? saveAreaObservations(run, areaOriginal, chat, p)
-        : saveChatObservations(run, defaultOriginal, chat, p);
+        : saveChatObservations(run, defaultOriginal, chat, p, {resumeSuccess});
       if (saved && !historical && (rebuilt || Number.isFinite(chat.resumedAt) && launchAnchor(chat) !== priorResumeAnchor)) armCurrentAutomaticChat(run, p);
       handedOff = true;
+      if (saved && !historical && Number.isFinite(chat.resumedAt)
+        && (rebuilt || launchAnchor(chat) !== priorResumeAnchor)) await continueResumedChat(run, chat, p, packageRoot);
       p.releaseRunLock?.();
     } });
     if (opened.restartAvailable) {
@@ -3721,13 +4076,13 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     const latest = readRun(run.runDir), gateRun = latest?.runId === run.runId ? latest : run;
     const shownGate = gateRun.gate?.promptSnapshot ? snapshotLines(gateRun.gate.promptSnapshot) : [];
     const where = `Herdr session pdd, tab "${chat.label}"`;
-    return done([...shownGate, ...(gateRun.gate ? [approvalGuide(gateRun, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
+    return done([...(opened.namingError ? [`Herdr name is not bound (${opened.namingError.code}); inspect the saved pane.`] : []), ...shownGate, ...(gateRun.gate ? [approvalGuide(gateRun, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
     if (newSession) return fail([`Chat replacement ${run.chatReplacement?.phase ?? 'refused'} (${failureReason(error)}).${run.chatReplacement ? ` Retry: pdd workflow open ${run.number} --new` : ''}`, ...failureDetails(error)].join('\n'));
     if (!handedOff) {
       if (areaOriginal) saveAreaObservations(run, areaOriginal, chat, p);
-      else saveChatObservations(run, defaultOriginal, chat, p, { error, phase: chat ? 'open' : 'start' });
+      else saveChatObservations(run, defaultOriginal, chat, p, { error, phase: chat ? 'open' : 'start', automatic: Boolean(automaticResume) });
     }
     // A starting chat is not a failed one: say so, with the one safe next step.
     if (['chat_start_unconfirmed', 'chat_start_failed'].includes(error.code)) return fail(oneLine(error.message));
@@ -3736,6 +4091,102 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
 }
 
 const openRunCommand = (args, ports) => lockedMutation(args, ports, openRunLocked);
+
+function continueText(run, packageRoot) {
+  const area = run.areas[run.area], step = area.steps.find(step => !run.done[step]);
+  const brief = resolve(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'steps', `${step ?? 'review'}.md`);
+  return `Continue your current step${step ? ` (${step})` : ''} in the ${area.name} area. Read the step brief ${JSON.stringify(brief)} and ${JSON.stringify(join(run.runDir, 'STEP.md'))}, if present. Keep completed work and approvals. Preserve any gate or person question and its required decision. This notice is not approval.`;
+}
+const deliverContinue = (run, text, p) => p.deliverContinue ? p.deliverContinue(run, text, p) : deliverRequest(run, text, p, true);
+
+function continuationCheckHeld(run, p) {
+  const held = progress => progress && ['waiting', 'running', 'unavailable'].includes(progress.state);
+  return held(interpreterFacts(run, p).interpreter)
+    || held((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p));
+}
+
+async function continueResumedChat(run, chat, p, packageRoot) {
+  const anchor = chat.resumedAt, latest = readRun(run.runDir);
+  const sameTarget = fresh => fresh && runIdentity(fresh) === runIdentity(run)
+    && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh) && !continuationCheckHeld(fresh, p)
+    && fresh.area === run.area && !layoutClosing(fresh) && !currentChat(fresh)?.closed
+    && currentChat(fresh)?.paneId === chat.paneId && currentChat(fresh)?.session?.id === chat.session?.id
+    && currentChat(fresh)?.resumedAt === anchor;
+  if (!sameTarget(latest) || currentChat(latest).continueAnchor === anchor) return;
+  const unchanged = fresh => sameTarget(fresh) && ['state', 'done', 'gate', 'question'].every(key => sameFact(fresh[key], latest[key]));
+  if (!conditionalCommit(latest, p, unchanged, fresh => { currentChat(fresh).continueAnchor = anchor; })) return;
+  const result = await deliverContinue(readRun(run.runDir), continueText(latest, packageRoot), {
+    ...p, packageRoot, deliveryGuard: unchanged,
+  });
+  if (result.exitCode !== 0) p.say(result.message);
+}
+
+// An idle worker uses the existing journal and transport. It never launches another chat.
+export const nudgeIdleRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
+  const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p);
+  const skipped = () => ({...done(''), recovery: 'skipped'});
+  if (!found.run) return found.error ? {...fail(found.error), recovery: 'skipped'} : skipped();
+  const run = found.run, chat = currentChat(run), area = run.areas[run.area];
+  const owned = fresh => fresh && runIdentity(fresh) === runIdentity(run)
+    && validSavedAutomaticOrigin(fresh) && fresh.automaticOrigin.coordinatorId === input.coordinatorId
+    && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd);
+  if (!owned(run) || layoutClosing(run) || chat?.closed) return skipped();
+  // The saved stop survives a failed alert handoff or process restart. The alert
+  // service owns retries and delivered/unconfirmed deduplication on later ticks.
+  if (run.state === 'stuck' && run.chatIdleLimit)
+    return {...done(run.parkReason), recovery: 'stuck', area: run.chatIdleLimit.area};
+  const eligible = fresh => owned(fresh) && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh) && !activeChatFailure(fresh)
+    && !continuationCheckHeld(fresh, p)
+    && !layoutClosing(fresh) && !currentChat(fresh)?.closed && fresh.area === run.area
+    && (!fresh.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(fresh.chatReplacement.phase))
+    && currentChat(fresh) && !currentChat(fresh).startUnconfirmed && validSessionId(currentChat(fresh).session?.id)
+    && !prOf(fresh, area?.name) && area?.steps.some(step => !fresh.done[step]);
+  if (!eligible(run)) return skipped();
+  const original = structuredClone(chat), progress = Object.fromEntries(area.steps.filter(step => run.done[step]).map(step => [step, run.done[step]]));
+  const unchanged = fresh => eligible(fresh) && sameFact(currentChat(fresh), original)
+    && sameFact(fresh.done, run.done) && sameFact(fresh.automaticOrigin, run.automaticOrigin);
+  const live = await chatSession(chat, p), at = p.now(), observed = observeIdle(chat, live, at);
+  if (!idleAgent(chat, live)) {
+    if (!sameFact(chat, observed)) conditionalCommit(run, p, unchanged, fresh => copyObservation(currentChat(fresh), observed));
+    return skipped();
+  }
+  if (await chatHealth({run, chat, live}, p)) return skipped();
+  const previous = run.chatIdleNudges?.[area.name];
+  const budget = previous && sameFact(previous.progress, progress) ? previous : {progress, count: 0, lastAt: null};
+  const since = Math.max(observed.idleSince, budget.lastAt ?? -Infinity);
+  if (at < since + IDLE_WAIT_MS) {
+    if (!sameFact(chat, observed)) conditionalCommit(run, p, unchanged, fresh => copyObservation(currentChat(fresh), observed));
+    return skipped();
+  }
+  if (budget.count >= 3) {
+    const reason = `The ${area.name} agent stayed idle after 3 continue prompts without step progress. Inspect the chat before continuing this run.`;
+    const saved = conditionalCommit(run, p, unchanged, fresh => {
+      copyObservation(currentChat(fresh), observed);
+      fresh.state = 'stuck'; fresh.parkReason = reason; fresh.chatIdleLimit = {area: area.name, at};
+    });
+    return saved ? {...done(reason), recovery: 'stuck', area: area.name} : skipped();
+  }
+  const attempt = {...budget, count: budget.count + 1, lastAt: at};
+  if (!conditionalCommit(run, p, unchanged, fresh => {
+    copyObservation(currentChat(fresh), observed);
+    (fresh.chatIdleNudges ??= {})[area.name] = attempt;
+  })) return skipped();
+  const reserved = readRun(run.runDir);
+  const stillCurrent = fresh => eligible(fresh) && sameFact(currentChat(fresh), currentChat(reserved))
+    && sameFact(fresh.done, reserved.done) && sameFact(fresh.automaticOrigin, reserved.automaticOrigin)
+    && sameFact(fresh.chatIdleNudges?.[area.name], attempt);
+  const result = await deliverContinue(reserved, continueText(reserved, input.packageRoot), {
+    ...p, packageRoot: input.packageRoot, deliveryGuard: stillCurrent,
+    beforeDeliverySubmit: async () => idleAgent(currentChat(reserved), await chatSession(currentChat(reserved), p)),
+  });
+  return {...result, recovery: result.exitCode === 0 ? 'nudged' : 'skipped'};
+}));
+
+export const resumeStoppedRun = saveGuard(async ({ref, cwd, packageRoot, coordinatorId, machine}, ports) => {
+  const args = {ref, cwd, packageRoot};
+  const result = await lockedMutation(args, ports, (input, p) => openRunLocked({...input, automaticResume: {coordinatorId, machine}}, p));
+  return result.recovery ? result : {...result, recovery: result.exitCode === 0 ? 'resumed' : 'skipped'};
+});
 
 async function startRunCommand(args, ports = {}) {
   if (Object.hasOwn(args, 'automaticOrigin')) return fail('Invalid automatic start context.');
@@ -3800,12 +4251,12 @@ async function yieldAutomaticCapacityCommand({ ref, cwd }, ports) {
   const chat = currentChat(run);
   if (!chat || chat.startUnconfirmed || run.chatFailure || run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
     return fail('Capacity handoff cannot confirm the current chat has stopped.');
-  const live = await chatSession(chat, p), now = p.now();
+  const live = await chatSession(chat, {...p, run}), now = p.now();
   const own = sessionEvidenceDue(chat, live, now) && !observedSession(chat, chat.agent ?? run.agent)
     ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
   const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
   const completedTurn = live.alive && live.status === 'done' && observed.exact;
-  const endedChat = !live.alive && ['agent_not_found', 'server_not_running'].includes(live.code) && ['ended', 'failed'].includes(observed.state);
+  const endedChat = !live.alive && ['agent_not_found', 'server_not_running', ...(chat.closed ? ['pane_not_found','tab_not_found'] : [])].includes(live.code) && ['ended', 'failed'].includes(observed.state);
   if (!completedTurn && !endedChat)
     return fail('Capacity handoff cannot confirm the current chat has stopped.');
   if (['completed', 'cancelled'].includes(run.state)) {
@@ -3836,6 +4287,7 @@ export const askPerson=saveGuard(askPersonCommand);
 export const cancelRun=saveGuard(cancelRunCommand);
 
 export const runStatus=saveGuard(async(options,ports)=>{
+  ports = { ...ports, skipCostSessions: true };
   try{return await runStatusCommand(options,ports);}
   catch(error){
     if(error?.code==='workflow_run_save_failed'&&error.cause?.code==='workflow_run_busy')return runStatusCommand(options,ports,true);
@@ -3880,4 +4332,17 @@ export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,r
     if(capture(root,{tests,appMap:null}).sha256!==source_sha256)return{...result,state:'ineligible',reason:'the exact selected source has changed'};
     return{state:'eligible',reason:null,runId:null,repo:null,producerRoot,tests,stage:'current',sourceAnchor:{root,head:null},source_sha256};
   }catch(error){return{...result,reason:oneLine(error.message??error)};}
+}
+
+// An explicit full-suite command uses the machine queue, never the run mutation lock.
+export function runSuite(input, ports = {}) { return runTestSuite(input, ports); }
+
+// Local cost observations never advance the workflow.
+export async function runCosts({ ref, cwd, input }, ports = {}) {
+  const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
+  if (!found.run) return fail(found.error);
+  try {
+    const run = updateRunCosts(found.run.runDir, latest => input === undefined ? latest : applyCostMeasurement(latest, input, p.now()), p);
+    return done(JSON.stringify(costReport([run], p.now()).runs[0], null, 2));
+  } catch (error) { return { exitCode: 2, message: error.message }; }
 }

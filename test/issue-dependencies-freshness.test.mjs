@@ -1,3 +1,5 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -888,8 +890,8 @@ test('the launcher names a repeated request and its reason, and does not send it
   let now = start;
   const prompts = [], warnings = [];
   const live = { pane_id: 'p', workspace_id: 'w', cwd, foreground_cwd: cwd, tab_id: 't', terminal_id: 'term', agent: 'codex', agent_status: 'idle', agent_session: 'session' };
-  const ports = { stateRoot, now: () => now, warn: text => warnings.push(text), queryIssues: async () => ({ status: 304 }),
-    run: async command => command === 'git' ? { code: 0, stdout: `${cwd}\n` } : { code: 0, stdout: JSON.stringify({ nameWithOwner: repository, url: `https://github.com/${repository}` }) },
+  const ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(cwd), stateRoot, now: () => now, warn: text => warnings.push(text), queryIssues: async () => ({ status: 304 }),
+    run: async command => command === 'git' ? { code: 0, stdout: `${cwd}\n` } : { code: 0, stdout: JSON.stringify({ nameWithOwner: repository, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repository}` }) },
     reconcileDependencyIntake: (args, intakePorts) => reconcileDependencyIntake(args, { ...intakePorts, ...observed }),
     herdr: async args => {
       if (args[0] === 'agent' && args[1] === 'get') return { result: { type: 'agent_info', agent: live } };

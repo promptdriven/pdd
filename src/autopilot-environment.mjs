@@ -1,0 +1,88 @@
+// Generated from prompts/cli/autopilot-environment.prompt.md (sha256: c655cfcc99fd5c06ef38a6c3e1fab7a350fdf31b740b5cd37373bf5a7336ccd7).
+import { readFileSync, readdirSync, accessSync, constants } from 'node:fs';
+import { readCheckStatus } from './test-suite-queue.mjs';
+import { readMachineResources } from './machine-resources.mjs';
+import { join, isAbsolute } from 'node:path';
+
+export const ENVIRONMENT_BACKOFF = Object.freeze([15 * 60_000, 60 * 60_000, 4 * 60 * 60_000]);
+const validations = new Set(['check', 'verify', 'formal']);
+export function classifyStuckCause(reason, runtime = false) {
+  if (runtime) return 'interpreter';
+  const text = String(reason ?? '');
+  const validation = /\b(?:tests?|checks?|expectations?|suite|validations?)\b/i.test(text);
+  const failure = /\bfail(?:s|ed|ing|ure|ures)?\b|\bred\b/i.test(text);
+  if (/assertion|must[- ]fix|\bdecision\b|unresolved|separate code.*blocker/i.test(text) || validation && failure) return 'work';
+  if (/unknown (outcome|result)|no[- ]verdict|saved[- ]batch|interpreter.*(unknown|reconcil|outage|wake)/i.test(text)) return 'interpreter';
+  if (validation && /stall|timed? out|timeout|killed|cancelled|canceled|incomplete|ETIMEDOUT/i.test(text)) return 'environment';
+  return /filesystem journal|(?:disk|memory|I\/O) (?:pressure|stall|contention|full)|(?:native|test|suite|validation)[^.;\n]*(?:stall|timed? out|timeout|killed|cancelled|incomplete|ETIMEDOUT)|(?:full|suite) queue|queue (?:is )?full|missing tool|tool[^.;\n]*not found/i.test(text) ? 'environment' : 'work';
+}
+export function environmentRecovery(run) {
+  if (!run?.automaticOrigin || run.state !== 'stuck' || run.repairLimit || classifyStuckCause(run.parkReason) !== 'environment') return null;
+  const retry = run.environmentRetry;
+  if (!retry || !Number.isFinite(retry.at) || !Number.isInteger(retry.attempts) || retry.attempts < 0 || retry.attempts > ENVIRONMENT_BACKOFF.length
+    || retry.area !== run.area || !validations.has(retry.step) || !run.areas?.[run.area]?.steps?.includes(retry.step)
+    || typeof retry.reason !== 'string' || classifyStuckCause(retry.reason) !== 'environment'
+    || (retry.attempts < ENVIRONMENT_BACKOFF.length ? !Number.isFinite(retry.nextAt) || retry.nextAt < retry.at : retry.nextAt !== null)) return null;
+  return retry;
+}
+export function environmentStatus(run) {
+  const retry = environmentRecovery(run);
+  if (!retry) return null;
+  return retry.attempts >= ENVIRONMENT_BACKOFF.length
+    ? `stuck (environment): ${retry.reason}; validation ${retry.step} failed after ${retry.attempts} retries`
+    : `retrying after environment failure (attempt ${retry.attempts + 1} of ${ENVIRONMENT_BACKOFF.length}, next at ${new Date(retry.nextAt).toISOString()}): ${retry.reason}`;
+}
+export const environmentWakeTag = retry => `Environment validation wake for ${retry.area}:${retry.step} at ${new Date(retry.at).toISOString()} attempt ${retry.attempts + 1}.`;
+const missingTool = reason => /missing tool\s*:?\s*([\w.-]+)|tool\s+([\w.-]+)\s+(?:is\s+)?not found/i.exec(reason ?? '');
+const validPair = row => row && Number.isFinite(row.available) && row.available >= 0 && Number.isFinite(row.total) && row.total > 0 && row.available <= row.total;
+const memoryHealthy = row => validPair(row) && row.available / row.total >= 0.1;
+const resourcesFor = (input, ports) => (ports.machineResources ?? (input => readMachineResources(input, ports)))(input);
+export async function machineHealth({ cwd } = {}, ports = {}) {
+  let resources;
+  try { resources = await resourcesFor({ cwd }, ports); } catch { resources = null; }
+  const causes = [];
+  if (!memoryHealthy(resources?.memory)) causes.push('Available memory is below 10% or cannot be read');
+  const disk = resources?.disk;
+  if (!validPair(disk) || disk.available < 1024 ** 3 || disk.available / disk.total < 0.05)
+    causes.push('Free disk is below 1 GiB or 5% or cannot be read');
+  return { healthy: !causes.length, causes, resources };
+}
+export async function environmentHealthy({ env = process.env, reason = '', cwd } = {}, ports = {}) {
+  const readFile = ports.readFile ?? (path => readFileSync(path, 'utf8'));
+  const readDir = ports.readDir ?? readdirSync;
+  const alive = ports.alive ?? (pid => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { return error.code === 'ESRCH' ? false : undefined; }
+  });
+  try {
+    const health = await machineHealth({ cwd: cwd ?? ports.cwd ?? process.cwd() }, ports);
+    if (!health.healthy) return false;
+    const resources = health.resources;
+    const count = resources.cpuCount, load = resources.load;
+    if (!Number.isFinite(count) || count <= 0 || !Number.isFinite(load) || load < 0 || load / count >= 1) return false;
+    if ((ports.platform ?? process.platform) === 'linux' && [resources.pressure.io, resources.pressure.memory]
+      .some(value => !Number.isFinite(value) || value < 0 || value >= 10)) return false;
+    if (/missing tool|tool.*not found/i.test(reason)) {
+      const match = missingTool(reason), tool = match?.[1] ?? match?.[2];
+      if (!tool || !await (ports.toolPresent ?? (tool => (env.PATH ?? '').split(':').filter(Boolean).some(dir => { try { accessSync(join(dir, tool), constants.X_OK); return true; } catch { return false; } })))(tool)) return false;
+    }
+    if (ports.suiteAvailable) return await ports.suiteAvailable({ env }) === true;
+    const root = env.PDD_SUITE_QUEUE ?? (env.PDD_VM_SUITE_LOCK ? `${env.PDD_VM_SUITE_LOCK}.queue` : `/tmp/pdd-full-suite-${process.getuid?.() ?? 'user'}`);
+    if (!isAbsolute(root)) return false;
+    let names;
+    try { names = await readDir(root); } catch (error) { return error.code === 'ENOENT'; }
+    let running = 0;
+    for (const name of names.filter(name => /^ticket-.*\.json$/.test(name))) {
+      const row = JSON.parse(await readFile(join(root, name)));
+      if (!Number.isSafeInteger(row.ticket) || row.ticket <= 0 || !Number.isSafeInteger(row.pid) || row.pid <= 0 || !['waiting', 'running', 'finished'].includes(row.state)
+        || typeof row.cwd !== 'string' || !Number.isFinite(row.queuedAt)
+        || row.startedAt !== null && !Number.isFinite(row.startedAt) || row.finishedAt !== null && !Number.isFinite(row.finishedAt)) return false;
+      if (row.state !== 'finished' && await alive(row.pid) === false
+        && (row.state === 'waiting' || Number.isSafeInteger(row.childPid) && row.childPid > 0 && await alive(-row.childPid) === false)) continue;
+      if (row.state === 'waiting') return false;
+      if (row.state === 'running') running++;
+    }
+    const limit = ports.suiteLimit ?? (ports.readDir || ports.readFile ? 3 : readCheckStatus({env}).checks);
+    return Number.isSafeInteger(limit) && limit > 0 && running < limit;
+  } catch { return false; }
+}

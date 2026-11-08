@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Queue for full suites on pdd-vm: at most 3 run at a time, first come first served.
+# Shared full-suite queue: machine-sized check slots, first come first served.
 # Usage: cd <clone> && <pdd checkout>/scripts/vm-suite-lock.sh > <log> 2>&1
 # SUITE is the command to run. Without SUITE, it runs the plain suite: npm test with Chrome.
 # PDD_VM_SUITE_LOCK is the lock file that the jobs on the VM share. It must be an absolute path
@@ -16,17 +16,6 @@ if [ ! -d "$(dirname "$L")" ] || [ ! -w "$(dirname "$L")" ]; then
   echo "vm-suite-lock: lock folder not found or not writable: $(dirname "$L")" >&2
   exit 1
 fi
-if [ "${1:-}" = --check ]; then exit 0; fi
-echo "queued $(TZ=America/Los_Angeles date +%H:%M:%S) in $(pwd)"
-exec 8>"$L.turn" && flock 8 || exit 1   # the queue: only the oldest waiter looks for a slot
-while true; do
-  for s in "$L.3" "$L.2" "$L"; do exec 9>"$s"; if flock -n 9; then break 2; fi; exec 9>&-; done
-  sleep 5
-done
-flock -u 8; exec 8>&-                 # let the next waiter in
 umask 022
-echo "started $(TZ=America/Los_Angeles date +%H:%M:%S) in $(pwd)" | tee -a "$L.history"
-if [ -n "${SUITE:-}" ]; then bash -c "$SUITE" < /dev/null; else POCKET_BROWSER_BIN=/usr/bin/google-chrome npm test < /dev/null; fi
-rc=$?
-echo "finished $(TZ=America/Los_Angeles date +%H:%M:%S) exit $rc in $(pwd)" | tee -a "$L.history"
-exit $rc
+# The packaged queue is shared with pdd workflow suite, across repositories and profiles.
+exec node "$(cd "$(dirname "${BASH_SOURCE[0]}")/../src" && pwd)/test-suite-entry.mjs" "${1:-}"

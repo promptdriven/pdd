@@ -11,7 +11,15 @@ Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--i
 
 Catalog `graph` (local `issue-dependency-graph`, no operands, flags `--open` and text options `--issue`, `--repo`). Show forms `pdd graph`, `pdd graph --open`, `pdd graph --issue N` and `pdd graph --open --issue N --repo OWNER/REPO`.
 
-Catalog `workflow park` as local `workflow-park`, with required text `--reason` and flag `--interpreter`; show `pdd workflow park --reason TEXT` for recording an automatic stop in its existing worktree, and `pdd workflow park --interpreter --reason TEXT` for a run that waits for the interpreter after an AI-service, busy or network result of its interpreter check: no question to a person, the worker slot can be yielded, and Autopilot wakes the run when the interpreter is back.
+Catalog `workflow park` as local `workflow-park`, with required text `--reason`, optional text `--step`, and flag `--interpreter`; show `pdd workflow park --reason TEXT` for recording an automatic stop in its existing worktree, and `pdd workflow park --interpreter --reason TEXT` for a run that waits for the interpreter after an AI-service, busy or network result of its interpreter check: no question to a person, the worker slot can be yielded, and Autopilot wakes the run when the interpreter is back.
+
+Show `pdd workflow park --reason TEXT --step STEP` for an environment failure of a named validation step.
+
+Catalog `pdd autopilot status [--all] [--json]` with both Boolean flags. Catalog `pdd workflow cost ISSUE [--input -]` (local `workflow-cost`, one issue operand, optional text --input). It reads a local cost row or accepts an explicit measurement JSON from stdin.
+
+Catalog optional text `--model`, `--herdr-agent-name` and `--codex-threads` on
+`workflow run` and `workflow open`. Show them on both help forms. Open settings
+require `--new`; the runner owns validation and profile selection.
 
 ## Authoring
 
@@ -38,19 +46,19 @@ Help forms and completion name only the `NAMES` words.
 
 ## Autopilot routes
 
-Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
+Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs, --checks and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.
+- `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
-- `pdd autopilot status [--all]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
+- `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
 
 Catalog two alert routes after `autopilot.add`. [Autopilot alerts](autopilot-alerts.prompt.md) owns their behavior and validation.
 
-- `autopilot.alert` (`autopilot alert`, local `autopilot-alert`, no operands; text `--issue`, value `--kind` with usage-limit, resource, interpreter, interpreter-access, access, decision, stuck, long-running and recovered, text `--input`, flag `--update`). Form `pdd autopilot alert --issue N --kind usage-limit|resource|interpreter|interpreter-access|access|decision|stuck|long-running|recovered --input - [--update]`. Help says it is for the coordinator; it records one alert for a real human need or incident and sends it to this machine's destination; it reads `{"cause","tried","need"}` JSON from stdin; usage-limit, resource, interpreter and interpreter-access are one alert per repository and machine for all blocked issues; access, decision, stuck and long-running are one alert per issue; a repeat sends nothing unless the last send failed; `--update` sends a material change; recovered sends one recovery and closes the matching alerts.
-- `autopilot.alerts` (`autopilot alerts`, local `autopilot-alerts`, one operand of choice set, test or clear, text options `--discord-channel` and `--token-command`). Four forms: `pdd autopilot alerts set` reads a Discord or Slack incoming webhook URL from stdin and saves it for this machine outside every repository, readable only by the user, and never prints it; `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` uses a Discord bot instead, reading its token from stdin and saving it readable only by the user, or saving CMD and running it at each send so the token is never written to disk, and never prints the token or the command output; `pdd autopilot alerts test` sends one test message and confirms the posted message, and for a bot first shows the bot name and channel name; `pdd autopilot alerts clear` removes the destination. No form takes the URL as an argument. The operand keeps the prefix at two words, so `pdd autopilot alerts --help` works through the existing parser.
+- `autopilot.alert` (`autopilot alert`, local `autopilot-alert`, no operands; text `--issue`, value `--kind` with usage-limit, resource, interpreter, interpreter-access, access, decision, stuck, long-running and recovered, text `--input`, flag `--update`). Form `pdd autopilot alert --issue N --kind usage-limit|resource|interpreter|interpreter-access|access|decision|stuck|test-suite|long-running|recovered --input - [--update]`. Help says it is for the coordinator; it records one alert for a real human need or incident and sends it to this machine's destination; it reads `{"cause","tried","need"}` JSON from stdin; usage-limit, resource, interpreter and interpreter-access are one alert per repository and machine for all blocked issues; access, decision, stuck, test-suite and long-running are one alert per issue; a repeat sends nothing unless the last send failed; `--update` sends a material change; recovered sends one recovery and closes the matching alerts.
+- `autopilot.alerts` (`autopilot alerts`, local `autopilot-alerts`, one operand of choice set, test or clear, text options `--discord-channel` and `--token-command`, and value option `--destination` with choices `autopilot`, `infrastructure`). Four forms: `pdd autopilot alerts set` reads a Discord or Slack incoming webhook URL from stdin and saves it for this machine outside every repository, readable only by the user, and never prints it; `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` uses a Discord bot instead, reading its token from stdin and saving it readable only by the user, or saving CMD and running it at each send so the token is never written to disk, and never prints the token or the command output; `pdd autopilot alerts test` sends one test message and confirms the posted message, and for a bot first shows the bot name and channel name; `pdd autopilot alerts clear` removes the destination. All four forms accept `[--destination autopilot|infrastructure]`. Default is autopilot. The `set` help description states the alerts module rule: post changed causes, decisions and recoveries; an unchanged stuck review sends nothing; send one digest of open work per repository and machine at most every 6 hours. It also explains that the optional infrastructure destination separates machine incidents. No form takes the URL as an argument. The operand keeps the prefix at two words, so `pdd autopilot alerts --help` works through the existing parser.
 
-The [launcher](autopilot-launcher.prompt.md) owns behavior and --runs numeric interpretation. No fixed run cap, headless flag or additional setup question. Include routes in help and completion. Preserve all unrelated forms and ordering.
+The [launcher](autopilot-launcher.prompt.md) owns behavior and numeric interpretation. Include routes in help and completion. Preserve all unrelated forms and ordering.
 
 ## Public routes
 
@@ -59,9 +67,15 @@ Catalog local routes `autopilot.off`, `autopilot.observe`, and `autopilot.auto` 
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
-- workflow.run `workflow run NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--agent` is an option of kind `text` that keeps `codex`, `claude`, `gemini` and `agy` as its completion choices; ENTRY is the name of an entry in `~/.config/pdd/agents.json` (quote spaces). The [workflow agents](workflow-agents.prompt.md#named-agentsjson-entries) owner resolves the name and refuses an unknown one; parsing does not read configuration. `--draft` is a Boolean flag requesting draft PR publication for this run; omission keeps ready publication. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
+- workflow.run `workflow run NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--agent` is an option of kind `text` that keeps `codex`, `claude`, `gemini` and `agy` as its completion choices; ENTRY is the name of an entry in `~/.config/pdd/agents.json` (quote spaces). The [workflow agents](workflow-agents.prompt.md#named-agentsjson-entries) owner resolves the name and refuses an unknown one; parsing does not read configuration. `--draft` is a Boolean flag requesting draft PR publication for this run; omission keeps ready publication. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 
 For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path to an existing-approved-corpus declaration. Its help description says it adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; keep the existing help form unchanged. Example: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`. The runner and replay owner define validation and trust, not the parser.
+
+- workflow.suite `workflow suite --command COMMAND [--timeout MIN]` (local
+  `workflow-suite`): no operands, required nonblank command text enforced by
+  dispatch, optional integer timeout 1 to 120 minutes. Help describes the shared
+  machine queue, machine-sized check slots and the 30-minute execution timeout. The required
+  [queue contract](test-suite-queue.prompt.md) owns execution and status.
 
 - workflow.done `workflow done STEP [--summary TEXT] [--skipped REASON]`: STEP is a safe step name; the summary and the reason are free text. Help says it records the step with pdd's own latest `pdd <NAMES.test>`, `pdd <NAMES.lint>` and prove results (the summary is an agent note), and that --skipped records that the step was skipped, and why. Build the two command words from `NAMES`, like every other form, so a rename changes this help too.
 - `workflow.request-uptake` (local `workflow-request-uptake`): the public verb comes only from `NAMES.requestUptake`, used for both the `['workflow', verb]` prefix and help form `pdd workflow <verb> REQUEST_ID --summary TEXT`. Require one text operand and text option `--summary` (dispatch enforces its presence). Help describes an agent in a run worktree recording that it took up one delivered change request, with a short note. Keep all five existing exports, including `NAMES` with its existing keys and values plus the uptake key; consumers find this route by its stable id, never by duplicating the public verb.
@@ -73,7 +87,7 @@ For `workflow.run` and `workflow.approve`, also accept the value option `--throu
 - workflow.card `workflow card [ISSUE]` (local `workflow-card`): one optional issue operand, no options. Help says it prints the run's Story card from its real files, read-only, with no GitHub, Herdr or interpreter call.
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
 - workflow.cancel `workflow cancel ISSUE`.
-- workflow.open `workflow open ISSUE [AREA] [--new]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.
+- workflow.open `workflow open ISSUE [AREA] [--new] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.
 - workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Simulator links without starting or resuming a chat.
 - workflow.list `workflow list [--json]`.
 - workflow.prove `workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]` (local `workflow-prove`): one required issue operand, two text options and an optional integer `--timeout` from 1 to 120 (minutes). Help says it runs the supplied command on the merge-base of committed head with the fetched base branch and committed head, including when no eligible tests changed, with a limit per phase (default 10 minutes; --timeout sets 1 to 120), and saves a non-gating report that pull requests show as pdd's own result. No native option passthrough. Both text options are required by CLI dispatch before effects; parser retains ordinary text/duplicate/blank validation. [Old-code proof](workflow-prove.prompt.md) owns execution, outcome and saved-result policy (required generation/runtime/verification context).
@@ -252,13 +266,17 @@ RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.
+1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then `## Dependencies`, then one Runtime interface block.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
 4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.
 5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves.
 ```
 
+
+## Finished chat maintenance
+
+Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands, optional flag `--dry-run`, and help form `pdd workflow tidy [--dry-run]`. It closes safely finished chats or reports eligible tabs without changes.
 
 ## Dependencies
 
@@ -283,3 +301,5 @@ Preserve every unrelated help form.
 The metrics routes are `pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]`, `pdd metrics export FILE [--timezone IANA]`, `pdd metrics import FILE`, and `pdd metrics record FILE`. The metrics owner validates option combinations and values.
 
 For `workflow.run`, also accept optional `--origin` (manual, autopilot or unknown), `--decision-id` (text) and `--outcome` (code or prompt-only) as observational metadata. The runner verifies the decision against the actual repository and issue. Keep the draft, base and approved-corpus options and existing help form.
+
+Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopilot-check-base`, required text operands RUN and PR, and no options. Form: `pdd autopilot check-base RUN PR`. Description: Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only.

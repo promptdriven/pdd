@@ -1,3 +1,5 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
@@ -42,7 +44,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
   if (layout === 'separate-git-dir') separateGitDir(cwd);
   const f = { dir, home, cwd, time: Date.parse('2026-11-04T00:00:00Z'), calls: [], timers: [], prompts: [], herdrCalls: [], issues: [], warnings: [] };
   f.ports = {
-    stateRoot: join(home, 'state'), now: () => f.time, warn: text => f.warnings.push(text),
+    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time, warn: text => f.warnings.push(text),
     readRunProgress: async () => [], pathDiagnostic: () => [],
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
     run: async (command, args, options = {}) => {
@@ -52,7 +54,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
         try { return { code: 0, stdout: execFileSync('git', args, { cwd: options.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' }; }
         catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }; }
       }
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') {
         if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
@@ -384,11 +386,12 @@ test('status --all lists every repository with Autopilot on this machine from an
 
   assert.equal(exitCode, 0, stderr.text);
   assert.equal(stderr.text, '');
-  const lines = stdout.text.trimEnd().split('\n');
+  const lines = stdout.text.trimEnd().split('\n').filter(line => line.startsWith('Autopilot on ') || line.includes(' · mode ') || line.endsWith('saved state unreadable'));
   assert.equal(lines[0], 'Autopilot on this machine (2):');
-  const row = repo => lines.find(text => text.startsWith(`${repo} in `));
-  assert.equal(row('owner/one'), `owner/one in ${one} · mode auto · Autopilot enabled · timer active · coordinator idle`);
-  assert.equal(row('owner/two'), `owner/two in ${two} · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`);
+  const row = repo => lines.find(text => text.startsWith(`${repo} in `)).split(' · Health:')[0];
+  assert.equal(lines.slice(1).every(line => /Health:.*unknown/.test(line)), true);
+  assert.equal(row('owner/one'), `owner/one in ${one} · base unavailable (start Autopilot) · mode auto · Autopilot enabled · timer active · coordinator idle`);
+  assert.equal(row('owner/two'), `owner/two in ${two} · base unavailable (start Autopilot) · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`);
   assert.equal(lines.length, 3);
   assert.ok(!calls.some(([kind]) => ['gh', 'github'].includes(kind)), 'no GitHub call');
   assert.ok(!calls.some(([kind, action]) => kind === 'timer' && action !== 'status'), 'timers are only read');
@@ -396,7 +399,8 @@ test('status --all lists every repository with Autopilot on this machine from an
 
   const empty = capture();
   assert.equal(await runPdd(['autopilot', 'status', '--all'], { cwd: outside, env: { HOME: join(dir, 'nobody'), PATH: process.env.PATH }, stdout: empty, stderr: capture(), autopilotLauncherPorts: { ...ports, stateRoot: join(dir, 'nobody', 'state') } }), 0);
-  assert.equal(empty.text, 'No Autopilot on this machine.\n');
+  assert.equal(empty.text.split('\n')[0], 'No Autopilot on this machine.');
+  assert.ok(empty.text.includes('Issue costs (local measured usage):'));
   assert.equal(dirname(outside), dir);
 });
 
@@ -448,14 +452,14 @@ test('status --all keeps each line independent when a saved folder is gone or a 
   assert.equal(exitCode, 0, stderr.text);
   // Lines follow the order of the state file names; the ids of one and two depend on the temporary folder.
   const expected = {
-    [goneId]: `owner/gone in ${gone} · mode unknown (folder missing) · Autopilot enabled · timer active · coordinator unavailable (missing)`,
-    ['1'.repeat(20)]: `owner/plain in ${outside} · mode unknown (not a Git repository) · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
-    [id(one)]: `owner/one in ${one} · mode auto · Autopilot enabled · timer active · coordinator idle`,
-    [id(two)]: `owner/two in ${two} · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
+    [goneId]: `owner/gone in ${gone} · base unavailable (start Autopilot) · mode unknown (folder missing) · Autopilot enabled · timer active · coordinator unavailable (missing)`,
+    ['1'.repeat(20)]: `owner/plain in ${outside} · base unavailable (start Autopilot) · mode unknown (not a Git repository) · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
+    [id(one)]: `owner/one in ${one} · base unavailable (start Autopilot) · mode auto · Autopilot enabled · timer active · coordinator idle`,
+    [id(two)]: `owner/two in ${two} · base unavailable (start Autopilot) · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
     ['e'.repeat(20)]: `${'e'.repeat(20)}.json: saved state unreadable`,
     ['f'.repeat(20)]: `${'f'.repeat(20)}.json: saved state unreadable`,
   };
-  const lines = stdout.text.trimEnd().split('\n');
+  const lines = stdout.text.trimEnd().split('\n').filter(line => line.startsWith('Autopilot on ') || line.includes(' · mode ') || line.endsWith('saved state unreadable')).map(line => line.split(' · Health:')[0]);
   assert.equal(lines[0], 'Autopilot on this machine (6):');
   assert.equal(lines[1], expected[goneId], 'the missing folder sorts first');
   assert.deepEqual(lines.slice(1), Object.keys(expected).sort().map(name => expected[name]));

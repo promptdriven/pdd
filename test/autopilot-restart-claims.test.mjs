@@ -7,8 +7,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tickAutopilot, runAutopilotLauncher, autopilotLaunchFingerprint } from '../src/autopilot-launcher.mjs';
 import { createDependencyReadPorts } from '../src/issue-dependencies-github.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
-import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
+import { startRun, stepDone, approveRun, runStatus } from '../src/workflow-runner.mjs';
 import { fixture as runnerFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const repo = 'example/project', issue = `https://github.com/${repo}/issues/17`;
@@ -21,8 +23,8 @@ const metadata = row => JSON.parse(/```json\n([\s\S]*?)\n```/.exec(row.body)[1])
 function world(t, existing) {
   const dir = existing?.base ?? mkdtempSync(join(tmpdir(), 'pdd-restart-claims-'));
   if (!existing) t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const cwd = existing?.source ?? join(dir, 'repo'), home = join(dir, 'restart-home'), stateRoot = join(dir, 'autopilot');
-  mkdirSync(home); mkdirSync(stateRoot);
+  const cwd = existing?.source ?? join(dir, 'repo'), home = existing?.ports.env.HOME ?? join(dir, 'restart-home'), stateRoot = join(dir, 'autopilot');
+  mkdirSync(home, { recursive: true }); mkdirSync(stateRoot);
   if (!existing) { mkdirSync(cwd); execFileSync('git', ['init', '-q'], { cwd }); execFileSync('git', ['remote', 'add', 'origin', `https://github.com/${repo}.git`], { cwd }); }
   const commonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim();
   const runDir = join(commonDir, 'pdd', 'runs', '17'); mkdirSync(runDir, { recursive: true });
@@ -72,7 +74,7 @@ function world(t, existing) {
     } else throw Error(`Unexpected fake endpoint ${method} ${endpoint}`);
     return { code: 0, stdout: `HTTP/1.1 200 OK\n\n${JSON.stringify(value)}` };
   };
-  f.ports = { env: { HOME: home }, stateRoot, stateDir: join(dir, 'index'), now: () => f.time, run: f.execFile, execFile: f.execFile,
+  f.ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), env: { HOME: home }, stateRoot, stateDir: join(dir, 'index'), now: () => f.time, run: f.execFile, execFile: f.execFile,
     allocationCheck: async () => ({ state: 'ready' }), pathDiagnostic: () => [], selectAgent: async () => agent, timer: async () => true,
     allRuns: () => [], readRunProgress: async () => [], queryIssues: async () => ({ status: 304 }), warn: text => f.warnings.push(text),
     reconcileDependencyIntake: async () => {
@@ -98,6 +100,44 @@ function world(t, existing) {
   f.start = extra => runAutopilotLauncher({ command: 'start', cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot, issues: [], ...extra }, f.ports);
   return f;
 }
+
+
+for (const changedOwner of [false, true]) test(`release restart: open run keeps its claim and resumes its chat (owner changed: ${changedOwner})`, async t => {
+  const runner = await runnerFixture(t, {agent: 'claude'});
+  runner.clock = NOW - hour;
+  assert.equal((await runner.run()).exitCode, 0);
+  assert.equal((await runStatus({ref: '17', cwd: runner.source}, runner.ports)).exitCode, 0);
+  const before = runner.record(), chat = before.chats.at(-1);
+  runner.herdr.paneOf(chat).agent = null;
+  runner.herdr.calls.length = 0;
+  runner.clock = NOW;
+  const f = world(t, runner), coordinatorHerdr = f.ports.herdr;
+  if (!changedOwner) {
+    const state = f.state(); state.coordinatorId = 'old';
+    state.ownerLaunch.coordinator.coordinatorId = 'old'; f.saveState(state);
+  }
+  Object.assign(f.ports, {findNativeSessions: runner.ports.findNativeSessions,
+    layoutDirectory: runner.ports.layoutDirectory, autopilotStateRoot: f.stateRoot,
+    workflowHerdr: runner.herdr.herdr,
+    herdr: args => ['p1', 'p2'].includes(args[2]) ? coordinatorHerdr(args) : runner.herdr.herdr(args)});
+  const finished = f.record().done;
+  assert.equal((await f.tick()).exitCode, 0);
+  const after = f.record(), owner = changedOwner ? 'new' : 'old';
+  assert.equal(metadata(f.claim).coordinatorId, owner);
+  assert.equal(metadata(f.claim).lastSeen, at(NOW));
+  assert.equal(after.automaticOrigin.coordinatorId, owner);
+  assert.deepEqual(after.automaticOrigin.claim, {commentId: '901', labelEventId: '701'});
+  assert.equal(f.comments.length, 1);
+  assert.deepEqual(after.done, finished);
+  assert.equal(after.runId, before.runId);
+  assert.equal(after.chats.at(-1).session.id, chat.session.id);
+  assert.equal(runner.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 1,
+    `same-tick chat recovery must follow claim recovery: ${f.warnings.join('; ')}`);
+  runner.herdr.calls.length = 0;
+  f.time += 1000; runner.clock = f.time;
+  await f.tick();
+  assert.equal(runner.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 0);
+});
 
 test('start again with open runs retains the repository owner when capacity replaces the coordinator pane', async t => {
   const f = world(t); const state = f.state(); state.coordinatorId = 'old'; state.recipeDelivered = false;

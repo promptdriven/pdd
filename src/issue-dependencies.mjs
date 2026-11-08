@@ -1,4 +1,5 @@
-// Implements prompts/cli/issue-dependencies.prompt.md.
+import { projectSortGraph } from './issue-sort.mjs';
+// Generated from prompts/cli/issue-dependencies.prompt.md (sha256: 9dd1aafacf95cd2361eb7a0afc1127cfc320e5cdb1051c8f3f075398788cc196).
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const unique = xs => [...new Set(xs)];
 // The one canonical GitHub issue identity: OWNER/REPO ignores letter case.
@@ -296,7 +297,7 @@ export function projectIssueGraph({ snapshot }) {
         && executionState === 'idle' && !holds.length && unassigned && !ownFacts.get(key).length && covered,
       reasons: unique(reasons), blockers, review, nativeState: issue.state, facts };
   });
-  return { repository: snapshot.repository, capturedAt: snapshot.capturedAt, complete: snapshot.complete, nodes, edges: graphEdges };
+  return projectSortGraph(snapshot, { repository: snapshot.repository, capturedAt: snapshot.capturedAt, complete: snapshot.complete, nodes, edges: graphEdges });
 }
 
 // The link facts that a dependency review records and respects. `row` is the

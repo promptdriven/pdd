@@ -1,3 +1,5 @@
+import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
+import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,10 +24,11 @@ function fakes(t, options = {}) {
   const bin = join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
+  mkdirSync(join(dir,'suite-queue'));
+  writeFileSync(join(dir,'suite-queue','capacity.json'),JSON.stringify(withCheckLifetime(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports))));
   writeFileSync(join(home, 'auth-sentinel'), 'original home must survive');
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ tap: tap(), ...options }));
   // Replace external commands through PATH. The real Node still parses the footer.
-  // flock and sleep are fakes too: with busy N, the first N tries for a free slot fail.
   const fake = `#!${process.execPath}
 import { appendFileSync, fstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -63,19 +66,14 @@ if (name === 'git') {
 } else if (name === 'gh') {
   if (scenario.apiFail) { console.error('status API rejected'); process.exit(7); }
   console.log('{}');
-} else if (name === 'flock' && args[0] === '-n') {
-  const tries = process.env.FAKE_DIR + '/flock-tries';
-  let n = 0;
-  try { n = Number(readFileSync(tries, 'utf8')); } catch {}
-  writeFileSync(tries, String(n + 1));
-  if (n < (scenario.busy || 0)) process.exit(1);
+
 }
 `;
-  for (const name of ['git', 'npm', 'node', 'gh', 'flock', 'sleep']) {
+  for (const name of ['git', 'npm', 'node', 'gh']) {
     writeFileSync(join(bin, name), fake, { mode: 0o755 });
   }
   const env = {
-    ...process.env, SUITE: undefined, PDD_VM_SUITE_LOCK: undefined,
+    ...process.env, SUITE: undefined, PDD_VM_SUITE_LOCK: undefined, PDD_SUITE_QUEUE: join(dir, 'suite-queue'),
     // C is available on Linux and macOS, unlike an inherited C.UTF-8 locale.
     LC_ALL: 'C',
     HOME: home, TMPDIR: dir, FAKE_DIR: dir, PATH: `${bin}:${process.env.PATH}`, ...options.env,
@@ -215,7 +213,7 @@ test('vm-suite takes a slot from the lock runner next to it, with no dated perso
   assert.equal(result.status, 0, result.stderr);
   expectStatus(result, 'success', '7/8, 0 failed');
   assert.equal(existsSync(join(result.home, 'work')), false);
-  assert.deepEqual(steps(result.events), ['flock 8', 'flock -n 9', 'flock -u 8', 'suite']);
+  assert.deepEqual(steps(result.events), ['suite']);
   assert.equal(result.events.find(e => e.name === 'node' && e.args.includes('--test')).stdinIsDevNull, true);
   const history = readFileSync(join(result.home, '.local/state/pdd/vm-suite/fullsuite.lock.history'), 'utf8');
   assert.match(history, new RegExp(`^started ${clock} in (\\S+/checkout)\\nfinished ${clock} exit 0 in \\1\\n$`));
@@ -253,18 +251,17 @@ test('vm-suite stops with one line before any external action when the configure
   }
 });
 
-test('the lock runner waits for a free slot, holds the turn only while it looks, and returns the suite exit code', t => {
+test('the compatibility runner uses the shared queue and returns the suite exit code', t => {
   const result = runLock(t, {
-    busy: 4,
     lockEnv: dir => {
       mkdirSync(join(dir, 'shared'));
       return { PDD_VM_SUITE_LOCK: join(dir, 'shared/fullsuite.lock'), SUITE: 'npm run suite; exit 7' };
     },
   });
   assert.equal(result.status, 7, result.stderr);
-  assert.deepEqual(steps(result.events), [
-    'flock 8', 'flock -n 9', 'flock -n 9', 'flock -n 9', 'sleep 5', 'flock -n 9', 'flock -n 9', 'flock -u 8', 'npm run suite',
-  ]);
+  assert.deepEqual(steps(result.events), ['npm run suite']);
+  const records = readdirSync(join(result.dir,'suite-queue')).filter(name => name.startsWith('ticket-')).map(name => JSON.parse(readFileSync(join(result.dir,'suite-queue',name),'utf8')));
+  assert.equal(records.length, 1); assert.equal(records[0].state, 'finished'); assert.equal(records[0].cwd, realpathSync(result.clone));
   const suite = result.events.find(e => e.name === 'npm');
   assert.equal(suite.cwd, realpathSync(result.clone));
   assert.equal(suite.stdinIsDevNull, true);
@@ -278,7 +275,7 @@ test('the lock runner waits for a free slot, holds the turn only while it looks,
 test('the lock runner runs the plain suite with Chrome when SUITE is empty', t => {
   const result = runLock(t, { suiteExit: 3 });
   assert.equal(result.status, 3, result.stderr);
-  assert.deepEqual(steps(result.events), ['flock 8', 'flock -n 9', 'flock -u 8', 'npm test']);
+  assert.deepEqual(steps(result.events), ['npm test']);
   const suite = result.events.find(e => e.name === 'npm');
   assert.equal(suite.browser, '/usr/bin/google-chrome');
   assert.equal(suite.stdinIsDevNull, true);

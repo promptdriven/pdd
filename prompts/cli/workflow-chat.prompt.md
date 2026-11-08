@@ -8,9 +8,9 @@ Own `src/workflow-chat.mjs`. An area chat is one native Codex, Claude, Gemini or
 - `startChat({run, area, message}, ports)`: use the [run layout](workflow-herdr-layout.prompt.md) for live workspace and area-tab lookup; the layout owner decides adoption or creation. Write the first message to `<run folder>/<area>-start.md`. In the tab, run one short shell line: `cd '<worktree>' && env PDD_AGENT_SESSION=1 [CLAUDE_CONFIG_DIR=…|CODEX_HOME=…|GEMINI_CLI_HOME=…] claude --dangerously-skip-permissions --session-id <new uuid> "$(cat '<file>')"`, or for Gemini `GEMINI_CLI_TRUST_WORKSPACE=true gemini --yolo --prompt-interactive "$(cat '<file>')"` (the variable trusts the run worktree for the session, so a new worktree never stops at Gemini's folder-trust question; it is in the chat's environment, not a flag, so older Gemini CLI versions still start), or for agy `agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":["<worktree>"]}' --add-dir <runs folder> --add-dir <worktrees folder> --prompt-interactive "$(cat '<file>')"`, or for Codex `codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects={"<worktree>"={trust_level="trusted"}}' "$(cat '<file>')"`. The config folder is the run's persisted `configDir`, initially selected by the terminal that started the run. Later areas inherit that saved choice, including an account change committed by the runner's explicit fresh-session route; approval from another terminal alone does not select an account. Every launch and resume line, here and in open, closed-workspace recovery and replacement, also carries the [chat login](#chat-login), and a run with a saved agents.json entry starts that entry's command in place of the bare program. Return the chat record (tab, pane, terminalId, workspace, label, start time, session `{agent,id}` when known, config folder). Prepare that identity before the pane launch. If its reply fails, attach that same record as `error.chat` with `startUnconfirmed: true`; the caller saves it because the command may have dispatched.
 - Module function `sendToChat(chat, text, ports)` owns bounded readiness, the [dialog check](#never-answer-a-dialog) and one ordered Herdr submission; see [Message delivery](#message-delivery). Return `{ok:true}` on acknowledgement or `{ok:false, code}` on failure, with `uncertain:true` only when submission may have happened, and a one-line `reason` for a dialog or an unread screen.
 - `chatSession(chat, ports)`: read `herdr agent get <pane>`. Return `{alive, status, sessionId}`; when Herdr fails, `{alive: false, status: null, sessionId: null, code, message}` with Herdr's error code (`agent_not_found` when no agent runs in the pane).
-- Module function `chatHealth({run, chat, live}, ports)`: say whether an alive agent cannot work because its login failed or it reached a usage limit. See [Chat health](#chat-health).
+- Module function `chatHealth({run, chat, live}, ports)`: say whether an alive or stopped agent cannot work because its login failed or it reached a usage limit. See [Chat health](#chat-health).
 - `openChat({run, chat}, ports)`: if the tab is gone, make a new tab in the run workspace, except for an unconfirmed launch: inspect its saved agent first. If the tab and agent/pane are both confirmed missing, return restartAvailable without creating a tab, launching or resuming. The caller archives that stale start and offers an explicit new open to start this area again in the same run. A live agent or an unavailable inspection retains the original identity and refuses replacement. Subject to the shared lifecycle (starting/unknown absence does not permit resume), resume a positively ended native session there (`claude --resume <id>`, `codex resume <id>`, `gemini --resume <id>`, `agy --conversation <id>`, with the same full-access flags (and, for agy, the same `--add-dir` folders) and, for Gemini, the same `GEMINI_CLI_TRUST_WORKSPACE=true`), and set `chat.resumedAt` to now. An inspection failure other than confirmed `agent_not_found` must throw before any native launch/resume; unavailable Herdr is not proof of an empty pane. For a retained `startUnconfirmed` chat, an observed live agent confirms the original launch. Without it, refuse another launch/resume and tell the person to inspect that same pane; never send a fresh first message blindly after a lost reply. A failed resume request marks that same chat unconfirmed too. Successful positive observation clears the unconfirmed flag. Focus the tab. Terminal attachment with `herdr session attach pdd` is separate from opening effects and observation persistence: the runner must persist observations and release its run lock before attachment. An optional awaited `ports.beforeAttach(chat)` caller hook may perform that handoff after all opening effects and observations, before attach; a rejected hook prevents attach. Without the hook, direct `openChat` calls retain normal attachment behavior. Attach completion or failure must not trigger later unprotected chat/run writes. Attach only when the caller has a terminal and is not inside Herdr. Otherwise print where the chat is.
-- `closeChats(run, ports)`: close each chat tab, then the run workspace, then request repository cleanup under the layout owner's creation-ownership rule. Failures are warnings. A warning names the error code, or the code once with the first line of its message (for example the layout's [identity refusal](workflow-herdr-layout.prompt.md#identity-refusal)). Chat labels are `<repo name>#N NAME › AREA`.
+- `closeChats(run, ports)`: use the finished-chat cleanup below with explicit cancellation force, then request verified run and repository cleanup. Failures are warnings. A warning names the error code, or the code once with the first line of its message (for example the layout's [identity refusal](workflow-herdr-layout.prompt.md#identity-refusal)). Chat labels are `<repo name>#N NAME › AREA`.
 
 Pass input preAgentRefusal to the layout only for a saved first-start run with no chats, completed steps or
 PRs and the canonical linked_worktree_source chat failure (or its exact saved startup warning on legacy runs).
@@ -147,6 +147,18 @@ Gemini uses the same user/workspace `.agents/skills` discovery paths as Codex; t
 
 Antigravity CLI (`agy`) follows the same rules as Gemini: the first message names the selected skill file, approvals use recorded `--said` words, and native session lookup is unavailable. Its file tools read only its workspace, so every agy launch (start, resume and replacement) passes `--add-dir` once for each folder of module function `agentDirs(run)`: the same two folders Gemini gets with `--include-directories`, the run metadata's `commonDir/pdd/runs` (`<clone>/.git/pdd/runs`) and the folder that holds the run worktree, the parent folder of the run's `root` (`<clone>.pdd-worktrees`, or the run worktrees folder of the [Git layout](workflow-worktree.prompt.md#supported-git-layouts) when the run starts from a linked checkout), each shell-quoted; without `commonDir` and `root` it passes none. The start file, the run record and other runs' worktrees are then inside its workspace, so the chat never needs a shell command to read them. `chatCommand` accepts these folders as optional `addDirs`; other agents ignore them. `--dangerously-skip-permissions` gives agy the same full access as Codex and Claude. In a new worktree agy first asks "Do you trust the contents of this project?"; the `--settings` value trusts the run worktree for this session only (agy never saves it and keeps the person's other settings), on start, resume and replacement.
 
+## Machine queue environment
+
+Every start, resume, replacement and rollback launch uses the caller's effective
+machine queue settings from `ports.env`, including defaults when unset. Carry
+`PDD_INTERPRETER_QUEUE` and `PDD_INTERPRETER_CONCURRENCY` into the child agent,
+overriding missing or stale daemon settings and conflicting agents.json values.
+Use the queue owner's exported settings resolver. Shell-quote each value.
+Codex command environments also receive these values through invocation-only
+`shell_environment_policy.set` overrides, with the same existing `include_only`
+limitation. Status readers use the same caller settings. Do not alter the daemon
+or a saved agent profile.
+
 <a id="chat-login"></a>
 ## Chat login and agents.json commands
 
@@ -180,10 +192,10 @@ A run without `agentDefinition` (every built-in agent) starts the bare program a
 <a id="chat-health"></a>
 ## Chat health
 
-An agent can stay alive in its pane while every turn fails. Its login failed (for example, a disabled `ANTHROPIC_API_KEY` or a revoked token), or its account reached a usage limit and it shows the limit message or the limit menu. Herdr still reports the agent, so the lifecycle says running and no exit check fires. `chatHealth({run, chat, live}, ports)` reads what the agent itself shows and returns one problem or null. The runner's status is its caller.
+An agent can stay alive in its pane while every turn fails. Its login failed (for example, a disabled `ANTHROPIC_API_KEY` or a revoked token), or its account reached a usage limit and it shows the limit message or the limit menu. Herdr still reports the agent, so the lifecycle says running and no exit check fires. `chatHealth({run, chat, live}, ports)` reads what the agent itself shows and returns one problem or null. The runner's status and automatic recovery are its callers.
 
 - It only reads. It never sends text, keys or Enter to the chat. It never answers, picks or closes a dialog or menu option, and never uses a usage-limit reset. It makes no AI call and no network call. It never throws: a failed or partial read is not evidence.
-- Inputs: `live` is the current `chatSession` result (null for an agent that is not alive); `chat` is the saved chat record (`agent`, `paneId`, `session`, `configDir`, `startedAt`); `run.root` is the worktree. Ports: `herdr`, `env`, `now`, `timeZone` (optional; the local time zone when it is not set), and `sessionFs` (default `node:fs`; it supplies `openSync`, `fstatSync`, `readSync`, `closeSync`, `readdirSync`, `statSync`).
+- Inputs: `live` is the current `chatSession` result, including a stopped agent; `chat` is the saved chat record (`agent`, `paneId`, `session`, `configDir`, `startedAt`); `run.root` is the worktree. Ports: `herdr`, `env`, `now`, `timeZone` (optional; the local time zone when it is not set), and `sessionFs` (default `node:fs`; it supplies `openSync`, `fstatSync`, `readSync`, `closeSync`, `readdirSync`, `statSync`).
 - Result: null, or `{kind, agent, until, resets, resetsAt, message}`. `kind` is `login` or `usage-limit`. `agent` is the chat's agent. `until` is the epoch milliseconds when the limit ends, from the agent's structured data, else null. `resets` is the agent's own [reset words](#reset-words) for that time (`Oct 28 at 3pm (UTC)`, `Nov 3rd, 2026 10:35 PM`, `4:17 PM`), else null. `resetsAt` is the epoch milliseconds of these words when `until` is null and pdd can read them as one exact time, else null. `resets` and `resetsAt` are null for `login`. `message` is the agent's error text on one line, at most 160 characters. For `usage-limit` it is only the limit sentence, and the reset words when they come right after it (`You've hit your weekly limit · resets Nov 6 at 3pm (America/Los_Angeles)`, `You've hit your usage limit.`). The limit sentence ends at `.`, `!` or `?`, at ` · `, before a slash command (` /…`), or at the end of the agent's own error line. So pdd never repeats the agent's plan or account offers, or a line that the agent draws under its error.
 - Only Claude and Codex chats are checked. Other agents return null.
 
@@ -209,7 +221,159 @@ Usage-limit text: `You've hit your … limit`, `You have reached your … limit`
 
 Limits: the screen is a fallback. A Claude error that comes after a tool call in the same turn is found only in the transcript. When no transcript is readable, a person's prompt that quotes a `⎿` error line on its second line can look like one. Codex wording that pdd does not know stays unknown. pdd reads a Codex time in its own local zone; when the Herdr server runs in another zone, `resetsAt` is off by the difference. A time without a date on the screen keeps `resetsAt` null, so status can still name that time after it has passed. A Claude error line so long that it wraps inside its limit sentence gives only the part on its first line as `message`.
 
+## Shared suite queue environment
+
+`chatLaunch` adds `queueEnv` to its existing result. It is a mapping with only
+present string values for `PDD_SUITE_QUEUE` and `PDD_VM_SUITE_LOCK`.
+`chatCommand` accepts optional `queueEnv = {}` for Codex command overrides.
+On every worker launch and resume, forward the caller's `PDD_SUITE_QUEUE` and
+`PDD_VM_SUITE_LOCK` values through the private launch environment; current named
+agent overrides retain their normal precedence. Unset either missing selector
+in the native child so an older Herdr server environment cannot select a
+different queue. Pass selected values to Codex commands with invocation-only
+`shell_environment_policy.set` overrides as well. Preserve all other shell
+policy entries. The [shared queue contract](test-suite-queue.prompt.md) owns
+selector precedence and admission.
+
+For saved-session recovery, `openChat` and `rebuildClosedChat` accept optional
+`resumeMessage` text. When nonempty, write it to a private area resume message file
+in the run folder and pass that file with the exact resume ID through `chatCommand`.
+Without it, keep the existing resume invocation. `openChat` accepts port
+`background` (default false); true skips tab focus and terminal attachment while
+retaining durable pre-attachment checkpoints. An optional awaited `beforeLaunch`
+port runs after login/command preparation immediately before `pane run` for open
+and rebuild dispatches. A rejection sends no command and cleans up login files. Stopped-session health uses the same
+bounded session reader; if no session verdict exists, read a surviving pane screen
+when available. Missing pane/session data returns null, never a fabricated failure.
+
+## Finished chat cleanup and pane budget
+
+Own the intentional-close record shared with automatic stopped-chat recovery.
+`chat.closed = {at, reason, screen, confirmedAt?}` is a durable **do not automatically resume**
+mark, written before a close request. `at` is epoch milliseconds; `reason` is
+`area-end`, `run-end`, `budget` or `cancel`; `screen` is the saved UTF-8 screen
+path, or null if capture failed. Optional `confirmedAt` is epoch ms when complete inventory confirms absence after the request; absence of this field means the close is pending. Retries of a saved intent do not repeat its grace period. Preserve all native IDs, account and message
+custody. A close failure retains this mark and can be retried by cleanup. Only
+an explicit successful `workflow open` clears it and saves `openedAt` (epoch ms).
+Automatic recovery must skip marked chats, including after process/server restart.
+
+Export `finishedChats(run)`, `finishedAt(run,chat)` (the boundary in epoch ms), and `closeFinishedChats(run, ports={})`. A chat is
+finished when the run is cancelled/completed, or it is not the latest chat of the
+current area. Each finished chat gets an `endedAt` epoch-ms boundary at handoff
+or run end; legacy records use the next area's start, cancellation or saved update
+time. Close only after 15 minutes from that boundary and from `openedAt`.
+`ports.graceMs:0` removes only that grace under budget pressure or replacement.
+Never park the current live chat, including a gate, question or failed chat.
+Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory:
+the saved workspace must match the run checkout and clone, and its saved tab
+must have exactly the saved pane and terminal ID. A reused ID, split tab,
+foreign workspace or unknown inventory is retained with a reason. No live-folder
+comparison establishes pane identity. Inspect the agent immediately before
+closing: idle/done is safe; working/blocked/unknown stays open. Confirmed agent
+absence also requires authoritative `pane process-info --pane <id>` evidence:
+the pane ID matches, positive shell PID equals the foreground process group ID,
+and the nonempty foreground process list contains only that shell PID with a
+recognized shell name (bash, zsh, sh, dash, fish, ksh or tcsh). Retain foreground
+work as `pane-busy`; retain unavailable, malformed or unknown process evidence as
+`pane-unknown`. A saved session and terminal identity alone do not prove an
+unused pane after the agent exits. Require a valid saved native session, learning Codex's session from
+Herdr or one ownSession lookup if needed. No session means retain the tab.
+
+Before close, read `pane read PANE --source recent-unwrapped --lines 5000` into
+`<runDir>/chats/<area>-<startedAt>.txt`, private mode 0600. Read failure does not
+block closing a safely resumable session. Await `ports.checkpoint(chat, layout)`
+before `tab close`; failure sends no close. Retry a marked chat through the same
+identity checks. Missing tabs are ended evidence only with a saved close mark.
+An optional `ports.onlyChat` selects one saved pane/terminal identity from the finished set for globally ordered sweeping. Recheck caller protection, live identity, agent status and the required agent-absence process evidence after the durable checkpoint, immediately before the close. Return `{closed, kept, warnings}`: closed is the number of tabs confirmed closed,
+kept is an array of `{area, reason}`, warnings is an array of diagnostics. Dry run
+(`ports.dryRun`) reports eligible count but writes no file/record or Herdr effect.
+After all ended-run chat tabs are gone, use the [verified layout cleanup](workflow-herdr-layout.prompt.md#cleanup),
+forwarding the caller environment and explicit cancellation force. A retained
+shell is included in kept as `{area:"run shell", reason:<cleanup error code>}`
+and in warnings, so tidy counts it and status reports why it stays open.
+Remove a stale shell retention reason after successful cleanup.
+Explicit cancellation uses the same routine with `ports.force:true`: it bypasses
+busy/session/grace checks, but retains ownership and caller-pane protection.
+`closeChats` delegates to it. A cancelled/replaced run can be cancelled again.
+
+Export `paneUsage(ports)` returning `{panes,budget}` from one complete session-wide
+pane list (an optional `onPaneUsage(rows)` receives that complete inventory), and `ensurePaneBudget(need, ports)` returning that shape plus `closed`.
+`PDD_HERDR_PANE_BUDGET` is a nonnegative safe integer, default 56; 0 disables the
+limit. Count all panes, including personal panes. Before allocation, sweep normal
+finished chats through the supplied `sweepFinished` callback. On pressure sweep
+with zero grace, oldest end first, then recount. If it still cannot fit, throw
+`herdr_pane_budget` with count, budget, need, cleanup count, the caller-supplied `describePaneOwners(rows)` breakdown of saved run chats, run shells and other panes, and an action to close
+unused tabs or raise the variable. Unknown Herdr allocation failures include the
+observed pane count. Open, rebuild, start and replacement check before creating
+panes; the layout owner reserves the complete missing layout before its first
+create. Closed chats count as positively ended on explicit open and resume at
+once. Preserve uncertain-launch protections.
+
+
+
+## Launch profiles
+
+The [launch profile owner](workflow-launch-profile.prompt.md) owns launch settings.
+Start each area with the run's profile and save a copy on the chat. Use the chat's
+snapshot for ordinary resume, changes, workspace reconstruction and rollback.
+For a fresh replacement, pin the selected profile in the envelope before effects,
+and copy it to the replacement chat. A legacy envelope without a profile acquires
+one from its replacement chat, else original chat, retaining its pinned configDir.
+Validate consistency between envelope and replacement before effects. Preserve
+legacy configDir recovery and all existing custody rules.
+Every native launch or resume passes the snapshot's model as shell-quoted
+`--model M` when present. Only Codex gets the configured invocation-only
+`-c features.multi_agent_v2.max_concurrent_threads_per_session=N`; no account
+configuration is written. Retain full-access, login and environment flags.
+
+After an acknowledged pane launch, inspect the pane through `chatSession` with
+the run and prepared chat snapshot. Bind with `herdr agent rename PANE NAME`
+only after the ownership proof below, including on the first observation. Herdr may
+not have detected the agent yet: `agent_not_found` defers binding. Name failures
+must never turn a successful launch or positive agent observation into absence
+or an unconfirmed launch. Report other failures as a naming warning with the
+Herdr error code; leave native lifecycle and launch acknowledgement intact.
+`chatSession` returns optional `namingError: {code}` when binding fails or cannot
+be verified. The runner shows this warning in detailed/JSON status and open, including the
+post-launch result of resume and fresh replacement. Chat observations retain
+optional `namingError: {code}` until a successful binding clears it; this warning
+never changes native lifecycle or pending replacement identity.
+
+On delayed binding, require the same agent kind and a matching saved UUID when
+present. For Codex also require its own native session lookup (using optional
+`ports.run`, the saved worktree, folder and launch time) to match the observed
+UUID. For a resumed chat with a saved UUID, verify that UUID in the original
+`startedAt` window, including workspace reconstruction: native metadata keeps
+the session's original time. Other sessions started later must not make this
+known session ambiguous. For native session evidence, `ownSession` uses the saved account selection:
+an absent, null or empty `configDir` means `<home>/.codex` for Codex or
+`<home>/.claude` for Claude, where home is `ports.env.HOME` when nonempty,
+else the OS home. Pass this default folder explicitly to the native reader;
+the observing caller's `CODEX_HOME` or `CLAUDE_CONFIG_DIR` must not override it.
+This matches the config-variable removal on native launch and resume, and applies
+to delayed naming, session discovery and workspace reconstruction.
+The latest launch/resume time still owns startup grace
+and fresh-attempt discovery. `ownSession` accepts optional `sessionId` for this
+exact lookup; invalid IDs or results for another ID are unknown evidence.
+Match the Codex UUID in parsed native metadata; do not require it in the filename.
+This proof is required even after another observation saved a UUID, so
+an unrelated occupant never gains naming authority from observation alone.
+Claude's preallocated or resumed UUID proves identity. Gemini and agy have no
+authoritative native-session lookup here; an observed UUID alone cannot prove
+ownership for renaming, so leave their names unbound and show the naming warning.
+Missing or ambiguous evidence defers binding. No name is
+needed to observe lifecycle or send an existing request.
+The stable saved name and pane let tools inspect and interrupt the chat with
+`herdr --session pdd agent get NAME` and
+`herdr --session pdd agent send-keys NAME ctrl-c`.
+
 ## Dependencies
+
+- [Shared suite queue](test-suite-queue.prompt.md): required selector context for launch and resume environments.
+
+- [Machine interpreter queue](interpreter-queue.prompt.md): required settings resolver and defaults for chat environment propagation.
+
+- [Launch profiles](workflow-launch-profile.prompt.md): required generation and verification context for profile snapshots, effective launch arguments and Herdr name derivation.
 
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
@@ -220,7 +384,7 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"a2320e91bd72be3ba94d6df4843f156ec2df2ebece11b4ec39288c068ebda60b","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

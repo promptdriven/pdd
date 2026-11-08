@@ -1,3 +1,5 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -11,17 +13,19 @@ const at=Date.parse('2026-11-05T00:00:00Z');
 function selector(t,{issues=true}={}) {
  const root=fs.mkdtempSync(join(tmpdir(),'pdd-composed-selector-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));execFileSync('git',['init','-q',root]);
  fs.writeFileSync(join(root,'pdd.json'),JSON.stringify({autopilot:{mode:'auto'}}));const stateFile=join(root,'state.json');
- const home=process.env.HOME, activatedAt='2026-11-04T00:00:00Z', coordinator={version:'pdd.autopilot-coordinator.v1',repository:'Owner/Repo',coordinatorId:'c',machine:'m',activation:activatedAt};
- fs.writeFileSync(stateFile,JSON.stringify({enabled:true,cwd:root,repo:'Owner/Repo',activatedAt,coordinatorId:'c',machine:'m',environment:{HOME:home},agent:{id:'codex',kind:'codex',command:'codex',env:{}},stateFile,workspaceId:'w',paneId:'p',recipeDelivered:true,ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null},fingerprint:autopilotLaunchFingerprint({cwd:root,agent:{kind:"codex"}})}}));
+ const home=join(root,'home'), activatedAt='2026-11-04T00:00:00Z', coordinator={version:'pdd.autopilot-coordinator.v1',repository:'Owner/Repo',coordinatorId:'c',machine:'m',activation:activatedAt};
+ fs.mkdirSync(home);
+ fs.writeFileSync(stateFile,JSON.stringify({enabled:true,defaultBranch:'main',baseBranch:'main',cwd:root,repo:'Owner/Repo',activatedAt,coordinatorId:'c',machine:'m',environment:{HOME:home},agent:{id:'codex',kind:'codex',command:'codex',env:{}},stateFile,workspaceId:'w',paneId:'p',recipeDelivered:true,ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null},fingerprint:autopilotLaunchFingerprint({cwd:root,agent:{kind:"codex"}})}}));
  const rows=issues?[{number:1,state:'open',title:'One',body:'body',user:{login:'owner'},author_association:'OWNER',created_at:'2026-11-04T00:01:00Z',updated_at:'2026-11-04T00:01:00Z',comments:0,labels:[],html_url:'https://example.test/1'}]:[];
- const f={root,stateFile,sent:[],ports:{now:()=>at,warn:()=>{},allocationCheck:async()=>({state:'ready',message:''}),queryIssues:async()=>({status:200,issues:rows}),run:async (command,args)=>({code:0,stdout:command==='git'?execFileSync('git',args,{cwd:root,encoding:'utf8'}):'{}',stderr:''})}};
+ const f={root,stateFile,sent:[],ports:{...healthyMachine,now:()=>at,warn:()=>{},allocationCheck:async()=>({state:'ready',message:''}),queryIssues:async()=>({status:200,issues:rows}),run:async (command,args)=>({code:0,stdout:command==='git'?execFileSync('git',args,{cwd:root,encoding:'utf8'}):'{}',stderr:''})}};
+ f.ports.checkCapacityPorts=isolatedCheckCapacity(f.root);
  f.ports.reconcileDependencyIntake=async()=>({eligible:rows.map(row=>row.html_url),queued:[],skipped:[]});
  f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get')return {result:{agent:{agent_status:'idle',agent_session:'session'}}};if(args[0]==='pane'&&args[1]==='read')return '';if(args[0]==='agent'&&args[1]==='prompt'){const text=args.at(-1),match=/Artifact path: (.+)/.exec(text);f.sent.push(match?fs.readFileSync(JSON.parse(match[1]),'utf8'):text);}return {};};
  f.tick=()=>tickAutopilot(stateFile,f.ports);return f;
 }
 function storage(t) {
  const root=fs.mkdtempSync(join(tmpdir(),'pdd-composed-run-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const commonDir=join(root,'.git'),runDir=join(commonDir,'pdd','runs','1');fs.mkdirSync(commonDir);
- return {root,runDir,run:{v:1,runId:'one',repo:'example/repo',number:1,root,sourceRoot:root,commonDir,runDir,state:'running',workflow:'small-change',areas:[{name:'code',steps:['build'],optional:[]}],area:0,chats:[],done:{},pr:[]},ports:{stateDir:join(root,'state'),now:()=>at,skipMetricsDelivery:true,metricsWarning:()=>{}}};
+ return {root,runDir,run:{v:1,runId:'one',repo:'example/repo',number:1,root,sourceRoot:root,commonDir,runDir,state:'running',workflow:'small-change',areas:[{name:'code',steps:['build'],optional:[]}],area:0,chats:[],done:{},pr:[]},ports:{env:{HOME:root},stateDir:join(root,'state'),now:()=>at,skipMetricsDelivery:true,metricsWarning:()=>{}}};
 }
 test('composed launcher sends successfully despite capture, gap and warning failures',async t=>{
  const f=selector(t);const dir=join(f.root,'.git','pdd','metrics');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(join(dir,'transactions'),'unavailable');

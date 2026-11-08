@@ -54,7 +54,11 @@ For COMMAND only, preserve literal double quotes and backslashes; encode C0 cont
 
 Native authoring, generation and verification of the default `readRun` adapter require [Run records and selection](workflow-runs.prompt.md), the canonical owner of `resolveRun` semantics. The default adapter must preserve those real selection rules; this native/default-adapter context does not supply selection policy to the Runtime decision, whose outside run facts come only from `host.readRun`.
 
+Measure elapsed wall minutes around each native test phase, including failed phases, using an injected `suiteNow` clock (native performance.now). Record those minutes through injected `recordSuiteCost` (native ordinary run update with applyCostMeasurement) once per phase with a unique id. Do not retain command text in cost measurements. Measurement failure never changes proof outcome.
+
 ## Dependencies
+
+- [Cost ledger](cost-ledger.prompt.md): native generation and verification context for suite-minute observations.
 
 - Actual injected callbacks `ports.readRun`, `snapshot`, `createWorktree`, `overlay`, `runProcess`, `cleanup`, `saveProof` correspond one-for-one to resource `host` operations. Defaults perform real local run/Git/filesystem/process operations; decision logic calls no host APIs directly. `readRun` resolves and returns only runId/runDir/root/baseSha/baseBranch plus error; `snapshot({root,baseBranch})` fetches/computes the committed base/head identity and returns baseSha plus exact NUL-safe changed-file descriptors; error is empty on success. `createWorktree` returns its path even on a partial failure when cleanup is required. `overlay` and `cleanup` return an empty error on success. `runProcess` returns bounded stdout/stderr and termination facts, with an error for spawn/host failure and setupError for the recognized setup diagnostics above. `saveProof` performs atomic persistence. Resource schemas below are the actual callback contracts, not alternate check-only arguments.
 
@@ -65,8 +69,8 @@ Runtime fakes establish forwarding and classification only. Native Git isolation
 
 ```json
 {
-  "status":"draft",
-  "prose_sha256":"",
+  "status":"approved",
+  "prose_sha256":"173dae659fa2d50edf63b8842b7a5d1e4e446f6c81c52386ee5ed1104284c4e5",
   "entries": [
     {
       "operation": "proveRun",

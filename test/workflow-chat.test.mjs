@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { chatCommand, herdrCommand, startChat } from '../src/workflow-chat.mjs';
+import { chatCommand, chatLaunch, herdrCommand, startChat } from '../src/workflow-chat.mjs';
 import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -132,4 +132,25 @@ test('R9: chatCommand refuses a resume id that is not a UUID and quotes a valid 
   const id = '11111111-1111-4111-8111-111111111111';
   assert.match(chatCommand({ agent: 'codex', cwd: '/w', resumeId: id }), new RegExp(`codex resume '${id}' `));
   for (const bad of ['$(touch x)', "x'; rm -rf ~; '", '']) assert.throws(() => chatCommand({ agent: 'claude', cwd: '/w', resumeId: bad }), /session id/);
+});
+
+test('worker native launches and resumes retain shared suite selectors in clean child environments', t => {
+  const root=temp(t),bin=join(root,'bin'),cwd=join(root,'worktree'); mkdirSync(bin); mkdirSync(cwd);
+  const selectors={PDD_SUITE_QUEUE:join(root,"queue 'x' $()"),PDD_VM_SUITE_LOCK:join(root,'legacy lock')};
+  for(const agent of ['codex','claude','gemini','agy']) writeFileSync(join(bin,agent),`#!${process.execPath}\nprocess.stdout.write(JSON.stringify({queue:process.env.PDD_SUITE_QUEUE??null,legacy:process.env.PDD_VM_SUITE_LOCK??null,argv:process.argv.slice(2)}));\n`,{mode:0o755});
+  for(const agent of ['codex','claude','gemini','agy']) for(const resume of [false,true]) {
+    const launch=chatLaunch({run:{runDir:root,root:cwd},agent,env:selectors});
+    const line=chatCommand({agent,cwd,...launch,...(resume?{resumeId:'11111111-1111-4111-8111-111111111111'}:{})});
+    const actual=JSON.parse(execFileSync('/bin/sh',['-c',line],{env:{PATH:`${bin}:/usr/bin:/bin`},encoding:'utf8'}));
+    assert.equal(actual.queue,selectors.PDD_SUITE_QUEUE,`${agent} worker inherits selected queue`);
+    assert.equal(actual.legacy,selectors.PDD_VM_SUITE_LOCK,`${agent} worker inherits legacy selector`);
+    if(agent==='codex') for(const [name,value] of Object.entries(selectors)) assert.equal(codexConfigs(actual.argv).set[name],value);
+  }
+  for(const agent of ['codex','claude','gemini','agy']) {
+    const launch=chatLaunch({run:{runDir:root,root:cwd},agent,env:{}});
+    const line=chatCommand({agent,cwd,...launch});
+    const actual=JSON.parse(execFileSync('/bin/sh',['-c',line],{env:{PATH:`${bin}:/usr/bin:/bin`,...selectors},encoding:'utf8'}));
+    assert.equal(actual.queue,null,'missing selector cannot inherit the Herdr server queue');
+    assert.equal(actual.legacy,null);
+  }
 });

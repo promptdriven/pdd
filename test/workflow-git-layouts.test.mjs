@@ -106,7 +106,7 @@ for (const name of Object.keys(LAYOUTS)) test(`2698: ${name}: run, Herdr parent,
   assert.equal(basename(next.root).length, 36);
 });
 
-test('2698: a separate Git directory refuses before any run record, claim, worktree or Herdr call', async t => {
+test('2698: a separate Git directory refuses before any run record, claim, worktree or Herdr allocation', async t => {
   const f = await fixture(t, { agent: 'codex' }), separate = join(f.base, 'separate.git'), main = join(f.base, 'main'), cwd = join(f.base, 'linked');
   f.git(f.base, 'clone', '-q', '--separate-git-dir', separate, f.source, main);
   f.git(main, 'remote', 'set-url', 'origin', ORIGIN);
@@ -125,7 +125,8 @@ test('2698: a separate Git directory refuses before any run record, claim, workt
   for (const path of ['pdd/runs/17', 'pdd/worktree-assignments/runs', 'pdd/worktree-assignments/issues/17.json'])
     assert.equal(existsSync(join(separate, path)), false, path);
   assert.equal(f.git(cwd, 'worktree', 'list', '--porcelain'), before);
-  assert.deepEqual(f.herdr.calls, []); assert.deepEqual(f.pushes, []); assert.deepEqual(f.prs, []);
+  // #2709 checks pane capacity before allocation; this is a read-only inventory.
+  assert.deepEqual(f.herdr.calls, [['pane', 'list']]); assert.deepEqual(f.pushes, []); assert.deepEqual(f.prs, []);
 });
 
 const BARE_IN_PROJECT = ['bare repository in P/.git with a linked worktree', 'bare P/.bare named by the P/.git file'];

@@ -75,6 +75,8 @@ Optional `ports.execFile(file,args,{cwd})` returns or resolves `{stdout,stderr?,
 
 The native gh runner records each `gh` call in the GitHub call ledger of the repository that the call names, through `nativeGithubCounter` of [GitHub calls](github-calls.prompt.md#ledger). Counting never changes a call or its result; an injected `execFile` is not wrapped.
 
+PR status reads also request `headRefOid` and return optional `headSha` when GitHub supplies it, so the local cost ledger can read Actions durations once at closure without a separate head lookup. Preserve other fields and reads.
+
 ## Dependencies
 
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
@@ -86,7 +88,7 @@ The native gh runner records each `gh` call in the GitHub call ledger of the rep
 <summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"47dd7f10397c20aa0c04868d72d2327a848dfd61ff454e34069045679b8d1462","entries":[{"operation":"prepareWorkflowPr","input_schema":{"type":"object","properties":{"cwd":{"type":"string","minLength":1},"runId":{"type":"string","minLength":1},"stageId":{"type":"string","minLength":1},"repository":{"type":"string","minLength":1},"baseBranch":{"type":"string","minLength":1},"title":{"type":"string","minLength":1}},"required":["cwd","runId","stageId","repository","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"runId":{"type":"string"},"stageId":{"type":"string"},"headBranch":{"type":"string"},"baseBranch":{"type":"string"},"headSha":{"type":"string"},"marker":{"type":"string"},"title":{"type":"string"}},"required":["repository","runId","stageId","headBranch","baseBranch","headSha","marker","title"],"additionalProperties":false},"errors":["workflow_github_intent_invalid","workflow_github_repository_mismatch","workflow_github_worktree_dirty","workflow_github_topic_required"]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
+{"status":"approved","prose_sha256":"ec93154d734a88bda1d05b2af87066b604cc4fbc435833f64f830ad1278b019e","entries":[{"operation":"prepareWorkflowPr","input_schema":{"type":"object","properties":{"cwd":{"type":"string","minLength":1},"runId":{"type":"string","minLength":1},"stageId":{"type":"string","minLength":1},"repository":{"type":"string","minLength":1},"baseBranch":{"type":"string","minLength":1},"title":{"type":"string","minLength":1}},"required":["cwd","runId","stageId","repository","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"runId":{"type":"string"},"stageId":{"type":"string"},"headBranch":{"type":"string"},"baseBranch":{"type":"string"},"headSha":{"type":"string"},"marker":{"type":"string"},"title":{"type":"string"}},"required":["repository","runId","stageId","headBranch","baseBranch","headSha","marker","title"],"additionalProperties":false},"errors":["workflow_github_intent_invalid","workflow_github_repository_mismatch","workflow_github_worktree_dirty","workflow_github_topic_required"]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
 ```
 
 </details>

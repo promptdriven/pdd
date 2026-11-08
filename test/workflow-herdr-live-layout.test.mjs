@@ -39,5 +39,5 @@ test('a different linked caller starts its story chat despite an obsolete layout
   assert.equal(f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 1);
   assert.equal(readFileSync(file, 'utf8'), bytes, 'The registry remains untouched');
   assert.deepEqual(f.herdr.workspaces.find(w => w.workspace_id === 'legacy'), workspace);
-  assert.equal(f.herdr.calls.filter(args => ['close', 'remove', 'rename'].includes(args[1])).length, 0);
+  assert.equal(f.herdr.calls.filter(args => (['close', 'remove'].includes(args[1]) || args[1] === 'rename' && args[0] !== 'agent')).length, 0);
 });

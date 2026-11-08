@@ -229,9 +229,15 @@ saved ETag for such a page: it reads the page in full and follows a new next
 page. A page with a next page, or with fewer than `P` entries, stays conditional:
 a new entry changes its body, or GitHub serves the saved next page.
 
+## Per-run cost attribution
+
+`nativeGithubCounter` also accepts `costRun(options)` and `costRecord(runDir, entry)` ports. After each gh call, resolve the run from options (production: the exact run worktree in `options.cwd`, found by its Git common dir). Append the numeric call through `recordCostGithub` even for normal runs without an Autopilot ledger. Keep the original result/error if resolution or recording fails. Never allocate a repository-wide call to overlapping issues.
+
 ## Dependencies
 
-None: this module uses only the injected file port and clock. Its consumers, for
+- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for per-run call recording through the default costRecord port.
+
+This module also uses the injected file port and clock. Its consumers, for
 navigation only: the [Autopilot launcher](autopilot-launcher.prompt.md#github-budget)
 counts its calls, applies the budget, shows the status line and reads review
 pages with the full-last-page rule; the

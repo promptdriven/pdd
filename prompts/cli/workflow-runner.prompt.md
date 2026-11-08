@@ -1,6 +1,44 @@
 # Workflow runner (area chats)
 
-Own `src/workflow-runner.mjs`. It runs a workflow for one GitHub issue as a few area chats. pdd has four jobs: start, gates, PR and status. The agent does the work. For an automatic fresh area chat, arm the one-shot [worker completion bridge](workflow-worker-completion.prompt.md) after its identity is saved and launch confirmed. The bridge waits for native worker completion and coordinator availability; it does not impose a workflow timeout. After saving a supported current automatic resume, arm the same bridge with its new resume anchor and require fresh activity evidence before completion. Arm a confirmed current automatic `--new` replacement with its saved fresh pane identity, and treat a resumed replacement as a resume. Reused-pane recovery needs fresh activity evidence and is not armed as a fresh turn. pdd does not run tests automatically or merge. The explicit local [old-code proof](workflow-prove.prompt.md) command is the sole bounded supplied-command execution exception; this runner never executes a command from notes or evidence.
+Own `src/workflow-runner.mjs`. It runs a workflow for one GitHub issue as a few area chats. pdd has four jobs: start, gates, PR and status. The agent does the work. For an automatic fresh area chat, arm the one-shot [worker completion bridge](workflow-worker-completion.prompt.md) after its identity is saved and launch confirmed. The bridge waits for native worker completion and coordinator availability; it does not impose a workflow timeout. After saving a supported current automatic resume, arm the same bridge with its new resume anchor and require fresh activity evidence before completion. Arm a confirmed current automatic `--new` replacement with its saved fresh pane identity, and treat a resumed replacement as a resume. Reused-pane recovery needs fresh activity evidence and is not armed as a fresh turn. pdd does not run tests automatically or merge. The explicit local [old-code proof](workflow-prove.prompt.md) command and shared full-suite queue are the bounded supplied-command execution exceptions; this runner never executes a command from notes or evidence.
+
+## Native admission lock
+
+Native module function `acquireRunLock(runDir, filename = 'chat-replacement.lock')`
+uses the existing PID and token lock format and returns an own-token release
+callback. A live or uncertain owner or an acquisition failure gives `run_busy`;
+reclaim only a proven-dead owner. This native interface selection has no required
+context outside this section. The queue loads only this selection, so it does
+not depend on the runner's execution policy.
+
+## Full-suite execution and status
+
+Expose module function `runSuite({cwd, command, timeout, env}, ports)` for the
+explicit `workflow suite` command. Delegate execution to
+[the shared full-suite queue](test-suite-queue.prompt.md), passing the supplied
+ports. This is a second explicit supplied-command exception, alongside old-code
+proof; no notes or evidence can cause automatic execution. In status detail and
+list JSON/text, read the queue for the saved run worktree even when ordinary
+mutation ownership is held. A waiting ticket shows its position; a running suite
+shows test execution; a failed suite shows its own reason. Include optional
+`suite` with the queue's public status shape in JSON. Completed/cancelled workflow
+states keep precedence. Queue observations never write a run record or change a
+gate. Every newly launched automatic area and automatic continuation must tell
+the worker to run its repository's full-suite command through the absolute
+invoked CLI `workflow suite --command COMMAND` and wait for its result. Focused
+tests retain their normal route. The queue contract is required context for this
+execution and status behavior.
+
+## Native admission lock
+
+Native module function `acquireRunLock(runDir, filename = 'chat-replacement.lock')`
+uses the existing PID and token lock format and returns an own-token release
+callback. A live or uncertain owner or an acquisition failure gives `run_busy`;
+if initial lock creation fails for a reason other than an existing lock, retain
+the original I/O error as its `cause`, so consumers can distinguish unavailable
+storage from contention. Reclaim only a proven-dead owner. This native interface
+selection has no required context outside this section. The queue loads only
+this selection, so it does not depend on the runner's execution policy.
 
 ## Current Autopilot start ownership
 
@@ -26,10 +64,7 @@ Paused/stuck/question work yields only with confirmed no occupied worker; age or
 labels alone cannot free it. Unknown/starting/unconfirmed slots count. Reread the
 current saved cap; caller context cannot raise or erase it. Manual starts keep
 their current behavior. Add no separate cap framework or new locking policy.
-Native module function `acquireRunLock(runDir, filename = 'chat-replacement.lock')`
-uses the existing PID and token lock format and returns an own-token release
-callback. A live or uncertain owner or an acquisition failure gives `run_busy`;
-reclaim only a proven-dead owner. This helper is a native interface.
+Use the [native admission lock](#native-admission-lock) interface below.
 
 A permitted check continues through all existing account, base, adoption,
 room and native startup rules. This decision introduces no new scheduler or lock policy.
@@ -128,6 +163,21 @@ the issue in that checkout stays deferred ("issue has an active run"). Each run,
 area and issue has its own count. The 5 is a constant, not a setting. Manual and
 legacy runs save no count and no fingerprint and are never refused; their
 skill's 2-repair rule applies.
+
+## Automatic attention projection
+
+Export `automaticAttention({repo, machine}, ports = {})`, a synchronous, read-only
+projection of all saved runs on this machine from workflow-runs `allRuns`, or
+injected `ports.readRuns()`. Pass `ports.env`/`stateDir` to the native reader.
+Include only runs whose `automaticOrigin.machine` matches machine and whose repo
+matches ignoring case. Exclude ended runs except completed runs still at an
+`ask-code` gate. Emit `{number, category, cause}` rows: `stuck` with the existing
+stuck reason for stuck runs; otherwise `parked` with runtimeWait.reason or
+parkReason for paused runs; otherwise `decision` with the current open question
+or gate kind for a question or gate. One row per run, sorted by issue number.
+Ignore manual runs, other machines and repositories. Do not probe chats, wake,
+approve, mutate, or infer a stop. This supplies the launcher's repository digest
+across parallel runs, without changing run state or ownership.
 
 ## Record an automatic stopped run
 
@@ -311,11 +361,14 @@ the Interpreter entries below.
 
 Each workflow command export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
 
-- `startRun({name, issue, agent, base, adoptCorpus, draft, through, cwd, packageRoot, coordinator})`: save `through` (`prompt-pr` or `code`) when given, and save what the reporter asked (`issue.asked`, see [Normal-run gates](#normal-run-gates)). Read the areas from the pdd-NAME skill ([areas](workflow-areas.prompt.md)). Show any advisory returned by [workflow areas](workflow-areas.prompt.md#approval-gate-advisory), without blocking startup or changing areas. Resolve `agent` with [workflow agents](workflow-agents.prompt.md#named-agentsjson-entries) `workflowAgentEntry(agent,{cwd,env})` before any git, gh, worktree or Herdr work; a refusal returns exit 1 with its message. A custom agents.json entry runs as its kind: `run.agent` is the kind, and the run saves `agentDefinition: {name, kind, command, envNames}` (env names only, never values) for the [chat owner](workflow-chat.prompt.md#chat-login). Read the agent's config folder: `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude, `GEMINI_CLI_HOME` for Gemini, none for Antigravity CLI ([chat](workflow-chat.prompt.md) `homeVariable`, `expandHome`). For an entry, read it from the caller environment with the entry's env overrides on top, so an entry that sets `CLAUDE_CONFIG_DIR` saves that folder. A leading `~` or `~/` is the home folder (zsh leaves `~` as text in `env CODEX_HOME=~/x pdd …`, 0.1.6 tester), and a relative path is resolved from cwd. When it is set and that folder does not exist, refuse before any git, gh, worktree or Herdr work: `VAR is "PATH", but that folder does not exist. Fix VAR and run the command again.` The run keeps the full path as `configDir`, and the Claude trust check reads `.claude.json` in it. Resolve the issue with gh ([GitHub](workflow-github.prompt.md)). For an explicit manual start, refuse when the issue already has a completed run. After successful current automatic admission and claim verification, a completed historical run permits a fresh automatic start: release only its matching local issue claim (an absent claim is already free; a different owner refuses), retain its completed record, worktree, branch and native chat custody, archive its run folder through the existing history mechanism and record it in `previous`. Do not cancel it or infer process exit from completion. For an explicit manual start, an active run (running or waiting) never blocks a new run: it may be stuck, abandoned or left from a crash. For an automatic start, first apply [current Autopilot start ownership](#current-autopilot-start-ownership). If a saved run exists and is not ended, refuse the automatic start before replacement, claim release or custody effects, even when the current check permits reuse of the issue slot. For an explicit manual start with an active run, after the base and adoption checks pass, mark it replaced through the ordinary identity-checked update (`state: cancelled`, `cancelled: {state: replaced, at}`, `gate: null`), ask no person, and show one warning that names it: run id, workflow, worktree and checkout, and last activity (`updatedAt`, else `startedAt`). When that activity is less than an hour old, the warning says that the old run may still be working. Then treat it like a cancelled run. After a cancelled or replaced run, free the issue claim (`releaseIssueClaim`), keep the old worktree and branch, rename the old run folder to `<N>-cancelled-<first 8 of its run id>` and start fresh with a new worktree and branch; the new record lists the old one in `previous`. A replaced run cannot write over the new run: its saves and journal updates check the run identity at the plain issue folder and fail. Status shows a replaced run as `replaced`. Select the base as described below. Make the worktree and branch ([worktree](workflow-worktree.prompt.md)). Make the run folder and write the run record ([runs](workflow-runs.prompt.md)). Start the area 1 chat ([chat](workflow-chat.prompt.md)). Print where the run is, `pdd workflow open N`, `pdd workflow status N` and the shell-safe approval guidance below. Then return at once. If the main repository is not trusted by Claude, say that Claude asks to trust the folder first.
+- `startRun({name, issue, agent, base, adoptCorpus, draft, through, cwd, packageRoot, coordinator})`: save `through` (`prompt-pr` or `code`) when given, and save what the reporter asked (`issue.asked`, see [Normal-run gates](#normal-run-gates)). Read the areas from the pdd-NAME skill ([areas](workflow-areas.prompt.md)). Show any advisory returned by [workflow areas](workflow-areas.prompt.md#approval-gate-advisory), without blocking startup or changing areas. Resolve `agent` with [workflow agents](workflow-agents.prompt.md#named-agentsjson-entries) `workflowAgentEntry(agent,{cwd,env})` before any git, gh, worktree or Herdr work; a refusal returns exit 1 with its message. A custom agents.json entry runs as its kind: `run.agent` is the kind, and the run saves `agentDefinition: {name, kind, command, envNames}` (env names only, never values) for the [chat owner](workflow-chat.prompt.md#chat-login). Read the agent's config folder: `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude, `GEMINI_CLI_HOME` for Gemini, none for Antigravity CLI ([chat](workflow-chat.prompt.md) `homeVariable`, `expandHome`). For an entry, read it from the caller environment with the entry's env overrides on top, so an entry that sets `CLAUDE_CONFIG_DIR` saves that folder. A leading `~` or `~/` is the home folder (zsh leaves `~` as text in `env CODEX_HOME=~/x pdd …`, 0.1.6 tester), and a relative path is resolved from cwd. When it is set and that folder does not exist, refuse before any git, gh, worktree or Herdr work: `VAR is "PATH", but that folder does not exist. Fix VAR and run the command again.` The run keeps the full path as `configDir`, and the Claude trust check reads `.claude.json` in it. Resolve the issue with gh ([GitHub](workflow-github.prompt.md)). For an explicit manual start, a completed run permits a fresh run under the ended-run ownership rule below. After successful current automatic admission and claim verification, a completed historical run permits a fresh automatic start: release only its matching local issue claim (an absent claim is already free; a different owner refuses), retain its completed record, worktree, branch and native chat custody, archive its run folder through the existing history mechanism and record it in `previous`. Do not cancel it or infer process exit from completion. For an explicit manual start, an active run (running or waiting) never blocks a new run: it may be stuck, abandoned or left from a crash. For an automatic start, first apply [current Autopilot start ownership](#current-autopilot-start-ownership). If a saved run exists and is not ended, refuse the automatic start before replacement, claim release or custody effects, even when the current check permits reuse of the issue slot. For an explicit manual start with an active run, after the base and adoption checks pass, mark it replaced through the ordinary identity-checked update (`state: cancelled`, `cancelled: {state: replaced, at}`, `gate: null`), ask no person, and show one warning that names it: run id, workflow, worktree and checkout, and last activity (`updatedAt`, else `startedAt`). When that activity is less than an hour old, the warning says that the old run may still be working. Then treat it like a cancelled run. After a cancelled or replaced run, free the issue claim (`releaseIssueClaim`), keep the old worktree and branch, rename the old run folder to `<N>-cancelled-<first 8 of its run id>` and start fresh with a new worktree and branch; the new record lists the old one in `previous`. A replaced run cannot write over the new run: its saves and journal updates check the run identity at the plain issue folder and fail. Status shows a replaced run as `replaced`. Select the base as described below. Make the worktree and branch ([worktree](workflow-worktree.prompt.md)). Make the run folder and write the run record ([runs](workflow-runs.prompt.md)). Start the area 1 chat ([chat](workflow-chat.prompt.md)). Print where the run is, `pdd workflow open N`, `pdd workflow status N` and the shell-safe approval guidance below. Then return at once. If the main repository is not trusted by Claude, say that Claude asks to trust the folder first.
 - `stepDone({step, summary, skipped, cwd})`: only the agent calls this, from the worktree. Find the run from cwd. Record the step with its summary and time, and with [pdd's own results](#pdds-own-results-and-agent-notes). The stored summary keeps its line breaks (each line's spaces collapsed, blank lines dropped); every place that shows a summary on one line (status, the code question, the PR step list) collapses it. An unknown or out-of-order step prints a warning and is still recorded. A step that runs again after later steps of its area (for example `build` after `verify` when vectors fail) prints a warning and clears those later steps, so they run again; the area's PR opens only after its last step. Then print one of:
   - the next step of the area and the exact `done` command (an optional step is a question to the person, and "skipped" is a valid summary; in a [normal run](#normal-run-gates) pdd skips the optional `try` step itself and asks nothing);
   - at an `approve` gate: show the result (in a normal run, the [Story card](#normal-run-gates) as it is), ask the person, stop, never approve for them; how they approve; how to handle changes (revise here, run done again, ask again);
   - after the last step of a `pr` area: "pdd opens the PR now". Commit any uncommitted files (with a warning), push and open the PR for this area. The warning names each committed file by its exact repository-relative destination path: preserve every character, including leading characters, spaces and literal quotes. For a rename, name the destination, not the source or Git’s `source -> destination` display. Decode Git’s quoted path representation before showing it; do not trim status output before extracting paths. Keep the existing warning wording and commit-all behavior. The body (0.1.4 #18, 0.1.6) starts with pdd's own result lines ([pdd's own results](#pdds-own-results-and-agent-notes)), then the current source-compatible Prompt tests lines selected by the current-head publication rule below: every "Prompt tests (<story>)…: …" line, one per Story (a Story that appears again keeps its place and takes its latest line), then, with two or more Stories, a total that pdd adds up itself: "Prompt tests (all Stories)[ (DRAFT)]: ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls" (sum the criteria, the checks and the AI calls, each only when every Story line has it; ✓ only when every Story passes, else ✗; DRAFT when any Story line is DRAFT). A pasted overall "Prompt tests: …" line is dropped when Story lines exist, because it can cover only the Stories checked last; a summary with no overall line works the same. Without Story names, keep those lines' results as written, with the `Prompt tests` label. Then "Report (<story>): URL (report links expire after 7 days)" for each distinct report link, in summary order (the Story name comes from a "Report (<story>): URL" entry; a bare link or "Report: URL" or "Report (DRAFT): URL" has no name). The chat pastes the lines that `pdd test` prints into the check step's summary, one per line (with a `Report:` line per Story) or joined with "; " (with one "Report (<story>): URL" per report row); a result ends at a line break, ";", a `Report` entry, a link or the next `Prompt tests` or `Runtime check` label. Read these lines from the stored summary, before it is collapsed. Above the Prompt tests lines go the verdict line and the before → after line of a bug check (0.1.7): the first "Verdict: …" and the first "Before ✗ …" / "Before ✓ …" / "Before: no prompt …" in the step summaries (the check step's first, then the newest step), each up to its line break, or up to a "; " that starts "Before", "Prompt tests", "Runtime check" or "Report" (a "; " inside the verdict sentence stays). A report link in the before → after line gets " (report links expire after 7 days)" and is not listed again as a "Report" line. Then the PR head ("Part of #N" / "Closes #N" …), then the Steps overview: one line per step since the previous PR, cut to about 200 characters at a word end and never inside a URL (a URL that crosses the end stays whole, and " …" follows it) and shown as one inline code span, and below it the [full step summaries](#full-step-summaries-in-the-pr). Only a PR that covers a verify step carries `<run folder>/verify.md`, under "## Verify" (0.1.6 tester: 100 lines of shell before the vector table): drop a leading "# Verify" line, write each "## " heading as "### ", and fold each fenced block of more than 15 lines that is not inside a `<details>` block into `<details><summary>Commands (N lines)</summary>` (sh, bash, zsh, shell or console blocks) or `Output (N lines)`. When verify.md has no `<details>` of its own, keep the text before its first heading on top, then its sections whose heading names vectors or results, then the Formal check, then other sections with a table, then the rest, each group in file order. GitHub refuses a PR description over 65,536 characters (0.1.7 tester: a 105,489-character verify report; every retry failed the same way), so the whole body stays at most 60,000 characters (Unicode code points), which leaves room for the marker and for GitHub's own count. When verify.md does not fit in the room that the rest of the body leaves, the body keeps a summary of it. First each `<details>` block (long commands and output) becomes one line, `- <its summary text>: not shown here.` A tag inside an inline code span is text: it opens or closes no block and is not removed. If it is still too long, keep its first lines that fit, cut at a line end (never inside a link) with an open code fence closed, and then list the lines of the cut part that report a failure (`✗`, or the word fail, fails, failed or failing) under `Lines that report a failure, from the part not shown:`, as many as fit. End the summary with: `_The full verify report has N characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: WHAT. The PR author has the full report: verify.md in the run folder._` (WHAT: `the long blocks are not shown`, or `its first N lines; M more lines are not shown, and K of them report a failure`, with `reports` when K is 1). Before collapsing details (authored or generated from long fenced output), retain their failure lines and report references outside the collapsed block. If truncation is still required, consider failures and report references from all omitted content, including collapsed blocks. Keep whole evidence lines and links while room allows; explicitly count omitted failures and report references when they cannot all fit. The full verify.md stays byte-for-byte in the run folder. Failures are never dropped in silence. Local paths never appear: the worktree path becomes repo-relative, the run folder "<run folder>", any other `/Users/…`, `/home/…`, `/private/…`, `/var/folders/…` or `/tmp/…` path "<local path>". Before writing a PR body, replace every Try link (a URL whose path has `/s/<token>`) in the step summaries and verify.md with "(Try link removed)"; report links (`/r/`) stay. When the first line of verify.md starts with "✗" (for example "✗ 2 vectors fail"), retain that warning ahead of the replay/ordinary body while the evidence owner controls the top evidence block. When the body has an interpreter report link, add "Interpreter report links expire after 7 days." A report link is a URL with a `/r/` path segment, or a URL that starts with `PDD_RUNTIME_URL` when it is set. Never fix a runtime host in the code. When the PR exists already, refresh the label/proof top block and, for code PRs, the inventory as required below, preserving publication-pending before changed-source pushes. When the PR does not open, print the message of the [GitHub](workflow-github.prompt.md) result: it names GitHub's own reason when GitHub refused the PR, and says unconfirmed only for a real doubt. A retry builds the same intent again (same run, area, marker, branch and SHA when nothing new was committed) and does not push again. Print the PR URL and "pdd never merges".
+
+For automatic umbrella work, read the current issue-sort group before publication. Both PRs reference the members. Only a new per-member sort after the global fix merges may close a member. Ordinary ownership, review, claim and publication gates still apply. Project the current dependency graph too. If a group is no longer proved current and safe, omit extra closing references. Group policy belongs to [issue-sort](issue-sort.prompt.md).
+
   A cancelled or completed run prints that the agent must stop, except for the
   completed-at-PR-1 review-only recovery below.
 - Try before PR 1 (0.1.4 #13): a `pr` area with `"before":"approve"` does not open its PR after the last step. `done` sets the gate kind `approve-pr` and tells the chat to show the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict, as `pdd test` prints it) with its report link and the Try link, ask the person to try it and approve or ask for changes, and stop. Status: "waiting for you: try it, then approve to open PR 1". When there is nothing to try (no step of the area left a Try link, and the try step was skipped or the worktree changes no test file), the gate text says "There is nothing to try. Ask them to approve or ask for changes." and status drops "try it, then " (0.1.6 tester: a browser-only Story). For PR 1 the gate text also gives the chat the words for what PR 1 holds, read from the worktree's changes against the run base (uncommitted files count): "Tell the person what PR 1 holds, in these words: "PR 1 is ready with the approved Story[, the approved prompt X][, the draft prompt Y][, the prompt Z] and the tests."", with "the approved Stories" for two or more Stories under `user_stories/`, and without "and the tests" plus " It has no test file." when no test file (a `*.json` with `prompt-runtime.program-scenario`) changed. Only the Story area was approved, so a draft prompt is never called approved (0.1.6 tester). `approve` here works like an area gate (explicit approval under the rule below; terminal: "Approve the AREA area and open PR 1 for …? (y/N)"); it records the decision and opens the PR. With `then: ask-code` the run moves to the code-or-stop gate (new gate time): from the chat, the reply tells the chat to ask the code question; from the terminal, when PR 1 has draft prompts, pdd does not ask about the code PR: it prints PR 1's link and the approve-first line (see Draft prompts) and delivers to the chat as a [pdd notice](#pdd-notices) "pdd opened PR 1: URL. … Tell them exactly: "PR 1 is open: URL. <approve-first line>" Then stop."; else pdd asks "Make the code PR now …? (y/N)" — no delivers PR 1's link and the stop to the chat as a pdd notice and prints "PR 1 is open. Tell your agent when you want the code PR."; yes goes on as the code gate (the code branch and chat). A PR that cannot open leaves the gate open; run approve again. A [normal run](#normal-run-gates) first tries the full-pass route: a full check pass opens PR 1 at `done` with no question, and the person gate stays only for a run without a saved Story approval. A card run with a failed or missing check waits for the agent to repair and check, not for person approval.
@@ -481,36 +534,292 @@ When judging a full check for a normal run, supply each approved Story with numb
 
 For initial and reopened normal Story gates, revalidate the displayed Story/test fingerprint after terminal confirmation and before recording an approval or changing any prompt approval. Refuse a changed fingerprint and require a new card and later answer. Save the exact validated fingerprint as the Story approval; do not recapture unseen bytes for it.
 
-## Dependencies
+## Idle workflow agents
 
-- [Readable PR descriptions](workflow-pr-body.prompt.md): required authoring/generation/verification/testing context for the readable part, the titles and the Details section of every PR description.
-- [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
+After a confirmed current-area saved-session resume, manual or automatic, send one
+continue notice through the existing change-request delivery journal and guarded
+transport. This also applies after workspace reconstruction. Send it before terminal
+attachment. Opening an already live chat or a historical area sends no notice.
+Reopening a deliberately held chat still restores and attaches its saved session,
+but sends no continue notice. Require a running state with no approval gate or
+open question before saving `continueAnchor`, inside the journal claim before
+creating a notice, and at submission. Paused interpreter waits are holds too. A hold
+that arrives during resume or delivery wins; preserve it and send nothing.
+Use the declared interpreter and full-suite queue owners to inspect the current
+worktree before a resume notice or idle nudge, inside journal custody and before
+submission. Waiting, running or unavailable queue observations hold automatic
+continue delivery. A worker waiting for a slot or native check waits on purpose;
+an unavailable observation cannot prove that it is safe to continue. Keep both
+pending and confirmed `chat.closed` marks authoritative at these boundaries.
+The notice names the current unfinished step, its bundled step brief and the run's
+STEP.md. It preserves completed work, approvals and any gate or question; it grants
+no approval. Save `continueAnchor` on the chat (epoch milliseconds of the resume)
+before delivery, so repeated opens do not create another request for that resume.
+Failures retain the existing pending/uncertain journal custody; never resend an
+uncertain request automatically. Inject `deliverContinue(run,text,ports)` with a
+native default that calls the same journal delivery as `changeRun`, as a notice.
 
-- [Metrics store](metrics-store.prompt.md): required native generation/verification context for the pure canonical validateSnapshot function used before origin matching; validation failure leaves measurement unknown.
+Export `nudgeIdleRun({ref,cwd,packageRoot,coordinatorId,machine},ports)` using the
+existing run lock. Return `{exitCode,message,recovery}` with recovery `skipped`,
+`nudged` or `stuck`. Apply the stopped-recovery origin, source, close, state,
+question, gate and replacement guards. Require a current unfinished step and no
+active chat failure or PR for this area. Read Herdr through the chat owner, with
+injected clock and transport; make no AI or interpreter call to inspect state.
+Only an exact saved native session reported idle or done is idle evidence.
+Starting, unknown, working, blocked, mismatched and unavailable observations cannot
+authorize a nudge. Login and usage problems keep their existing hold.
 
-- [Metrics capture](metrics-capture.prompt.md): required native generation/verification context for filtered start/outcome/readiness observations; [approval evidence](approval-evidence.prompt.md) supplies native metadata discovery without altering approval semantics.
+Save `idleSince` on the current chat as epoch milliseconds at the first idle
+observation and `idleAnchor`, its launch/resume anchor. Any non-idle observation or
+a different anchor starts a new interval. A later resume clears the old interval.
+Status uses the same observation rule. Detail, list, all-repository and JSON words
+show `agent idle since HH:MM` in the status time zone (UTC when absent) while an
+unfinished running area is idle. Existing gate, question, PR, failure and health
+words win; idle words win over successful-resume and normal working words.
 
-- [Autopilot launcher](autopilot-launcher.prompt.md): required authoring, generation, runtime, verification and testing context for local launcher control state and supported start and stop.
+After 600000 idle milliseconds, deliver one continue notice, at most once per
+600000 milliseconds. Persist `chatIdleNudges`, keyed by area, with `progress` (the
+area's saved done records), `count` (attempts, 0 to 3), and `lastAt` (last attempt,
+epoch milliseconds or null). Reserve an attempt before delivery, including failed
+or uncertain delivery. Reuse the same continue text for an unfinished step, so the
+journal retries a pending notice instead of queuing duplicate nudges; an uncertain
+notice remains held. Only a changed area done record resets this allowance;
+working observations, resumed or replaced chats and status reads do not. Each area
+has its own allowance. After three attempts and another idle interval without
+recorded progress, set state stuck, `parkReason` naming the area and idle limit,
+and `chatIdleLimit:{area,at}`. Later calls for this saved stuck incident return
+the same `stuck` result and `area`, before testing nudge eligibility or inspecting
+Herdr. Require the same valid automatic origin, coordinator, machine and source
+checkout, and no layout or current-chat intentional close mark. This durable
+handoff lets the launcher retry the existing deduplicated alert service after
+failure or a process restart between saving the stop and handing off the alert;
+it never reserves another nudge or launches a chat. Recheck current run identity,
+area, progress, chat, origin, close state, gate and question after inspection, before saving a stop
+or reserving a nudge, and at delivery submission. A concurrent hold or progress
+wins and sends nothing. Never change completed steps or clear person decisions.
 
-- [Dependency intake](issue-dependencies-intake.prompt.md#current-automatic-start-check): required authoring, generation, runtime, verification and testing context for the current Autopilot start check. Preserve explicit manual starts and active-run open/resume behavior.
+## Automatic recovery of stopped chats
 
-- [Shared ownership reader](issue-dependencies-github.prompt.md): required authoring, generation, runtime, verification and testing context for `createDependencyReadPorts` and its current trusted ownership and winning-claim observation used by automatic continuation. This dependency is scoped to that reader and its required context.
+Export `resumeStoppedRun({ref,cwd,packageRoot,coordinatorId,machine}, ports)`.
+It returns the ordinary `{exitCode,message}` plus `recovery` (`skipped`, `resumed`,
+or `stuck`); a stuck reply includes `area`. Failed automatic open observations
+retain the running state for a later tick; uncertain dispatch retains its existing
+unconfirmed custody and cannot authorize another dispatch. Use the same run lock and open operation
+as `openRun`, including the chat owner's workspace rebuild and exact saved-session
+resume. Automatic recovery never attaches a terminal or focuses a tab.
 
-- [Workflow scope](workflow-scope.prompt.md): required authoring, generation, runtime, verification and testing context for scope checks and effect boundaries.
+Inside the lock, require a valid saved automatic origin matching coordinator and
+machine, matching source checkout, and state running with no gate, open question,
+or unfinished replacement. A run layout marked `phase: close_intent` or `closed` by the
+layout owner is deliberately closing or closed: skip recovery, consume no allowance and do
+not mark resume exhaustion. Recheck this disposition after asynchronous inspection
+before saving exhaustion, and immediately before dispatch.
+Also consume the chat owner's durable intentional-close mark `chat.closed` on
+the current area's latest saved chat. Pending closure and confirmed closure both
+forbid automatic recovery, allowance use, recording exhaustion and returning a
+saved exhaustion result for alerting. Check this before the saved stuck-result
+return, after asynchronous inspection before saving exhaustion, and on the exact
+current target immediately before dispatch. A newer chat or close mark wins over
+the inspected snapshot, including during workspace/tab reconstruction. Preserve
+the mark through observations and process/server restart. An automatic route must
+never clear it; explicit successful open is the chat owner's clearing route.
+Only the current area's latest confirmed chat with a valid saved native session
+UUID qualifies. Automatic recovery never starts a fresh conversation to replace
+missing session history; manual open retains its existing recovery options.
+A positive missing agent/pane or `server_not_running` observation and an ended
+lifecycle permit recovery. For this preflight, a confirmed `pane_not_found` is
+endpoint absence like `agent_not_found`; the shared open operation still verifies
+and rebuilds its tab. For an acknowledged launch that status never observed running,
+use the chat owner's `sessionEvidenceDue`, `ownSession` and `observedSession`
+rules, just as manual open does, before judging its lifecycle. A unique matching
+native session after grace can prove that launch ran; its initially chosen Claude
+UUID alone cannot. Missing, unreadable or ambiguous native evidence and lost launch
+acknowledgements never authorize recovery.
+Workspace closure alone does not bypass lifecycle evidence. Unknown observations, starting/unconfirmed launches without that proof,
+working/idle/blocked agents and completed/cancelled/paused runs do not. Before any
+launch, call the shared chat-health reader on the stopped session. Login and usage
+limit evidence prevents automatic recovery even after a reported limit end.
 
-- [Approval policy and journal](approval-policy.prompt.md) and [prompt approval](prompt-approve.prompt.md): required authoring/generation/native-production/verification/testing context for said approval policy, actor/journal and prompt edit validation.
-- [Command catalog](command-catalog.prompt.md): required authoring/generation/verification/testing context for the stable `workflow.request-uptake` route; the catalog owns command names. Derive every printed uptake command, including delivery envelopes and missing-input hints, from its prefix using the complete current `p.pdd`/`pddFor` command prefix exactly like done/ask hints, preserving the prefix's individually shell-quoted executable and script arguments without wrapping the whole prefix as one executable; this runner owns no public spelling. Render the exact request id as one shell-single-quoted argument, escaping each embedded single quote with the standard close-quote, quoted-single-quote, reopen-quote sequence. Include a shell-quoted short-note placeholder for the summary option. Never interpolate request ids or notes as executable shell syntax, even when injected ids contain quotes, spaces, dollar signs, backticks or command substitution characters.
-- [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
-- [Area chats](workflow-chat.prompt.md): required authoring/generation/native-production/verification/testing context for bounded readiness, transport acknowledgements, uncertain delivery, replacement checkpoints and attempt configuration and chat health; this runner owns request custody, retry order and caller account selection. Its checkpoint interface supplies the effective profile to native effects without a required dependency back to this runner.
-- [Workflow agents](workflow-agents.prompt.md#named-agentsjson-entries): required authoring/generation/testing context for `workflowAgentEntry`, which resolves a built-in agent or an agents.json entry name at start.
-- [PR evidence preparation](workflow-pr-evidence.prompt.md): required authoring/generation/native-production/verification/testing context for the real `src/workflow-pr-evidence.mjs` module function `preparePrEvidence({run,isCode}, ports)`. Both PR creation and updates must call it with the actual saved-run projection and native ports; insert its lines/reference through the existing body protections. It owns lifted labels, machine proof freshness, reference substitution and their publication-refresh requirements. No alternative test-only renderer.
-- [Results reader](workflow-results.prompt.md): required generation/runtime/verification context for pdd's own saved results and their lines.
-- [Story card](workflow-story-card.prompt.md): required authoring/generation/verification/testing context for the Story card, the Story fingerprint and the full check pass of [Normal-run gates](#normal-run-gates).
-- [Old-code proof](workflow-prove.prompt.md): required generation/runtime/verification context for machine result schema, classification and provenance; runner consumes results without executing proof.
-- [Test inventory](workflow-inventory.prompt.md): required authoring/generation/runtime/verification context for collection and the informational report.
-- [Replay evidence](workflow-replay.prompt.md): required generation/runtime context for policy, source fingerprints, original anchors, validation and formatting.
-- [Product marker format](../../skills/pdd-product/references/files.md#planned-run-identity): required generation/testing context for the optional saved product association and its PR description line.
-- Ports: `execFile` (git and gh), `herdr`, `env`, `stdin`, `stderr`, `confirm`, `readApprovalEvidence`, `stateDir`, `now`, `pdd` (the command prefix). Defaults are the real ones.
+Persist `chatResumes`, an object keyed by area name whose value is an array of
+dispatch-attempt times in epoch milliseconds. Keep attempts in the rolling hour (times
+strictly greater than now minus 3600000); record each attempt immediately before the shared chat owner sends `pane run`,
+through its `beforeLaunch` hook, after readiness and recovery checks. A failed
+dispatch consumes its attempt; a failed pre-launch check consumes none. Allow at most three per area. If the chat stops again
+with three attempts still in that hour, set state stuck and `parkReason` naming
+area and the exhausted resume limit; save `chatResumeLimit:{area,at}`. After
+asynchronous inspection, conditionally commit this stop only if run state, current
+area, chat custody, progress, origin, gate, question and replacement are unchanged.
+If they changed, skip recovery and send no alert. Later calls
+return that same stuck result without another launch, so the launcher can retry
+its deduplicated alert. Each area has an independent allowance. Manual open keeps
+its existing behavior and does not spend this automatic allowance.
+
+After an acknowledged automatic resume and a successful save of its chat custody,
+persist `chatResumeSuccess:{area,at,count,paneId,sessionId,resumedAt}`: the area,
+dispatch time in epoch milliseconds, attempt number within that rolling hour
+(1 through 3, including earlier failed dispatches), and the resumed chat's pane,
+native session and resume anchor. Failed or uncertain dispatches consume allowance
+but never create this success record. Ordinary manual open never creates one.
+Detail status and list/all-repository/JSON status words show
+`resumed after the chat stopped (N of 3)` while this success is within the rolling
+hour and still matches the current area's latest pane, native session and resume
+anchor. Expiry, a later manual resume or replacement, or area advancement removes
+these words from view without rewriting history. Gates, questions, completion,
+stuck state, runtime waits, chat failures, stopped/blocked chats and health problems
+keep their existing precedence; recovery words replace only normal working words.
+
+Hold automatic recovery if the delivery journal cannot be read.
+For either manual or automatic resume, include the current area's delivered,
+unacknowledged, non-in-flight change requests in the resumed agent's startup input:
+their original IDs, text and uptake commands. Use the chat owner's optional
+`resumeMessage` input. For manual reconstruction with no saved session, include the same reminder in
+the first message. Do not alter delivery state, retarget pending or
+uncertain requests, or record uptake. Preserve run ID, worktree, branch, progress,
+claims, gates and approvals. A reminder is not approval and does not rerun completed
+steps.
+
+## Ended, replaced and closed chat ownership
+
+Use the chat owner's finished-chat cleanup at area handoff, replacement, cancel,
+and sweep. Handoff records the earlier chat's endedAt before starting the next
+area, then tries cleanup. Completion records endedAt for all chats; status and
+view perform no Herdr close. `tidyRuns({dryRun=false,cwd}, ports)` returns the
+usual exitCode/message plus `closed` and `kept` counts. Optional native inputs `graceMs`, `need` and `timeBudgetMs` support pressure and bounded tick sweeps; timeBudgetMs limits monotonic elapsed milliseconds between candidates, never interrupts a close already underway. Sweep all machine-indexed
+runs including archived runs, globally oldest finished chat first and stopping budget cleanup as soon as the next allocation fits, taking the existing
+run lock and skipping busy/uncertain owners. Include ended runs with outstanding
+saved run-layout cleanup even when no chat was recorded, such as failed startup
+before the first area tab. Order these shell-only candidates by cancellation or
+saved update/start time. Exclude chats with confirmed close marks from the candidate
+list; an ended run with retained layout custody remains a shell-only candidate.
+Fully reclaimed history consumes no sweep time. Pending close marks remain
+candidates for reconciliation. Apply the same lock, caller, ownership, occupancy and
+pending-intent reconciliation guards; report retained shells and retry them on
+later sweeps. Revalidate run/chat identity at each
+checkpoint. Persist the chat owner's retained shell reason until a fresh shell
+check replaces it or confirmed layout closure clears it. A sweep that skips
+shell cleanup because a chat is retained cannot discard that earlier reason.
+Explicit `pdd workflow tidy [--dry-run]` and each Autopilot tick use
+this sweep. Before new-run Git allocation, check a 3-pane budget and cleanup;
+a capacity refusal leaves the selected run, branch, worktree and folder unchanged.
+Recheck at actual Herdr allocation. Automatic admission reports a `panes` hold,
+never an issue failure. Cleanup never closes the current live gate chat.
+
+A manual start may replace a completed run as well as a live run. Refresh saved
+PR status before deciding whether it ended. Retain the ended record and history;
+release only the matching issue allocation. Replacement marks the old run
+cancelled/replaced, sets `replacedBy` to the new run UUID, and tries zero-grace
+cleanup. Busy old chats stay protected and the warning names `workflow tidy`
+and `workflow cancel` from the retained worktree. When archiving, update runDir
+and every artifact path under the moved run folder, including prior history
+references. The archived record remains discoverable by its worktree. Commands
+from that worktree refuse new progress with the old run ID, replacement ID,
+reason and stop instruction. They never select or modify the replacement run.
+Cancellation from that worktree retries cleanup even if already cancelled. Its result reports retained chat areas and reasons instead of claiming those tabs closed.
+
+Opening an ended run is read-only for Herdr: show saved screen paths and quoted
+native resume commands with saved account folders and worktree. The native `openRun` input may include the #3068 `automaticResume` context. A marked selected chat returns `{exitCode:0,message:"",recovery:"skipped"}` before any Herdr effect; it cannot use manual open to remove the mark. Integrators must retain this guard and recheck the latest mark at automatic dispatch. A live explicit
+open clears the intentional-close mark only after acknowledged open/resume and
+saves openedAt. Preserve uncertain dispatch custody on failure. Capacity handoff
+accepts a deliberately closed current chat with confirmed missing pane/tab as
+ended evidence. Status distinguishes confirmed closed chats from pending close intents and shows retained cleanup reasons;
+JSON includes `chats[].closed`. Supply pane ownership summaries from matching saved workspace/pane/terminal IDs, with repository/issue/run references, run shell count and other pane count; labels alone never classify ownership. Machine status includes session `herdr` with
+`panes`, `budget`, `finishedOpen` (null if inventory unavailable). Status never
+creates or closes Herdr objects.
+
+
+
+## Environment stops
+
+Plain park classifies the cause through [environment recovery](autopilot-environment.prompt.md).
+Store `stuckCause` for every successful park (`environment`, `interpreter`, `work`).
+`parkAutomaticRun` also accepts optional `step` from `--step STEP`: a failed
+validation step in this current area's check/verify/formal steps. Invalid explicit
+steps refuse without saving. Environment parks require explicit `step`; absence refuses without saving. A
+previously completed step is allowed only as an explicitly named failed rerun.
+Environment parks save `environmentRetry` using the
+shared recovery shape, retaining the same-target delivered budget. Repeating an
+identical park while stuck preserves its time and budget. Runtime parks keep their
+existing authority and refusal rules. Work parks keep current repair/stuck rules.
+No environment park asks a person or sends an alert before retry exhaustion.
+Status and list use the shared environment status before ordinary stuck words;
+these waits group as working until exhaustion. At exhaustion the next action says
+that retries are exhausted and directs inspection of the environment alert, never
+promising another automatic retry. Other stuck states expose their cause class on a separate `Cause:` status line.
+
+`changeRun` recognizes the shared environment wake tag. Deliver only for the
+current environment park, after its nextAt, below its limit, with current host
+health, existing automatic continuation ownership and STOP rules. A stale or
+repeated tag sends nothing. Under journal ownership, a definitely-unsent pending
+obsolete environment wake becomes `superseded` (retained history, never sent);
+never retire in-flight or uncertain custody. A current but temporarily unhealthy
+pending wake stays pending and is deferred so later ordinary requests can pass.
+FIFO admission skips only those deferred environment wakes. Recheck wake identity
+against the latest run under transport admission after health observation. Repeat this check at transport admission to prevent
+stale queued requests from waking a replacement park. Preserve gate identity,
+completed steps, branch, claim and area. An environment wake is a change, never an
+answer to an open question; it preserves that question and stays waiting for it. Only confirmed delivery increments
+attempts, records the attempt time and returns to running (or waiting for an
+existing gate/question); failed or uncertain delivery consumes no retry and
+retains existing journal protection. The wake instructs the worker to rerun only
+the named validation step, using its original evidence and command; do not replay
+build, approvals, publication or an unknown external operation. Ordinary change
+requests retain their existing delivery behavior. They do not consume the automatic
+retry budget. An explicit person retry can resume a stuck run: export pure
+`isRetryRequest(text)` for a direct imperative retry, resume, or try-again request,
+optionally prefixed by please or can/could/would you (please), or following a
+sentence/clause about the repaired machine. Admit a leading command that stands
+alone or names the failed validation, step, run, work, check, test, build, verify
+or formal target, including now, from retained evidence, using its original
+command or after the machine repair. A retry word followed by a status or policy
+description is a diagnostic, not an imperative. Reported or quoted commands and
+commands embedded in other diagnostic text do not authorize continuation. An
+explicit negative continuation instruction anywhere in the text wins over a
+positive command. Retry denials include retrying and retries, before or after the
+negative term. Inflected forms alone are status or nouns, not direct commands.
+This includes a forbidden or disabled continuation status and
+an instruction to stop, hold or wait, including before resuming. Unrecognized
+wording keeps ordinary change delivery behavior;
+it grants no person retry override. This is a conservative lexical decision,
+without an AI call.
+The launcher uses this same predicate only after its existing trust filter.
+
+For a stuck automatic run, such a request is a change, never a question answer.
+Recognize the request before ordinary one-line text normalization, and retain that
+intent in pending journal custody so a multiline request still resumes after a
+blocked delivery. Recheck the saved text with the same predicate before granting
+the override; a saved retry flag alone is not authorization. Repaired-machine
+requests remain recognizable when ordinary one-line normalization removes their
+line break.
+Apply STOP, current claim ownership and repair-ceiling checks before accepting
+and again before worker submission. Confirmed delivery resumes running, or waiting
+for an existing gate/question. Keep the original gate identity, question, completed
+steps, area, branch, claim and automatic retry budget; clear the old park reason.
+The worker receives the saved failed validation target when present, or instructions
+to locate the failed step in retained evidence, and retries only that step with its
+original command. A person retry need not wait for automatic backoff or remaining
+automatic attempts. Failed or uncertain delivery resumes nothing and uses existing
+journal custody without blind resend. Other ordinary requests do not unpark a stop. An unskipped successful `stepDone` for the
+failed target clears its retry record. A skipped validation does not reset it. Other progress does not reset its budget.
+
+Workflow status sets `skipCostSessions` on its storage updates. Health reads retain their existing 256 KiB tail budget; cost status owns explicit token refresh.
+
+## Issue costs
+
+`runCosts({ref,cwd,input}, ports)` resolves the run locally. Without input, refresh and return its public cost row as JSON. With input, validate and apply an explicit [cost measurement](cost-ledger.prompt.md) through `updateRunCosts` under ordinary run ownership, preserving the workflow progress timestamp and journal, then return the row. This route makes no GitHub, Herdr, model or approval call. At the existing PR refresh boundary, retain observed head SHA and call `captureClosedCi` for closed/merged PRs; it owns the at-most-once duration read.
+
+
+
+## Machine interpreter waiting
+
+Read [machine interpreter progress](interpreter-queue.prompt.md) for the run's
+worktree using the same machine queue environment. Keep workflow state separate
+from queue state. Show waiting with its position in workflow status. Exclude the
+union of persisted queue waiting intervals from the no-progress clock. An active
+wait or unavailable queue cannot establish a stuck run. Completed waiting time
+remains excluded after restart. Do not wake a chat or mutate queue records during
+observation. Preserve queue path and concurrency settings in launcher environments.
+
+
 
 ## Recover a missing unconfirmed area tab
 
@@ -802,22 +1111,45 @@ Call the production [PR evidence preparation](workflow-pr-evidence.prompt.md) bo
 
 This is an additive extension; all other runner contracts remain unchanged. An explicit `area` must name an area at or before `run.area` with a recorded chat. Choose its latest saved chat. Unknown, future or unrecorded selectors refuse before persistence or native effects; an unknown-area message lists the workflow's valid area names. Without a selector choose the current area. A fresh `newSession` attempt for an earlier area refuses with advice to select the current area; recovery of an already saved attempt follows its recorded target below; a current area without a saved chat cannot replace one. Historical open delegates to `openChat`, persists only that selected chat's observations (including its same-identity startUnconfirmed flag after a failed resume), and reports its own error without setting/clearing current `chatFailure`, changing run state or invoking current-area recovery. AREA never changes `run.area`, even on failure. This navigation does not enforce read-only historical execution.
 
-For replacement call the module function `restartChat({run,chat,message,pending}, ports)` from [area chats](workflow-chat.prompt.md#explicit-fresh-session). That owner defines native checks and the checkpoint envelope. Build the continuation with `areaMessage` for the same current area plus its completed step names/summaries, remaining steps, open gate and pending question in human-readable words, including what the person must decide; never paste a raw gate object. Explain that already completed steps must not rerun and that prior approval does not approve new work. Preserve the same agent, run/worktree/branch, completed records, question, gate, approvalRecord, decisions and PR records on success and failure; configuration follows the account-selection rule below; replacement never advances or publishes. An eligibility or ownership refusal before intent leaves the entire saved run unchanged, including state and chatFailure. A failure after durable intent retains the pending custody for recovery, without misreporting it as a preflight refusal. After effects begin, record replacement custody, its account commit below and a current-area chat failure when necessary; successful replacement clears that failure but restores running only without a waiting gate/question.
+For replacement call the module function `restartChat({run,chat,message,pending}, ports)` from [area chats](workflow-chat.prompt.md#explicit-fresh-session). That owner defines native checks and the checkpoint envelope. Build the continuation with `areaMessage` for the same current area plus its completed step names/summaries, remaining steps, open gate and pending question in human-readable words, including what the person must decide; never paste a raw gate object. Explain that already completed steps must not rerun and that prior approval does not approve new work. Preserve the same agent, run/worktree/branch, completed records, question, gate, approvalRecord, decisions and PR records on success and failure; configuration follows the launch-profile rule below; replacement never advances or publishes. An eligibility or ownership refusal before intent leaves the entire saved run unchanged, including state and chatFailure. A failure after durable intent retains the pending custody for recovery, without misreporting it as a preflight refusal. After effects begin, record replacement custody, its account commit below and a current-area chat failure when necessary; successful replacement clears that failure but restores running only without a waiting gate/question.
 
 <details>
-<summary>Account selection for an explicit Codex replacement</summary>
+<summary>Launch profile selection</summary>
 
-For module function `openRun`, select the effective replacement profile without changing CLI spelling or ordinary focus/resume behavior:
+The [launch profile owner](workflow-launch-profile.prompt.md) owns the profile shape,
+validation, legacy defaults, name derivation and Codex configuration reads. Save
+`launchProfile` at run start, alongside compatible `agent` and `configDir` fields.
+`startRun` accepts optional `model`, `herdrAgentName`, and `codexThreads` from the CLI.
+New Codex runs default to five threads, with a higher account value preserved by
+the profile owner. Other agents and legacy runs keep their native thread default.
+Validate these and the account folder before any Git, GitHub or Herdr effects.
 
-| Open request | Effective profile |
-| --- | --- |
-| Recover an existing pending replacement with `--new` | The chat owner's saved attempt configuration, regardless of incoming `CODEX_HOME` |
-| A fresh `--new` for the current area of a Codex run, with nonempty incoming `CODEX_HOME` | That explicitly supplied existing folder, overriding a saved null or old folder |
-| Any other request | Existing saved-profile behavior, including empty/unset `CODEX_HOME` and other agents |
+`openRun` accepts the same settings, only with `newSession: true` and the current
+area. For a new attempt, a nonempty caller variable for the saved agent kind
+(`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GEMINI_CLI_HOME`) selects its existing
+folder. Resolve it as at start. Empty or absent variables keep the saved folder.
+The agent kind and agents.json definition stay the same. Ordinary open, historical
+open, changes and approval never select a profile from the caller. They use the
+chat's saved profile for resume and the run's profile for a new area.
 
-Incoming means `ports.env` (default process environment); inherited nonempty `CODEX_HOME` counts as supplied. Do not trim or interpret a folder as shell syntax. Expand `~` and `~/` with the chat owner's `expandHome`, then resolve a relative path from this invocation's `cwd`, as for `startRun`. Preserve spaces and quote characters with the existing shell quoting. Supply this full path as `run.configDir` to `restartChat` without rewriting the original chat. The selection tests directory existence only, never authentication, credentials or quota. A missing path or regular file refuses with exit 1 and `CODEX_HOME is "PATH", but that folder does not exist. Fix CODEX_HOME and run the command again.` before intent, close, allocation or launch; keep saved run and delivery-journal bytes unchanged. A missing old profile must not veto a valid explicitly selected replacement folder. Without this selection, retain the saved-folder refusal. Pending recovery uses its pinned folder for replacement work; original inspection/rollback retains the original profile. Refuse missing folders before a native effect requiring them, keeping pending custody and never falling back to a retry's profile.
+Snapshot the entire selected profile into the replacement envelope at intent.
+An existing pending attempt uses that immutable snapshot, regardless of retry
+options or environment. Keep original chat inspection and rollback on the
+original chat's profile. Commit the selected run profile, and compatible
+`configDir`, atomically with the current area's first `launchRequested` checkpoint,
+before dispatch. Failed writes send nothing. Prelaunch rollback keeps the prior
+run profile. Historical or late checkpoints cannot retarget a newer area.
+Keep existing progress, cancellation, replacement, ownership and refusal guards.
+A valid new folder can replace a missing old folder; do not require access to the
+old native session for a fresh chat. No logout, account reset, credential copy or
+native session migration occurs. A fresh chat on a new account continues the same
+run, with its completed steps, gates and decisions.
 
-The chat owner's immutable attempt `configDir` makes the selection durable at intent. Update the run's inherited `configDir` atomically with installation of the current area's active replacement at `launchRequested`, before dispatch. A failed write sends nothing. A lost launch reply retains that selected run/replacement configuration for recovery and later areas. Prelaunch rollback leaves the run's prior profile intact. Historical recovery, later checkpoints and stale writers cannot replace a newer current-area profile; retain existing run identity, progress and cancellation guards. Subsequent area starts use the committed run profile even from another terminal. Plain open, historical open and `changes` do not select accounts or retarget pending requests. No account reset, profile creation, credential copying, global environment change or native-session migration is part of this route.
+Detailed status shows model, account folder, Codex thread limit and the current
+chat's Herdr name and pane. JSON summaries include `launchProfile` and
+`chat: {herdrAgentName, paneId}` (null without a chat). Include optional
+`chat.namingError: {code}` when live naming cannot be confirmed; detailed status
+and open show that warning without changing the positive native lifecycle fact.
 
 </details>
 
@@ -886,10 +1218,56 @@ Every successful `stepDone` result, including an ordinary next step, an existing
 
 The Interpreter entries below name the actual public module functions, including `runStatus`. For selected-run display, `runs.resolveRun` transports the existing [run-record resolver](workflow-runs.prompt.md) reply `{run}` or `{error}` as JSON text; `results.readRunResults` transports the existing injected reader reply as JSON text. `files` binds the named read-only Node filesystem operations (UTF-8 reads; null means a failed read/stat/list/realpath), and `program.execFile` binds the existing process port. Preserve native exceptions as unavailable facts, not empty successful reads. These are dependency bindings, not new public renderer/snapshot operations. Native run selection, journal/claim durability, process recovery, active chat/PR refresh and the done chain still require native tests; these declarations do not prove those effects. The display scenarios use an ended run and do not cover active refresh.
 
+## Dependencies
+
+- [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
+
+- [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
+
+- [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
+
+- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
+
+- [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
+
+- [Launch profiles](workflow-launch-profile.prompt.md): required generation and verification context for selecting, validating and saving run and chat launch settings.
+
+- [Readable PR descriptions](workflow-pr-body.prompt.md): required authoring/generation/verification/testing context for the readable part, the titles and the Details section of every PR description.
+
+- [Sort](issue-sort.prompt.md): required generation, runtime and verification context for safe group publication references and post-merge member closure.
+
+- [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
+
+- [Metrics store](metrics-store.prompt.md): required native generation/verification context for the pure canonical validateSnapshot function used before origin matching; validation failure leaves measurement unknown.
+
+- [Metrics capture](metrics-capture.prompt.md): required native generation/verification context for filtered start/outcome/readiness observations; [approval evidence](approval-evidence.prompt.md) supplies native metadata discovery without altering approval semantics.
+
+- [Autopilot launcher](autopilot-launcher.prompt.md): required authoring, generation, runtime, verification and testing context for local launcher control state and supported start and stop.
+
+- [Dependency intake](issue-dependencies-intake.prompt.md#current-automatic-start-check): required authoring, generation, runtime, verification and testing context for the current Autopilot start check. Preserve explicit manual starts and active-run open/resume behavior.
+
+- [Shared ownership reader](issue-dependencies-github.prompt.md): required authoring, generation, runtime, verification and testing context for `createDependencyReadPorts` and its current trusted ownership and winning-claim observation used by automatic continuation. This dependency is scoped to that reader and its required context.
+
+- [Workflow scope](workflow-scope.prompt.md): required authoring, generation, runtime, verification and testing context for scope checks and effect boundaries.
+
+- [Approval policy and journal](approval-policy.prompt.md) and [prompt approval](prompt-approve.prompt.md): required authoring/generation/native-production/verification/testing context for said approval policy, actor/journal and prompt edit validation.
+- [Command catalog](command-catalog.prompt.md): required authoring/generation/verification/testing context for the stable `workflow.request-uptake` route; the catalog owns command names. Derive every printed uptake command, including delivery envelopes and missing-input hints, from its prefix using the complete current `p.pdd`/`pddFor` command prefix exactly like done/ask hints, preserving the prefix's individually shell-quoted executable and script arguments without wrapping the whole prefix as one executable; this runner owns no public spelling. Render the exact request id as one shell-single-quoted argument, escaping each embedded single quote with the standard close-quote, quoted-single-quote, reopen-quote sequence. Include a shell-quoted short-note placeholder for the summary option. Never interpolate request ids or notes as executable shell syntax, even when injected ids contain quotes, spaces, dollar signs, backticks or command substitution characters.
+- [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
+- [Area chats](workflow-chat.prompt.md): required authoring/generation/native-production/verification/testing context for bounded readiness, transport acknowledgements, uncertain delivery, replacement checkpoints and attempt configuration and chat health; this runner owns request custody, retry order and caller account selection. Its checkpoint interface supplies the effective profile to native effects without a required dependency back to this runner. Recovery also consumes the owner's durable `chat.closed` disposition supplied by finished-chat cleanup; this consumer requires its presence only, regardless of close reason or confirmation.
+- [Workflow agents](workflow-agents.prompt.md#named-agentsjson-entries): required authoring/generation/testing context for `workflowAgentEntry`, which resolves a built-in agent or an agents.json entry name at start.
+- [PR evidence preparation](workflow-pr-evidence.prompt.md): required authoring/generation/native-production/verification/testing context for the real `src/workflow-pr-evidence.mjs` module function `preparePrEvidence({run,isCode}, ports)`. Both PR creation and updates must call it with the actual saved-run projection and native ports; insert its lines/reference through the existing body protections. It owns lifted labels, machine proof freshness, reference substitution and their publication-refresh requirements. No alternative test-only renderer.
+- [Results reader](workflow-results.prompt.md): required generation/runtime/verification context for pdd's own saved results and their lines.
+- [Story card](workflow-story-card.prompt.md): required authoring/generation/verification/testing context for the Story card, the Story fingerprint and the full check pass of [Normal-run gates](#normal-run-gates).
+- [Old-code proof](workflow-prove.prompt.md): required generation/runtime/verification context for machine result schema, classification and provenance; runner consumes results without executing proof.
+- [Test inventory](workflow-inventory.prompt.md): required authoring/generation/runtime/verification context for collection and the informational report.
+- [Replay evidence](workflow-replay.prompt.md): required generation/runtime context for policy, source fingerprints, original anchors, validation and formatting.
+- [Product marker format](../../skills/pdd-product/references/files.md#planned-run-identity): required generation/testing context for the optional saved product association and its PR description line.
+- Ports: `execFile` (git and gh), `herdr`, `env`, `stdin`, `stderr`, `confirm`, `readApprovalEvidence`, `stateDir`, `now`, `pdd` (the command prefix). Defaults are the real ones.
+
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"bda4323a62e78c4345815f35255e9e8c60d5684b10253af2d54051092352688e","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"storyCount","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runtimeHistory":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}},"done":{"type":"object","properties":{},"required":[],"additionalProperties":false},"evidence":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}}},"required":["root","runtimeHistory","done","evidence"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"pass":{"type":"integer"},"total":{"type":"integer"},"failing":{"type":"array","items":{"type":"string"}},"unknown":{"type":"array","items":{"type":"string"}},"evidence":{"type":"string"}},"required":["pass","total","failing"],"additionalProperties":false},"errors":[]},{"operation":"runStatus","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"cwd":{"type":"string"},"json":{"type":"boolean"},"all":{"type":"boolean"},"cancelled":{"type":"boolean"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"source","kind":"port","access":"read","operations":[{"name":"fingerprint","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["value"],"additionalProperties":false}},{"name":"capture","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}},"appMap":{"type":"null"}},"required":["root","tests","appMap"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"sha256":{"type":"string"},"error":{"type":"string"}},"required":["sha256","error"],"additionalProperties":false}}]},{"name":"runs","kind":"port","access":"read","operations":[{"name":"resolveRun","access":"read","arguments_schema":{"type":"object","properties":{"ref":{"type":"string"},"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},{"name":"files","kind":"port","access":"read","operations":[{"name":"readFileSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["content"],"additionalProperties":false}},{"name":"readdirSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"entries":{"oneOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}]}},"required":["entries"],"additionalProperties":false}},{"name":"realpathSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"path":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["path"],"additionalProperties":false}},{"name":"lstatSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stat":{"oneOf":[{"type":"object","properties":{"isFile":{"type":"boolean"},"isDirectory":{"type":"boolean"},"size":{"type":"integer"}},"required":["isFile","isDirectory","size"],"additionalProperties":false},{"type":"null"}]}},"required":["stat"],"additionalProperties":false}},{"name":"existsSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exists":{"type":"boolean"}},"required":["exists"],"additionalProperties":false}}]},{"name":"program","kind":"port","access":"read","operations":[{"name":"execFile","access":"read","arguments_schema":{"type":"object","properties":{"file":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["file","args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"},"code":{"type":"integer"}},"required":["stdout","code"],"additionalProperties":false}}]},{"name":"results","kind":"port","access":"read","operations":[{"name":"readRunResults","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"oneOf":[{"type":"string"},{"type":"null"}]},"runId":{"oneOf":[{"type":"string"},{"type":"null"}]},"since":{"type":"integer"},"baseBranch":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]}],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"d7158f92b73b610e9af7a67efacab9dbd08cb1906cef2375e2a4039d108127e3","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"storyCount","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runtimeHistory":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}},"done":{"type":"object","properties":{},"required":[],"additionalProperties":false},"evidence":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}}},"required":["root","runtimeHistory","done","evidence"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"pass":{"type":"integer"},"total":{"type":"integer"},"failing":{"type":"array","items":{"type":"string"}},"unknown":{"type":"array","items":{"type":"string"}},"evidence":{"type":"string"}},"required":["pass","total","failing"],"additionalProperties":false},"errors":[]},{"operation":"runStatus","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"cwd":{"type":"string"},"json":{"type":"boolean"},"all":{"type":"boolean"},"cancelled":{"type":"boolean"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"source","kind":"port","access":"read","operations":[{"name":"fingerprint","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["value"],"additionalProperties":false}},{"name":"capture","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}},"appMap":{"type":"null"}},"required":["root","tests","appMap"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"sha256":{"type":"string"},"error":{"type":"string"}},"required":["sha256","error"],"additionalProperties":false}}]},{"name":"runs","kind":"port","access":"read","operations":[{"name":"resolveRun","access":"read","arguments_schema":{"type":"object","properties":{"ref":{"type":"string"},"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},{"name":"files","kind":"port","access":"read","operations":[{"name":"readFileSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["content"],"additionalProperties":false}},{"name":"readdirSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"entries":{"oneOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}]}},"required":["entries"],"additionalProperties":false}},{"name":"realpathSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"path":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["path"],"additionalProperties":false}},{"name":"lstatSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stat":{"oneOf":[{"type":"object","properties":{"isFile":{"type":"boolean"},"isDirectory":{"type":"boolean"},"size":{"type":"integer"}},"required":["isFile","isDirectory","size"],"additionalProperties":false},{"type":"null"}]}},"required":["stat"],"additionalProperties":false}},{"name":"existsSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exists":{"type":"boolean"}},"required":["exists"],"additionalProperties":false}}]},{"name":"program","kind":"port","access":"read","operations":[{"name":"execFile","access":"read","arguments_schema":{"type":"object","properties":{"file":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["file","args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"},"code":{"type":"integer"}},"required":["stdout","code"],"additionalProperties":false}}]},{"name":"results","kind":"port","access":"read","operations":[{"name":"readRunResults","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"oneOf":[{"type":"string"},{"type":"null"}]},"runId":{"oneOf":[{"type":"string"},{"type":"null"}]},"since":{"type":"integer"},"baseBranch":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]}],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
 
@@ -900,6 +1278,8 @@ Candidate identity is a deterministic SHA-256 digest over installed runtime byte
 
 Metrics readiness records the published PR and exact head only when the terminal code-area step is explicitly completed in that publication invocation. Republishing or refreshing an existing PR does not establish readiness for a new head. Attach this observation to the existing post-publication waiting transition, with the same concurrency checks and duplicate protection. Measurement-only saves elsewhere must not block native responses: if such a save fails, retain the existing incomplete-coverage fact where possible and retry the observation on a later call; native state-write failures retain their ordinary errors. This observation adds no workflow gate.
 
-Module function `acquireRunLock(runDir, filename = 'chat-replacement.lock')` exposes the existing run lock and its release function; preserve its lock identity and behavior.
-
 For a bridge completion, validate its run, current area, pane and launch anchor under the existing run lock before changing the run. Refuse a mismatch. Release that lock before invoking the Autopilot completion hook.
+
+## Automatic base authority
+
+For an admitted automatic start, select the base with [automatic base selection](autopilot-base.prompt.md) using the source checkout config and the repository default from the issue binding. A supplied --base must equal that selection or startup refuses before allocation. Treat automatic base fetching as explicit: failure stops instead of falling back to stale refs. Manual base rules above stay unchanged. Save baseBranch and baseSha at start and keep both immutable. Each area brief and next-step response states the saved base and tells agents not to take a base from repository documents or ask which document to follow. Stacked PR 2 behavior remains as above.

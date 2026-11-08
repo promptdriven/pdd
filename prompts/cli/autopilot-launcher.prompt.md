@@ -4,13 +4,44 @@ Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(
 `tickAutopilot(stateFile, ports)` and `requestAutopilotCompletion({cwd,env}, ports)`, and the pure
 `autopilotLaunchFingerprint(state)` that returns the launch fingerprint below for a saved state. This launcher connects a repository to the
 person's interactive coding agent in a dedicated Herdr session. It adds no
-approval, merge, quota-reset or headless execution route. Preserve existing
+approval, merge, quota-reset or headless execution route. Its read-only base check refuses unsafe merge targets without performing a merge. Preserve existing
 setup, workflow and interpreter behavior.
 
 `runAutopilotLauncher` accepts command start, stop, status or add, cwd, packageRoot, env,
-issues (argv issue references), and optional runs text. Return `{exitCode,message}`.
+issues (argv issue references), and optional runs and checks text. Tests may inject `checkCapacityPorts` for the
+shared queue machine/filesystem ports independently of the launcher process port. Return `{exitCode,message}`.
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
+
+## Stopped workflow chats
+
+In auto mode, every tick and completion reconciliation inspects this checkout's saved
+runs before GitHub budget waits. Use the existing `listRuns` reader and the runner's
+`resumeStoppedRun({ref,cwd,packageRoot,coordinatorId,machine}, ports)` boundary.
+Only this repository, source checkout and saved automatic coordinator/machine qualify.
+Observe and off modes never resume workers. A failed observation holds that run;
+other runs and tick work continue. Forward injected Herdr, clock and process ports;
+when only the launcher's process port exists, adapt it to the runner's execFile port.
+This native reconciliation makes no model or interpreter call. After intake recovers a
+stranded claim and updates its local run custody, reconsider that run for stopped-chat
+recovery and idle nudges in the same reconciliation. Keep the earlier pre-budget
+recovery for runs already owned by this coordinator. Revisit only runs whose custody
+was recovered, so other runs do not consume a second recovery or nudge allowance.
+
+In that same reconciliation, call the runner's `nudgeIdleRun` for eligible saved
+workers through the same injected ports and admission guard. The runner owns idle
+evidence, timing, bounded delivery and stop guards. Forward each `stuck` result,
+including a saved incident on a later tick, to the existing stuck alert service
+with the issue, idle cause, three attempted nudges and the need to inspect the
+agent. Keep retrying the handoff after failure or restart. The alert service owns
+retries for known unsent failures and deduplication of delivered or unconfirmed
+incidents; do not bypass it or send an update for a repeated incident.
+
+The runner owns eligibility, recovery, request visibility and the per-area limit.
+On its `stuck` result, send a `stuck` alert through the existing alert service with
+issue number, cause, tried and need fields. Its incident deduplication owns one alert
+for this stop, including repeated ticks. Keep the stopped reason in workflow status.
+Never acquire a second claim, start another run or approve a gate to recover a chat.
 
 ## Native Codex startup
 
@@ -118,7 +149,7 @@ starting a timer or agent. Off starts neither; retain its invalid-setting notice
 in the actionable off message. Both active modes use the same launcher; the
 [Autopilot skill](../../skills/pdd-autopilot/SKILL.md) owns later gates.
 
-For `start --resume-custody FILE`, read a bounded original-owner projection `{repository,sourceRoot,coordinatorId,machine,activation,paneId,workspaceId,agent:{id,kind},home,definitionHome,configHome,launchStartedAt}` from the operator's file. The current invocation's `--runs` controls capacity; omission is uncapped. The projection is not a whole-state import.
+For `start --resume-custody FILE`, read a bounded original-owner projection `{repository,sourceRoot,coordinatorId,machine,activation,paneId,workspaceId,agent:{id,kind},home,definitionHome,configHome,launchStartedAt}` from the operator's file. The current invocation's `--runs` controls capacity; omission uses the machine default. The projection is not a whole-state import.
 
 For this explicit operator recovery, check the source checkout and repository and use the existing admission boundary. Recheck the original pane/workspace/agent and repository with existing native target and repository observations, and verify the saved profile through the existing readiness path. The owner-verified bounded projection supplies the original launch/profile evidence. Do not add a native process-inspection system, require `PDD_AUTOPILOT_CONTEXT`, a PID or a missing native session UUID. A missing or mismatched target, profile readiness, or required current claim for an involved run leaves recovery blocked without effects.
 
@@ -133,8 +164,25 @@ Start persists a repo/machine state outside the checkout, installs a 30-minute
 user timer and runs the first tick immediately. Repeated start reuses the timer
 and saved activation time. An explicit start rearms the existing one-shot worker completion bridge for saved current automatic chats belonging to this repository and coordinator; timer ticks do not recreate listeners, except for the fresh pane after a [coordinator relaunch](#coordinator-relaunch) or a [gone coordinator pane](#gone-coordinator-pane). Yield retains its current claim and ownership checks. If observation is unavailable, report the manual completion-evidence and yield fallback. In auto mode, on every fresh reconciliation, including ordinary timer ticks, explicit start, completion and capacity refill, reconsider currently graph-eligible, open, unassigned and unclaimed work even when an earlier packet was acknowledged and its trusted content is unchanged. Delivery alone is not worker admission; preserve trust, ownership, custody and waiting checks and make a fresh selection observation. In observe mode retain unchanged notification deduplication; in all modes keep it for work that is not currently ready and for empty scans. Each reconciliation considers all open eligible
 backlog, regardless of creation or activation time.
-Optional --runs is a positive safe integer with no product maximum. Omission
-means no fixed cap. Persist only the selected launcher identity/config-folder
+Optional --runs and --checks are positive safe integers with no product maximum.
+Save explicit `runs` and `checks` like other start options; omission selects the
+machine default on a new start, retaining options with uncertain pending custody.
+At every active tick, use the shared queue's machine capacity contract to refresh
+`checkCapacity` before selecting work, without an AI call. Bind its shared snapshot
+owner to this launcher state file. On stop, after disabling the timer, release only
+this owner’s shared snapshot; preserve running tickets and other repositories’
+snapshots. Shared snapshot expiry covers lost timers. Persist the snapshot
+under the existing current-control guard. Default open-run admission uses its
+`runs`; retain explicit `runs` as the stable coordinator identity. Thus machine
+resize changes capacity without changing coordinator custody. Packet `runs` is
+the effective cap and `checkCapacity` is the snapshot. Instruct the coordinator
+to claim new issues only within that cap; the native start check enforces it.
+Status reads the active shared admission capacity read-only and shows its
+calculated and chosen check and run counts, plus `check slots: B busy of S, W waiting, cores per check C`.
+Show this repository's saved check and run overrides separately, labelled as
+repository overrides (automatic when omitted). They do not replace the shared
+status limits. If capacity is unavailable, show its cause and do not admit work at that tick.
+Persist only the selected launcher identity/config-folder
 paths, including the HOME used to load local launcher definitions, not credentials or the whole environment. A named user timer runs the
 Node script with absolute paths and the launcher's PATH and agent config paths.
 Linux uses a systemd user timer whose oneshot service sets `KillMode=process`,
@@ -143,6 +191,15 @@ On Linux, check user-session lingering without changing it; when it is off or
 cannot be checked, warn how `loginctl enable-linger` keeps the timer after logout. No controller process
 or polling loop remains running between ticks. Timer failure is actionable and
 does not leave status claiming it is running.
+
+Executing this module with the ordinary timer state-file operand dispatches
+`tickAutopilot` for that file. A rejected tick writes one plain `Autopilot:` error
+line to stderr and sets exit code 1. Offline process replays execute the generated
+Node/module/state command itself, with a child preload supplying controlled
+machine and account dependency observations. Preserve packet coalescing and
+restart deduplication; importing and calling the tick export alone does not
+verify timer dispatch. Do not add a production test mode or read live resources
+for this coverage.
 
 On explicit start with a changed invoked package root, leave prior custody intact and schedule a fresh current-state wake to deliver the new package instruction even when no work is eligible; use the existing guarded recovery and do not replay unknown payloads. Dependency analysis instructions also begin with this binding. On a successful explicit `pdd autopilot start`, persist the actual operator action, repository and current active mode for subsequent coordinator work and dependency packets. When the current mode matches that recorded action, identify it as an operator command, not a person’s quoted reply or checker approval. In auto mode explain that it authorizes ordinary eligible work and automatic merge under the repository’s review, testing, strict approval and other rules; observe mode retains its own limits. A timer or configuration read alone must not invent a start action. If a saved installation lacks this context, the next explicit start requests the existing guarded fresh current-state wake even without eligible work; retain unknown custody and do not replay it. Retain the actual start action across mode changes; apply it only when its repository and mode match the current active context. Observe and off do not authorize automatic merge. Record actual operator action through existing supported approval routes where applicable; never manufacture a later person reply.
 
@@ -525,10 +582,35 @@ Include an `eligible` boolean from the current intake result on every issue item
 An `eligible: false` item is monitoring context, never fresh work. Keep claimed
 issues marked `claimed: true`, never present them as unclaimed.
 
+For full-suite progress, load the required
+[shared queue contract](test-suite-queue.prompt.md). Read suite intervals for each
+active run's worktree. Subtract their union from inactivity since the run record's
+mtime. While waiting or executing, offer no stuck-run or idle-claim rule for that
+run. An unavailable queue observation retains the valid run progress, warns with
+its cause, and withholds both inactivity rules without emitting a suite-failed
+rule. Retry observation on later ticks. After success, only elapsed time outside
+those intervals counts. A failed,
+timed out or interrupted suite produces one `suite-failed` time rule per ticket
+completion (keyed by run and ticket, including equal completion times) with its exact queue reason, requesting the `test-suite` alert and
+failure diagnosis. It does not produce `stuck-run` or `idle-claim`. Completion is
+validation activity for the claim idle rule. Preserve the existing progress port;
+optional `suite` carries the queue public status. The coordinator instruction
+requires full-suite validation through the absolute invoked CLI's
+`workflow suite --command COMMAND`, using the repository's actual test command.
+Preserve both `PDD_SUITE_QUEUE` and `PDD_VM_SUITE_LOCK` in saved environment,
+user timer definitions and coordinator launches. Use the shared queue contract's
+selector precedence. Forward selected values to Codex command environments with
+invocation-only `shell_environment_policy.set` overrides, so workflow launches
+inherit them even when the profile restricts environment inheritance. Include
+these overrides in the launch fingerprint. Do not depend on the Herdr server's
+environment for queue selection: unset missing selectors in the native child.
+Use the same queue command for full builds. The queue limits heavy validation;
+the capacity-derived open-run cap bounds issue workers separately.
+
 Elapsed time can also offer work without a GitHub change or an AI call in the
 tick. Use the clock and local run-progress reader as injectable ports. Read this
 repository's active PDD run records in the Git common directory's
-`pdd/runs/*/status.json`; the file's last modification time is its last change.
+`pdd/runs/*/status.json`; use finite saved `progressAt` when present, otherwise the file's last modification time. The run storage contract owns preservation of that progress timestamp during cost observations.
 At 60 minutes without a change, offer one line naming the run number and asking
 the skill to follow its `pdd:stuck` rule. Completed and cancelled runs are over;
 missing or unreadable records supply no progress fact.
@@ -602,7 +684,8 @@ machine.
 An own claim whose issue has had `pdd:stuck` for 4 hours (`stuckSince`) is not
 refreshed again, so it expires 4 hours later unless the issue leaves `pdd:stuck`.
 For it, offer one `stuck-claim` time rule, once per stuck time, that asks the
-skill to retry with a changed approach or ask in the configured alert channel.
+skill to retry with a changed approach or ask in the configured alert channel,
+without another alert when the cause and required decision are unchanged.
 After a ceiling (the claim is `takeoverLimited`, or this checkout's run of the
 issue is `stuck` with a saved `repairLimit`), the rule instead says which limit
 was reached and asks for no retry, no removal of `pdd:stuck` and no new comment:
@@ -653,6 +736,58 @@ it), and does not touch other issues. `self` is this coordinator and machine:
   re-claim.
 
 The 24 hours is a constant, not a setting.
+
+### Environment validation retries
+
+Persist the nonsecret PDD_SUITE_QUEUE and PDD_VM_SUITE_LOCK path overrides with
+the launcher environment, so later timer ticks observe the selected shared queue.
+Read this coordinator and machine's automatic environment-stuck runs from local
+run records, with a `readEnvironmentWaits(state,p)` port. Use the shared
+`environmentRecovery` contract, preserving interpreter and work handling. Keep
+these runs out of generic stuck-claim and no-progress time rules. While a retry
+budget remains, retain own live claim heartbeats even beyond four hours stuck.
+On each tick, offer an `environment-ready` time rule only after nextAt and healthy
+host admission (`environmentHealthy` port with native default). Its `number`,
+`step`, `attempt`, `limit` (3) and `nextAt` name the failed target and due time;
+its reason tells the coordinator to deliver the exact shared wake tag with
+`pdd workflow changes N`, oldest first as worker room allows. Rerun only that
+validation step with its original command and evidence. No whole-run restart,
+new approval, blind external resend, usage-limit change or person question.
+Pass the checkout cwd to the retry check. Its native default reuses this tick's
+`health.resource.resources` through `machineResources`, without probing the host
+again. Retain the injected retry ports and the dependency's retry-only checks.
+Use existing delivery/timeSeen custody per wake tag and 30-minute offer interval;
+reoffer an undelivered current park on a later interval, without replaying uncertain
+transport custody. Only worker delivery spends
+the attempt. At three failed retries, leave the run stuck and call the existing
+alert module with one per-issue `stuck` incident naming the environment cause,
+three attempts and the failed step. Use its delivered/unconfirmed suppression
+and failed-delivery retry rules. Send no early per-issue alert and no duplicate
+stuck-claim rule. Other work continues. Expose pending retry details in workflow
+status via its owner; do not run tests or mutate run records from a tick.
+
+### Person retry signals
+
+Removing `pdd:stuck` from an observed issue is new work at the next tick even if
+`pdd:working` remains and all trusted text is unchanged. Retain the observed stuck
+label separately from the trusted text digest; for older records without that
+flag, use the saved `pdd:stuck` selection reason as the prior observation. Also offer a new or edited trusted
+comment that satisfies the workflow runner's `isRetryRequest`, including on an
+initial held-issue baseline when the comment was posted or edited since activation.
+Ignore outsider retry text and already-observed retry comments. Use the existing
+trusted-comment work packet, source cache, guarded coordinator delivery and seen
+acknowledgement; perform no AI interpretation or run mutation in the tick.
+
+A retry item adds `retry: {source, text}`: source is `comment` or
+`stuck-label-removed`; text is the trusted person's original comment or a request
+to retry the failed step from retained evidence for label removal. Retry delivery
+is continuation work even without graph eligibility or after all hold labels are
+removed. It is never a fresh workflow start. A busy or failed delivery keeps the
+signal pending; a confirmed coordinator delivery consumes it once. Tell the
+coordinator to pass its exact retry text through `pdd workflow changes N` as room
+allows and resume the failed step using existing evidence. Never restart completed
+work, approve a gate, answer a question or bypass a repair ceiling. The runner
+owns continuation checks and the worker delivery effect.
 
 ### Interpreter outage (#3039)
 
@@ -978,11 +1113,129 @@ a promise of later handling; the independent 30-minute tick remains fallback.
 Use the existing launcher ports and native defaults, including state, Git, settings,
 reconcile and wake boundaries; injected substitutes reach this same path.
 
+## No-AI machine and account health
+
+Share one `machineResources({cwd})` observation between health, check capacity and
+validation retry in each tick. Native reads include the check affinity profile.
+Observe health before configuring capacity, then pass its resources to the queue.
+Pass the chosen check count as `suiteLimit` to validation retry preflight.
+Injected legacy machineHealth/checkCapacityPorts remain supported.
+
+Every enabled tick reads `machineHealth` (native environment module default) and,
+for Codex, `codexLimits` (native limits module default), before any GitHub
+rate-limit or budget early exit. Pass the saved selected command and profile:
+resolve definition env, then pin saved HOME and CODEX_HOME; remove ambient
+CODEX_HOME when the saved profile has none. Non-Codex usage is not applicable.
+Persist `health:{at,paused,resource,usage,incidents,recoveryPending}` where at is
+an epoch millisecond observation time, paused is boolean, resource is machineHealth's
+result, usage is the normalized limits result (or state not-applicable with null
+metrics), incidents maps resource/usage-limit to the issue number that owns its
+open machine incident, and recoveryPending is a timestamp or null. Never persist
+raw account replies or subprocess diagnostics.
+Unknown readings pause admissions. They do not claim a quota reset or recovery.
+Use existing alerts for one incident per repository and machine: resource for
+low/unknown machine readings, usage-limit for limited/unknown Codex readings.
+Use an existing run/claim or observed issue number; if none exists, retain health
+and open the alert when an issue exists. Join other affected issues via that
+same incident, retry failed delivery through the existing alert store. Include
+safe cause and known reset ISO time, ask only to wait for the ordinary reset or
+free resources. Never suggest a reset purchase, credits or account logout.
+Recover each kind only on a positively healthy reading, using kind-scoped
+recovered alerts. When all blockers clear retain a recoveryPending timestamp
+until the existing guarded wake confirms delivery; wake even without fresh work.
+
+Keep dependency/progress reads and own claim heartbeats active while paused.
+Do not deliver dependency review prompts, environment/runtime retry wakes or
+ordinary coordinator work until healthy. Do not mark withheld work delivered.
+No run records, claims, heartbeats, gates or progress are erased by health.
+Save the latest hold under the shared admission lock before selection; automatic
+start admission reads it independently, including from an already working chat.
+Status and status --all append the saved Health line with observation time,
+paused/healthy, memory/disk cause and Codex usage/reset when known. Missing
+observations or malformed saved health show unknown without failing status.
+Status makes no new account or machine probe.
+
+When the existing GitHub budget permits reads, a tick also invokes
+`cleanupWorktrees` with the repository and cwd, defaulting to the cleanup
+dependency. GitHub deferrals skip cleanup, never health. Cleanup failure cannot
+skip health or heartbeats.
+
+## Native attention digest
+
+On each enabled, non-off tick, before GitHub budget and retry early exits, read
+`automaticAttention({repo: state.repo, machine: state.machine}, {env: p.env})`
+from the workflow runner (injectable `readAttention(state, p)`). Call
+`runAutopilotAlerts` with action `digest`, `cwd`, `env`, and these `attention`
+rows, using this launcher's state root, stable machine, repository, clock and
+`alertPorts`. A `sendDigest(input, ports)` port can replace the call. This is
+native work: no AI wake, GitHub read or write, approval, workflow park or claim
+change. The alerts module owns cadence, aggregation and delivery. A digest read,
+send or save failure never stops the tick. Repeated 4-hour stuck rules explicitly
+say to send nothing when the cause and required decision are unchanged; elapsed
+time and another review are not new facts. Preserve retry and claim expiry rules.
+
+## Finished chat maintenance
+
+Each enabled tick sweeps safely finished workflow chats using runner tidyRuns
+before intake, with a 5000 ms elapsed budget between candidates. Skip busy runs and report cleanup failures without failing issues.
+Before starting fresh work, a full pane budget is a `panes` capacity hold. Tell
+the coordinator it waits for Herdr session pdd capacity and retry next tick.
+A chat with the durable chat-owner `closed` mark was intentionally stopped:
+automatic stopped-chat recovery must never resume it. Explicit open is the only
+route that can remove the mark after success.
+
+For `status`, include the local [issue cost report](cost-ledger.prompt.md) for normal and automatic runs in the selected repository; `--all` includes indexed repositories. Refresh numeric cost checkpoints through `updateRunCosts`, preserving the workflow progress timestamp, sequence and completion journal. Before refreshing a selected cost record, verify its runId and startedAt under run ownership. Archived attempts can retain a former runDir now owned by a new attempt: retain their saved cost snapshot and never substitute or update that new attempt. Measurement failure must not fail status. `status --json` returns only the versioned cost report and skips timer, Herdr, settings-on-GitHub and workflow readiness probes. It works without a saved launcher. Human status appends `costStatusLines`; neither status form fetches CI durations.
+
+
+
+## Machine interpreter waiting
+
+Read [machine interpreter progress](interpreter-queue.prompt.md) for the run's
+worktree using the same machine queue environment. Keep workflow state separate
+from queue state. Show waiting with its position in workflow status. Exclude the
+union of persisted queue waiting intervals from the no-progress clock. An active
+wait or unavailable queue cannot establish a stuck run. Completed waiting time
+remains excluded after restart. Do not wake a chat or mutate queue records during
+observation. Preserve queue path and concurrency settings in launcher environments.
+
+This module has native Node integration tests against the settings module and
+bundled skill. Timer services, real sign-ins and cross-machine skill execution
+need live verification; syntax-only checks do not prove those effects.
+
+Give each offered issue a durable decision token tied to its repository and issue, and include it in the trusted work packet for explicit workflow invocation. Delivery is an offer, never a confirmed start. Do not alter selection or custody rules.
+
+Save a complete selector snapshot of observed open issues with known scope and reasons, and unknown readiness where unavailable. Atomically publish the full snapshot after its decision records are durable. Offers do not establish worker launch. If capture or delivery fails, retain retry facts and a durable coverage-gap observation where storage permits, without changing wake or custody behavior.
+
+Record each actual wake delivery attempt and its confirmed delivery, uncertain or failed result against each offered decision ID. An offer or coordinator tick is not a worker start. Save the selection snapshot even when its membership is empty. Metrics capture must not change delivery or custody behavior.
+
+Classify known trusted unblocked selector facts as ready even on unchanged ticks; unavailable facts remain unknown. Retain each actual launch attempt and outcome in the existing decision outbox before best-effort delivery, using stable identities for idempotent replay. A busy agent or failed setup before delivery is not an attempt.
+
+Each measurement callback is independently best effort outside the native delivery try/catch. A failed attempted callback cannot suppress delivery; a failed confirmed callback cannot change a successful send into an uncertain result. Throwing warning callbacks must not escape telemetry. Preserve timeRules in messages and time-only wakes, pendingTimes/timeSeen, idle-claim processing and review-inclusive source digests. Decision IDs from an incomplete snapshot cannot establish verified origin. Metrics filesystem and append/gap operations admit controlled injected ports; defaults remain native.
+
+Telemetry repository discovery uses the same injected native process port as the existing launcher; a separate real process must not escape a controlled caller. A metricsContext port may supply the same repository/common-directory observation for controlled verification.
+
+Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.
+
 ## Dependencies
+
+- [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
+
+- [Codex limits](codex-limits.prompt.md) and [worktree cleanup](autopilot-cleanup.prompt.md): required native generation and verification context for read-only usage and safe ended-run removal.
+
+- [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
+
+- [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
+
+- [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
+
+- [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake and display size, cause and umbrella in status without a GitHub read.
+
+- [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage, run discovery and guarded custody updates.
 
-- [Workflow runner](workflow-runner.prompt.md#current-autopilot-start-ownership): required native generation and verification context for the existing shared admission lock and run mutation lock.
+- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock, run mutation lock and stopped-chat recovery boundary.
+
 - [GitHub dependency reader](issue-dependencies-github.prompt.md#coordinator-recovery): required native generation and verification context for guarded claim recovery and its current-claim proof.
 - [Dependency intake](issue-dependencies-intake.prompt.md): required generation, runtime and verification context for reconciliation and structured coordinator context. The [pure model](issue-dependencies.prompt.md) owns review and readiness, and its `issueKey` is the canonical issue identity for matching `eligible` keys.
 
@@ -1011,21 +1264,8 @@ reconcile and wake boundaries; injected substitutes reach this same path.
   generation and verification context for status. When `alertStatusLine` with the
   saved repository and state root returns a line, status adds it on a second line.
   It reads local files only; an error adds nothing.
+## One automatic base
 
-This module has native Node integration tests against the settings module and
-bundled skill. Timer services, real sign-ins and cross-machine skill execution
-need live verification; syntax-only checks do not prove those effects.
+Use [automatic base selection](autopilot-base.prompt.md) for automatic runs. Each explicit start refreshes saved state.defaultBranch from one repository metadata read including defaultBranchRef, even when a default is already saved or Autopilot is already enabled. A failed read refuses startup rather than using the saved default. An old saved state without a default gets one metadata read on its next tick. Never add a metadata read per ordinary tick. Select state.baseBranch from the local config and this cached default at start and tick. Start, status and status --all show the selected base; status reads saved values only and makes no GitHub call for it. Include baseBranch in each work packet and tell the coordinator to use it for automatic starts, never to derive a base from documents. A changed selection at start or tick must be delivered even when issues are unchanged, so a repository default changed between starts reaches the coordinator and agrees with the base selected by a new automatic workflow run.
 
-Give each offered issue a durable decision token tied to its repository and issue, and include it in the trusted work packet for explicit workflow invocation. Delivery is an offer, never a confirmed start. Do not alter selection or custody rules.
-
-Save a complete selector snapshot of observed open issues with known scope and reasons, and unknown readiness where unavailable. Atomically publish the full snapshot after its decision records are durable. Offers do not establish worker launch. If capture or delivery fails, retain retry facts and a durable coverage-gap observation where storage permits, without changing wake or custody behavior.
-
-Record each actual wake delivery attempt and its confirmed delivery, uncertain or failed result against each offered decision ID. An offer or coordinator tick is not a worker start. Save the selection snapshot even when its membership is empty. Metrics capture must not change delivery or custody behavior.
-
-Classify known trusted unblocked selector facts as ready even on unchanged ticks; unavailable facts remain unknown. Retain each actual launch attempt and outcome in the existing decision outbox before best-effort delivery, using stable identities for idempotent replay. A busy agent or failed setup before delivery is not an attempt.
-
-Each measurement callback is independently best effort outside the native delivery try/catch. A failed attempted callback cannot suppress delivery; a failed confirmed callback cannot change a successful send into an uncertain result. Throwing warning callbacks must not escape telemetry. Preserve timeRules in messages and time-only wakes, pendingTimes/timeSeen, idle-claim processing and review-inclusive source digests. Decision IDs from an incomplete snapshot cannot establish verified origin. Metrics filesystem and append/gap operations admit controlled injected ports; defaults remain native.
-
-Telemetry repository discovery uses the same injected native process port as the existing launcher; a separate real process must not escape a controlled caller. A metricsContext port may supply the same repository/common-directory observation for controlled verification.
-
-Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.
+Catalog command `check-base` receives issues `[RUN, PR]`. Resolve the saved run with resolveRun, then call checkAutopilotBase with the saved run and PR through this launcher's counted process port. Return its result unchanged. This read-only command does not require a running coordinator, timer or agent. It supplies the pre-merge guard and post-merge base audit.

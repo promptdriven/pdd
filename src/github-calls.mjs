@@ -1,8 +1,9 @@
-// Implements prompts/cli/github-calls.prompt.md.
+// Generated from prompts/cli/github-calls.prompt.md (sha256: fbb5690ad3092e784178e1b66b1b52a36393276c8b3bb3a50e30ed155ff46ae2).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { recordCostGithub } from './cost-ledger.mjs';
 
 export const GITHUB_PURPOSES = ['dependencies', 'claims', 'issues', 'pulls', 'writes', 'setup', 'other'];
 export const GITHUB_SHARE = 30, GITHUB_FLOOR = 1000;
@@ -156,8 +157,30 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
 // A counter for a pdd command outside the tick: the ledger of the repository that each call names, only when
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
-export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now } = {}) {
-  return countGithubCalls(exec, { purpose, now, ledger: (args, named) => {
+export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, costRun, costRecord = recordCostGithub } = {}) {
+  const findCostRun = costRun ?? (async options => {
+    if (typeof options.cwd !== 'string' || !fs.existsSync(join(options.cwd, '.git'))) return null;
+    const result = await exec('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: options.cwd });
+    const folder = join(String(result.stdout).trim(), 'pdd', 'runs');
+    let names; try { names = fs.readdirSync(folder); } catch { return null; }
+    for (const name of names.filter(name => /^[1-9][0-9]*$/.test(name))) {
+      try {
+        const run = JSON.parse(fs.readFileSync(join(folder, name, 'status.json'), 'utf8'));
+        if (run.root && resolve(run.root) === resolve(options.cwd)) return run.runDir;
+      } catch {}
+    }
+    return null;
+  });
+  const countedExec = async (file, args, options = {}) => {
+    let result, failure, failed = false;
+    try { result = await exec(file, args, options); } catch (error) { failure = error; failed = true; }
+    if (file === 'gh') {
+      try { const runDir = await findCostRun(options); if (runDir) costRecord(runDir, { at: now() }, { fs }); } catch {}
+    }
+    if (failed) throw failure;
+    return result;
+  };
+  return countGithubCalls(countedExec, { purpose, now, ledger: (args, named) => {
     const repository = githubRepository(args) ?? (typeof named === 'string' && REPOSITORY.test(named) ? named.toLowerCase() : null);
     if (!repository) return null;
     const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs });

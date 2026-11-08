@@ -1,4 +1,5 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 36db5ec1390c7828fd91e8741e07973c42ed87a1d1b356973d383afc4a23341d).
+import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: cddb84d11a00e822a0e0a93ffdf6b262f5b89e968cd480bcb29b471ce5317ab9).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -788,7 +789,33 @@ function slotPorts(context, deadline = context.deadline) {
       return confirmedEnd(answer) ? 'ended' : ['queued', 'running'].includes(answer.state) ? 'running' : 'unknown';
     } };
 }
+function machinePorts(context) {
+  const { ports } = context;
+  return { ...ports.interpreterQueuePorts, deadline: context.deadline, now: ports.now, sleep: async ms => { await ports.sleep(ms, context.signal); await new Promise(done => setImmediate(done)); },
+    interrupted: () => context.interrupted || !!context.stopped || !!context.sendError,
+    say: message => line(ports.stderr, message) };
+}
+async function machineObservation(context, requestId, outcome, terminal, extra = {}) {
+  try { await observeInterpreterRequest({ env: context.ports.env, origin: context.origin, requestId, outcome, terminal, ...extra }, machinePorts(context)); }
+  catch (error) { throw new Stop(5, error.message); }
+}
+async function machineAnswer(context, answer) {
+  if (!['lint', 'check'].includes(answer?.command) || !sameJob(answer, answer.id, answer.command)) return;
+  const id = answer.id;
+  const capacity = answer.command === 'check' ? checkCapacity(answer) : null;
+  const lintWait = answer.command === 'lint' ? [answer.result?.report?.refusal, ...(answer.result?.refusals ?? [])].map(lintQueueWait).find(ms => ms !== null) : null;
+  const uncertainBusy = answer.command === 'check' && checkCapacityCandidate(answer) && capacity === null;
+  const busy = capacity !== null || lintWait != null || uncertainBusy;
+  if (busy) return machineObservation(context, id, uncertainBusy ? 'unknown' : 'busy', !uncertainBusy,
+    { busy: true, waitMs: capacity ?? lintWait ?? 5000 });
+  if (['passed', 'failed', 'refused', 'unknown'].includes(answer.state))
+    await machineObservation(context, id, ['passed', 'failed'].includes(answer.state) ? 'verdict' : answer.state, true);
+}
+async function finishMachineRequests(context) {
+  for (const id of context.machineRequests ?? []) await machineObservation(context, id, 'unknown', false);
+}
 async function finishReservation(context, target, answer) {
+  await machineAnswer(context, answer);
   if (target?.reservation && confirmedEnd(answer)) {
     await releaseRuntimeSlot(target.reservation, { ended: true }, slotPorts(context));
     target.reservation = null;
@@ -1360,22 +1387,59 @@ function saveAnswerAt(store, folder, id, json) {
 }
 function saveAnswer(context, id, json) { saveAnswerAt(context.store, context.folder, id, json); }
 
-async function postJob(context, path, command, request, row, timeoutMs, deadline = context.deadline) {
+async function acquireMachine(context, id, command, row, deadline) {
+  if (row) row.machineWaiting = true;
+  let machine;
+  try { machine = await acquireInterpreterSlot({ cwd: context.root, origin: context.origin, requestId: id, kind: command,
+    env: context.ports.env, deadline }, machinePorts(context)); }
+  catch (error) { throw new Stop(5, error.message); }
+  finally { if (row) row.machineWaiting = false; }
+  if (machine) { context.machineRequests ??= new Set(); context.machineRequests.add(id); }
+  return machine;
+}
+
+async function postJob(context, path, command, request, row, timeoutMs, deadline = context.deadline, admittedMachine = null) {
   const id = request.requestId;
   const target = row ?? context.lint;
   if (context.interrupted || context.stopped || context.sendError) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
   const registered = await recordRuntimeRequest(target.reservation, id, slotPorts(context, deadline));
   if (registered === false) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
   if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
+  let machine = admittedMachine;
+  if (['lint', 'check'].includes(command)) {
+    try { machine ??= await acquireMachine(context, id, command, row, deadline); }
+    catch (error) { await finishReservation(context, target, { state: 'not_run' }); throw error; }
+    if (!machine) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
+    if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) {
+      await machineObservation(context, id, 'not_sent', true);
+      await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' };
+    }
+  }
   context.store.posted(context.folder, id);
   if (row) { if (!row.request_ids.includes(id)) row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.phase = 'server'; row.calls = 'unknown'; row.post_verdict = 'uncertain'; }
   saveBatch(context);
-  const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
+  if (machine) {
+    try { await markInterpreterDispatch(machine, machinePorts(context)); }
+    catch (error) { await machineObservation(context, id, 'not_sent', true); throw new Stop(5, error.message); }
+    if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) {
+      await machineObservation(context, id, 'not_sent', true);
+      await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' };
+    }
+    machine.dispatched = true;
+  }
+  const reply = await context.runtime.post(path, request, context.capture.tar, Math.max(1, Math.min(timeoutMs, deadline - context.ports.now())));
   const verdict = judgePost(reply, id, command, context.secrets);
   verdict.observed_at = context.ports.now();
   if (row && verdict.answer && ['queued', 'running', 'passed', 'failed'].includes(outcomeFor(verdict.answer, { kind: 'check' }).state))
     line(context.ports.stderr, `Sent 1 check at ${clock(context.ports.now())}: ${row.test}.`);
   if (row) row.post_verdict = verdict.kind;
+  if (machine && !verdict.answer) {
+    const busy = !verdict.maintenance && ['busy', 'unknown'].includes(verdict.kind) && [429, 503].includes(reply.status);
+    await machineObservation(context, id, verdict.kind === 'unknown' ? 'unknown' : busy ? 'busy'
+      : verdict.kind === 'busy' ? 'busy' : reply.unreachable ? 'not_sent'
+      : ['refused', 'not_run', 'stop'].includes(verdict.kind) ? 'refused' : 'unknown',
+      ['busy', 'not_run', 'stop', 'refused', 'not_sent'].includes(verdict.kind), { busy, waitMs: verdict.wait });
+  }
   if (verdict.maintenance) maintenanceNotice(context, verdict, reply);
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   if (verdict.admission) context.store.write(join(context.folder, `${id}.admission.json`), verdict.admission);
@@ -1410,73 +1474,85 @@ async function sendCheckAttempt(context, row) {
     markCapacityUnknown(context, row);
     return;
   }
-  adoptClaims(context, row);
-  if (row.request_ids.length !== attempt || !['ready', 'waiting'].includes(row.state) || context.interrupted || context.ports.now() >= context.deadline) {
-    await finishReservation(context, row, { state: 'not_run' });
-    if (context.interrupted && row.request_ids.length === attempt && ['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
-    return;
-  }
-  if (row.restart_pending) {
-    const restartPath = claimPath(context, row).replace(/\.0\.dispatch\.json$/, '.restart.json');
-    let claim;
-    try { claim = openSync(restartPath, 'wx', 0o600); }
-    catch (error) {
-      await finishReservation(context, row, { state: 'not_run' });
-      if (error.code !== 'EEXIST') throw error;
-      row.restart_pending = false; adoptClaims(context, row); row.state = 'unknown'; return;
+  const id = context.ports.randomUUID();
+  const machine = await acquireMachine(context, id, 'check', row, context.deadline);
+  if (!machine) { await finishReservation(context, row, { state: 'not_run' }); return; }
+  try {
+    if (row.request_ids.length && (row.busy || row.capacity_uncertain) && !row.restart_pending && !capacityRetryAllowed(context, row)) {
+      markCapacityUnknown(context, row); return;
     }
-    try { writeSync(claim, JSON.stringify({ used: true })); } finally { closeSync(claim); }
-    row.restart_used = true; row.restart_pending = false;
-    line(context.ports.stderr, 'The interpreter restarted during this check. pdd sends it again (1 of 1).');
-  }
-  // Acquire by original row and attempt, before allocating the UUID. Never remove a claim:
-  // an interruption between claim and POST leaves dispatch uncertain, never replayable.
-  const path = claimPath(context, row, attempt);
-  let fd;
-  try { fd = openSync(path, 'wx', 0o600); }
-  catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    await finishReservation(context, row, { state: 'not_run' });
     adoptClaims(context, row);
-    if (row.dispatchIncomplete) Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', final: true,
-      why: 'An interrupted dispatch claim has no recoverable ID. No replacement check was sent.' });
-    return;
-  }
-  let id;
-  try { id = context.ports.randomUUID(); writeSync(fd, JSON.stringify({ id, reservation: row.reservation, restart: !!row.restart_used })); }
-  finally { closeSync(fd); }
-  if (context.interrupted || context.ports.now() >= context.deadline) {
-    await finishReservation(context, row, { state: 'not_run' });
-    adoptClaims(context, row);
-    if (context.interrupted) row.note = { code: null, message: 'Stopped before sending.' };
-    return;
-  }
-  row.attempts = (row.attempts ?? 0) + 1;
-  row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
-  row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
-  row.phase = 'server';
-  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
-  const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
-  if (verdict.kind === 'not_sent') {
-    const note = { code: null, message: 'Stopped before sending.' };
-    // Live knowledge owns this attempt's wording only; claim adoption still owns uncertainty.
-    if (context.interrupted) (context.unsentInterruptions ??= new WeakMap()).set(row, { id, note });
-    Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note });
-  }
-  else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context, verdict.wait, verdict.observed_at);
-  else if (verdict.kind === 'busy') {
-    if (row.request_ids.length > 1 && !capacityRetryAllowed(context, row)) markCapacityUnknown(context, row);
-    else markBusy(context, row, verdict.wait, verdict.observed_at);
-  }
-  else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
-  else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
-  else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
-  // An explicit caller deadline also bounds recovery of a lost POST answer.
-  else {
-    if (verdict.capacity_uncertain) markCapacityUnknown(context, row);
-    else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Number.isFinite(context.deadline)
-      ? context.deadline : context.ports.now() + LOST_READ_MS });
-    row.lost = true; row.read_until = Number.isFinite(context.deadline) ? context.deadline : context.ports.now() + LOST_READ_MS;
+    if (row.request_ids.length !== attempt || !['ready', 'waiting'].includes(row.state) || context.interrupted || context.ports.now() >= context.deadline) {
+      await finishReservation(context, row, { state: 'not_run' });
+      if (context.interrupted && row.request_ids.length === attempt && ['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
+      return;
+    }
+    if (row.restart_pending) {
+      const restartPath = claimPath(context, row).replace(/\.0\.dispatch\.json$/, '.restart.json');
+      let claim;
+      try { claim = openSync(restartPath, 'wx', 0o600); }
+      catch (error) {
+        await finishReservation(context, row, { state: 'not_run' });
+        if (error.code !== 'EEXIST') throw error;
+        row.restart_pending = false; adoptClaims(context, row); row.state = 'unknown'; return;
+      }
+      try { writeSync(claim, JSON.stringify({ used: true })); } finally { closeSync(claim); }
+      row.restart_used = true; row.restart_pending = false;
+      line(context.ports.stderr, 'The interpreter restarted during this check. pdd sends it again (1 of 1).');
+    }
+    // Claim the original row and attempt only after machine admission. Never remove a claim:
+    // an interruption between claim and POST leaves dispatch uncertain, never replayable.
+    const path = claimPath(context, row, attempt);
+    let fd;
+    try { fd = openSync(path, 'wx', 0o600); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      await finishReservation(context, row, { state: 'not_run' });
+      adoptClaims(context, row);
+      if (row.dispatchIncomplete) Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', final: true,
+        why: 'An interrupted dispatch claim has no recoverable ID. No replacement check was sent.' });
+      return;
+    }
+    try { writeSync(fd, JSON.stringify({ id, reservation: row.reservation, restart: !!row.restart_used })); }
+    finally { closeSync(fd); }
+    if (context.interrupted || context.ports.now() >= context.deadline) {
+      await finishReservation(context, row, { state: 'not_run' });
+      adoptClaims(context, row);
+      if (context.interrupted) row.note = { code: null, message: 'Stopped before sending.' };
+      return;
+    }
+    row.attempts = (row.attempts ?? 0) + 1;
+    row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
+    row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
+    row.phase = 'server';
+    const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
+    const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())), machine);
+    if (verdict.kind === 'not_sent') {
+      const note = { code: null, message: 'Stopped before sending.' };
+      // Live knowledge owns this attempt's wording only; claim adoption still owns uncertainty.
+      if (context.interrupted) (context.unsentInterruptions ??= new WeakMap()).set(row, { id, note });
+      Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note });
+    }
+    else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context, verdict.wait, verdict.observed_at);
+    else if (verdict.kind === 'busy') {
+      if (row.request_ids.length > 1 && !capacityRetryAllowed(context, row)) markCapacityUnknown(context, row);
+      else markBusy(context, row, verdict.wait, verdict.observed_at);
+    }
+    else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
+    else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
+    else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
+    // An explicit caller deadline also bounds recovery of a lost POST answer.
+    else {
+      if (verdict.capacity_uncertain) markCapacityUnknown(context, row);
+      else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Number.isFinite(context.deadline)
+        ? context.deadline : context.ports.now() + LOST_READ_MS });
+      row.lost = true; row.read_until = Number.isFinite(context.deadline) ? context.deadline : context.ports.now() + LOST_READ_MS;
+    }
+  } finally {
+    if (!machine.dispatched) {
+      await machineObservation(context, id, 'not_sent', true);
+      await finishReservation(context, row, { state: 'not_run' });
+    }
   }
 }
 
@@ -1681,7 +1757,7 @@ async function runScheduledChecks(context, rows, toSend) {
   };
   let waitingShown = -1;
   const progress = context.checkProgress ??= { startedAt: ports.now(), shownAt: ports.now() };
-  const readable = row => isOpen(row) && ports.now() < Math.min(context.deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
+  const readable = row => !row.machineWaiting && isOpen(row) && ports.now() < Math.min(context.deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   try {
   while (!context.interrupted && !context.readStop) {
     // Never count an uncertain dispatched job as a free slot, even if it cannot currently be read.
@@ -2153,7 +2229,8 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   // A pdd that was killed can leave rows that never got an answer: read them if they were posted.
   for (const row of rows) if (['ready', 'sending', 'waiting'].includes(row.state)) {
     if (row.request_ids.length) row.state = 'unknown';
-    else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'pdd stopped before sending this check.' } });
+    else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', busy: !row.dispatchIncomplete, can_retry: !row.dispatchIncomplete,
+      note: { code: null, message: 'pdd stopped before sending this check.' } });
   }
   // A final POST refusal has no run receipt. Legacy rows retain their final verdict,
   // but stale busy flags are not evidence that an allocated ID was unstarted.
@@ -2292,6 +2369,7 @@ async function runRequest(context, id, cwd) {
   if (read.kind === 'state') {
     const owner=owningCheckBatch(context,identity,origin,id);
     if(owner?.not_checked?.length) Object.assign(row,{not_checked:owner.not_checked,criteria_total:owner.criteria_total,criterion_texts:owner.criterion_texts,steps:owner.steps});
+    await machineAnswer(context, read.answer);
     applyAnswer(row, read.answer, context);
   }
   else row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
@@ -2367,6 +2445,7 @@ async function runCallRead(context, id) {
   const answer = verified && !(command === 'call' && reply.json.state === 'passed' && !isObject(reply.json.result?.program_result)) ? reply.json : null;
   if (answer?.command === 'check') {
     Object.assign(context, { origin, secrets: [identity.token] });
+    await machineAnswer(context, answer);
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     const owner = await refreshCheckBatches(context, identity, origin, id, answer);
     if (owner?.row.not_checked?.length) Object.assign(row, {not_checked:owner.row.not_checked,criteria_total:owner.row.criteria_total,
@@ -2406,7 +2485,7 @@ async function runCallRead(context, id) {
 // Its lifetime covers scheduler waits, recovery and every phase of a retry.
 async function withCheckRun(context, run) {
   let ownership;
-  context.postCheck = async (request, row, timeoutMs) => {
+  context.postCheck = async (request, row, timeoutMs, machine) => {
     ownership ??= (async () => {
       if (!context.testCache) {
         const cache = context.testCache = await openTestCache(context, context.root, false);
@@ -2417,7 +2496,7 @@ async function withCheckRun(context, run) {
       if (!cache.disabled && !cache.mark) await cacheTransaction(cache, data => markTestAttempt(cache, data));
     })();
     await ownership;
-    return postJob(context, '/v1/check', 'check', request, row, timeoutMs);
+    return postJob(context, '/v1/check', 'check', request, row, timeoutMs, context.deadline, machine);
   };
   let result;
   try { result = await run(); }
@@ -2546,7 +2625,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     try { context.releaseBatch?.(); }
     catch (error) {
       try { line(ports.stderr, `Warning: could not release batch ${context.lockedBatch ?? context.batch ?? 'ownership'} (${cleanText(error.code ?? 'state error')}).`); } catch { /* preserve the command outcome */ }
-    } finally { release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
+    } finally { release(); await finishMachineRequests(context); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
   }
 }
 
@@ -3425,7 +3504,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
     if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
-  } finally { release();for(const lease of context.caseWriteLeases?.values()??[])lease.release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
+  } finally { await finishMachineRequests(context); release();for(const lease of context.caseWriteLeases?.values()??[])lease.release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
 
 // pdd simulate --stop [STORY]: find the Try by its story name in the state record, so it works on any branch (real-user issue 14).

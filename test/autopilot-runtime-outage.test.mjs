@@ -1,3 +1,5 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 // #3039: an interpreter outage parks only the runs that need the interpreter, frees their slots, alerts once and recovers by itself.
 // Every the interpreter, health, HTTP, Discord and clock port is injected; no test calls the real the interpreter or a chat service.
 import test from 'node:test';
@@ -243,15 +245,16 @@ async function launcher(t) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-06T12:00:00Z'), prompts: [], issues: [], waits: [], health: { state: 'healthy', detail: 'HTTP 200' }, healthCalls: 0, probe: 'pending', alerts: [], sent: [] };
   f.ports = {
+    ...healthyMachine,
     allocationCheck: async () => ({ state: 'ready', message: '' }),
-    stateRoot: join(home, 'state'), now: () => f.time, readRunProgress: async () => [], warn: () => {},
+    checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time, readRunProgress: async () => [], warn: () => {},
     readRuntimeWaits: async () => structuredClone(f.waits),
     runtimeHealth: async () => { f.healthCalls++; return f.health; },
     readRuntimeProbe: async () => f.probe,
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [],
     run: async (command, args) => {
       if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
@@ -502,7 +505,7 @@ test('real path: a parked run record, the real health check over HTTP, a test wa
   delete f.ports.readRuntimeWaits; delete f.ports.runtimeHealth; delete f.ports.readRuntimeProbe;
   const bin = join(f.dir, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nif [ "$1" = "auth" ] && [ "$2" = "token" ]; then echo gho_fake_token; exit 0; fi\nexit 1\n', { mode: 0o755 });
-  f.ports.env = { PDD_RUNTIME_URL: `http://127.0.0.1:${server.address().port}`, PATH: `${bin}:${process.env.PATH}`, PDD_STATE_DIR: join(rf.ports.env.HOME, '.pdd', 'runtime') };
+  f.ports.env = { HOME: f.home, PDD_RUNTIME_URL: `http://127.0.0.1:${server.address().port}`, PATH: `${bin}:${process.env.PATH}`, PDD_STATE_DIR: join(rf.ports.env.HOME, '.pdd', 'runtime') };
   await f.start(); f.prompts.length = 0;
   // The launcher reads the parked record from its run folder (the fake git names the checkout as its common dir).
   const folder = join(f.cwd, 'pdd', 'runs', String(record.number)); mkdirSync(folder, { recursive: true });
@@ -542,7 +545,7 @@ test('real pdd test: a posted check that did not run is sent again by the Story 
   // The run waits for the interpreter (its park record, read by the real readRuntimeWaits); the tick wakes it as the test after the outage.
   const f = await launcher(t);
   delete f.ports.readRuntimeWaits; delete f.ports.readRuntimeProbe;
-  f.ports.env = { PDD_STATE_DIR: setup.state, PATH: process.env.PATH };
+  f.ports.env = { HOME: f.home, PDD_STATE_DIR: setup.state, PATH: process.env.PATH };
   f.time = Date.parse('2026-10-27T15:00:00Z');
   await f.start(); f.prompts.length = 0;
   const folder = join(f.cwd, 'pdd', 'runs', '12'); mkdirSync(folder, { recursive: true });
