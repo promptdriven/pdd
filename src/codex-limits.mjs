@@ -1,4 +1,4 @@
-// Generated from prompts/cli/codex-limits.prompt.md (sha256: 9f6669d6ddf6f0e0bcbbc0570a8ac8e83012d97e90f9eaec08dd70cc990e9cf6).
+// Generated from prompts/cli/codex-limits.prompt.md (sha256: 2d6754461572f93dc5b92b6987ec7b8f492feb09c30f85664c0f7b2d01525f19).
 import { spawn } from 'node:child_process';
 const unknown = () => ({ state: 'unknown', resetAt: null, usedPercent: null });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -24,8 +24,16 @@ export async function readCodexLimits({ command = 'codex', cwd, env = process.en
       if (done) return;
       done = true; clearTimeout(timer);
       if (!child || closed) { resolve(value); return; }
-      const kill = setTimeout(() => child.kill('SIGKILL'), 500);
-      child.once('close', () => { clearTimeout(kill); resolve(value); });
+      const complete = () => { clearTimeout(kill); clearTimeout(cleanup); resolve(value); };
+      const kill = setTimeout(() => {
+        if (child.exitCode == null && child.signalCode == null) child.kill('SIGKILL');
+      }, 500);
+      const cleanup = setTimeout(() => {
+        // Descendants can retain inherited pipes after the direct child exits.
+        child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+        child.unref?.(); complete();
+      }, 1_000);
+      child.once('close', complete);
       child.stdin.end(); child.kill('SIGTERM');
     };
     const send = value => child.stdin.write(JSON.stringify(value) + '\n');
