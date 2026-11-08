@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 51cf866372bcd55f731acc074d225cc5e2a1e96a727dba20085b087449a171c7).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 249b4577e77097450e54fe2c27a2bba445c33e41a84101bec3cd7128dfae16a7).
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';
@@ -195,15 +195,22 @@ export function savedCheckCause(batch, { env = process.env } = {}) {
 }
 // Proof that the interpreter gave a verdict after a time: a passed or failed row of this worktree's pdd test that ended at or
 // after `since` (a sent check, not a cached pass or a read of an older answer). It reads files only.
-export function checkVerdictSince({ root, since }, { env = process.env } = {}) {
+export function latestCheckVerdict({ root, since }, { env = process.env } = {}) {
   const directory = join(stateFolder(env), 'batches'), wanted = real(root);
   let names;
-  try { names = readdirSync(directory).filter(name => BATCH.test(name)); } catch { return false; }
-  return names.some(name => {
+  try { names = readdirSync(directory).filter(name => BATCH.test(name)); } catch { return null; }
+  let latest = null;
+  for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
-    return batch?.batch === name && batch.intent === 'check' && typeof batch.root === 'string' && Array.isArray(batch.rows) && real(batch.root) === wanted
-      && batch.rows.some(row => ['passed', 'failed'].includes(row?.state) && Number.isFinite(row.ended_at) && row.ended_at >= since);
-  });
+    if (batch?.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string'
+      || !Array.isArray(batch.rows) || real(batch.root) !== wanted) continue;
+    for (const row of batch.rows) if (['passed', 'failed'].includes(row?.state) && Number.isFinite(row.ended_at) && row.ended_at >= since)
+      latest = latest === null ? row.ended_at : Math.max(latest, row.ended_at);
+  }
+  return latest;
+}
+export function checkVerdictSince({root, since}, {env = process.env} = {}) {
+  return latestCheckVerdict({root, since}, {env}) !== null;
 }
 
 function more({ requests = [], reports = [] }) {

@@ -32,7 +32,7 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
   const list = async () => (await ports.list()).filter(owned);
   let runs = await list();
   for (const run of runs) {
-    if (run.parking?.phase === 'waking') continue;
+    if (['waking', 'releasing'].includes(run.parking?.phase)) continue;
     const blocker = blockerFor(run) ?? await ports.observeBlocker?.(run);
     if (!blocker && !run.parking) continue;
     const progress = await ports.checkProgress(run);
@@ -60,9 +60,9 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
   if (wake && release) {
     const hours = Number.isFinite(policy.hours) && policy.hours > 0 ? policy.hours : 48;
     const maxParked = Number.isSafeInteger(policy.maxParked) && policy.maxParked > 0 ? policy.maxParked : 2 * limit;
-    const parked = (await list()).filter(run => run.parking?.phase === 'parked').sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
+    const parked = (await list()).filter(run => ['parked', 'releasing'].includes(run.parking?.phase)).sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
     let excess = Math.max(0, parked.length - maxParked);
-    for (const run of parked) if (ports.now() - run.parking.at >= hours * 3600000 || excess > 0) {
+    for (const run of parked) if (run.parking.phase === 'releasing' || ports.now() - run.parking.at >= hours * 3600000 || excess > 0) {
       const released = await ports.release(run);
       if (released) excess = Math.max(0, excess - 1);
     }

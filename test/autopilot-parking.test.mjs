@@ -7,7 +7,7 @@ import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import {tickAutopilot, runAutopilotLauncher} from '../src/autopilot-launcher.mjs';
-import {runStatus, parkAutomaticRun, changeRun, startRun} from '../src/workflow-runner.mjs';
+import {runStatus, parkAutomaticRun, changeRun, startRun, openRun} from '../src/workflow-runner.mjs';
 import {createDependencyReadPorts} from '../src/issue-dependencies-github.mjs';
 import {checkDependencyStart} from '../src/issue-dependencies-intake.mjs';
 
@@ -375,4 +375,128 @@ for (const kind of ['ci', 'review']) test(`3091 ${kind} wake needs a completed r
   };
   await tick(); assert.equal(f.record().parking.phase, 'parked'); assert.equal(launches(f).length, 0);
   done = true; await tick(); assert.equal(f.record().parking, undefined); assert.equal(launches(f).length, 1);
+});
+
+// Repair 1: AC3/AC6. A release and a reply must not both acquire the run.
+test('3091 repair release serializes a reply during remote claim removal', async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  await tick(); assert.equal(f.record().parking?.phase, 'parked');
+  fullTicks(f, stateFile, ports);
+  let reply;
+  ports.releaseParkedClaim = async () => {
+    reply = await changeRun({ref: '17', cwd: f.source, text: 'Continue with the saved work', packageRoot}, f.ports);
+    return {state: 'released'};
+  };
+  f.tick(48 * 3600000); await tick();
+  assert.ok(reply, 'timeout must reach the remote release');
+  assert.notEqual(reply.recovery, 'resumed', 'a releasing run must refuse a concurrent reply wake');
+  assert.equal(f.record().state, 'cancelled');
+  assert.equal(launches(f).length, 0);
+});
+
+test('3091 repair unknown release retains custody and retries after restart', async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  await tick(); fullTicks(f, stateFile, ports);
+  let attempts = 0;
+  ports.releaseParkedClaim = async () => (++attempts === 1 ? {state: 'unavailable'} : {state: 'released'});
+  f.tick(48 * 3600000); await tick();
+  assert.equal(f.record().parking?.phase, 'releasing', 'unknown claim release must reserve custody');
+  assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 1);
+  const reply = await changeRun({ref: '17', cwd: f.source, text: 'Continue with the saved work', packageRoot}, f.ports);
+  assert.notEqual(reply.recovery, 'resumed'); assert.equal(launches(f).length, 0);
+  assert.equal((await openRun({ref: '17', cwd: f.source, packageRoot}, f.ports)).exitCode, 1);
+  await tick(); assert.equal(attempts, 2); assert.equal(f.record().state, 'cancelled');
+});
+
+// AC3: both clear in the same tick, with only one working slot.
+for (const budgetDeferred of [false, true]) test(`3091 repair oldest ready interpreter wakes before younger release wait (deferred=${budgetDeferred})`, async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.runtimeWait = {at: f.clock, reason: 'no verdict', cause: 'service'}; save(f, run);
+  await tick(); assert.equal(f.record().parking?.phase, 'parked');
+  const other = await anotherRun(f, 18); f.tick(1000); await tick();
+  assert.equal(other().parking?.phase, 'parked');
+  fullTicks(f, stateFile, ports);
+  if (budgetDeferred) {
+    const state = JSON.parse(readFileSync(stateFile)); state.retryAt = f.clock + 3600000; writeFileSync(stateFile, JSON.stringify(state));
+    ports.queryIssues = async () => assert.fail('GitHub reads must remain deferred');
+  }
+  f.herdr.calls.length = 0; ports.packageVersion = '99.0.0'; await tick();
+  assert.equal(f.record().parking, undefined, 'oldest ready park must own the last slot across blocker kinds');
+  assert.equal(other().parking.phase, 'parked');
+  assert.equal(launches(f).length, 1);
+  assert.deepEqual(JSON.parse(readFileSync(stateFile)).parking.wakePending, [18]);
+});
+
+// AC1/AC3: the park command cannot invent a completed person wait.
+test('3091 repair explicit person blocker requires a pending question or gate', async t => {
+  const {f, tick} = await setup(t);
+  const before = f.record();
+  const ports = {...f.ports, owners: {read: async () => ({json: JSON.stringify({localOwner: 'park-owner', runsKnown: true, runs: [], claims: [{issue: before.issue.url, active: true, owner: 'park-owner', coordinatorId: 'park-owner', machine: 'park-machine', commentId: '11', labelEventId: '12'}]})})}};
+  const result = await parkAutomaticRun({cwd: before.root, reason: 'Need a person to decide', blocker: 'person'}, ports);
+  assert.equal(result.exitCode, 1, 'unbound person blocker must be refused');
+  assert.deepEqual(f.record(), before);
+  const waiting = f.record(); waiting.question = {at: f.clock, text: 'Choose the case'}; save(f, waiting);
+  assert.equal((await parkAutomaticRun({cwd: before.root, reason: 'Need a person to decide', blocker: 'person'}, ports)).exitCode, 0);
+  await tick(); assert.equal(f.record().parking?.phase, 'parked');
+  await tick(); assert.equal(f.record().parking?.phase, 'parked'); assert.equal(launches(f).length, 0);
+  assert.equal((await changeRun({ref: '17', cwd: f.source, text: 'Use the first case', packageRoot}, f.ports)).recovery, 'resumed');
+});
+
+test('3091 repair unbound saved person wait cannot clear without a reply', async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'person', until: null}; save(f, run);
+  await tick(); assert.equal(f.record().parking?.phase, 'parked');
+  fullTicks(f, stateFile, ports); await tick();
+  assert.equal(f.record().parking?.phase, 'parked', 'absence of a question is not a recorded reply');
+  assert.equal(launches(f).length, 0);
+});
+
+// AC4: use the native wait reader and real saved check batches in the fixture home.
+for (const hadTestMode of [false, true]) for (const laterFailures of [0, 2, 3]) test(`3091 repair verdict cutoff excludes older failures and counts ${laterFailures} newer waits (testMode=${hadTestMode})`, async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const at = f.clock;
+  const run = f.record(); run.state = 'paused'; run.runtimeWait = {at: at + 1, reason: 'no verdict', cause: 'service'}; save(f, run);
+  for (const [i, number] of [18, 19, 20, 21, 22].entries()) {
+    const read = await anotherRun(f, number), row = read();
+    delete row.blockedOn; row.runtimeWait = {at: at + (i < 2 ? 2 * (i + 1) : i + 3), reason: 'no verdict', cause: 'service'};
+    if (i >= 2 && i - 2 >= laterFailures) {delete row.runtimeWait; row.state = 'running';}
+    save(f, row);
+  }
+  const batch = '20261108-120000-abcd', folder = join(f.ports.env.HOME, '.pdd/runtime/batches', batch);
+  const {mkdirSync} = await import('node:fs'); mkdirSync(folder, {recursive: true});
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify({batch, root: run.root, intent: 'check', rows: [{state: 'passed', ended_at: at + 4}, {state: 'failed', ended_at: at + 2}]}));
+  const state = JSON.parse(readFileSync(stateFile)); state.interpreterPattern = {streak: 2, seen: {}, observedAt: at, testMode: hadTestMode};
+  if (hadTestMode) state.runtime = {outage: {since: at, first: 17, issues: [], probed: [17], probe: {number: 17, at: at + 1, offeredAt: at + 3}}};
+  writeFileSync(stateFile, JSON.stringify(state)); fullTicks(f, stateFile, ports);
+  ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+  f.tick(10000); await tick();
+  let pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+  assert.equal(pattern.streak, laterFailures, 'only no-verdict waits after the newest verdict belong to the streak');
+  assert.equal(Boolean(pattern.testMode), laterFailures >= 3);
+  // The same saved waits must not reappear as new failures on another tick.
+  f.tick(); await tick(); pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+  assert.equal(pattern.streak, laterFailures); assert.equal(Boolean(pattern.testMode), laterFailures >= 3);
+});
+
+for (const changed of ['runId', 'at', 'phase']) test(`3091 repair release revalidates ${changed} after remote effects`, async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  await tick(); fullTicks(f, stateFile, ports);
+  let released = false;
+  ports.releaseParkedClaim = async () => {
+    released = true;
+    // Model a writer that uses progress custody rather than the chat-open lock.
+    const current = f.record();
+    if (changed === 'runId') current.runId += '-replacement';
+    if (changed === 'at') current.parking.at++;
+    if (changed === 'phase') current.parking.phase = 'waking';
+    save(f, current);
+    return {state: 'released'};
+  };
+  f.tick(48 * 3600000); await tick();
+  assert.equal(released, true);
+  assert.notEqual(f.record().state, 'cancelled', 'changed run custody must stop local release and cancellation');
+  assert.ok(existsSync(join(run.commonDir, 'pdd/worktree-assignments/issues/17.json')), 'local allocation must retain changed custody');
 });

@@ -1,15 +1,14 @@
 import {reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
-import {releaseIssueClaim} from './workflow-worktree.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession} from './workflow-chat.mjs';
-import {parkBlockedRun, wakeParkedRun, cancelRun, changeRun} from './workflow-runner.mjs';
+import {parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun} from './workflow-runner.mjs';
 import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 7dbba4e18856126966d9e78bd22f50eb2598b784a513cac8c3b34eea60ad8925).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4c0012837183a180e7eca79040caa6fb00546e403172b55147e78fe2de6c9045).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -32,7 +31,7 @@ import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, releaseParkedClaim, recoverCoordinatorClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
-import { checkVerdictSince } from './workflow-results.mjs';
+import { checkVerdictSince, latestCheckVerdict } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
@@ -404,7 +403,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
-      if (blocker.kind === 'person') return !run.gate && (!run.question || run.question.answeredAt);
+      if (blocker.kind === 'person') return Boolean(run.parking.personWait) && !run.gate && (!run.question || Boolean(run.question.answeredAt));
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (blocker.kind === 'pdd') {
         const installed = p.packageVersion ?? read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {}).version;
@@ -443,15 +442,15 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return false;
     },
     release: async run => p.scanAction(async () => {
-      const claim = {...run.automaticOrigin.claim, issue: run.issue.url, coordinatorId: state.coordinatorId, machine: state.machine};
-      const result = await (p.releaseParkedClaim ?? releaseParkedClaim)({cwd: state.cwd, repository: state.repo, claim,
-        coordinatorId: state.coordinatorId, machine: state.machine, runId: run.runId, branch: run.branch},
-        {...worker, execFile: async (file, args, options) => p.execute(file, args, {...options, purpose: 'claims'})});
-      if (result.state !== 'released') return false;
-      const released = await releaseIssueClaim({cwd: state.cwd, issueNumber: run.number, runId: run.runId}, worker);
-      if (released.state !== 'released') return false;
-      const cancelled = await cancelRun({ref: String(run.number), cwd: state.cwd}, worker);
-      return cancelled.exitCode === 0;
+      const result = await releaseParkedRun({...args(run), runId: run.runId, at: run.parking.at}, {
+        ...worker, releaseParkedClaim: fresh => {
+          const claim = {...fresh.automaticOrigin.claim, issue: fresh.issue.url, coordinatorId: state.coordinatorId, machine: state.machine};
+          return (p.releaseParkedClaim ?? releaseParkedClaim)({cwd: state.cwd, repository: state.repo, claim,
+            coordinatorId: state.coordinatorId, machine: state.machine, runId: fresh.runId, branch: fresh.branch},
+            {...worker, execFile: async (file, args, options) => p.execute(file, args, {...options, purpose: 'claims'})});
+        },
+      });
+      return result.recovery === 'released';
     }),
   };
 }
@@ -675,20 +674,26 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   const saved = state.runtime ?? {}, now = p.now();
   const pattern = state.interpreterPattern ?? {streak: 0, seen: {}};
   const hadTestMode = Boolean(pattern.testMode);
-  if (p.readInterpreterVerdict && await p.readInterpreterVerdict(pattern.observedAt ?? 0)) {pattern.streak = 0; pattern.testMode = false;}
-  else if (!p.readRuntimeWaits) {
+  let verdictAt = null;
+  if (p.readInterpreterVerdict) {
+    const verdict = await p.readInterpreterVerdict(pattern.observedAt ?? 0);
+    verdictAt = verdict === true ? now : Number.isFinite(verdict) ? verdict : null;
+  } else if (!p.readRuntimeWaits) {
     const runs = await parkingPorts(state, p).list();
-    if (runs.some(run => checkVerdictSince({root: run.root, since: pattern.observedAt ?? now}, {env: p.env}))) {
-      pattern.streak = 0; pattern.testMode = false;
+    for (const run of runs) {
+      const at = latestCheckVerdict({root: run.root, since: pattern.verdictAt ?? pattern.observedAt ?? 0}, {env: p.env});
+      if (at !== null) verdictAt = Math.max(verdictAt ?? at, at);
     }
   }
   pattern.observedAt = now;
-  if (pattern.testMode && saved.outage?.probe
-    && await (p.readRuntimeProbe ?? readRuntimeProbe)(state, p, saved.outage.probe) === 'verdict') {
-    pattern.streak = 0; pattern.testMode = false;
+  if (verdictAt === null && pattern.testMode && saved.outage?.probe
+    && await (p.readRuntimeProbe ?? readRuntimeProbe)(state, p, saved.outage.probe) === 'verdict') verdictAt = now;
+  if (verdictAt !== null && verdictAt > (pattern.verdictAt ?? -Infinity)) {
+    pattern.verdictAt = verdictAt; pattern.streak = 0; pattern.testMode = false;
   }
   for (const wait of waits) {
     const key = `${wait.number}:${wait.at}`;
+    if (wait.at <= (pattern.verdictAt ?? -Infinity)) continue;
     if (!pattern.seen[key] && !(saved.retried?.[wait.number]?.mark === wait.mark && saved.retried[wait.number].at < wait.at) && ['service', 'none', 'unknown'].includes(wait.cause)) {pattern.seen[key] = now; pattern.streak++;}
   }
   pattern.seen = Object.fromEntries(Object.entries(pattern.seen).filter(([, at]) => now - at < RUNTIME_KEEP));
@@ -1391,25 +1396,26 @@ function workflowCleanupPorts(p, ports) {
   })};
 }
 async function runTick(stateFile, ports, completion) {
-  const outcome = (state, message) => completion ? { state } : ok(message);
-  let state = read(stateFile), p, scanGuard; if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.');
+  let deferredWakes = null;
+  const outcome = async (status, message) => {await deferredWakes?.(); return completion ? {state: status} : ok(message);};
+  let state = read(stateFile), p, scanGuard; if (!state?.enabled) return await outcome('inactive', 'Autopilot stopped.');
   const lock = stateFile + '.lock';
-  if (!claimTickLock(lock)) { ports.tickBusy?.(); return outcome('busy', 'Autopilot tick already running.'); }
+  if (!claimTickLock(lock)) { ports.tickBusy?.(); return await outcome('busy', 'Autopilot tick already running.'); }
   try {
     state = read(stateFile);
-    if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.');
-    if (ports.expectedStart && !['cwd','repo','coordinatorId','machine','controlRevision'].every(key => state[key] === ports.expectedStart[key])) return outcome('inactive', 'Autopilot start was superseded.');
+    if (!state?.enabled) return await outcome('inactive', 'Autopilot stopped.');
+    if (ports.expectedStart && !['cwd','repo','coordinatorId','machine','controlRevision'].every(key => state[key] === ports.expectedStart[key])) return await outcome('inactive', 'Autopilot start was superseded.');
     p = portsFor(state, { ...ports, githubRoot: dirname(stateFile) });
     if (!state.coordinatorId || !state.machine) {
       const release = await claimAdmission(state, p);
       if (!release) throw Error('Timed out waiting for automatic admission; retry.');
-      try { state = read(stateFile); if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state); }
+      try { state = read(stateFile); if (!state?.enabled) return await outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state); }
       finally { release(); }
     }
     try { await (ports.tidyRuns ?? tidyRuns)({timeBudgetMs:5000}, workflowCleanupPorts(p, ports)); }
     catch (error) { p.warn(`Finished chat cleanup waits (${error.code ?? 'unavailable'}).`); }
     const config = await settings(state, p);
-    if (config.mode === 'off') return outcome('inactive', line(config.message));
+    if (config.mode === 'off') return await outcome('inactive', line(config.message));
     const priorBase = state.baseBranch;
     await automaticBase(state, p);
     if (priorBase !== state.baseBranch) state.recipeDelivered = false;
@@ -1429,9 +1435,9 @@ async function runTick(stateFile, ports, completion) {
     };
     p.scanGuard = scanGuard;
     await observeHealth(state, p);
-    if (!await scanGuard(latest => { latest.health = state.health; })) return outcome('inactive', 'Autopilot changed.');
+    if (!await scanGuard(latest => { latest.health = state.health; })) return await outcome('inactive', 'Autopilot changed.');
     let capacity;
-    if (!await scanGuard(async latest => { capacity = await configureCheckCapacity({env:p.env,checks:state.checks,runs:state.runs,owner:stateFile,resources:state.health?.resource?.resources}, p.checkCapacityPorts ?? p); latest.checkCapacity = capacity; })) return outcome('inactive', 'Autopilot control changed.');
+    if (!await scanGuard(async latest => { capacity = await configureCheckCapacity({env:p.env,checks:state.checks,runs:state.runs,owner:stateFile,resources:state.health?.resource?.resources}, p.checkCapacityPorts ?? p); latest.checkCapacity = capacity; })) return await outcome('inactive', 'Autopilot control changed.');
     state.checkCapacity = capacity;
     p.scanAction = async (action, cleanup = '') => {
       const release = await claimAdmission(state, p);
@@ -1460,10 +1466,25 @@ async function runTick(stateFile, ports, completion) {
       await (p.sendDigest ?? runAutopilotAlerts)(input, alertPorts);
     } catch { /* Digest failures never stop feasible work. */ }
     if (config.mode === 'auto') {
-      await parkingTick(state, p, config, {wake: !state.health.paused, localOnly: true});
+      await parkingTick(state, p, config, {localOnly: true});
+      deferredWakes = async () => {
+        deferredWakes = null;
+        if (state.health.paused) return;
+        state.timeSeen ??= {};
+        const rules = [], pending = {}, local = parkingPorts(state, p, {localOnly: true});
+        // Preserve ordinary interpreter observation timing when no local wake
+        // competes for capacity. A ready local wait must consider older waits.
+        for (const run of await local.list()) if (run.parking?.phase === 'parked' && await local.blockerCleared(run)) {
+          const waits = await (p.readEnvironmentWaits ?? readEnvironmentWaits)(state, p);
+          await environmentTick(state, p, waits, rules, pending, dirname(stateFile));
+          await runtimeTick(state, p, completion, rules, pending, dirname(stateFile));
+          break;
+        }
+        await parkingTick(state, p, config, {wake: true, localOnly: true, wakeRules: rules});
+      };
       await resumeStoppedWorkers(state, p);
     }
-    if (state.retryAt > p.now()) return outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
+    if (state.retryAt > p.now()) return await outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
     // The GitHub budget of the tick on this machine, from the local ledgers and the newest limit that GitHub reported.
     let budget = { state: 'normal' }, restLeft;
     try {
@@ -1497,7 +1518,7 @@ async function runTick(stateFile, ports, completion) {
       // No rate-limit wait is saved: each tick until the reset computes the budget again and sends the heartbeats again.
       const claims = ownClaimsOf(Array.isArray(state.githubIntake?.claims) ? state.githubIntake.claims : []);
       if (!(Number.isFinite(restLeft) && restLeft < 2 * claims.length)) await sendHeartbeats(claims, true);
-      return outcome('unknown', `GitHub limit low: ${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor}; Autopilot waits until ${new Date(budget.resetAt).toISOString()}, except the heartbeats of this machine's claims.`);
+      return await outcome('unknown', `GitHub limit low: ${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor}; Autopilot waits until ${new Date(budget.resetAt).toISOString()}, except the heartbeats of this machine's claims.`);
     }
     // A due relaunch wakes even without new work; the fresh chat starts with the recipe.
     const relaunch = relaunchTarget(state, p);
@@ -1567,7 +1588,7 @@ async function runTick(stateFile, ports, completion) {
       if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {
         const claims = ownClaimsOf(Array.isArray(savedIntake?.claims) ? savedIntake.claims : []);
         await sendHeartbeats(claims, true);
-        return outcome('unknown', 'GitHub limit is below the floor; dependency progress is saved until reset.');
+        return await outcome('unknown', 'GitHub limit is below the floor; dependency progress is saved until reset.');
       }
       if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [], groups: Array.isArray(intake.groups) ? intake.groups : [] };
       else delete state.githubIntake;
@@ -1621,8 +1642,8 @@ async function runTick(stateFile, ports, completion) {
 
     try { await (p.cleanupWorktrees ?? (input => cleanupWorktrees(input, { execute: p.execute })))({ cwd: state.cwd, repository: state.repo }); } catch { /* Retain unknown worktrees. */ }
     const result = p.queryIssues ? await p.queryIssues(state) : await queryIssues(state, p);
-    if (result.reserveBlocked) return outcome('unknown', 'GitHub limit is below the floor; retry after reset.');
-    if (result.status === 429 || result.rateLimited) { state.retryAt = result.resetAt || p.now() + INTERVAL; return outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
+    if (result.reserveBlocked) return await outcome('unknown', 'GitHub limit is below the floor; retry after reset.');
+    if (result.status === 429 || result.rateLimited) { state.retryAt = result.resetAt || p.now() + INTERVAL; return await outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
     if (![200, 304].includes(result.status)) throw Error('GitHub issue check failed; check gh auth status.');
     delete state.retryAt;
     if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; }
@@ -1695,6 +1716,7 @@ async function runTick(stateFile, ports, completion) {
       }
     }
     await healthAlerts(state, p, dirname(stateFile));
+    deferredWakes = null;
     if (!state.health.paused) {
       await environmentTick(state, p, environmentWaits, timeRules, pendingTimes, dirname(stateFile));
       await runtimeTick(state, p, completion, timeRules, pendingTimes, dirname(stateFile));
@@ -1831,7 +1853,7 @@ async function runTick(stateFile, ports, completion) {
         }
       }
     }
-    if (!await scanGuard()) return outcome('inactive', 'Autopilot changed.');
+    if (!await scanGuard()) return await outcome('inactive', 'Autopilot changed.');
     let delivered = false;
     const metricsContext=p.metricsContext ?? (cwd=>gitContext(cwd,{execFile:(file,args,options)=>p.execute(file,args,options)}));
     const metricsFiles={...nativeFiles,...p.metricsFiles};
@@ -1892,9 +1914,9 @@ async function runTick(stateFile, ports, completion) {
         } catch (error) { p.warn(`Long-running alert record deferred for ${claim.issue}: ${line(error.message)}`); }
       }
     }
-    return outcome('reconciled', [delivered ? `Autopilot offered ${work.length} issue(s).` : 'Autopilot tick complete.', ...warnings].join(' '));
+    return await outcome('reconciled', [delivered ? `Autopilot offered ${work.length} issue(s).` : 'Autopilot tick complete.', ...warnings].join(' '));
   } catch (e) {
-    if (e.resetAt) { state.retryAt = e.resetAt; return outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
+    if (e.resetAt) { state.retryAt = e.resetAt; return await outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
     throw e;
   } finally {
     try {

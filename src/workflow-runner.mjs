@@ -9,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 30d96ffb5fc174e1595a1501ef22d0d02f0a63fbc588e86abf79252628a34e45).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f274ecc46bb030b6ef467d3cfdf1a9ba78c1da7fd2fe2688e97bf5fcba4d14b0).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -187,6 +187,7 @@ function commitRun(run, p, update) {
 function protectProgress(run,p,{approval=false}={}) {
   const selectedState=run.state,selectedGate=structuredClone(run.gate ?? null),selectedArea=run.area;
   const check=latest=>{
+    if (latest.parking?.phase === 'releasing') throw Object.assign(Error('This parked run is releasing its claim. Wait for release to finish.'), {code: 'workflow_progress_refused'});
     if(ended(latest) && !(selectedState==='completed'&&latest.state==='completed'&&selectedGate?.kind==='ask-code'))
       throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`),{code:'workflow_progress_refused'});
     if(approval && (latest.area!==selectedArea || Boolean(latest.gate)!==Boolean(selectedGate) || (selectedGate?.id && latest.gate?.id!==selectedGate.id) || ['area','kind','at'].some(key=>latest.gate?.[key]!==selectedGate?.[key])))
@@ -3327,6 +3328,7 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
         : blocker === 'pdd' ? /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(until ?? '')
         : ['account', 'github'].includes(blocker) ? Number.isFinite(Date.parse(until))
         : until === undefined);
+    if (blocker === 'person' && !run.gate && !openQuestion(run)) return fail('A person blocker requires a pending question or gate. Nothing was parked.');
     if (!valid) return fail('Name a blocker and its clearing value: dependency issue, pdd release, or account/github reset time.');
     blockedOn = {kind: blocker, until: until ?? null};
   } else if (until !== undefined) return fail('--until requires --blocker.');
@@ -3556,6 +3558,7 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
   if (await environmentWakeAllowed(found.run, text, p) === false) return done('Environment validation retry is not due, healthy or current. Nothing was sent.');
   const retryRefusal = await personRetryRefusal(found.run, text, p);
   if (retryRefusal) return fail(retryRefusal);
+  if (found.run.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   if (!p.queueOnly && found.run.parking?.phase === 'parked') {
     const origin = found.run.automaticOrigin;
     const resumed = await wakeParkedRun({ref, cwd, at: found.run.parking.at, packageRoot,
@@ -4298,6 +4301,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
+  if (run.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
   let beforeLaunch, resumeSuccess = null;
@@ -4538,6 +4542,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
 
 const openRunCommand = async (args, ports) => {
   const p = deps(ports), found = await resolveRun(args.ref, {cwd: args.cwd}, p);
+  if (found.run?.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   if (found.run?.parking?.phase === 'parked') {
     const run = found.run, origin = run.automaticOrigin;
     const resumed = await wakeParkedRun({...args, at: run.parking.at, coordinatorId: origin.coordinatorId, machine: origin.machine}, ports);
@@ -4641,7 +4646,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   const skipped = () => ({...done(''), recovery: 'skipped'});
   if (!run || ended(run) || !validSavedAutomaticOrigin(run)
     || run.automaticOrigin.coordinatorId !== input.coordinatorId || run.automaticOrigin.machine !== input.machine
-    || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || run.parking?.phase === 'waking') return skipped();
+    || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || ['waking', 'releasing'].includes(run.parking?.phase)) return skipped();
   if (run.parking?.phase === 'parked') return {...done(''), recovery: 'parked'};
   if (continuationCheckHeld(run, p)) return skipped();
   if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'environmentRetry', 'automaticOrigin']
@@ -4651,7 +4656,9 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin};
   const unchanged = fresh => fresh && fresh.runId === run.runId && fresh.root === run.root && !ended(fresh) && Object.entries(snapshot).every(([key, value]) => sameFact(fresh[key], value));
   if (!conditionalCommit(run, p, unchanged, fresh => {
-    fresh.parking ??= {at: p.now(), blocker: input.blocker, phase: 'closing'};
+    fresh.parking ??= {at: p.now(), blocker: input.blocker, phase: 'closing',
+      ...(input.blocker.kind === 'person' && (run.gate || openQuestion(run))
+        ? {personWait: {gate: run.gate ?? null, question: run.question ?? null}} : {})};
   })) return skipped();
   const parked = readRun(run.runDir), copy = structuredClone(parked);
   const result = await closeFinishedChats(copy, {...p, force: true, reason: 'park', checkpoint: async (chat, layout) => {
@@ -4670,6 +4677,27 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   if (closed) conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at,
     fresh => {fresh.parking.phase = 'parked';});
   return {...done(result.warnings.join('\n')), recovery: closed ? 'parked' : 'skipped'};
+}));
+
+// Keep run custody through the irreversible release. Unknown effects retain a
+// durable reservation, so a later tick retries instead of resuming unowned work.
+export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
+  const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
+  const skipped = () => ({...done(''), recovery: 'skipped'});
+  const current = fresh => fresh && fresh.runId === input.runId && !ended(fresh)
+    && fresh.parking?.at === input.at && ['parked', 'releasing'].includes(fresh.parking.phase)
+    && validSavedAutomaticOrigin(fresh) && fresh.automaticOrigin.coordinatorId === input.coordinatorId
+    && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd)
+    && sameFact(fresh.automaticOrigin, run?.automaticOrigin) && fresh.root === run?.root;
+  if (!current(run) || typeof p.releaseParkedClaim !== 'function') return skipped();
+  if (!conditionalCommit(run, p, current, fresh => {fresh.parking.phase = 'releasing';})) return skipped();
+  if (!current(readRun(run.runDir))) return skipped();
+  const remote = await p.releaseParkedClaim(readRun(run.runDir));
+  if (remote?.state !== 'released' || !current(readRun(run.runDir))) return skipped();
+  const local = await releaseIssueClaim({cwd: input.cwd, issueNumber: run.number, runId: run.runId}, p);
+  if (local.state !== 'released' || !current(readRun(run.runDir))) return skipped();
+  const result = await cancelRunCommand(input, p);
+  return {...result, recovery: result.exitCode === 0 ? 'released' : 'skipped'};
 }));
 
 export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
