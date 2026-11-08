@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 3777ff8889d4eae5ed3d6f7dbfba47874c088c3a7b647c10e70e4ae5c89df364).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 902a62fe8100c15758852d3270993e593f8854e438fabfd034a53efa5591386f).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -899,13 +899,13 @@ export async function closeFinishedChats(run, ports = {}) {
           validSessionId(chat.session?.id) && native.agent_session?.kind === 'id' && native.agent_session.value !== chat.session.id))
         { keep('agent-identity'); continue; }
       if (!ports.force && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
-      if ((!ports.force || restarted) && !native) await assertEmptyForeground(chat.paneId);
+      if ((!ports.force || restarted || ports.reason === 'park') && !native) await assertEmptyForeground(chat.paneId);
       let id = validSessionId(chat.session?.id) ? chat.session.id : null;
       if (!id && agent === 'codex') {
         if (native?.agent_session?.kind === 'id' && validSessionId(native.agent_session.value)) id = native.agent_session.value;
         else { const own = await ownSession({run, chat, since: launchAnchor(chat), ports}); if (own.kind === 'match') id = own.id; }
       }
-      if (!ports.force && !id) { keep('no-saved-session'); continue; }
+      if ((!ports.force || ports.reason === 'park') && !id) { keep('no-saved-session'); continue; }
       if (ports.dryRun) { closed++; continue; }
       let screen = null;
       try {
@@ -933,9 +933,12 @@ export async function closeFinishedChats(run, ports = {}) {
         { keep('agent-identity'); continue; }
       if (restarted && finalNative) { keep('agent-identity'); continue; }
       if (!ports.force && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
-      if ((!ports.force || restarted) && !finalNative) await assertEmptyForeground(chat.paneId);
+      if ((!ports.force || restarted || ports.reason === 'park') && !finalNative) await assertEmptyForeground(chat.paneId);
       if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
-      try { await herdr(['tab', 'close', chat.tabId]); }
+      try {
+        if (ports.reason === 'park' && ports.processes?.closeChat) await ports.processes.closeChat({runId: run.runId, root: run.root, tabId: chat.tabId, paneId: chat.paneId, sessionId: id});
+        else await herdr(['tab', 'close', chat.tabId]);
+      }
       catch (error) { if (error.code !== 'tab_not_found') throw error; }
       // Require absence, including after a lost acknowledgement on a later sweep.
       if ((await inventory('tab', chat.workspaceId)).some(t => t.tab_id === chat.tabId)) throw problem('chat_close_unconfirmed');
@@ -950,7 +953,7 @@ export async function closeFinishedChats(run, ports = {}) {
     try {
       const custody = {...run.layout};
       await withHerdrLayoutLock(() => closeHerdrRunLayout({runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody},
-        {command: herdr, env: ports.env, force: ports.force, checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
+        {command: herdr, env: ports.env, force: ports.force && ports.reason !== 'park', checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
       {directory: ports.layoutDirectory});
     } catch (error) {
       if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;

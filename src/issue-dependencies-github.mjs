@@ -1,6 +1,6 @@
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 9847c321e2f0f7e89e8499973f4897b5244eb7461990af5e3bab29651b6f784d).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: d4b16b4c7843ef44f2ff328a2224be5815e1b138e9422516e8ac484107150503).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1190,6 +1190,12 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     const runId = run.runId || run.runDir;
     if (typeof runId !== 'string' || !runId) { runsKnown = false; continue; }
     seen.add(runId);
+    if (run.parking?.phase === 'parked' && run.layout?.phase === 'closed'
+      && run.chats.every(chat => Number.isFinite(chat.closed?.confirmedAt))) {
+      runs.push({issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId,
+        state: 'paused', occupied: false, parked: true});
+      continue;
+    }
     const chat = currentChat(run), state = chatLifecycle(chat); let finishedTurn = false;
     if (['paused', 'stuck', 'question', 'waiting'].includes(run.state) && chat && !chat.startUnconfirmed && !run.chatFailure
       && !(run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))) {
@@ -1281,7 +1287,7 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
     const result = await runAutopilot({ action: 'setup', interactive: false, inRepo: true }, { cwd: root, execFile: ports.execFile });
     if (result.exitCode !== 0 || !state || typeof state.enabled !== 'boolean') throw Error('Current activation unavailable');
     if (state.checkCapacity !== undefined && (!Number.isSafeInteger(state.checkCapacity?.runs) || state.checkCapacity.runs < 1)) throw Error('Current check capacity unavailable');
-    return { ...(state.health?.paused === true ? { healthPaused: true } : {}), ...(state.checkCapacity === undefined ? {} : {capacityRuns:state.checkCapacity.runs}), mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }) };
+    return { ...(state.parking?.wakePending?.length ? {parkingWakePending: state.parking.wakePending} : {}), ...(state.health?.paused === true ? { healthPaused: true } : {}), ...(state.checkCapacity === undefined ? {} : {capacityRuns:state.checkCapacity.runs}), mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }) };
   } };
   Object.defineProperty(settings, NATIVE_SETTINGS, { value: true });
   ports.settings = supplied.settings?.[NATIVE_SETTINGS] ? settings : supplied.settings ?? settings;
@@ -1639,4 +1645,38 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
   if (ports.admitEffect && !await ports.admitEffect()) return pending('Automatic control changed before confirmation');
   const saved = await saveDependencyReview({ repository, issue: target.key, review: { ...raw, continuation: reviewId, outcome: 'complete', effects: 'confirmed' } }, ports);
   return saved.state === 'saved' ? { state: 'confirmed', added, warnings } : pending('The confirmed continuation is not yet observed');
+}
+
+// One guarded release of a long-parked claim. The marker in the existing claim
+// makes a lost label-removal acknowledgement recoverable without touching a new owner.
+export async function releaseParkedClaim({cwd = '', repository, claim, coordinatorId, machine, runId, branch}, ports = {}) {
+  const skipped = {state: 'skipped'}, i = info(claim?.issue);
+  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !runId || !branch
+    || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !claim.commentId || !claim.labelEventId) return skipped;
+  const live = createDependencyReadPorts({cwd}, ports), fresh = {...live, githubCache: null, dependencyReads: undefined};
+  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, fresh), s = service(cwd, fresh);
+  const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`;
+  const comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value, record = claimRecord(comment?.body);
+  if (!record || String(comment.id) !== String(claim.commentId) || record.value.coordinatorId !== coordinatorId
+    || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return skipped;
+  const matches = current => current && current.coordinatorId === coordinatorId && current.machine === machine
+    && current.commentId === String(claim.commentId) && current.labelEventId === String(claim.labelEventId);
+  const winner = () => winningClaim(repository, claim.issue, github, live.authority, (ports.now ?? Date.now)(), true);
+  let current = await winner();
+  if (current && !matches(current)) return skipped;
+  if (!current && record.value.parkRelease?.runId !== runId) return skipped;
+  if (record.value.parkRelease?.runId !== runId) {
+    const body = editClaimRecord(comment.body, record, {...record.value, parkRelease: {runId, branch}}, 'parkRelease');
+    if (body === null) return skipped;
+    const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({body}), 'claims', repository)).value;
+    if (claimRecord(saved?.body)?.value.parkRelease?.runId !== runId) return skipped;
+  }
+  current = await winner();
+  if (current && !matches(current)) return skipped;
+  if (current) await s.api(`repos/${repository}/issues/${i.issue}/labels/pdd%3Aworking`, 'DELETE', undefined, 'claims', repository);
+  const marker = `<!-- pdd:park-release:${runId} -->`;
+  const comments = await allPages(github, repository, 'comments', i.issue, 'claims', true);
+  if (!comments.some(row => row.body?.includes(marker)))
+    await s.api(`repos/${repository}/issues/${i.issue}/comments`, 'POST', JSON.stringify({body: `Autopilot released this parked run to the queue. Saved work stays on branch ${JSON.stringify(branch)}.\n\n${marker}`}), 'claims', repository);
+  return {state: 'released'};
 }

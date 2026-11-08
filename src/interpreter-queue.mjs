@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interpreter-queue.prompt.md (sha256: ef7206e3d86babe317e73bc46f6ef6d9090181c9409c6ca4081446e3e8e1ea99).
+// Generated from prompts/cli/interpreter-queue.prompt.md (sha256: bee9c40a723ba59ecd6c01eaa5564369e0df78c98c079cde25a01d6b3785c62a).
 import * as files from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -122,7 +122,7 @@ export async function acquireInterpreterSlot({ cwd, origin, requestId, kind, env
     while (!ended()) {
       const position = await locked(p, () => {
         const all = records(p), position = place(all, row), active = all.filter(other => other.state === 'running').length, cap = capacity(p);
-        if (position === 1 && active < Math.min(p.limit, cap.limit) && p.now() >= cap.blockedUntil) {
+        if (position === 1 && active < Math.min(p.limit, cap.limit, Object.values(cap.testOwners ?? {}).some(until => until > p.now()) ? 1 : Infinity) && p.now() >= cap.blockedUntil) {
           row.state = 'running'; row.startedAt = p.now(); row.activeAtStart = active + 1;
           save(p, `ticket-${row.ticket}.json`, row); return 0;
         }
@@ -171,6 +171,7 @@ export async function observeInterpreterRequest({ env = process.env, origin, req
         cap.limit = Math.max(1, Math.floor(Math.min(cap.limit, p.limit) / 2)); cap.until = p.now() + 60_000;
         cap.blockedUntil = Math.max(cap.blockedUntil, p.now() + Math.min(60_000, Math.max(1000, Number.isFinite(waitMs) ? waitMs : 5000)));
       } else if (outcome === 'verdict' && terminal && p.now() >= cap.until) cap.limit = Math.min(p.limit, cap.limit + 1);
+      if (terminal && outcome === 'verdict') delete cap.testOwners;
       save(p, 'capacity.json', cap);
     }, () => p.interrupted(), true);
   } catch (error) { throw problem(error); }
@@ -191,4 +192,19 @@ export function interpreterStatusWords(progress) {
   return progress.state === 'waiting' ? `waiting for an interpreter slot (position ${progress.position})`
     : progress.state === 'unavailable' ? `interpreter queue unavailable: ${progress.reason}`
     : progress.state === 'running' ? 'running an interpreter request' : 'interpreter requests finished';
+}
+
+// The existing machine admission boundary also owns temporary interpreter probes.
+export async function configureInterpreterTestMode({env = process.env, owner, enabled}, ports = {}) {
+  const p = portsFor(env, ports);
+  if (typeof owner !== 'string' || !owner) throw problem(Error('Missing test-mode owner.'));
+  p.fs.mkdirSync(p.root, {recursive: true, mode: 0o700});
+  return locked(p, () => {
+    const cap = capacity(p);
+    cap.testOwners = Object.fromEntries(Object.entries(cap.testOwners ?? {}).filter(([, until]) => Number.isFinite(until) && until > p.now()));
+    if (enabled) cap.testOwners[owner] = p.now() + 3600000;
+    else delete cap.testOwners[owner];
+    if (!Object.keys(cap.testOwners).length) delete cap.testOwners;
+    save(p, 'capacity.json', cap);
+  });
 }

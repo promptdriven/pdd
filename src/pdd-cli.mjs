@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 2f3b140027bd4da31f5f8280833c3f54d8162a6b7c15049ef6a3e6e76e2a0917).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 893ef754e11461bd8c65c3d6aaf934227b4688dc08c31a13aa81f650de8ada93).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -51,7 +51,7 @@ const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], ...profileOptions(plan), agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}), ...(plan.options['--through'] !== undefined ? {through:plan.options['--through']} : {}) }],
   'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], tests: plan.options['--test'] }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
-  'workflow-park': plan => ['parkAutomaticRun', { reason: plan.options['--reason'], step: plan.options['--step'], runtime: plan.options['--interpreter'] === true }],
+  'workflow-park': plan => ['parkAutomaticRun', { reason: plan.options['--reason'], step: plan.options['--step'], runtime: plan.options['--interpreter'] === true, ...(plan.options['--blocker'] === undefined ? {} : {blocker: plan.options['--blocker']}), ...(plan.options['--until'] === undefined ? {} : {until: plan.options['--until']}) }],
   'workflow-yield': plan => ['yieldAutomaticCapacity', { ref: plan.operands[0] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}), ...(plan.options['--skipped'] !== undefined ? { skipped: plan.options['--skipped'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--through'] !== undefined ? { through: plan.options['--through'] } : {}) }],

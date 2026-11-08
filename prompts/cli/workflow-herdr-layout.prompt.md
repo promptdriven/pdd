@@ -108,6 +108,10 @@ absent, and area tab if absent. Reserve the whole missing layout before its firs
 creation, so a refusal cannot leave a partial layout. An existing layout with
 no allocation needs no budget. The chat owner supplies the pane-budget policy.
 
+## Deliberate park reopening
+
+A layout with phase closed normally refuses reopening. Permit it only for its same run with parking.phase waking, under the workflow runner's park identity guard. Reuse ordinary worktree ownership verification and layout allocation; no second allocator. Newly checkpointed layout custody has phase open. Preserve normal closed/cancelled refusal.
+
 ## Dependencies
 
 - Load the complete [Prompting guide](../../docs/prompting-guide.md) for authoring/generation.
@@ -120,6 +124,6 @@ no allocation needs no budget. The chat owner supplies the pane-budget policy.
 The native module remains unbound to the Interpreter: its callback/checkpoint ports, real filesystem identity and cross-process lock have no declared JSON transport binding. No check-only entry or invented adapter is part of this contract. Native tests must establish allocation, chat dispatch and cleanup effects; an Interpreter pass cannot prove them.
 
 ```json
-{"status":"draft","prose_sha256":"","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":0},"conventions":[]}
+{"status":"draft","prose_sha256":"4caf8e60223b95e7b91e43c74c4eb39db1621bb731386c379625b0740f21826f","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":0},"conventions":[]}
 ```
 </details>

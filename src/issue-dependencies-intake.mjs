@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: ed8ec3fb4a14583c22eca59635186aaa076e287aba0036ab44ad4f376a091c94).
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: 95fae0a39296013864c56132d94c36723db4e23f0bc84036bf89cbed382f4610).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -121,6 +121,7 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     const owners = json(ownerReply.json); const snapshot = read.snapshot;
     if (settings.mode === 'off') return { allowed: false, reason: 'off' };
     if (settings.healthPaused === true) return { allowed: false, reason: 'health' };
+    if (settings.parkingWakePending?.length) return {allowed: false, reason: 'runs'};
     const key = issueKey(issue);
     const selected = key && root(key, repository) ? key : null;
     const claim = selected && (owners.claims || []).find(x => issueKey(x.issue) === selected && x.active);
@@ -137,7 +138,7 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
       }
       if (slots.size + ([...slots.values()].some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > runCap) return { allowed: false, reason: 'runs' };
     }
-    if (occupied.some(run => selected && issueKey(run.issue) === selected)) return { allowed: false, reason: 'dependency' };
+    if (owners.runs.some(run => selected && issueKey(run.issue) === selected)) return { allowed: false, reason: 'dependency' };
     const copy = structuredClone(snapshot); const subject = copy.issues.find(x => selected && issueKey(x.key) === selected);
     if (subject && subject.executionClaim?.coordinatorId === claim.coordinatorId && subject.executionClaim?.commentId === claim.commentId && subject.executionClaim?.labelEventId === claim.labelEventId) {
       subject.execution = 'idle'; subject.holds = subject.holds.filter(x => !/^(running|claim|claimed)$/i.test(x));

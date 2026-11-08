@@ -77,6 +77,10 @@ finished or unavailable status. Stuck detection excludes saved wait intervals an
 never declares an actively waiting or unreadable queue stuck. Workflow status
 shows the waiting words in text and its `words` JSON field without waking a chat.
 
+## Autopilot test mode
+
+Export configureInterpreterTestMode({env,owner,enabled},ports). Use the same queue admission lock and capacity file. Keep a map testOwners of owner paths to lease expiry timestamps; enabling renews a one-hour lease and disabling removes only this owner. Admission has limit one while any lease is current. A terminal verdict clears the leases so ordinary interpreter capacity returns immediately. Preserve the busy cooldown and unknown-result ownership. The tick calls this only after its three-no-verdict pattern, never after one failure. Reuse injected filesystem, clock, PID and lock ports. No second queue.
+
 ## Dependencies
 
 - [Native admission lock](workflow-runner.prompt.md#native-admission-lock): required

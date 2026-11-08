@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 66b4ef8e57be9da8ce8c446341c9bc6b1e9cf5e774b38d7bd2b49dffde3cbb7d).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 234a163a126c9e06fb05b8528750c00bd8b3c26c868b4126035330f5cc30ce23).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -230,7 +230,7 @@ export async function openHerdrRunLayout(input, ports) {
   let owner = input.run;
   if (owner !== undefined && (!owner || typeof owner !== 'object' || owner.runId !== input.runId)
     || input.repair !== undefined && (input.repair !== true || !owner)) throw problem('invalid_herdr_layout_input');
-  if (owner?.layout?.phase === 'closed') throw problem('herdr_run_binding_changed');
+  if (owner?.layout?.phase === 'closed' && owner?.parking?.phase !== 'waking') throw problem('herdr_run_binding_changed');
   let rows = await inventory(command);
   const sourceRoot = await realpath(input.sourceRoot), cwd = await realpath(input.cwd);
   let commonDir;
