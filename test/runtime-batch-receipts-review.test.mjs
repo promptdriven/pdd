@@ -11,12 +11,15 @@ async function fixture(t, reply) {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (e, f) => e.command === 'lint'
     ? { status: 200, json: f.lint(e.request.requestId) } : reply(e, f));
-  const run = async options => {
+  const run = async (options, text = false) => {
     const { ports, clock } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
     const words = options?.['--read'] ? [options['--read']] : options ? [] : ['place-order'];
     const normalized = options?.['--read'] ? { ...options, '--read': true } : options;
-    const code = await runCheck({ cwd: setup.repo, words, options: { '--json': true, ...normalized } }, ports);
-    return { code, json: ports.stdout.text ? JSON.parse(ports.stdout.text) : null, err: ports.stderr.text, clock };
+    const sleeps = [], sleep = ports.sleep;
+    ports.sleep = async ms => { sleeps.push(ms); await sleep(ms); };
+    const started = clock.now;
+    const code = await runCheck({ cwd: setup.repo, words, options: { ...(!text && { '--json': true }), ...normalized } }, ports);
+    return { code, json: !text && ports.stdout.text ? JSON.parse(ports.stdout.text) : null, out: ports.stdout.text, err: ports.stderr.text, clock, started, sleeps };
   };
   const first = await run();
   const folder = join(setup.state, 'batches', first.json.batch), file = join(folder, 'batch.json');
@@ -74,6 +77,34 @@ test('2655 review S3: zero eligible retry continues beyond three GETs to termina
   assert.equal(result.json.rows[0].state, 'passed');
   assert.equal(r.fake.posts.length, posts);
   assert.equal(result.clock.uuids, 0);
+});
+
+test('2876: retry waits 90 seconds for the original running check without resending', async t => {
+  let recovering = false;
+  const r = await fixture(t, (e, f) => recovering && e.method === 'GET'
+    ? { status: 200, json: f.check(e.url.split('/').at(-1), 'running') } : passed(e, f));
+  recovering = true;
+  r.edit(row => Object.assign(row, { phase: 'local', state: 'running', can_retry: false, eligible: false }));
+  rmSync(join(r.folder, `${r.id}.json`));
+  const posts = r.fake.posts.length, gets = r.fake.gets.length;
+  const originalCap = read(r.file).rows[0].max_calls;
+  const result = await r.run({ '--retry': r.batch }, true);
+  const reads = r.fake.gets.slice(gets);
+  assert.equal(result.code, 3);
+  assert.match(result.out, /^STILL RUNNING after 90 s: Place a coffee order\. Do not send it again\.(?: |$)/m);
+  assert.equal(result.clock.now - result.started, 90_000);
+  assert.ok(result.sleeps.length > 0 && result.sleeps.length <= 45);
+  assert.ok(result.sleeps.every(ms => ms > 0 && ms <= 2_000));
+  assert.ok(reads.length > 0 && reads.length <= 46);
+  assert.ok(reads.every(e => e.url === `/v1/runs/${r.id}`));
+  assert.equal(r.fake.posts.length, posts);
+  assert.equal(result.clock.uuids, 0);
+  assert.equal(read(r.file).rows[0].max_calls, originalCap);
+  recovering = false;
+  const recovered = await r.run({ '--read': r.batch });
+  assert.equal(recovered.code, 0);
+  assert.equal(recovered.json.rows[0].request_id, r.id);
+  assert.equal(r.fake.posts.length, posts);
 });
 
 test('2655 review S3: stale busy/retry flags without proof and unavailable GET never POST', async t => {
