@@ -243,7 +243,14 @@ present. For Codex also require its own native session lookup (using optional
 UUID. For a resumed chat with a saved UUID, verify that UUID in the original
 `startedAt` window, including workspace reconstruction: native metadata keeps
 the session's original time. Other sessions started later must not make this
-known session ambiguous. The latest launch/resume time still owns startup grace
+known session ambiguous. For native session evidence, `ownSession` uses the saved account selection:
+an absent, null or empty `configDir` means `<home>/.codex` for Codex or
+`<home>/.claude` for Claude, where home is `ports.env.HOME` when nonempty,
+else the OS home. Pass this default folder explicitly to the native reader;
+the observing caller's `CODEX_HOME` or `CLAUDE_CONFIG_DIR` must not override it.
+This matches the config-variable removal on native launch and resume, and applies
+to delayed naming, session discovery and workspace reconstruction.
+The latest launch/resume time still owns startup grace
 and fresh-attempt discovery. `ownSession` accepts optional `sessionId` for this
 exact lookup; invalid IDs or results for another ID are unknown evidence.
 Match the Codex UUID in parsed native metadata; do not require it in the filename.

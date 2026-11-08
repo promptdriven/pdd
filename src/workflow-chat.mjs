@@ -78,8 +78,10 @@ export function sessionEvidenceDue(chat, live, at) {
 // Naming a known resumed UUID uses its original window and an exact sessionId. Discovery keeps the latest launch window.
 // An unreadable, ambiguous or unrelated result is never evidence and never authorizes a launch.
 export async function ownSession({ run, chat, since, sessionId, ports = {} }) {
-  const env = ports.env ?? process.env, kind = chat.agent ?? run.agent, folder = expandHome(chat.configDir, env);
+  const env = ports.env ?? process.env, kind = chat.agent ?? run.agent;
   if (kind === 'gemini' || kind === 'agy') return { kind: 'unknown' };
+  // A saved default selection unsets the config variable at launch. Evidence must use that same account.
+  const folder = expandHome(chat.configDir, env) ?? join(env.HOME || homedir(), kind === 'claude' ? '.claude' : '.codex');
   if (sessionId !== undefined && !validSessionId(sessionId)) return { kind: 'unknown' };
   const saved = sessionId ?? (kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null);
   let sessions;
