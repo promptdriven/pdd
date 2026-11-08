@@ -13,7 +13,7 @@ const folder = stateDir => join(stateDir, 'slots', 'localhost%3A453');
 function seed(stateDir, row) { mkdirSync(folder(stateDir), { recursive: true }); writeFileSync(join(folder(stateDir), `${row.id}.json`), JSON.stringify(row)); }
 const record = (id, extra = {}) => ({ id, state: 'active', pid: process.pid, kind: 'check', started_at: 0, request_ids: ['run-a'], ...extra });
 const child = (args, { cwd, env, t }) => new Promise((done, fail) => {
-  const p = spawn(process.execPath, args, { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const p = spawn(process.execPath, args, { cwd, env: { PATH: process.env.PATH, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '', stderr = '';
   const watchdog = setTimeout(() => { stderr += 'child completion watchdog expired'; p.kill('SIGKILL'); }, 120_000);
   t?.after(() => { clearTimeout(watchdog); if (p.exitCode === null) p.kill('SIGKILL'); }); p.stdout.on('data', b => stdout += b); p.stderr.on('data', b => stderr += b);
@@ -158,12 +158,16 @@ test('slots: ten real CLI checks across repositories share a limit of three and 
       return { status: 202, json: f.job(id, e.command, 'queued') };
     }
     const id = e.url.split('/').at(-1), job = jobs.get(id);
-    assert.ok(job, `unknown job ${id}`);
+    // A lease can advertise its ID before the server has accepted its POST.
+    if (!job) return { status: 404, json: { error: { code: 'not-found' } } };
     await terminalReplies;
     if (!job.ended) { active--; job.ended = true; }
     assert.ok(active >= 0 && active <= 3);
     return { status: 200, json: job.command === 'lint' ? f.lint(id) : f.check(id) };
   });
+  const early = await fetch(`${fake.origin}/v1/runs/not-posted-yet`);
+  assert.equal(early.status, 404);
+  assert.equal(jobs.size, 0); assert.equal(active, 0);
   const gh = join(setup.sandbox, 'gh'); writeFileSync(gh, '#!/bin/sh\nif [ "$1" = auth ]; then echo fixture-token; else echo "octo 4242"; fi\n'); chmodSync(gh, 0o700);
   const env = { HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '3', PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '3', PDD_INTERPRETER_QUEUE: join(setup.sandbox, 'machine-queue') };
   const start = i => child([join(root, 'bin/pdd.mjs'), 'test', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env, t });

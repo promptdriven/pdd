@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: e147fdff812bc0de07fc11b18667bbfce21afb4da1e96a9997fc013bba2b6eeb).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: b6ea3f9cec91a346c2d1fd83220c964930433416dcc8788088fb5101a25ceb5e).
 import * as files from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -162,13 +162,13 @@ export function suiteStatusWords(suite) {
 export async function runTestSuite({ cwd, command, timeout = 30, env = process.env }, ports = {}) {
   if (typeof command !== 'string' || !command.trim() || !Number.isInteger(timeout) || timeout < 1 || timeout > 120)
     return { exitCode: 2, message: 'Supply a suite command and a timeout of 1 to 120 minutes.' };
-  let p, row;
+  let p, row, environmentRoot;
   try {
     p = portsFor(env, ports);
     p.fs.mkdirSync(p.root, { recursive: true, mode: 0o700 });
     row = await underLock(p, () => {
       const all = records(p), ticket = (all.at(-1)?.ticket ?? 0) + 1;
-      const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null };
+      const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
       save(p, record); return record;
     });
     let lastPosition;
@@ -191,7 +191,21 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       await p.sleep(250);
     }
     p.say('running the full test suite');
-    const result = await p.execute(command, { cwd, env:{...env,PDD_CHECK_CPUS:String(row.coresPerCheck)}, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: Number(timeout) * 60_000,
+    environmentRoot = p.fs.mkdtempSync(join(p.root, 'suite-env-'));
+    const childEnv = Object.fromEntries(Object.entries(env).filter(([key, value]) =>
+      typeof value === 'string' && /^(?:PATH|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TERM|CI|SystemRoot|WINDIR)$/.test(key)));
+    childEnv.PATH ??= '/usr/bin:/bin';
+    childEnv.POCKET_BROWSER_BIN = env.POCKET_BROWSER_BIN ?? '/usr/bin/google-chrome';
+    for (const [folder, names] of [
+      ['home', ['HOME', 'USERPROFILE']], ['state', ['PDD_STATE_DIR']],
+      ['config', ['XDG_CONFIG_HOME']], ['tmp', ['TMPDIR', 'TMP', 'TEMP']],
+    ]) {
+      const path = join(environmentRoot, folder);
+      p.fs.mkdirSync(path, {mode:0o700});
+      for (const name of names) childEnv[name] = path;
+    }
+    childEnv.PDD_CHECK_CPUS = String(row.coresPerCheck);
+    const result = await p.execute(command, { cwd, env:childEnv, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: Number(timeout) * 60_000,
       onChild: pid => { row.childPid = pid; save(p, row); } });
     row.state = 'finished'; row.finishedAt = p.now(); row.reason = result.reason ?? (result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null);
     save(p, row);
@@ -204,6 +218,8 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       try { save(p, row); } catch {}
     }
     return { exitCode: 1, message: `Shared test suite queue failed: ${error.code ?? error.message}` };
+  } finally {
+    if (environmentRoot) p.fs.rmSync(environmentRoot, {recursive:true, force:true});
   }
 }
 export async function executeSuite(command, { cwd, env, timeoutMs, onChild, cpuIds = [], taskset = null }, ports = {}) {

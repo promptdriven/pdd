@@ -43,6 +43,22 @@ missing injected HOME inside the isolated process. Run the actual npm test scrip
 checkout with a new test that omits the import, and check the same caller-home boundary. Cleanup must leave
 no owned test home after an ordinary success or test failure.
 
+The named launcher, runtime-slots and product saved-checks regressions must
+also work under a synthetic agent caller. Launcher fixtures explicitly mask an
+absent CODEX_HOME at the injected launcher boundary, including later ticks.
+Concurrent native runtime fixtures use a private interpreter queue and a real
+clock with real asynchronous waits for native filesystem locks; a rapidly
+advancing shared fake clock cannot stand in for elapsed lock time. Construct
+these fixture environments explicitly so caller job limits, queue selectors and
+agent settings cannot affect their results. The slots fake must answer a GET
+before POST registration with HTTP 404, like the service, and retain its unique
+POST, capacity, wait barrier and completion checks. Exercise this order directly.
+VM suite command fakes keep their scenario paths in the fake executable itself,
+not in inherited environment variables. Affinity regressions check the clean
+child environment and reserved CPU list together.
+Keep the health transport's asynchronous shutdown marker and bounded observation
+from #3089. Do not import operational captures as fixtures.
+
 ## Dependencies
 
 - [Workflow state](../cli/workflow-runs.prompt.md), [interpreter client](../cli/runtime-client.prompt.md), [skills](../cli/skills-install.prompt.md) and [Herdr layout](../cli/workflow-herdr-layout.prompt.md): required path-selection context for authoring and native verification.
@@ -56,7 +72,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"66aa5f2392603c3432c73419f5cfba109f80030cb9471277468cf95c20efe14c","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"66aa5f2392603c3432c73419f5cfba109f80030cb9471277468cf95c20efe14c","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>
