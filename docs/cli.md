@@ -495,7 +495,7 @@ senders at their own source; PDD does not change those programs.
 
 Finished chats close after a 15-minute grace period when they are idle and have a
 saved native session. Each new start and each Autopilot tick tries cleanup.
-`pdd workflow tidy` also retries cleanup. It refreshes restart terminal IDs only for matching area tabs and panes with confirmed idle shells. Missing or foreign workspaces stay protected. List status suggests tidy only when its read-only eligibility check finds a chat it can close. Status and view close nothing. A manual
+`pdd workflow tidy` also retries cleanup. It refreshes restart terminal IDs for matching area tabs and the saved run shell, with confirmed agent absence and idle foreground shells. Done runs release their workspace after verified chat cleanup. Workspace closure requires a saved creation record for that exact workspace. Adopted workspaces and legacy records without creation evidence remain open with a cleanup reason. Saved native sessions, run folders and Git worktrees remain available. Missing or foreign workspaces stay protected. List status suggests tidy only when its read-only eligibility check finds a chat it can close. Status shows pane counts for working, parked, done and unowned panes. It warns at 90 percent of the configured pane budget and lists unowned workspaces with commands for manual closure. These observations do not authorize automatic closure. Status and view close nothing. A manual
 start on a completed issue keeps its history and starts a fresh run. A replaced
 run remains discoverable from its retained worktree; its agent sees the old and
 replacement run IDs and must stop. Run `pdd workflow cancel ISSUE` from that old
