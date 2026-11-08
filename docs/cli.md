@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.25, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.26, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -108,6 +108,16 @@ tick offers no new issue, writes a warning to the timer log and keeps those issu
 for a later tick. It still delivers the start-up recipe, dependency review, time
 rules, the work of existing claims, and reviews and trusted comments on claimed
 and held issues.
+
+Starting Autopilot again keeps this machine's repository claim owner when it
+replaces the coordinator chat. Open runs keep their heartbeats after a crash or
+machine restart. A tick can also recover an unfinished local run whose claim
+still names an earlier coordinator. The run folder, checkout, machine, claim
+comment and label event must match. Another machine's claim always wins.
+A claim that expired after a coordinator change can recover once. The tick
+updates the run's custody, posts one short issue comment and resumes heartbeats.
+Then `pdd workflow done` can publish finished work under its usual ownership
+checks. Recovery makes no AI call and does not approve a prompt or a gate.
 
 In `status --all`, each line is independent. A saved folder that is gone still
 shows its real timer and coordinator state, with `mode unknown (folder missing)`.
@@ -628,7 +638,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.25`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.26`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
 | `pdd jobs` | List active slots and waiting interpreter jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or interpreter call |
 

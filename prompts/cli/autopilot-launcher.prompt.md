@@ -22,7 +22,11 @@ Only this repository, source checkout and saved automatic coordinator/machine qu
 Observe and off modes never resume workers. A failed observation holds that run;
 other runs and tick work continue. Forward injected Herdr, clock and process ports;
 when only the launcher's process port exists, adapt it to the runner's execFile port.
-This native reconciliation makes no model or interpreter call.
+This native reconciliation makes no model or interpreter call. After intake recovers a
+stranded claim and updates its local run custody, reconsider that run for stopped-chat
+recovery and idle nudges in the same reconciliation. Keep the earlier pre-budget
+recovery for runs already owned by this coordinator. Revisit only runs whose custody
+was recovered, so other runs do not consume a second recovery or nudge allowance.
 
 In that same reconciliation, call the runner's `nudgeIdleRun` for eligible saved
 workers through the same injected ports and admission guard. The runner owns idle
@@ -219,7 +223,7 @@ fingerprint in [Coordinator relaunch](#coordinator-relaunch) and the terminal
 identity in [Gone coordinator pane](#gone-coordinator-pane); an absent legacy
 profile binding does not match. Leave an old live pane with an absent or
 different binding untouched: never prompt, interrupt, kill or close it. Allocate
-a distinct explicitly owned pane and coordinator through the native launch route,
+a distinct explicitly owned pane through the native launch route,
 preserving queued work. Immediately before guarded submission, recheck the same
 pane, workspace and owner launch, and any observable `agent_session`. Launch
 acknowledgement establishes transport acceptance, not model uptake. A confirmed
@@ -632,8 +636,28 @@ The two 60-minute thresholds are constants, not settings, caps or hard stops.
 
 ### Claim heartbeat and expiry
 
+The saved `coordinatorId` is the stable owner of this machine's Autopilot for
+this repository. Keep it across starts, profile binding changes, crashes and
+replacement coordinator panes. A chat change does not transfer claim ownership.
+Keep the coordinator envelope and native pane/profile guards unchanged.
+
+Before ordinary heartbeats, recover stranded claims from earlier coordinators
+through the GitHub reader's `recoverCoordinatorClaim`. Select only unfinished
+local runs from `listRuns` with this repository, source checkout and machine,
+a present run folder and worktree, and an admitted `automaticOrigin` claim tuple.
+Require the observed winning claim's comment and label event to match that tuple.
+Never recover a run of another machine, checkout or repository, or a completed or
+cancelled run. Do not recover a claim stuck for 4 hours or past the takeover ceiling.
+Under scan admission and the existing run lock, reread the saved run, recover its
+claim, then update only `automaticOrigin.coordinatorId` through `updateRun` in the
+same guarded action. Preserve finished steps, files and other custody. A failure
+warns and leaves publication subject to its ordinary live ownership check. A retry
+after a remote edit must finish local custody using the reader's recovery proof.
+A successful recovery replaces the intake claim with the fresh returned claim,
+so heartbeats resume and `workflow done` can publish under its existing checks.
+
 Each tick keeps claims current without an AI call. Use the `claims` that the
-dependency intake returns; add no other GitHub read for them. For each active
+dependency intake returns; ordinary heartbeats add no other GitHub claim scan. For each active
 claim of this coordinator and machine, call the GitHub reader's
 [`refreshClaimHeartbeat`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry)
 with the current clock time, under the scan's admission guard. The tick, not the
@@ -641,8 +665,8 @@ AI, writes the `lastSeen` time: the first heartbeat sets the existing value (the
 `"lastSeen": ""` marker of a new claim record), or adds the member when it is
 missing. A failed
 heartbeat warns and the tick continues. Never refresh another owner's claim or an expired
-claim, also an own one: expiry is final, and the old owner gets the issue back
-only through the skill's takeover rule.
+claim, including an own one, except for the bounded coordinator-change recovery
+above. Other expired claims follow the skill's takeover rule.
 
 In `off` mode the tick stops before the heartbeat. This machine then releases
 nothing, but its claims get no `lastSeen` and expire after 4 hours, as on a stopped
@@ -1199,9 +1223,11 @@ Pass the already observed common directory to the store commonDir port; telemetr
 
 - [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
 
-- [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
+- [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage, run discovery and guarded custody updates.
 
-- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock and stopped-chat recovery boundary.
+- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock, run mutation lock and stopped-chat recovery boundary.
+
+- [GitHub dependency reader](issue-dependencies-github.prompt.md#coordinator-recovery): required native generation and verification context for guarded claim recovery and its current-claim proof.
 - [Dependency intake](issue-dependencies-intake.prompt.md): required generation, runtime and verification context for reconciliation and structured coordinator context. The [pure model](issue-dependencies.prompt.md) owns review and readiness, and its `issueKey` is the canonical issue identity for matching `eligible` keys.
 
 - [Autopilot settings](autopilot.prompt.md): required native generation and

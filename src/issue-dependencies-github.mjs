@@ -1,6 +1,6 @@
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 208eb38552328662b99611c6a82d3138a7d929495514dc2c98b7fa9a704d183b).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 9847c321e2f0f7e89e8499973f4897b5244eb7461990af5e3bab29651b6f784d).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -931,6 +931,7 @@ const memberPattern = member => member === 'lastSeen' ? LAST_SEEN : new RegExp(L
 const TICK_MEMBERS = ['lastSeen', 'longRunningAlertedAt'];
 const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
 const iso = at => new Date(at).toISOString();
+const heartbeatTimeForComment = comment => Number.isFinite(time(comment?.updated_at)) ? time(comment.updated_at) : time(comment?.created_at);
 
 // Set or remove only one top-level member (lastSeen unless named) and keep every other
 // byte. Each place where the member can be is tried; an edit counts only when the new
@@ -1004,7 +1005,7 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
   // writer clock or written value keeps a dead claim live. With no server time, the
   // legacy rule applies.
   const heartbeatTime = ({ comment, metadata }) => !Object.hasOwn(metadata, 'lastSeen') ? NaN
-    : Number.isFinite(time(comment.updated_at)) ? time(comment.updated_at) : time(comment.created_at);
+    : heartbeatTimeForComment(comment);
   // Takeovers (#3041), from GitHub data only. An era ends in one of three ways:
   // - a takeover: its claim was already expired at the removal (the same expiry rules at
   //   that time, with only earlier facts), and the removal's actor added the label again
@@ -1016,12 +1017,24 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
   // of pdd:stuck while the claim is takeover-limited also starts the count again at 0.
   for (const era of eras) era.record = await recordOf(era.winner);
   const expiredAt = (era, at, index) => {
-    const server = era.record ? heartbeatTime(era.record) : NaN;
+    let server = era.record ? heartbeatTime(era.record) : NaN;
+    let expiresAfter = Number.isFinite(server) ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER;
+    const proof = era.record?.metadata.coordinatorRecovery;
+    const beforeRecovery = time(proof?.lastSeenBeforeRecovery);
+    // A recovery can race the removal. Its edit must not make an already-expired
+    // historical era look live and erase the takeover chain.
+    if (server >= at && Number.isFinite(beforeRecovery)) {
+      server = beforeRecovery;
+      expiresAfter = proof.heartbeatBeforeRecovery === false ? LEGACY_CLAIM_EXPIRES_AFTER : CLAIM_EXPIRES_AFTER;
+    }
     const seen = Number.isFinite(server) ? Math.min(server, at) : [...comments.flatMap(c => [time(c.created_at), time(c.updated_at)]), ...timeline.slice(0, index).map(e => time(e.created_at))]
       .filter(value => Number.isFinite(value) && value < at).reduce((latest, value) => Math.max(latest, value), -Infinity);
-    return Number.isFinite(at) && Number.isFinite(seen) && at - seen >= (Number.isFinite(server) ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER);
+    return Number.isFinite(at) && Number.isFinite(seen) && at - seen >= expiresAfter;
   };
   const owner = era => era?.record ? `${era.record.metadata.coordinatorId}\n${era.record.metadata.machine}` : null;
+  // Recovery may change the current owner within an era. Its incoming transition
+  // still compares against the owner that originally claimed that era.
+  const initialOwner = era => era?.record ? `${era.record.metadata.coordinatorRecovery?.originalCoordinatorId ?? era.record.metadata.coordinatorId}\n${era.record.metadata.machine}` : null;
   const login = event => String(event?.actor?.login ?? '').toLowerCase();
   let takeovers = 0, chainStart = 0;
   const points = [...eras.flatMap((era, k) => era.end ? [{ index: era.end.index, k }] : []), ...stuckRemovals].sort((a, b) => a.index - b.index);
@@ -1033,7 +1046,7 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
     }
     const era = eras[point.k], next = eras[point.k + 1], at = time(era.end.event.created_at);
     const again = next && login(next.winner) && login(next.winner) === login(era.end.event) && time(next.winner.created_at) - at <= TAKEOVER_GAP;
-    if (again && expiredAt(era, at, era.end.index)) { if (!owner(era) || owner(era) !== owner(next)) takeovers++; }
+    if (again && expiredAt(era, at, era.end.index)) { if (!owner(era) || owner(era) !== initialOwner(next)) takeovers++; }
     else { takeovers = 0; chainStart = point.k + 1; }
   }
   const chain = eras.slice(chainStart), current = candidates.length ? eras.at(-1) : null;
@@ -1094,6 +1107,60 @@ async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorI
 export async function refreshClaimHeartbeat(args, ports = {}) {
   const lastSeen = await setOwnClaimTime('lastSeen', args, ports);
   return lastSeen === null ? { state: 'skipped' } : { state: 'refreshed', lastSeen };
+}
+
+// Recover only the still-winning claim era admitted by a local run. The proof in
+// the same edit makes a crash between remote ownership and local custody retryable.
+export async function recoverCoordinatorClaim({ cwd = '', repository, claim, coordinatorId, machine, at }, ports = {}) {
+  const skipped = { state: 'skipped' }, i = info(claim?.issue);
+  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository)
+    || !coordinatorId || !machine || claim.machine !== machine || !claim.coordinatorId || claim.coordinatorId === coordinatorId
+    || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? '')) || !claim.labelEventId || !Number.isFinite(time(at))) return skipped;
+  const livePorts = createDependencyReadPorts({ cwd }, ports);
+  // No cached snapshot or conditional comment body supplies recovery authority.
+  const freshPorts = { ...livePorts, githubCache: null, dependencyReads: undefined };
+  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, freshPorts), s = service(cwd, freshPorts);
+  const readWinner = () => winningClaim(repository, claim.issue, github, livePorts.authority, time(at), true);
+  const matches = current => current && current.machine === machine && current.commentId === claim.commentId && current.labelEventId === claim.labelEventId;
+  let current = await readWinner();
+  if (!matches(current) || ![claim.coordinatorId, coordinatorId].includes(current.coordinatorId)
+    || time(at) - time(current.stuckSince) >= CLAIM_EXPIRES_AFTER || takeoverLimited(current, { coordinatorId: claim.coordinatorId, machine })) return skipped;
+  const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`;
+  const comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value;
+  const record = claimRecord(comment?.body);
+  if (String(comment?.id) !== claim.commentId || !record || !sameRepo(record.value.repository, repository)
+    || record.value.machine !== machine || record.value.labelEventId !== claim.labelEventId || record.value.coordinatorId !== current.coordinatorId) return skipped;
+  let proof = record.value.coordinatorRecovery;
+  const retry = current.coordinatorId === coordinatorId && proof?.from === claim.coordinatorId && proof?.to === coordinatorId
+    && typeof proof.expired === 'boolean' && Number.isFinite(time(proof.at));
+  if (current.coordinatorId === coordinatorId && !retry) return skipped;
+  if (current.expired && (retry || record.value.coordinatorRestartRecoveredAt)) return skipped;
+  if (!retry) {
+    proof = { from: claim.coordinatorId, to: coordinatorId, at: iso(time(at)), expired: current.expired === true,
+      originalCoordinatorId: record.value.coordinatorRecovery?.originalCoordinatorId ?? record.value.coordinatorId,
+      lastSeenBeforeRecovery: current.lastSeen ?? null,
+      heartbeatBeforeRecovery: Object.hasOwn(record.value, 'lastSeen') && Number.isFinite(heartbeatTimeForComment(comment)) };
+    const expected = { ...record.value, coordinatorId, lastSeen: iso(time(at)), coordinatorRecovery: proof,
+      ...(proof.expired ? { coordinatorRestartRecoveredAt: iso(time(at)) } : {}) };
+    // Replacing the one JSON block preserves the readable legacy claim comment.
+    const body = String(comment.body).replace(record.text, () => JSON.stringify(expected));
+    const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository)).value;
+    if (String(saved?.id) !== claim.commentId || !isDeepStrictEqual(claimRecord(saved.body)?.value, expected)) throw Error('Claim recovery readback is unresolved');
+  }
+  const recovered = value => matches(value) && value.active === true && value.coordinatorId === coordinatorId;
+  current = await readWinner();
+  if (!recovered(current)) return skipped;
+  if (proof.expired) {
+    const marker = `<!-- pdd:autopilot:coordinator-recovery:${claim.commentId}:${claim.labelEventId} -->`;
+    const comments = await allPages(github, repository, 'comments', i.issue, 'claims', true);
+    let posted = false;
+    for (const row of comments) if (String(row.body ?? '').includes(marker)
+      && (await livePorts.authority.read({ repository, author: row.user?.login })).authority === 'trusted') posted = true;
+    if (!posted) await s.api(`repos/${repository}/issues/${i.issue}/comments`, 'POST', JSON.stringify({ body: `Autopilot recovered this machine's run after a coordinator restart.\n\n${marker}` }), 'claims', repository);
+    current = await readWinner();
+    if (!recovered(current)) return skipped;
+  }
+  return { state: 'recovered', claim: current };
 }
 
 // The 24-hour alert (#3041): after delivering it, the owning coordinator writes the time

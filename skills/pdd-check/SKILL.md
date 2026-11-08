@@ -2,7 +2,7 @@
 name: pdd-check
 description: Use when Autopilot needs a fresh checker verdict (PASS, FAIL or NOT SURE) on a PDD pull request at its head, before pdd-merge.
 metadata:
-  pdd-skills: 0.1.25
+  pdd-skills: 0.1.26
 ---
 
 # PDD check
