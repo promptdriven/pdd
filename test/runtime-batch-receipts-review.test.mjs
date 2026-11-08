@@ -91,7 +91,7 @@ test('2876: retry waits 90 seconds for the original running check without resend
   const result = await r.run({ '--retry': r.batch }, true);
   const reads = r.fake.gets.slice(gets);
   assert.equal(result.code, 3);
-  assert.ok(result.out.split('\n').includes('STILL RUNNING after 90 s: Place a coffee order. Do not send it again.'));
+  assert.match(result.out, /^STILL RUNNING after 90 s: Place a coffee order\. Do not send it again\.(?: |$)/m);
   assert.equal(result.clock.now - result.started, 90_000);
   assert.ok(result.sleeps.length > 0 && result.sleeps.length <= 45);
   assert.ok(result.sleeps.every(ms => ms > 0 && ms <= 2_000));
