@@ -1,4 +1,4 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: 39b12e1f411ac468411e7dfeece942416e3d5d189031366c19ff3b36107cd02b).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 439031a55c120366117a94eef39e6a64abcf003c491bfa9b05348433a28babf5).
 import { createHash } from 'node:crypto';
 import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
