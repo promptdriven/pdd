@@ -116,8 +116,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       if (plan.local === 'workflow-run') {
         let selected;
         try { selected = await workflowAgents.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts); }
-        catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
-        if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
+        catch { line(stderr, 'Agent readiness could not be checked. Run codex login status, claude auth status, gemini --version or agy models. gemini --version does not verify sign-in.'); return 1; }
+        if (!selected?.ok) { line(stderr, selected?.message || 'Agent readiness could not be checked. Run codex login status, claude auth status, gemini --version or agy models. gemini --version does not verify sign-in.'); return 1; }
         if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
         input.agent = selected.agent;
       }

@@ -1,7 +1,7 @@
 // Generated from prompts/cli/workflow-setup.prompt.md (sha256: 37195d39837196bbf574fe3fb24de8fab1765a62ffcb084e39ba94e67ccc22fe).
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 
-const recovery = 'Agent sign-in could not be checked. Run codex login status or claude auth status.';
+const recovery = 'Agent readiness could not be checked. Run codex login status, claude auth status, gemini --version or agy models. gemini --version does not verify sign-in.';
 export async function setupWithWorkflowAgent({ cwd = process.cwd(), env = process.env } = {}, ports = {}) {
   const stderr = ports.stderr ?? process.stderr;
   if (typeof ports.setup !== 'function') {
@@ -11,7 +11,7 @@ export async function setupWithWorkflowAgent({ cwd = process.cwd(), env = proces
   let selected;
   try { selected = await (ports.checkWorkflowAgents ?? checkWorkflowAgents)({ cwd, env }, ports); }
   catch { stderr.write(`${recovery}\n`); return 1; }
-  if (!selected.ok) { stderr.write(`${selected.message}\n`); return 1; }
+  if (!selected.ok) { stderr.write(`${selected.message || recovery}\n`); return 1; }
   if (typeof selected.hint === 'string' && selected.hint) stderr.write(`${selected.hint}\n`);
   try {
     const code = await ports.setup({ agent: selected.agent, cwd, env });
