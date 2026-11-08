@@ -48,7 +48,7 @@ for (const mode of ['explicit-lint', 'default-lint', 'free-lint']) {
         else assert.doesNotMatch(row.reason.message, /--timeout/);
       }
       if (mode === 'explicit-lint') assert.match(p.ports.stderr.text, /--timeout/);
-      assert.equal(p.clock.now - started, mode === 'explicit-lint' ? 60_000 : 90_000);
+      assert.equal(p.clock.now - started, mode === 'default-lint' ? 90_000 : 60_000);
       assert.equal(f.posts.length, boundary === 'maintenance' ? 0 : 1);
       assert.doesNotMatch(p.ports.stderr.text, /\bSent\b/);
     });

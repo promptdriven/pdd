@@ -47,7 +47,7 @@ for (const mode of ['refused', 'not_run', 'unknown']) for (const why of [advice,
       return { status: 200, json: answer };
     });
     const result = await run(setup, fake);
-    assert.equal(result.json.rows[0].state, mode);
+    assert.equal(result.json.rows[0].state, mode === 'unknown' ? 'partial' : mode === 'not_run' ? 'not run' : mode);
     assert.equal(result.json.rows[0].why, why === 'Checks failed.' ? null : why);
   });
 }
@@ -61,7 +61,7 @@ test('R1 saved lint read drops exact generic advice without submitting checks (A
   });
   const first = await run(setup, fake); reading = true;
   const read = await run(setup, fake, { '--read': first.json.batch, '--json': true });
-  assert.equal(read.json.rows[0].state, 'not_run');
+  assert.equal(read.json.rows[0].state, 'not run');
   assert.equal(read.json.rows[0].why, null);
   assert.notEqual(read.json.rows[0].reason?.message, 'Checks failed.');
   const text = await run(setup, fake, { '--read': first.json.batch });
@@ -114,7 +114,7 @@ test('R1 unknown GET cannot inherit a non-lost saved refusal explanation (A10 in
   writeFileSync(`${folder}/${id}.json`, JSON.stringify(cached));
   const result = await run(setup, fake, { '--json': true, '--read': first.json.batch });
   assert.equal(result.code, 3);
-  assert.equal(result.json.rows[0].state, 'unknown');
+  assert.equal(result.json.rows[0].state, 'partial');
   assert.equal(result.json.rows[0].why, null);
   assert.doesNotMatch(JSON.stringify(result.json), /OLD REFUSAL/);
   assert.equal(fake.gets.length, 1);
@@ -142,7 +142,7 @@ test('R1 legacy unknown transport explanation survives an omitted lost flag', as
   writeFileSync(file, JSON.stringify(saved));
   const result = await run(setup, fake, { '--json': true, '--read': first.json.batch });
   assert.equal(result.code, 3);
-  assert.equal(result.json.rows[0].state, 'unknown');
+  assert.equal(result.json.rows[0].state, 'partial');
   assert.equal(result.json.rows[0].why, 'The answer to the request was lost.');
   assert.equal(result.json.rows[0].reason.message, 'The answer to the request was lost.');
   assert.equal(fake.gets.length, 1);

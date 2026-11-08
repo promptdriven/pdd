@@ -164,8 +164,8 @@ test('TEST-CACHE-FIX active second phase reports additional dispatch truthfully'
   const ctx = await setup(t); assert.equal((await successful(ctx)).sent, 3); changeIndependent(ctx);
   ctx.state.identity.engine_sha = 'b'.repeat(40);
   const result = await successful(ctx);
-  assert.equal(result.sent, 3); assert.match(result.stderr, /Sending 2 more checks: interpreter build or model changed/);
-  assert.equal((result.stderr.match(/Lint passed\./g) ?? []).length, 1);
+  assert.equal(result.sent, 3); assert.equal(result.stderr.split('\n').filter(line => /^Sent 1 check at /.test(line)).length, 3);
+  assert.equal((result.stderr.match(/Lint passed\./g) ?? []).length, 2, 'the changed interpreter identity requires lint for both captured phases');
 });
 for (const shape of ['legacy', 'future']) test(`TEST-CACHE-FIX ${shape} pass cannot authorize reuse`, async t => {
   const ctx = await setup(t); assert.equal((await successful(ctx, ['independent'])).sent, 1);

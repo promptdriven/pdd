@@ -4,8 +4,8 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false
 
 ## Native lint selection and display (draft)
 
-For explicit `pdd lint STORY` (including existing path/directory and multiple
-Story operands), obtain preflight's bounded `nativeSelections` with the ordinary
+For explicit `pdd lint STORY` (including `--local` without `--timeout`,
+existing path/directory and multiple Story operands), obtain preflight's bounded `nativeSelections` with the ordinary
 Runtime selection. Resolve the owned run and exact Story/profile association
 from existing saved workflow evidence; if no unique owned run/profile exists,
 show that reason and no native proof. Do not pick a first report or create an
@@ -26,7 +26,9 @@ limits. Missing fixtures, required skips, unexecuted gates and incomplete/stale/
 unknown evidence retain the shared judgment even at process exit zero.
 
 A native-only explicit lint reads this saved evidence locally and sends no
-hosted request. A missing native proof returns 1; complete current whole-Story
+hosted request. This native assessment precedes SVG-only local lint when a
+native Story is explicitly selected; ordinary Runtime selections with `--local`
+keep their SVG-only advisory route. A missing native proof returns 1; complete current whole-Story
 native proof returns 0. Existing command/boundary errors retain their exits.
 For mixed/native-and-Runtime selection, process ordinary Runtime rows through
 their unchanged lint route and exit rules; any native missing proof prevents

@@ -15,6 +15,8 @@ function scratch(t) {
   for(const name of ['workflow-prove','workflow-prove-existing-tests','workflow-proof-pr','workflow-pr-labels']) {cpSync(`test/runtime/${name}.json`,join(root,`test/runtime/${name}.json`));cpSync(`test/${name}.vectors.test.mjs`,join(root,`test/${name}.vectors.test.mjs`));}
   cpSync('test/workflow-prove.test.mjs',join(root,'test/workflow-prove.test.mjs'));
   cpSync('test/workflow-prove.formal.test.mjs',join(root,'test/workflow-prove.formal.test.mjs'));
+  cpSync('test/runtime-fake.mjs',join(root,'test/runtime-fake.mjs'));
+  cpSync('test/fixtures',join(root,'test/fixtures'),{recursive:true});
   cpSync('test/runtime-check.test.mjs',join(root,'test/runtime-check.test.mjs'));return root;
 }
 function run(root,path,pattern) {

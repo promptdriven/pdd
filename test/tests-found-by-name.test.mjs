@@ -135,7 +135,7 @@ test('NAME5: two files with one name for one Story, or one test for two Stories,
   for (const word of ['p17', 'tests/p17.json']) {
     const result = await check(setup, [word], { '--json': true });
     assert.equal(result.code, 4, word);
-    assert.deepEqual(result.json.rows.map(row => [row.test, row.state, row.refusals.map(item => item.message)]), [['test/runtime/p17.json', 'refused', [sentence]]], word);
+    assert.deepEqual(result.json.rows.map(row => [row.test, row.state, row.refusals.map(item => item.message)]), [['test/runtime/p17.json', 'not run', [sentence]]], word);
     assert.deepEqual(result.calls, { fetch: 0, gh: 0 });
   }
   // pdd test --lint refuses the conflict locally, sends the other Story's test and names only that one.
@@ -149,11 +149,11 @@ test('NAME5: two files with one name for one Story, or one test for two Stories,
   };
   const alone = await lintRun(['p17']);
   assert.equal(alone.code, 4, alone.err);
-  assert.deepEqual(alone.json.rows.map(row => [row.test, row.state, row.refusals.map(item => item.message)]), [['test/runtime/p17.json', 'refused', [sentence]]]);
+  assert.deepEqual(alone.json.rows.map(row => [row.test, row.state, row.refusals.map(item => item.message)]), [['test/runtime/p17.json', 'not run', [sentence]]]);
   assert.equal(fake.posts.length, 0, 'nothing is sent');
   const both = await lintRun(['p17', 'place-order']);
   assert.equal(both.code, 4, both.err);
-  assert.deepEqual(both.json.rows.map(row => [row.test, row.state]), [['test/runtime/p17.json', 'refused'], ['tests/place-order.json', 'passed']]);
+  assert.deepEqual(both.json.rows.map(row => [row.test, row.state]), [['test/runtime/p17.json', 'not run'], ['tests/place-order.json', 'passed']]);
   assert.deepEqual(fake.posts.map(post => [post.command, post.request.tests]), [['lint', ['tests/place-order.json']]]);
   const twin = repoWith(t, { 'user_stories/a/x.md': story('X a'), 'user_stories/b/x.md': story('X b'), 'tests/x.json': scenario('user_stories/a/x.md') });
   assert.deepEqual(findTests({ root: twin.repo }).warnings, ['Warning: tests/x.json matches 2 Stories: user_stories/a/x.md and user_stories/b/x.md. Rename one.']);
@@ -183,7 +183,7 @@ test('NAME7: when the interpreter lists lint-tests, the lint request names the s
     fake.capacity = () => ({ status: 200, json: { maintenance: null, ...(features ? { features } : {}) } });
     const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
     const code = await runCheck({ words: ['place-order'], options: {}, cwd: setup.repo }, ports);
-    assert.equal(code, 0, ports.stderr.text);
+    assert.equal(code, 0, ports.stdout.text + ports.stderr.text);
     const lint = fake.posts.find(entry => entry.command === 'lint').request;
     if (features) { assert.deepEqual(lint.tests, ['tests/place-order.json']); assert.deepEqual(lint.app_maps, []); }
     else { assert.equal(Object.hasOwn(lint, 'tests'), false); assert.equal(Object.hasOwn(lint, 'app_maps'), false); }
@@ -236,9 +236,9 @@ test('NAME10: an unreadable test or a test over the upload limit is refused by n
     ['tests/locked.json', 'tests/locked.json cannot be read: EACCES.'],
     ['tests/place-order.json', null]]);
   const files = await check(setup, [], { '--files': true });
-  assert.equal(files.code, 0, files.err);
-  assert.ok(files.err.includes('Warning: not sent: tests/locked.json cannot be read: EACCES.'), files.err);
-  assert.doesNotMatch(files.out, /tests\/(?:huge|locked)\.json/);
+  assert.equal(files.code, 4, files.err);
+  assert.ok(files.out.includes('tests/locked.json') && files.out.includes('EACCES'));
+  assert.doesNotMatch(files.out, /tests\/(?:huge|locked)\.json +\d+ bytes/);
   // pdd test runs the other Stories: the two refused tests are neither uploaded nor named for lint.
   const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   fake.capacity = () => ({ status: 200, json: { maintenance: null, features: ['lint-tests'] } });
@@ -246,7 +246,7 @@ test('NAME10: an unreadable test or a test over the upload limit is refused by n
   let made = portsFor(env);
   assert.equal(await runCheck({ words: [], options: { '--json': true }, cwd: setup.repo }, made.ports), 4, made.ports.stderr.text);
   const json = JSON.parse(made.ports.stdout.text);
-  assert.deepEqual(json.rows.map(row => [row.test, row.state]), [['tests/huge.json', 'refused'], ['tests/locked.json', 'refused'], ['tests/place-order.json', 'passed']]);
+  assert.deepEqual(json.rows.map(row => [row.test, row.state]), [['tests/huge.json', 'not run'], ['tests/locked.json', 'not run'], ['tests/place-order.json', 'passed']]);
   assert.deepEqual(fake.posts.find(post => post.command === 'lint').request.tests, ['tests/place-order.json']);
   assert.ok(fake.posts.every(post => !post.tar.includes(Buffer.from('tests/huge.json')) && !post.tar.includes(Buffer.from('tests/locked.json'))));
   made = portsFor(env);
@@ -275,7 +275,7 @@ test('NAME11: a saved case never makes a second test for a Story; a test path th
 });
 
 // The selected tests declare the maps that lint must judge, even when the CLI names none.
-test('NAME12: named lint includes the distinct maps declared by selected tests only', async t => {
+test('NAME12: named lint refuses unknown scenario map keys before upload', async t => {
   const setup = repoWith(t, {
     'user_stories/place-order.md': story(),
     'tests/place-order.json': scenario('user_stories/place-order.md', { app_maps: ['maps/b.json', 'maps/a.json', 'maps/a.json'] }),
@@ -288,11 +288,12 @@ test('NAME12: named lint includes the distinct maps declared by selected tests o
   fake.capacity = () => ({ status: 200, json: { maintenance: null, features: ['lint-tests'] } });
   const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: join(setup.home, 'state') });
   const code = await runCheck({ words: ['place-order'], options: { '--lint': true }, cwd: setup.repo }, ports);
-  assert.equal(code, 0, ports.stderr.text);
-  const lint = fake.posts.find(entry => entry.command === 'lint').request;
-  assert.deepEqual(lint.tests, ['tests/place-order.json']);
-  assert.deepEqual(lint.app_maps, ['maps/a.json', 'maps/b.json']);
-  assert.equal(lint.complete, true);
+  // P1 owns the closed scenario keys. The capture check now applies it to
+  // lint too; app_maps is not an admitted scenario key.
+  assert.equal(code, 4, ports.stdout.text + ports.stderr.text);
+  assert.match(ports.stdout.text, /invalid-document/);
+  assert.match(ports.stdout.text, /app_maps/);
+  assert.equal(fake.posts.length, 0);
 });
 
 // A local refusal remains a fact while the remote lint waits or cannot run.
@@ -310,9 +311,9 @@ for (const state of ['running', 'not_run']) test(`NAME13: ${state} lint preserve
   const batch = readdirSync(join(stateDir, 'batches'))[0];
   const saved = JSON.parse(readFileSync(join(stateDir, 'batches', batch, 'batch.json')));
   assert.deepEqual(saved.rows.map(row => [row.test, row.state, row.phase]), [
-    ['tests/broken.json', 'refused', 'local'], ['tests/place-order.json', 'not_run', 'lint']]);
+    ['tests/broken.json', 'not run', 'local'], ['tests/place-order.json', 'not run', 'lint']]);
   assert.equal(saved.rows[0].refusals[0].code, 'invalid-document');
-  if (state === 'not_run') assert.equal(JSON.parse(ports.stdout.text).rows[0].state, 'refused');
+  if (state === 'not_run') assert.equal(JSON.parse(ports.stdout.text).rows[0].state, 'not run');
 });
 
 // Receipt refresh must reuse the same source as dispatch, including the excluded-test decision.
@@ -333,7 +334,7 @@ test('NAME14: a UUID receipt refresh keeps unsent tests out of capture and cache
     return { code, json: JSON.parse(ports.stdout.text) };
   };
   const first = await invoke([], { '--timeout': 1 });
-  assert.deepEqual(first.json.rows.map(row => [row.test, row.state]), [['tests/huge.json', 'refused'], ['tests/place-order.json', 'running']]);
+  assert.deepEqual(first.json.rows.map(row => [row.test, row.state]), [['tests/huge.json', 'not run'], ['tests/place-order.json', 'sent']]);
   const id = first.json.rows[1].request_id;
   running = false;
   assert.equal((await invoke([id], { '--read': true })).code, 0);

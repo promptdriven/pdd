@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 34af2690532e52cd31ad9dcee6c47b5a159ad0ce5ca1604d6b6f3f4897c4bc57).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 36db5ec1390c7828fd91e8741e07973c42ed87a1d1b356973d383afc4a23341d).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -2436,7 +2436,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
-    if (options['--lint'] === true && options['--local'] === undefined && words.length && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
+    if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
       const {root,found,normalized} = localSetup(cwd,words);
       const selection = selectTests(found,normalized,{native:true});
       if (selection.nativeSelections?.length) {

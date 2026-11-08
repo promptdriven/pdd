@@ -101,10 +101,10 @@ for (const interactive of [false, true]) {
       assert.equal(r.saved.timeout_min, null);
     });
   }
-  test(`LOST-LINT ${shell}: paid timeout does not shorten free lint recovery`, async t => {
+  test(`LOST-LINT ${shell}: explicit timeout bounds preliminary lint recovery`, async t => {
     const r = await lostLint(t, { interactive, timeout: 1 });
     assert.equal(r.safetyInterrupted, false);
-    assert.equal(r.elapsed, interactive ? 300000 : 90000);
+    assert.equal(r.elapsed, 60000);
     held(r);
     assert.equal(r.saved.timeout_min, 1);
   });

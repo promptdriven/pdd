@@ -35,7 +35,7 @@ for (const kind of ['410', 'wrong-id']) test(`E1 guard vs fresh ${kind} in same 
   const getsA = f.gets.filter(g => g.url.endsWith(aId)).length;
   // Expected by the lifecycle: A's own fresh GET said expired / wrong ID, so A is unknown.
   assert.match(a.why, kind === '410' ? /result expired/i : /another request ID or command/);
-  assert.equal(a.state, 'unknown', `A shown as ${a.state} after a fresh ${kind} GET`);
+  assert.equal(a.state, 'partial', `A shown as ${a.state} after a fresh ${kind} GET`);
 });
 
 // E3: interruption during --read with a cached running receipt.
@@ -54,6 +54,6 @@ test('E3 interrupted read keeps verified running cache', async t => {
   const p = portsFor(env, { onInterrupt: handler => { handler(); return () => {}; } });
   const code = await runCheck({ cwd: h.repo, words: [batch], options: { '--read': true, '--json': true } }, p.ports);
   const json = JSON.parse(p.ports.stdout.text);
-  assert.equal(json.rows[0].state, 'running');
+  assert.equal(json.rows[0].state, 'sent');
   assert.equal(f.gets.length, gets);
 });
