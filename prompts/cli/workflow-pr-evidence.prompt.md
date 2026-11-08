@@ -33,6 +33,8 @@ Return approval lines separately as `approvalLines`; never prepend them to `line
 
 Every dynamic value, including actor, timestamp, route, path/hash and words, is a quoted JSON literal in a Markdown code span longer than all interior backtick runs. Preserve recoverable raw text: JSON escapes newlines, carriage returns, controls and bidi characters. Escape each exact `pdd-workflow:` prefix colon as `\u003a` inside the JSON literal, preventing an ownership marker. Do not HTML-escape raw identity or allow mentions, issue references, closing instructions, HTML or backticks to escape the span. These approval values use this rule instead of the ordinary lifted-label formatter. Keep exactly one real ownership marker and preserve existing redaction/budget/publication safeguards. A full render through the read-only GitHub Markdown API must show no user-mention/issue anchors or extra workflow markers from supplied evidence.
 
+Also export `approvalRecords(run)`: the same approval rows that `approvalLines` renders, each once and oldest first (gate decisions with their evidence, legacy decisions as `{route, at, words}`, then the matching prompt approvals), as plain objects. The runner's [readable PR part](workflow-pr-body.prompt.md) reads their route, time and words for its one approval line; `preparePrEvidence` keeps its exact return shape.
+
 ## Dependencies
 
 - [Run records](workflow-runs.prompt.md): required authoring/generation/native-production/verification/testing context for saved approval decisions, including optional legacy-compatible gateAt and gateId; this renderer accepts supplied facts and never duplicates run storage policy.
@@ -48,7 +50,7 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
 ```json
 {
   "status": "approved",
-  "prose_sha256": "e677a7334f6e05a16ec5d8cb8b0ae990513bdb617c8164198aa9911613877bd5",
+  "prose_sha256": "fbb05f6c0a0ea5c4eb456b5107805364ba8ca5ef8bab2e1841a409d768da4962",
   "entries": [
     {
       "operation": "preparePrEvidence",

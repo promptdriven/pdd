@@ -404,6 +404,23 @@ test('an access or spending decision is one incident per issue: two decisions se
   f.noSecret();
 });
 
+test('a long-running issue is one informational incident per issue: one alert, no repeat, and a recovery closes it', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  const day = { cause: 'Issue 80 was claimed 24 hours ago and has no merge yet', tried: 'Kept working on its review fixes', need: 'Nothing now; this is information' };
+  f.replies.push(echo, echo);
+  assert.match((await f.alert(80, 'long-running', day)).stdout, /Alert sent for #80 long-running; the webhook confirmed it/);
+  assert.match((await f.alert(81, 'long-running', { ...day, cause: 'Issue 81 was claimed 24 hours ago and has no merge yet' })).stdout, /Alert sent for #81 long-running/);
+  assert.equal(f.requests[0].body.content.split('\n')[0], 'PDD Autopilot alert: long-running (test-host)');
+  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['80:long-running', '81:long-running']);
+  assert.match((await f.alert(80, 'long-running', day)).stdout, /Alert for #80 long-running is already open; nothing sent/);
+  f.replies.push(echo);
+  await f.alert(80, 'recovered', { cause: 'The PR merged', kind: 'long-running' });
+  assert.deepEqual(Object.keys(f.record().incidents), ['81:long-running'], 'the other issue stays open');
+  assert.equal(f.requests.length, 3);
+  f.noSecret();
+});
+
 test('the machine in an incident is the coordinator\'s saved machine name, so a host rename finds the same incident', async t => {
   const f = setup(t);
   await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
@@ -474,13 +491,13 @@ test('invalid alert input is refused with its problem named, and records and sen
     [['autopilot', 'alert', '--issue', 'twelve', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--issue', '0', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
-    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|access\|decision\|stuck\|recovered/],
+    [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running\|recovered/],
     [alert, 'not json', /JSON object on stdin with nonblank "cause", "tried", "need"\. Nothing was recorded/],
     [alert, '[]', /JSON object on stdin/],
     [alert, JSON.stringify({ cause: 'x', tried: 'y' }), /nonblank "cause", "tried", "need"/],
     [alert, JSON.stringify({ ...usage, need: '  ' }), /nonblank "cause", "tried", "need"/],
     [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: '' }), /nonblank "cause"\. Nothing was recorded/],
-    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|access\|decision\|stuck/],
+    [['autopilot', 'alert', '--issue', '12', '--kind', 'recovered', '--input', '-'], JSON.stringify({ cause: 'Quota reset', kind: 'progress' }), /"kind" in a recovery as one of usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running,/],
   ];
   for (const [argv, stdin, problem] of cases) {
     const refused = await f.pdd(argv, stdin);

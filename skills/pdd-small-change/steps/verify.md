@@ -6,4 +6,5 @@
 - If only the warning light changed, write `Not fixed yet: this helps find the cause` in verify.md for pdd to lift to the PR top; use `Refs #N` and keep the issue open.
 - Report the exact commands, exit codes and real output. Name what no test covers. Put the results first. Put the exact commands and long output last, in a closed `<details>` block.
 - verify.md shows commands and results only: no local absolute paths (like /Users/… or /home/…) and no raw logs.
+- In your `done` summary add the PR fields of RUNBOOK §15: `Title:`, `Problem:`, `Change:`, `Result:`, `Case:` rows and `File:` notes.
 - For proof that pdd records, run `pdd workflow prove ISSUE --test COMMAND --expect TEXT` (add `--timeout MIN` for slow tests).

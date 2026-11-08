@@ -1,6 +1,6 @@
 # PDD usage guide
 
-This guide is for people who install pdd 0.1.20 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.21 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -76,7 +76,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
-pdd --version   # prints 0.1.20
+pdd --version   # prints 0.1.21
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -99,7 +99,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # this pdd prints 0.1.20
+pdd --version   # this pdd prints 0.1.21
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -158,7 +158,7 @@ Where the skills go:
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.20`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.21`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -314,8 +314,8 @@ For a page or a screen, the chat recommends `visual`. It writes the app map, so 
 
 | PR | What it holds | When |
 |---|---|---|
-| PR 1 | The prompt, the Story and the test cases. Its title ends with "(prompt, Story and tests)", or "(prompt and Story)" when it has no test file | After the prompt PR area. Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Part of #42` |
-| PR 2 | The code | Only when you ask for it. Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Closes #42`, and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason. The tables come first; long commands and output are folded in closed `<details>` blocks |
+| PR 1 | The prompt, the Story and the test cases. Its title is `spec(AREA): what must be true (#42 · part 1: spec)` | After the prompt PR area. Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Part of #42` |
+| PR 2 | The code. Its title is `fix(AREA): what is true after the merge (#42 · part 2: fix)` (`feat(AREA)` in a feature run) | Only when you ask for it (in Autopilot `auto` mode it starts by itself). Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Closes #42`, and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason. The tables come first; long commands and output are folded in closed `<details>` blocks |
 
 In verify after the last commit, run one `pdd workflow prove 42 --test "node --test test/regression.test.mjs" --expect "defect text"` command that covers all new or changed tests; its line goes on the PR. Its `Old-code proof:` line names the actual command and old/new results. Authorized defect, proof, warning and independent review lines appear above replay status on both PRs; code PRs also show the machine proof.
 
@@ -323,9 +323,9 @@ In verify after the last commit, run one `pdd workflow prove 42 --test "node --t
 
 Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve 42`."
 
-The PR 1 body is short. It starts with pdd's own results: one `pdd result:` line for the newest `pdd test` and `pdd lint` of the run (or `pdd result: none. … (pdd:no-verdict)`). Lines that come from the agent's step summaries start with `Agent note — not checked by pdd:`. For a bug, the verdict line (for example "Verdict: the bug is in the PROMPT …") and the `Before ✗ … → after ✓ …` line with both report links come next. Then comes one `Prompt tests (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Prompt tests (all Stories)` line. A `Report (<story>)` link follows for each Story. Then come `Part of #42`, a line that names any prompts that are still `draft`, and one short line for each step. PR 1 has no `verify.md` and no Simulator links.
+Every PR starts with a part for people: a status line (`✅ Ready to merge`, `⏳ Waiting for CI` or `⛔ Blocked: <reason>`), the user story from the Story's "As a …, I want …, so that …" line, a short summary (PR 1: Problem, This PR, Verdict; PR 2: Problem, Cause, Fix, Result), a table of cases, what changed (+/− and the files), a Checks table (PR 1) or a Proof table (PR 2), and one line: PR 1's Approval and Next lines, PR 2's Merge line. The summary and the cases are the agent's words. pdd fills the status line and the tables only from its own records: saved `pdd test` and `pdd lint` results, replay evidence, the old-code proof, the review verdict, CI and the checker verdict. The status line says `✅ Ready to merge` only when every record that the PR needs is there and current (for PR 2: the old-code proof for its head, the review, the formal result, green CI and, in Autopilot, a checker PASS for the head); else it waits or is blocked and says why. A PR that only helps find the cause says `⛔ Not fixed yet` with "Not fixed yet: this helps find the cause." under it. A row that has no result yet shows `⏳ pending`, and a repository without CI checks shows "no CI checks configured". pdd refreshes the status line and the rows when it updates the PR and each time you run `pdd workflow status 42`; the line says when ("Updated <time>"). pdd owns the description: it rewrites the part above Details at each status and all of it at each push, so write your notes in a PR comment. The agent's words in the title, the summary, the cases and `verify.md` cannot close an issue (code spans keep their exact text), and in the summary they cannot add a link. Everything else (pdd's `pdd result:` lines, the agent's step summaries with their `Agent note — not checked by pdd:` label, the approval records, `Part of #42`, draft prompts, the step list and `verify.md`) is in one closed "Details for tools and audits" section. PR 1 has no `verify.md` and no Simulator links.
 
-- **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first.
+- **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first, except when PR 1's CI fails (its new tests are red until the code exists): then PR 2 says "This PR also merges PR 1 (#N). Do not merge PR 1 alone.", waits until it targets the base branch (`gh pr edit PR2 --base main`), and you merge PR 2, which carries PR 1. While PR 1's CI has no result, PR 2 says only "Builds on PR 1 (#N).".
 - **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the run’s saved base branch.
 If PR 1 names draft prompts, approve through the chat route above or approve each with `pdd approve PROMPT` at a terminal. The agent runs pdd and never sets approval fields. The later code-or-stop decision remains separate.
 - If a test case still fails on the code after two more build rounds, PR 2 opens anyway with "✗ N vectors fail" at the top. Read it before you merge.
@@ -336,7 +336,7 @@ For all workflows:
 
 - The verify step runs in a fresh subagent that did not write the code.
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
-- The PR body has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. Code PRs show a `Tests vs base:` block with removed cases, changed assertions and new skips before any `Prompt tests` lines and report links. Report links expire after 7 days.
+- The Details section of the PR has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. Code PRs show a `Tests vs base:` block with removed cases, changed assertions and new skips before any `Prompt tests` lines and report links. Report links expire after 7 days.
 - pdd does not run the tests itself. Read the test output in the PR before you merge.
 The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
 
@@ -561,7 +561,7 @@ This is a pre-release. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.20` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.21` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |

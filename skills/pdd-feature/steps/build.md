@@ -6,4 +6,5 @@
 - Write a replay test for each Story, as section 17 of RUNBOOK.md (pdd-prompting skill) says. Never edit the Story's test file.
 - For a screen, read its linked `.ui.svg` as the layout spec; build its parts, words, order, ids and state. Follow RUNBOOK §13 and rebuild until the screen matches.
 
+- In your `done` summary add the PR 2 fields of RUNBOOK §15: `Title:`, `Cause:`, `Fix:`, `Result:`, `Case:` rows and `File:` notes.
 - Prepare and run the affected behavior using `verification-setup.md` in the pdd-prompting skill; keep any needed recipe and controlled fixtures in project source.

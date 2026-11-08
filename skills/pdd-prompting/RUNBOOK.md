@@ -20,7 +20,7 @@ When the person asks you to report a problem with pdd itself, follow
 | File | What it holds |
 |---|---|
 | `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
-| `user_stories/<story>.md` | One story with a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
+| `user_stories/<story>.md` | One story: first one line "As a …, I want …, so that …" in the words of the issue (the PR shows it as the user story), then a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
 | `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` with a folder named `tests` or `test` anywhere in its path, not only as the direct parent (`tests/`, `test/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
@@ -348,7 +348,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | 0 | passed | Put the one-line result in the PR (section 15). If it says DRAFT, offer a simulation. |
 | 1 | failed | Find the cause first ("After a ✗" below). Fix only what the evidence shows. A person decides expected values. |
 | 4 | refused | Nothing was judged (`no verdict ·`): a file breaks a rule, or the AI service failed. Read the reason and the next step under the line. When the reason names a file rule, fix that file (table below); for an AI-service cause, change no file. If a fix changes an expected value, ask the person. |
-| 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. |
+| 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
 | 3 | unknown or still running | Run `pdd test --read BATCH` once with a long shell timeout or exit notification; it waits until every Story ends. Never resend the check. |
 | 2 | command error | Wrong command or story name. Run `pdd test --help`. |
 
@@ -366,7 +366,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. |
 | The Story is unclear | Two answers fit the Story | Stop. Ask the person to decide the rule in the Story. |
 | The answer changes between runs | `Rerun: failed 1 of 3 (unstable)` | Make the rule in the prompt firmer. Do not fit the prompt to one answer. |
-| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story: read each Story line | Tell the person, with pdd's next step. Change no file. Never send it again on your own. |
+| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story: read each Story line | Tell the person, with pdd's next step. Change no file. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
 
 4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.
 
@@ -386,7 +386,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
 | `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
-| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
+| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
 
 ## 12. `pdd simulate` and Save as test
@@ -591,15 +591,47 @@ ticks. Ticks use the existing action/call budget.
 
 ## 15. PR text
 
-In a pdd workflow run, pdd writes the PR text. Its top starts with pdd's own lines that begin with "pdd result:",
-read from the saved `pdd test` and `pdd lint` results (or one "pdd result: none" line with pdd:no-verdict). Put the `Prompt tests` line(s)
-that `pdd test` prints, with their report links, in your check summary. pdd shows them below its own lines, each
-starting with `Agent note — not checked by pdd:`. One Story gives one line, `Prompt tests (<story>): …`. 2 or more
-Stories give one line each and a last `Prompt tests:` line for all. The link expires after 7 days. Anyone with the
-link can open it. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while
-a prompt in it is still draft.
-> pdd result: pdd test (batch 20261103-120000-k3f9, 2026-11-03T12:00:00Z, source current): Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report: https://…/r/617480ac-… (report links expire after 7 days)<br>
-> Agent note — not checked by pdd: Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
+In a pdd workflow run, pdd writes the PR title and text. The top is for people: a status line (ready, waiting or
+blocked), the user story, a short summary, the cases, what changed, a table of checks (PR 1) or proof (PR 2) and
+one approval, next or merge line. pdd fills the status line and the tables only from its own records: saved `pdd test`
+and `pdd lint` results, the replay evidence (§17), the old-code proof, review.md, CI and the checker verdict. It says
+✅ only when each record that the PR needs is there and current. `pdd workflow status 42` (the run's issue) refreshes the status line
+and the rows of each open PR ("Updated <time>"). All the rest (pdd result lines, your step summaries, approvals,
+verify.md) stays whole in a closed "Details for tools and audits" section. pdd owns the description: it rewrites the
+part above Details at each status and all of it at each push. Put notes for people in a PR comment.
+
+Give pdd the human parts as labeled lines in your `done` summary, one per line. A later line with the same label
+replaces an earlier one, also from a later step of the same PR:
+
+| Label | PR 1 (prompt, Story and tests) | PR 2 (code) |
+|---|---|---|
+| `Title:` | what must be true | what is true after the merge |
+| `Problem:` | the wrong or missing behavior, in one sentence | kept from PR 1 |
+| `Cause:`, `Fix:`, `Result:` | — | one sentence each |
+| `Case:` | one line per issue case: input, today, expected | input, before, after, expected |
+| `File:` | `File: PATH — NOTE`, at most one short note per file | the same |
+
+A one-PR run (small change) uses `Problem:`, `Change:` and `Result:`. Use `Area:` only when the owning prompt's
+name is not a good title area. PR 1's Verdict is the verdict line of §14. pdd writes "This PR", the user story (from
+the Story's "As a …" line, §2), the changed files and their +/− counts itself. Your words never fill a table: "CI is
+green" in a summary stays your words. In the PR title and description your words cannot close an issue: pdd breaks
+each closing keyword (fix, close, resolve and their forms) in the title, the summary, the cases, the file notes and
+verify.md, so only pdd's `Closes #N` closes one. Code spans and code blocks stay as you wrote them (GitHub reads no
+reference there). A commit message can close an issue, so do not write "Fixes #N" in one. In the readable part your
+words also cannot add a link or a mention. Separate the cells of a `Case:` line with `|`; put a value that has a `|`
+in a code span. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while a
+prompt in it is still draft.
+
+```text
+Verdict: the prompt is right; the bug is only in the CODE.
+Before ✓ 6 of 6 criteria https://…/r/… → after ✓ 6 of 6 criteria https://…/r/…
+Prompt tests (format-price): ✓ 6 of 6 criteria · 6/6 checks · 6 AI calls
+Report (format-price): https://…/r/…
+Title: every price shows dollars and two cent digits
+Case: 1205 | $12.50 | $12.05
+```
+
+In PR 2 the same case has four cells: `Case: 1205 | $12.50 | $12.05 | $12.05`.
 
 ## 16. Known limits today
 

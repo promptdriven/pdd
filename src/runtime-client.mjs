@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d091d31f3f3448ec47f9e4d9dfd6c89a7c53a281d33981fc191d49fa86311671).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e8fea2858646b3ef40a9a3ec994004b2a1afba812b878ba7cc9f792f4659925b).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -493,6 +493,33 @@ function blockingAnswer(reply) {
 
 const sameJob = (json, id, command) => isObject(json) && json.requestId === id && json.id === id && json.command === command && JOB_STATES.has(json.state);
 const gateText = reply => reply.status === 503 && !reply.json && String(reply.text ?? '').includes('The runtime opens soon.');
+
+// The free interpreter health check for Autopilot: one GET /v1/capacity with the gh token, the same read that admission
+// uses. It sends no source, starts no check and makes no AI call. healthy: the server answered and is not in
+// maintenance; unavailable: no answer, HTTP 408, 429 or 5xx, or maintenance; access: an answer that is neither, a
+// sign-in or a setup problem on this machine that a person must fix (`fix` names how).
+const HEALTH_SIGN_IN = 'Run gh auth status on this machine; sign in again with gh auth login, or ask the PDD team for interpreter access.';
+const HEALTH_ADDRESS = 'Check PDD_RUNTIME_URL in the Autopilot environment: it must be the interpreter origin itself (unset it to use the default).';
+export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts = {}) {
+  const ports = withDefaults({ ...givenPorts, env });
+  let origin;
+  try { origin = runtimeOrigin(env); } catch { return { state: 'access', detail: 'PDD_RUNTIME_URL is not an HTTPS origin', fix: HEALTH_ADDRESS }; }
+  let token = '';
+  try { const reply = ports.gh(['auth', 'token']); token = reply.status === 0 ? String(reply.stdout ?? '').trim() : ''; } catch { token = ''; }
+  if (!token) return { state: 'access', detail: 'no gh sign-in', fix: HEALTH_SIGN_IN };
+  const reply = await new Runtime({ origin, token, ports }).send('/v1/capacity', { method: 'GET' }, givenPorts.timeoutMs ?? 10_000);
+  if (reply.lost) return { state: 'unavailable', detail: reply.unreachable ? 'not reached' : 'no answer' };
+  if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
+  if (reply.status === 200 && isObject(reply.json)) {
+    const until = Date.parse(reply.json.maintenance?.until);
+    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance' } : { state: 'healthy', detail: 'HTTP 200' };
+  }
+  // An older interpreter without the capacity read still answered with JSON; a 404 page that is not JSON is a wrong address.
+  if (reply.status === 404 && isObject(reply.json)) return { state: 'healthy', detail: 'HTTP 404' };
+  if ([401, 403].includes(reply.status)) return { state: 'access', detail: `HTTP ${reply.status}: The interpreter did not accept the gh login`, fix: HEALTH_SIGN_IN };
+  if (reply.status >= 300 && reply.status < 400) return { state: 'access', detail: `HTTP ${reply.status}: a redirect, not an interpreter answer`, fix: HEALTH_ADDRESS };
+  return { state: 'access', detail: `HTTP ${reply.status}${[200, 404].includes(reply.status) ? ' that is not an interpreter answer' : ''}`, fix: HEALTH_ADDRESS };
+}
 
 // Only capacity refusals that prove no execution can authorize a fresh check ID.
 function capacityDelay(refusal, headers) {

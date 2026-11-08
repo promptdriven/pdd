@@ -401,6 +401,16 @@ An own claim whose issue has had `pdd:stuck` for 4 hours (`stuckSince`) is not
 refreshed again, so it expires 4 hours later unless the issue leaves `pdd:stuck`.
 For it, offer one `stuck-claim` time rule, once per stuck time, that asks the
 skill to retry with a changed approach or ask in the configured alert channel.
+After a ceiling (the claim is `takeoverLimited`, or this checkout's run of the
+issue is `stuck` with a saved `repairLimit`), the rule instead says which limit
+was reached and asks for no retry, no removal of `pdd:stuck` and no new comment:
+send the one `stuck` alert only if this stop has none yet. After the takeover
+limit, a person removes `pdd:stuck` and `pdd:working` to let Autopilot try again.
+After the repair limit, the rule gives the way out: to let Autopilot try again, a
+person removes `pdd:stuck` and `pdd:working`, then runs `pdd workflow cancel N`
+in the checkout that holds the stuck run; the next tick starts a new run with a
+fresh repair count. When both limits hold, the rule names both and gives the
+repair-limit way out.
 
 An expired claim (`expired: true`) does not hold its issue: `pdd:working` alone
 is then not a waiting reason, and a currently eligible issue is fresh work. Its
@@ -410,6 +420,93 @@ rule does not apply to an expired claim. In the trusted view and fingerprint,
 show a claim comment with `lastSeen` through `withoutClaimHeartbeat` and with its
 creation time, so that a heartbeat alone is not new work. The 4-hour stuck time
 and the claim expiry times are constants, not settings.
+
+### Per-issue ceilings
+
+Two more time rules use the same claims, delivery and persistence. Each is sent
+once per issue, only for an issue that is open in the cached list (a merge closes
+it), and does not touch other issues. `self` is this coordinator and machine:
+
+- `long-running`: for an own active claim whose `claimedAt` is 24 hours old, while
+  the issue has no `pdd:stuck` and the claim has no `longRunningAlertedAt`, ask
+  the skill to send one informational alert for that issue and keep working. It
+  is information, not a stop: heartbeats and work continue. After the delivery,
+  write the time to the own claim comment through
+  [`recordLongRunningAlert`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry),
+  under the scan's admission guard; a failure warns. The claim chain then carries
+  it, so no other machine sends the alert again after a takeover.
+- `takeover-limit`: for a claim that is
+  [`takeoverLimited`](issue-dependencies-github.prompt.md#takeovers) for `self`,
+  while the issue has no `pdd:stuck`, ask the skill not to take it over again and
+  to take the stuck path (`pdd:stuck`, one comment with the cause, one `stuck`
+  alert), keeping its claim and progress, to read the issue again first and skip
+  it if it already has `pdd:stuck`, and say that a person removes `pdd:stuck` to
+  reset the count. Only one coordinator gets it: the owner of a live claim, else
+  the claim's `previousOwner`; any coordinator when GitHub shows no such owner.
+  Such a claim is not in the expired-claim set: `pdd:working` stays a hold, the
+  item has no `expiredClaim`, its selection reasons add `takeover-limit`, and the
+  idle-claim rule does not apply when it is expired. A change of that reason
+  alone updates the saved selection. An own expired claim is not limited for
+  `self`: it is offered with `expiredClaim`, because taking it back is a
+  re-claim.
+
+The 24 hours is a constant, not a setting.
+
+### Interpreter outage (#3039)
+
+A worker whose `pdd test` has no verdict for an interpreter cause parks its own run
+with `pdd workflow park --interpreter` ([workflow runner](workflow-runner.prompt.md)):
+state `paused` with `runtimeWait {at, reason, batch, cause}`. The tick reads these
+waits from the same local run records as run progress (an injectable
+`readRuntimeWaits` port) and sorts them oldest first. It never parks, wakes or
+changes a run itself; it adds time rules for the coordinator, which wakes a run
+with `pdd workflow changes N` under the existing room and delivery rules.
+
+When no run waits and no outage or interpreter access problem is open, the tick
+makes no health check. Else it makes one free health check,
+[`checkRuntimeHealth`](runtime-client.prompt.md#free-interpreter-health-check)
+(an injectable `runtimeHealth` port): `healthy`, `unavailable` (down) or
+`access` (an answer that is neither: a sign-in or setup problem with a `fix`).
+
+Every wake (`retry`, `probe` or `recovered`) is remembered for its run with the
+run's progress mark (area and number of done steps) and the wait's `at`, for 24
+hours; a recovery does not clear it. A wake is **used** when the same run later
+waits again at the same mark, unless that later wait was first seen while
+The interpreter was down (then the outage explains it). So each run resends at most once
+per wait, and every path ends in a wake or in the stuck rule:
+
+| Facts | Decision |
+| --- | --- |
+| Health `access` | Send one `interpreter-access` alert for this repository and machine that names the detail and the fix (`gh auth status`, `PDD_RUNTIME_URL`); other waiting issues join it. Wake nothing. A run that has waited 4 hours since its `at` or since the problem began (the later one) gets a `runtime-stuck` rule. The first later `healthy` answer sends one recovery (`"kind":"interpreter-access"`); a down answer does not end it |
+| No open outage, health `unavailable`, a run waits | Open one outage. Send one `interpreter` alert for the oldest waiting issue; other waiting issues join it and send nothing |
+| Open outage, health not `healthy` | Wake nothing. Call the alert again for its first issue (a repeat sends nothing unless the last send failed) and for each newly waiting issue |
+| Open outage, health `healthy` | Wake one test run (`probe`): the oldest waiting run that has not used its wake and has not been the test in this outage, preferring one whose cause is not `unknown`. The test passes only with proof: a new `pdd test` row of that run that passed or failed and ended at or after the wake was offered (an injectable `readRuntimeProbe` port). Then send one recovery (`recovered`, `"kind":"interpreter"`), close the outage and offer the other waiting runs, oldest first. A test run that waits again, ends or goes stuck with no such verdict failed, and so does one with no verdict 60 minutes after its wake was offered, also when the wake was never delivered and the run still waits: take the next candidate. With no candidate left, close the outage with one recovery that does not say the interpreter is back |
+| Health `healthy`, a run used its wake | A `runtime-stuck` rule, also during an open outage; it is never the test |
+| No open outage, health `healthy` | Waits from one or many issues are no outage: offer each run one `retry` |
+
+An offered wake is a `runtime-ready` time rule with one reason line: the run
+number, why it wakes (`one retry`, `the test` or the interpreter back), and the exact
+text for `pdd workflow changes N`. That text starts with
+`Interpreter wake for the park at ISO.` (the wait's `at`), so pdd delivers it at most
+once per park. It tells the worker to run `pdd test --read BATCH` first, to resend
+only a check that surely gave no verdict (`pdd test --retry BATCH` only when pdd
+names it, for busy or held checks; the Story's check once with
+`pdd test STORY --max-calls N` for another not run check or an AI-service
+refusal, because `--retry` sends nothing for a not run check that pdd already
+posted; the check once when no result was saved), never an unknown outcome or a
+failed check, and to keep `--max-calls`. For cause `unknown` the text has no
+resend command, only the Story's check once when the read now shows not run
+(nothing was sent); else the stuck rule. Each rule is a
+time event keyed by run and `at:kind`: delivered once, offered again on a
+completion tick (a freed slot) while the run still waits. Persist the outage,
+access problem and wakes in the launcher state as `runtime`. While an outage or
+access problem is open, the packet has `runtime: {state, since, note}` with
+state `unavailable`, `testing` or `access`; the note says to keep other work
+moving and that new issues may start and park only at their interpreter check, and
+for `access` names the fix and the 4-hour limit. Send alerts through
+[Autopilot alerts](autopilot-alerts.prompt.md) `runAutopilotAlerts` with this
+repository and the state root of this launcher (an injectable `sendAlert` port,
+or `alertPorts` for its HTTP); an alert failure never stops the tick.
 
 Use same-repository closing references in PR bodies to associate PRs with issues.
 Resolve trusted related PR metadata on change (state, draft, merge and head),

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 6ad6ce3989fb7c455f6af3d073191f6d2f8e9a156fcb902ff06c78839c2c794c).
+// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: aabfb1464b114804da61c2b8dc4bef68bb5c471cc4009bc8e8abc98cfc0259d6).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,7 +19,9 @@ function approvalValue(value) {
   const fence = '`'.repeat(Math.max(1, ...[...content.matchAll(/`+/g)].map(match => match[0].length + 1)));
   return fence + content + fence;
 }
-function approvalLines(run) {
+// Each approval once, oldest first: gate decisions and the matching prompt approvals. The readable PR part (#3042)
+// reads these plain facts for its one approval line; the rendered approval lines stay in Details.
+export function approvalRecords(run) {
   const seen = new Set(), rows = [];
   for (const decision of run.decisions ?? []) {
     if (decision.decision !== 'approve') continue;
@@ -27,11 +29,16 @@ function approvalLines(run) {
     else rows.push({ route: decision.via, at: decision.at, ...(decision.text !== undefined ? { words: decision.text } : {}) });
   }
   rows.push(...(run.promptApprovals ?? []));
-  return rows.sort((a,b) => a.at-b.at).flatMap(evidence => {
+  return rows.sort((a,b) => a.at-b.at).filter(evidence => {
     const key = typeof evidence.id === 'string' && evidence.id.length
       ? `id:${evidence.id}` : `legacy:${JSON.stringify([evidence.route, evidence.actor, evidence.at, evidence.words, evidence.prompts])}`;
-    if (seen.has(key)) return [];
+    if (seen.has(key)) return false;
     seen.add(key);
+    return true;
+  });
+}
+function approvalLines(records) {
+  return records.flatMap(evidence => {
     const label = evidence.route === 'said' ? 'Approved in chat:' : evidence.route === 'chat' ? 'Approved in area chat:' : 'Approved in terminal:';
     const values = [evidence.words !== undefined && evidence.words !== null ? approvalValue(evidence.words) : null,
       evidence.actor ? `actor ${approvalValue(evidence.actor.kind)} ${approvalValue(evidence.actor.id)}` : null,
@@ -125,5 +132,5 @@ export async function preparePrEvidence({ run, isCode }, ports = {}) {
   }
   lines.push(...labels.flatMap(label => [...grouped.get(label)].map(row => `Agent note — not checked by pdd: ${row.line}`)));
   const issueReference = `${grouped.get('Not fixed yet:').size ? 'Refs' : isCode ? 'Closes' : 'Part of'} #${run.number}`;
-  return { lines, approvalLines: approvalLines(run), issueReference, proofStatus };
+  return { lines, approvalLines: approvalLines(approvalRecords(run)), issueReference, proofStatus };
 }

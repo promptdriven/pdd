@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2214a7aaeaad37454c57af1f9573672a6246644990899971df90a1ead82b8c4b).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: f4670086c806d11f3a8132335ded418b4ab325218ca4323b6de145bfc80920ba).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch } from 'node:fs';
@@ -16,18 +16,20 @@ import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, refreshClaimHeartbeat, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
-import { acquireRunLock } from './workflow-runner.mjs';
+import { acquireRunLock, runtimeWakeTag } from './workflow-runner.mjs';
+import { checkVerdictSince } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
-import { alertStatusLine } from './autopilot-alerts.mjs';
+import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
 const CLAIM_IDLE_AFTER = 60 * 60 * 1000;
 const STUCK_CLAIM_AFTER = 4 * 60 * 60 * 1000;
+const LONG_RUNNING_AFTER = 24 * 60 * 60 * 1000;
 const HEARTBEAT_SLACK = 5 * 1000;
 const SESSION = 'pdd-autopilot';
 const ACK = '<!-- pdd:autopilot:thanks -->';
@@ -270,6 +272,167 @@ async function readRunProgress(state, p) {
   }
   return progress;
 }
+// Whether this checkout's run of the issue stopped at the Autopilot repair limit (#3041).
+async function readRepairLimited(state, number, p) {
+  try {
+    const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+    const run = read(join(commonDir, 'pdd', 'runs', String(number), 'status.json'));
+    return run?.v === 1 && run.number === number && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'stuck' && Boolean(run.repairLimit);
+  } catch { return false; }
+}
+// Runs that wait for the interpreter (pdd workflow park --interpreter), from the same local run records.
+async function readRuntimeWaits(state, p) {
+  const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+  const folder = join(commonDir, 'pdd', 'runs');
+  let names;
+  try { names = readdirSync(folder); } catch { return []; }
+  const waits = [];
+  for (const name of names) {
+    if (!/^[1-9][0-9]*$/.test(name)) continue;
+    try {
+      const run = read(join(folder, name, 'status.json')), wait = run?.runtimeWait;
+      if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'paused' && Number.isFinite(wait?.at))
+        waits.push({ number: run.number, at: wait.at, batch: typeof wait.batch === 'string' ? wait.batch : null, cause: wait.cause ?? 'unknown', mark: `${run.area}:${Object.keys(run.done ?? {}).length}` });
+    } catch { /* Missing or unreadable records supply no wait. */ }
+  }
+  return waits;
+}
+// The proof of a test wake: a pdd test verdict (pass or fail) of the test run, saved after the wake was offered.
+// A test run that waits again, or that ends or goes stuck with no such verdict, failed the test.
+async function readRuntimeProbe(state, p, probe) {
+  const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+  let run = null;
+  try { run = read(join(commonDir, 'pdd', 'runs', String(probe.number), 'status.json')); } catch { /* No fact at this tick. */ }
+  if (run?.v !== 1 || run.number !== probe.number || run.repo?.toLowerCase() !== state.repo.toLowerCase()) return 'pending';
+  if (typeof run.root === 'string' && checkVerdictSince({ root: run.root, since: probe.offeredAt }, { env: p.env })) return 'verdict';
+  if (run.state === 'paused' && run.runtimeWait?.at > probe.at) return 'failed';
+  return ['running', 'waiting', 'paused'].includes(run.state) ? 'pending' : 'failed';
+}
+const RUNTIME_KEEP = 24 * 60 * 60 * 1000, RUNTIME_ACCESS_LIMIT = 4 * 60 * 60 * 1000, RUNTIME_PROBE_LIMIT = 60 * 60 * 1000;
+const RUNTIME_TRIED = 'pdd retried each call up to 3 times. The runs wait for the interpreter and keep their claims, branches and progress; other work goes on.';
+const RUNTIME_NEED = 'No action now. Autopilot checks the interpreter at each tick without AI. When it answers again, Autopilot wakes the oldest waiting run as a test and wakes the others after its check reaches a verdict. Look at the PDD interpreter if this lasts.';
+const ACCESS_TRIED = 'Autopilot checks the interpreter at each tick without AI. The runs wait for the interpreter, keep their claims, branches and progress, and resend nothing; other work goes on.';
+function runtimeWake(wait, kind) {
+  const read = `pdd test --read${wait.batch ? ` ${wait.batch}` : ''}`;
+  const why = kind === 'retry' ? 'The interpreter answers its health check and no outage is open, so this is a problem of this issue only: this wake is its one retry. If the same step waits for the interpreter again, it follows the stuck rule.'
+    : kind === 'probe' ? 'The interpreter answers again after an outage. This oldest run is the test: the other waiting runs wake only after its check reaches a verdict.'
+    : 'The interpreter is back.';
+  // pdd test --retry resends only the checks that pdd names it for (busy or held); a fresh check of the Story sends the others.
+  const again = 'check that Story once again with pdd test STORY --max-calls N';
+  const resend = wait.cause === 'unknown' ? `Its last check has an unknown outcome: never send it again blind. If the read now shows not run (nothing was sent), ${again}; if it is still unknown, follow the stuck rule.`
+    : wait.cause === 'none' ? 'No check result was saved, so no check ran: send the check again once.'
+    : `Resend only a check that surely gave no verdict: pdd test --retry ${wait.batch ?? 'BATCH'} only when pdd names it (busy or held checks); for another not run check or an AI-service refusal, ${again}. Never resend a failed (✗) check.`;
+  return `Run #${wait.number} waits for the interpreter. ${why} When a worker slot is free (oldest first), wake it with pdd workflow changes ${wait.number} and this text: "${runtimeWakeTag(wait.at)} ${kind === 'retry' ? 'The interpreter answers again.' : 'The interpreter is back.'} First run ${read} once and read each Story line. ${resend} Keep --max-calls."`;
+}
+// The no-AI interpreter part of a tick: one free health check while a run waits for the interpreter, or an outage or a
+// interpreter access problem is open. Every run resends its check at most once per wait, and every path ends in a
+// wake or in the stuck rule.
+async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateRoot) {
+  const waits = (await (p.readRuntimeWaits ?? readRuntimeWaits)(state, p)).sort((a, b) => a.at - b.at || a.number - b.number);
+  const saved = state.runtime ?? {}, now = p.now();
+  // A wake is kept while its run works on it, so a second wait of the same step is seen; a recovery keeps it too.
+  const retried = Object.fromEntries(Object.entries(saved.retried ?? {}).filter(([, value]) => now - value.at < RUNTIME_KEEP));
+  let outage = saved.outage ? structuredClone(saved.outage) : null, access = saved.access ? structuredClone(saved.access) : null;
+  const keep = () => {
+    state.runtime = { ...(outage ? { outage } : {}), ...(access ? { access } : {}), ...(Object.keys(retried).length ? { retried } : {}) };
+    if (!Object.keys(state.runtime).length) delete state.runtime;
+  };
+  if (!waits.length && !outage && !access) return keep();
+  const health = await (p.runtimeHealth ?? (async input => (await import('./runtime-client.mjs')).checkRuntimeHealth(input)))({ env: p.env });
+  const send = p.sendAlert ?? (input => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...input },
+    { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now }));
+  const alert = async (number, kind, fields) => { try { await send({ issue: String(number), kind, text: JSON.stringify(fields) }); } catch { /* The alert record is best effort; work goes on. */ } };
+  // The first call opens the one incident of this repository and machine; later calls join it or resend a failed alert.
+  const incident = async (record, kind, fields) => {
+    for (const number of [record.first, ...waits.map(w => w.number).filter(n => n !== record.first && !record.issues.includes(n))]) {
+      await alert(number, kind, fields);
+      if (!record.issues.includes(number)) record.issues.push(number);
+    }
+  };
+  // A wake (retry, test or recovery) is used when the same step waits again after it, unless that wait began while
+  // the interpreter was down: then the outage, not the issue, explains it.
+  const used = w => retried[w.number]?.mark === w.mark && retried[w.number].at < w.at && outage?.down?.[w.number] !== w.at;
+  const wake = [], stuck = [];
+  const offer = (w, kind) => { wake.push([w, kind]); retried[w.number] = { mark: w.mark, at: w.at, kind }; };
+  if (health.state === 'access') {
+    // Not healthy and not down: a sign-in or setup problem that a person must fix. Wake nothing and resend nothing.
+    access ??= { since: now, first: waits[0]?.number ?? outage?.first, issues: [] };
+    Object.assign(access, { detail: health.detail, fix: health.fix });
+    if (access.first) await incident(access, 'interpreter-access', { cause: `The free interpreter health check cannot be read (${health.detail}). This is a sign-in or setup problem on this machine, not an interpreter outage.`, tried: ACCESS_TRIED, need: `${health.fix} After 4 hours each waiting run follows the stuck rule.` });
+    for (const w of waits) if (now - Math.max(w.at, access.since) >= RUNTIME_ACCESS_LIMIT)
+      stuck.push([w, `Run #${w.number} has waited 4 hours for the interpreter, and the free health check still cannot be read (${health.detail}).`]);
+  } else if (access && health.state === 'healthy') {
+    // A down answer does not show that the sign-in works again; only a healthy answer ends the access problem.
+    if (access.first) await alert(access.first, 'recovered', { cause: `The free interpreter health check answers again (${health.detail}).`, kind: 'interpreter-access' });
+    access = null;
+  }
+  // Only a failed health check opens an outage. Waits of several issues while the interpreter is healthy are not one.
+  if (health.state === 'unavailable' && !outage && waits.length)
+    outage = { since: now, first: waits[0].number, issues: [], probed: [], detail: `The free interpreter health check failed (${health.detail}).` };
+  if (outage) await incident(outage, 'interpreter', { cause: outage.detail, tried: RUNTIME_TRIED, need: RUNTIME_NEED });
+  // A wait first seen while the interpreter is down began in the outage; a wait already found used while healthy stays used.
+  if (outage && health.state === 'unavailable') outage.down = { ...outage.down, ...Object.fromEntries(waits.filter(w => retried[w.number]?.again !== w.at).map(w => [w.number, w.at])) };
+  if (health.state === 'healthy') {
+    let recovered = null;
+    if (outage) {
+      // One test wake at a time, at most one for each run in this outage. It passes only with a new verdict.
+      outage.probed ??= [];
+      const probe = outage.probe;
+      if (probe) {
+        const result = await (p.readRuntimeProbe ?? readRuntimeProbe)(state, p, probe);
+        const again = waits.some(w => w.number === probe.number && w.at > probe.at);
+        if (result === 'verdict') recovered = 'verdict';
+        // A test run that waits again, ends or goes stuck failed; one that gives no verdict within an hour of its wake
+        // failed too, also when the wake was never delivered and the run still waits.
+        else if (result === 'failed' || again || now - probe.offeredAt >= RUNTIME_PROBE_LIMIT) delete outage.probe;
+      }
+      if (!recovered && !outage.probe) {
+        const open = waits.filter(w => !used(w) && !outage.probed.includes(w.number)), next = open.find(w => w.cause !== 'unknown') ?? open[0];
+        if (next) { outage.probe = { number: next.number, at: next.at, offeredAt: now }; outage.probed.push(next.number); }
+        else recovered = 'untested';
+      }
+      const current = !recovered && waits.find(w => w.number === outage.probe.number && w.at === outage.probe.at);
+      if (current) offer(current, 'probe');
+    }
+    for (const w of waits) {
+      if (wake.some(([item]) => item === w)) continue;
+      if (used(w)) { retried[w.number].again = w.at; stuck.push([w, `Run #${w.number} waits for the interpreter again at the same step after its one resend, and the interpreter is healthy.`]); }
+      else if (recovered) offer(w, 'recovered');
+      else if (!outage) offer(w, retried[w.number]?.at === w.at ? retried[w.number].kind : 'retry');
+    }
+    if (recovered) {
+      const count = wake.length;
+      const woken = `Autopilot wakes ${count} waiting run${count === 1 ? '' : 's'}, oldest first`;
+      await alert(outage.first, 'recovered', { kind: 'interpreter', cause: recovered === 'verdict'
+        ? `The interpreter is back: the free health check passed and a test check reached a verdict again. ${woken}.`
+        : `The free health check passes again, and no waiting run is left to test. ${woken}; a run that failed its test follows the stuck rule.` });
+      outage = null;
+    }
+  }
+  for (const [w, kind] of wake) {
+    const key = `runtime:${w.number}`, value = `${w.at}:${kind}`;
+    // A capacity handoff frees a slot: offer a still-waiting run again. pdd delivers one wake per park.
+    if (state.timeSeen[key] === value && !completion) continue;
+    timeRules.push({ kind: 'runtime-ready', number: w.number, reason: runtimeWake(w, kind) });
+    pendingTimes[key] = value;
+  }
+  for (const [w, why] of stuck) {
+    const key = `runtime:${w.number}`, value = `${w.at}:stuck`;
+    if (state.timeSeen[key] === value) continue;
+    timeRules.push({ kind: 'runtime-stuck', number: w.number, reason: `${why} Follow the pdd:stuck rule: the label, one comment with the cause, one stuck alert, and pdd workflow park --reason TEXT in its worktree.` });
+    pendingTimes[key] = value;
+  }
+  keep();
+}
+// The packet's interpreter fact while an outage or an access problem is open.
+function runtimePacket(runtime) {
+  const { outage, access } = runtime ?? {};
+  const problem = access ? `The interpreter cannot be checked (${access.detail}): a sign-in or setup problem that a person must fix. ${access.fix} Autopilot sent one interpreter-access alert. Waiting runs stay parked and resend nothing; after 4 hours each follows the stuck rule.` : '';
+  if (outage) return { state: outage.probe ? 'testing' : 'unavailable', since: new Date(outage.since).toISOString(),
+    note: `${outage.probe ? `The interpreter answers again; run #${outage.probe.number} is the test, and the other waiting runs wake after its check reaches a verdict.` : 'The interpreter is unavailable.'} Keep other work moving: code, native tests, CI, merges, dependency reviews and claims. New issues may start; a worker parks only at its interpreter check with pdd workflow park --interpreter.${problem ? ` ${problem}` : ''}` };
+  if (access) return { state: 'access', since: new Date(access.since).toISOString(), detail: access.detail, note: `${problem} Keep other work moving.` };
+  return null;
+}
 function message(state, issues, timeRules = []) {
   const skillPath = resolve(state.packageRoot ?? dirname(dirname(self)), 'skills', 'pdd-autopilot', 'SKILL.md');
   const variable = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME' }[state.agent.kind];
@@ -277,7 +440,7 @@ function message(state, issues, timeRules = []) {
   const workflow = { pddBin: join(state.packageRoot ?? dirname(dirname(self)), 'bin', 'pdd.mjs'), agent: state.agent.kind, home: state.environment?.HOME, configHome: path ? { variable, path } : null };
   const start = state.startAction?.mode === state.currentMode && state.startAction?.repository === state.repo ? state.startAction : null;
   const authority = start ? `The operator invoked pdd autopilot start for ${state.repo} in ${state.currentMode} mode. ${state.currentMode === 'auto' ? 'This action establishes scope for ordinary eligible work and automatic merge under the repository review, testing, strict approval and other rules.' : 'Follow observe mode limits.'} This is an operator action, not a quoted person reply or checker approval. Use the existing supported approval routes for the actual action where applicable; never treat it as a later person reply.\n` : '';
-  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}) })}\n`;
+  return `Read and follow the bundled skill at ${JSON.stringify(skillPath)} and its relative supporting files. ${authority}When recipeFirst is true, follow its bounded startup readiness, then dependency review, room, pdd:working claim and stuck-run rules. Inspect claimed issues for progress and stale claims; do not treat them as unclaimed work. An item with expiredClaim has an expired claim; take it over only under the skill's expired-claim rule. The packet contains only trusted text; further issue/comment reads must preserve that boundary. Use the skill's pdd-check and pdd-merge handoffs for review and merge work. For an issue you start, pass its decisionId with --origin autopilot --decision-id TOKEN to pdd workflow run; pass --outcome code or prompt-only when the required outcome is known.\n${JSON.stringify({ repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activatedAt: state.activatedAt, ...(start ? { startAction: start } : {}), currentMode: state.currentMode, recipeFirst: !state.recipeDelivered, workflow, ...(state.runs === undefined ? {} : { runs: state.runs }), issues, ...(timeRules.length ? { timeRules } : {}), ...(runtimePacket(state.runtime) ? { runtime: runtimePacket(state.runtime) } : {}) })}\n`;
 }
 function coordinatorEnvelope(state) {
   return { version: 'pdd.autopilot-coordinator.v1', repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, activation: state.activatedAt, ...(state.runs === undefined ? {} : { runs: state.runs }) };
@@ -936,7 +1099,11 @@ async function runTick(stateFile, ports, completion) {
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
-    const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false).map(claim => [claim.issue.toLowerCase(), claim]));
+    // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
+    // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
+    const self = { coordinatorId: state.coordinatorId, machine: state.machine }, limitedFor = claim => takeoverLimited(claim, self);
+    const limitedClaims = new Map(observedClaims.filter(limitedFor).map(claim => [claim.issue.toLowerCase(), claim]));
+    const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false && !limitedFor(claim)).map(claim => [claim.issue.toLowerCase(), claim]));
     const ownClaims = observedClaims.filter(claim => claim.active === true && claim.coordinatorId === state.coordinatorId && claim.machine === state.machine && claim.commentId && claim.labelEventId);
     const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
     for (const claim of ownClaims) {
@@ -960,8 +1127,43 @@ async function runTick(stateFile, ports, completion) {
     for (const claim of ownClaims) {
       const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]), key = `stuck:${number}`;
       if (Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
-        timeRules.push({ kind: 'stuck-claim', number, reason: `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
+        // After a ceiling (the repair limit of this checkout's run, or the takeover limit), a
+        // retry is refused or not allowed: the rule asks for no retry and no further comment.
+        // Both ceilings can hold at once: name each one, and the cancel step whenever this checkout's run has the repair limit.
+        const takeover = limitedFor(claim), repair = await (p.readRepairLimited ?? readRepairLimited)(state, number, p);
+        const ceiling = takeover && repair ? 'takeover limit and the repair limit' : takeover ? 'takeover limit' : repair ? 'repair limit' : null;
+        timeRules.push({ kind: 'stuck-claim', number, reason: ceiling
+          ? `Issue #${number} has been stuck for 4 hours after the ${ceiling}. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet. ${repair ? `To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.` : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'} Its claim is no longer refreshed and expires in 4 hours.`
+          : `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
         pendingTimes[key] = claim.stuckSince;
+      }
+    }
+    // Per-issue ceilings (#3041), each sent once per issue. Only open issues count: a merge closes the issue.
+    const openIssues = new Map((state.cachedIssues ?? []).filter(issue => !issue.pull_request && issue.state === 'open').map(issue => [String(issue.html_url).toLowerCase(), issue]));
+    const issueNumber = claim => Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]);
+    // The 24-hour alert is once per issue across machines: a claim record of the chain
+    // carries longRunningAlertedAt once it was sent. A stuck issue already has its alert.
+    const longRunning = [];
+    for (const claim of ownClaims) {
+      const number = issueNumber(claim), key = `long:${number}`, since = Date.parse(claim.claimedAt);
+      if (openIssues.has(claim.issue.toLowerCase()) && Number.isFinite(since) && p.now() - since >= LONG_RUNNING_AFTER && state.timeSeen[key] === undefined
+        && claim.longRunningAlertedAt === undefined && claim.stuckSince === undefined) {
+        timeRules.push({ kind: 'long-running', number, reason: `Issue #${number} was claimed 24 hours ago and has no merge yet. Send one informational alert for it, then keep working; this is not a stop.` });
+        pendingTimes[key] = claim.claimedAt; longRunning.push(claim);
+      }
+    }
+    // One coordinator acts on the takeover limit: the owner of a live claim, else the
+    // coordinator that held the claim before its expired owner (when GitHub shows one).
+    const actsOnLimit = claim => {
+      const by = claim.active === true ? claim : claim.previousOwner;
+      return !by?.coordinatorId || by.coordinatorId === state.coordinatorId && by.machine === state.machine;
+    };
+    for (const claim of limitedClaims.values()) {
+      const number = issueNumber(claim), key = `takeover:${number}`, issue = openIssues.get(claim.issue.toLowerCase());
+      const stuck = issue?.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:stuck');
+      if (issue && !stuck && actsOnLimit(claim) && state.timeSeen[key] === undefined) {
+        timeRules.push({ kind: 'takeover-limit', number, reason: `Issue #${number} has been taken over ${claim.takeovers} times. Do not take it over again: take the stuck path (pdd:stuck, one comment with the cause, one stuck alert) and keep its claim and progress. Read the issue again first and skip it if it already has pdd:stuck. A person removes pdd:stuck to reset the count.` });
+        pendingTimes[key] = claim.takeovers;
       }
     }
     for (const { number, changedAt } of await (p.readRunProgress ?? readRunProgress)(state, p)) {
@@ -971,6 +1173,7 @@ async function runTick(stateFile, ports, completion) {
         pendingTimes[key] = changedAt;
       }
     }
+    await runtimeTick(state, p, completion, timeRules, pendingTimes, dirname(stateFile));
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];
       if (issue.pull_request || issue.state !== 'open') continue;
@@ -994,18 +1197,20 @@ async function runTick(stateFile, ports, completion) {
         const becameGraphEligible = graphEligible === true && previous && previous.graphEligible !== true;
         const expiredClaim = labels.includes('pdd:working') ? expiredClaims.get(String(issue.html_url).toLowerCase()) : undefined;
         const holdLabels = labels.filter(name => name === 'pdd:working' ? !expiredClaim : ['pdd:stuck', 'pdd:code-pending'].includes(name));
-        const blocked = holdLabels.length > 0, claimNote = expiredClaim ? ['expired-claim'] : [];
+        const limitedClaim = limitedClaims.get(String(issue.html_url).toLowerCase()), limited = Boolean(limitedClaim);
+        const blocked = holdLabels.length > 0, claimNote = limited ? ['takeover-limit'] : expiredClaim ? ['expired-claim'] : [];
         // A heartbeat edit of a claim comment is not issue activity. GitHub moves the issue
         // update time to the time of a comment edit, so the issue update time counts only
         // when it is later than the newest heartbeat edit.
         const heartbeatEdit = latestTime(rows.filter(heartbeat).map(row => row.updated_at)), issueUpdate = Date.parse(issue.updated_at);
         const claimActivity = latestTime([...(issueUpdate > heartbeatEdit + HEARTBEAT_SLACK ? [issue.updated_at] : []), ...rows.flatMap(row => heartbeat(row) ? [row.created_at] : [row.created_at, row.updated_at])]);
         const claimKey = `claim:${issue.number}`;
-        const claimDue = labels.includes('pdd:working') && !expiredClaim && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
+        const claimDue = labels.includes('pdd:working') && !expiredClaim && limitedClaim?.expired !== true && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
         const recheckReadyBaseline = previous?.waiting === true && graphEligible === true && !blocked;
         const unassigned = !issue.assignee && (!Array.isArray(issue.assignees) || issue.assignees.length === 0);
         const reconsiderReady = config.mode === 'auto' && graphEligible === true && !blocked && unassigned;
-        if (previous?.source === source && previous.mode === config.mode && !becameGraphEligible && !claimDue && !recheckReadyBaseline && !reconsiderReady) {
+        const sameLimit = Boolean(previous?.selectionReasons?.includes('takeover-limit')) === limited;
+        if (previous?.source === source && previous.mode === config.mode && sameLimit && !becameGraphEligible && !claimDue && !recheckReadyBaseline && !reconsiderReady) {
           if (graphEligible === false) previous.graphEligible = false;
           if (previous.view) { selection.state=previous.selectionState ?? (previous.waiting ? 'waiting' : 'ready'); selection.reasons=previous.selectionReasons ?? (previous.waiting ? ['previously-observed-wait'] : []); }
           continue;
@@ -1111,6 +1316,13 @@ async function runTick(stateFile, ports, completion) {
       };
       delivered = await wake(state, () => message(state, work, timeRules), p, async () => {}, ports.explicitStartReconcile === true, { kind: 'work', events: Object.fromEntries(Object.entries(pending).map(([key, value]) => [key, value.event])), times: pendingTimes, recipe: !state.recipeDelivered }, capture);
       if (delivered) { state.recipeDelivered = true; Object.assign(state.seen, pending); Object.assign(state.timeSeen, pendingTimes); }
+      // Record the delivered 24-hour alert in the own claim comment, so that no machine sends it again.
+      if (delivered) for (const claim of longRunning) {
+        try {
+          await (p.recordLongRunningAlert ?? recordLongRunningAlert)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
+            { execFile: async (file, args, options) => p.execute(file, args, options), admitMutation: action => p.scanAction(action) });
+        } catch (error) { p.warn(`Long-running alert record deferred for ${claim.issue}: ${line(error.message)}`); }
+      }
     }
     return outcome('reconciled', [delivered ? `Autopilot offered ${work.length} issue(s).` : 'Autopilot tick complete.', ...warnings].join(' '));
   } catch (e) {
@@ -1119,7 +1331,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['retryAt','cachedIssues','etag','pages','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld']) {
+        for (const key of ['retryAt','cachedIssues','etag','pages','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;

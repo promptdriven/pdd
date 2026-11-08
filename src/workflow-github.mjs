@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 36d0e5fd080d47226c5d4e249f08028c8b15aebae220b24abc277ad69886b3b2).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 8de64711277b42ab0b2c9038f75a490bbce4c280e0445c31bfa1e7515c22e1c5).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { causeText } from './runtime-output.mjs';
@@ -287,9 +287,10 @@ export async function publishWorkflowPr(input, ports = {}) {
 
 export async function readWorkflowPrStatus(input, ports = {}) {
   try {
-    const { cwd, url } = structuredClone(input ?? {});
+    const { cwd, url, view = false } = structuredClone(input ?? {});
     if (!text(url) || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url)) fail('workflow_github_pr_url_invalid');
-    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', 'state,mergedAt,statusCheckRollup']));
+    // With `view`, the same one read also gives the description, the head and the comments (a readable-top refresh).
+    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', `state,mergedAt,statusCheckRollup,baseRefName${view ? ',body,headRefOid,comments' : ''}`]));
     const state = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[row?.state];
     if (!state) fail('workflow_github_pr_state_invalid');
     const checks = Array.isArray(row.statusCheckRollup) ? row.statusCheckRollup : [];
@@ -297,6 +298,36 @@ export async function readWorkflowPrStatus(input, ports = {}) {
     const ci = !checks.length ? 'none'
       : checks.some(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check))) ? 'failing'
       : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
-    return { state, ci };
+    return { state, ci, ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
+      ...(view ? { view: { body: typeof row.body === 'string' ? row.body : null, head: text(row.headRefOid) ? row.headRefOid : null, comments: Array.isArray(row.comments) ? row.comments : null } } : {}) };
   } catch { return { state: 'unknown', ci: 'unknown' }; }
+}
+
+// The independent checker verdict (pdd-check) for one PR head: a JSON block with verdict PASS, FAIL or NOT SURE and the
+// exact head SHA, in a comment by the repository owner, a member or a collaborator. When those comments give different
+// verdicts for the same head, the verdict is 'split' (with the verdicts), never the newest one. Any doubt gives null.
+// `comments` from `gh pr view --json comments` (GraphQL names) replace the REST read, so no other call is made.
+export async function readWorkflowPrChecker(input, ports = {}) {
+  try {
+    const { cwd, url, headSha, comments } = structuredClone(input ?? {});
+    const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/([1-9][0-9]*)$/.exec(String(url ?? ''));
+    if (!match || !/^[a-f0-9]{40}$/i.test(String(headSha ?? ''))) return null;
+    const rows = Array.isArray(comments) ? comments : (await dependencies(ports).command(cwd, 'gh', ['api', '--paginate', `repos/${match[1]}/${match[2]}/issues/${match[3]}/comments?per_page=100`, '--jq', '.[] | {body, author_association, html_url, created_at}']))
+      .split('\n').filter(row => row.trim()).map(line => { try { return JSON.parse(line); } catch { return null; } });
+    let latest = null;
+    const seen = new Set();
+    for (const comment of rows) {
+      const association = comment?.author_association ?? comment?.authorAssociation, link = comment?.html_url ?? comment?.url, at = String(comment?.created_at ?? comment?.createdAt ?? '');
+      if (!['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association) || typeof comment.body !== 'string') continue;
+      for (const block of comment.body.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
+        let check;
+        try { check = JSON.parse(block[1]); } catch { continue; }
+        if (!['PASS', 'FAIL', 'NOT SURE'].includes(check?.verdict) || String(check.head ?? '').toLowerCase() !== headSha.toLowerCase()) continue;
+        seen.add(check.verdict);
+        if (!latest || at >= latest.at) latest = { verdict: check.verdict, url: text(link) ? link : null, at };
+      }
+    }
+    if (seen.size > 1) return { verdict: 'split', verdicts: ['PASS', 'FAIL', 'NOT SURE'].filter(verdict => seen.has(verdict)), url: latest.url };
+    return latest && { verdict: latest.verdict, url: latest.url };
+  } catch { return null; }
 }

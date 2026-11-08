@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 908a5a62afd039ae532cf73e6aa60d99a868a5e79b7aa69842447fa095c2b343).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: c354526a532f1fe6a988411af6fec1af727adcacba2f05828e89cd1908096f88).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -7,10 +7,12 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
-export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'access', 'decision', 'stuck', 'recovered']);
+export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'interpreter', 'interpreter-access', 'access', 'decision', 'stuck', 'long-running', 'recovered']);
 // These incidents are shared by the whole machine: one incident per repository, machine and kind lists every affected issue.
+// An interpreter outage is one of them: the hosted PDD interpreter is down for every issue at once. So is interpreter-access:
+// the interpreter health check of this machine cannot be read (its gh sign-in or PDD_RUNTIME_URL).
 // An access or spending decision belongs to its issue, like a product decision.
-const MACHINE_KINDS = Object.freeze(['usage-limit', 'resource']);
+const MACHINE_KINDS = Object.freeze(['usage-limit', 'resource', 'interpreter', 'interpreter-access']);
 const LOG_LIMIT = 200, TEXT_LIMIT = 1900, FIELD_LIMIT = 500, ISSUE_LIMIT = 10, TIMEOUT_MS = 10000, TOKEN_COMMAND_MS = 30000;
 const SERVICE = { discord: 'Discord', slack: 'Slack', 'discord-bot': 'Discord bot' };
 const DISCORD_API = 'https://discord.com/api/v10';

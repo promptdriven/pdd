@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.20, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.21, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -53,7 +53,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear` | Remove the alert destination from this machine |
-| `pdd autopilot alert --issue N --kind usage-limit\|resource\|access\|decision\|stuck\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
 
 The launcher uses the repository settings module to read root `pdd.json`. An
 active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
@@ -133,7 +133,7 @@ coordinator may take it over. The last-seen time is only the claim comment's Git
 time; the recorded `lastSeen` value never extends a claim. In `off` mode a tick
 does nothing on this machine: it releases no claim and writes no `lastSeen`, so the claims expire after 4 hours, as
 on a stopped machine; their runs then cannot open or update a PR. After 4
-hours stuck, the owner tries a changed approach or asks for help, and the claim then expires. Related PRs are associated through same-repository closing references;
+hours stuck, the owner tries a changed approach or asks for help, and the claim then expires. After a ceiling (the repair limit or the takeover limit), the owner does not retry and sends no second alert. After 3 takeovers of one issue, its expired claim is not taken over again: `pdd graph` shows "Taken over 3 times", a 4th start is refused, and the tick asks one coordinator once to take the stuck path. A takeover is the removal of an expired `pdd:working` whose remover adds the label again within 10 minutes for another coordinator or machine. A coordinator that takes back its own expired claim (same coordinator ID and machine) makes no takeover. To let Autopilot continue after the takeover limit, a person removes `pdd:stuck`: this resets the count. A normal release, or a person's removal of an expired `pdd:working`, also starts the count again. When people and coordinators share one GitHub login, pdd cannot tell them apart: a person's cleanup of an expired `pdd:working` followed by an Autopilot claim within 10 minutes counts as a takeover. Removing `pdd:stuck` at the limit always resets the count. 24 hours after the claim with no merge, the tick asks the owner once for an informational alert and records it in the claim comment, so that no machine sends it again; work continues. Related PRs are associated through same-repository closing references;
 trusted PR discussion comments and state transitions can wake waiting work once.
 Claimed issues stay identified as claimed when a trusted change needs attention.
 `add` rejects foreign repository references before writing any labels. Status
@@ -186,7 +186,8 @@ view the channel, send messages and read message history.
 The coordinator alerts only for a real need: an AI account usage limit (with the
 reset time when known), a CPU, memory or disk failure, an access or spending
 decision, an unresolved product choice, or an issue stuck after its retry time.
-It gives the cause, what it tried and what it needs as JSON on stdin:
+It also sends one informational `long-running` alert when an issue was claimed 24
+hours ago and has no merge yet; work goes on. It gives the cause, what it tried and what it needs as JSON on stdin:
 
 ```sh
 pdd autopilot alert --issue 12 --kind usage-limit --input - <<'PDD_ALERT'
@@ -196,12 +197,13 @@ PDD_ALERT
 
 Each message names the repository, the issue link, the cause, what Autopilot tried
 and what it needs. Answer on the GitHub issue, so the answer stays with the run.
-A usage limit or a resource failure is one incident for the repository and
-machine, so a limit that blocks 5 runs sends one alert. A call for another
+A usage limit, a resource failure, an interpreter outage or an interpreter access problem
+(`interpreter-access`: this machine cannot read the interpreter health check) is one incident for the
+repository and machine, so a limit that blocks 5 runs sends one alert. A call for another
 blocked issue adds that issue to the incident and sends nothing. The machine is
 the name that Autopilot saved at its first start (this checkout's start first),
 else the host name, so a host rename does not open a new incident. An access or spending decision, a product
-decision or a stuck issue is one incident per issue. A repeat call sends
+decision, a stuck issue or a long-running issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
 failed or had no destination. `--update` sends a material change or the new
 issue list. `--kind recovered` sends one recovery and closes the matching
@@ -314,7 +316,7 @@ The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case
 
 | Command | What it does |
 |---|---|
-| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR |
+| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR. In an Autopilot run, a `done` that returns to an earlier step and clears later recorded steps is a repair round; a retry of the same step (after a failed PR open, claim check or push) or a check recorded again on unchanged files is not. After 5 rounds in one area, pdd refuses another, marks the run stuck ("Repair limit reached in AREA: take the stuck path" in `status`) and refuses every later `done` of it. To let Autopilot try again, a person removes `pdd:stuck` and `pdd:working`, then runs `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count. Without the cancel, a new automatic start of the issue in that checkout waits: "Automatic start deferred: issue has an active run" |
 | `pdd workflow ask QUESTION` | Show the person that the chat waits for an answer in the middle of a step. `status` then says "waiting for you" with the question |
 
 The agent runs these from the run's worktree. pdd finds the run from that folder. You do not run them yourself.
@@ -325,7 +327,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.20`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.21`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
 | `pdd jobs` | List active slots and waiting interpreter jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or interpreter call |
 
@@ -457,3 +459,15 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 `pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
+
+`pdd workflow park --interpreter --reason TEXT` records that an automatic run waits for the PDD interpreter, the hosted service behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check, a refusal that names a file rule or a step that took longer than the server time limit is the issue's own work (make the step smaller). A sign-in, access or interpreter address problem needs a person, and waiting does not fix it. For these, the command exits 1, names the fix and parks nothing. If pdd cannot read the result, the outcome counts as unknown. A waiting run asks no person. `pdd workflow status` shows `waiting for the interpreter: REASON`, and `pdd graph` shows the hold `Waiting for the interpreter`. The run keeps its claim, branch, worktree and progress, and the coordinator can yield its worker slot with `pdd workflow yield N`.
+
+### Interpreter outage in Autopilot
+
+While a run waits for the interpreter, or an outage or an interpreter access problem is open, each Autopilot tick makes one free health check: a `GET /v1/capacity` read of the interpreter with your gh login. It sends no files and makes no AI call. When nothing waits and nothing is open, a tick makes no check.
+
+- the interpreter unavailable (no answer, HTTP 408, 429 or 5xx, or maintenance): this is an outage. Only a failed health check opens one. Autopilot sends one `interpreter` alert for the repository and machine, wakes no waiting run, and offers other work as usual. New issues can start; their workers wait only at the interpreter check.
+- An answer that is neither healthy nor down (HTTP 401 or 403, a redirect, an HTML page, a 404 that is not JSON, no gh sign-in, or an invalid `PDD_RUNTIME_URL`): this is a sign-in or setup problem on this machine. Autopilot sends one `interpreter-access` alert with the fix (`gh auth status`, or check `PDD_RUNTIME_URL`) and resends nothing. The runs stay visibly waiting. After 4 hours, each waiting run follows the stuck rule.
+- interpreter healthy and no outage open: waiting runs, from one issue or from many, are a problem of their own issues. Autopilot wakes each run once to retry. If the same step waits for the interpreter again, the coordinator follows the stuck rule.
+- the interpreter back after an outage: Autopilot first wakes one waiting run as a test, the oldest. Only when that run saves a new `pdd test` result that passed or failed does Autopilot send one recovery and wake the others, oldest first, within the worker cap. A test run that waits again or goes stuck is no proof, and neither is a test with no verdict within 60 minutes of its wake, also a wake that was never delivered. Each run is the test at most once in an outage.
+- A woken worker first runs `pdd test --read BATCH`. It resends only a check that surely gave no verdict: `pdd test --retry BATCH` only when pdd names it (busy or held checks), and else the Story's check once with `pdd test STORY --max-calls N`, for another check that did not run or an AI-service refusal. It never resends an unknown outcome or a failed check; when the read of an unknown outcome now shows that nothing was sent, it checks the Story once. Each wake reaches the run at most once for each park. `--max-calls`, strict mode and the merge rules do not change.
