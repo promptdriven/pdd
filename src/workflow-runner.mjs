@@ -1420,7 +1420,20 @@ function namedStories(run, extra = '') {
   }
   return paths.filter(path => selected.has(path));
 }
-// Readable Stories come from the current run-base diff or explicit Story references/approval.
+// PR 1 ownership survives its merge into main and the deletion of its branch.
+async function pr1StoryPaths(run, p) {
+  const area = askArea(run), pr1 = area && prOf(run, area.name);
+  if (!pr1) return [];
+  const saved = pr1.readable?.facts?.storyPaths;
+  if (Array.isArray(saved)) return saved;
+  // Older records have no path snapshot. Only the run's own first-parent commits
+  // establish ownership; main's Stories brought in by a merge do not.
+  const head = commitSha(pr1.publishedHeadSha) ? pr1.publishedHeadSha : `refs/remotes/origin/${pr1.branch}`;
+  try {
+    return (await rawGit(p, run.root, 'log', '--first-parent', '--no-merges', '--format=', '--name-only', '--no-renames', '-z', `${run.baseSha}..${head}`, '--')).split('\0');
+  } catch { return []; }
+}
+// Readable Stories come from the current run-base diff, PR 1 or explicit Story references/approval.
 // The original baseSha also sees changes inherited from main and cannot establish Story ownership.
 function runStoryPaths(run, files) {
   const approved = (run.storyApproval?.fingerprint?.stories ?? []).map(story => story.path);
@@ -1454,7 +1467,8 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   const diff = await diffStat(run, p, diffBase, head);
   const storyDiff = diffBase === run.baseBranch ? diff : await diffStat(run, p, run.baseBranch, head);
   const changed = new Set(files);
-  const storyPaths = runStoryPaths(run, (storyDiff?.files ?? []).map(file => file.path).filter(path => changed.has(path)));
+  const retained = layout === 'code' ? await pr1StoryPaths(run, p) : [];
+  const storyPaths = runStoryPaths(run, [...(storyDiff?.files ?? []).map(file => file.path).filter(path => changed.has(path)), ...retained]);
   const stories = [], missing = [];
   for (const path of storyPaths) {
     let text = null;
@@ -1482,7 +1496,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   const first = layout === 'code' && pr1 ? await prStatusOf(run, pr1, p) : null;
   const pr1Merged = Boolean(pr1) && (run.prBase === run.baseBranch || first?.state === 'merged');
   return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
-    stories, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'no Story applies to this PR',
+    stories, storyPaths, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'no Story applies to this PR',
     fields, thisPr: holds.length ? `${others.length ? '' : 'no code change. '}It holds ${listed(holds)}.` : 'no code change.', diff,
     area: prArea({ area: fields.area, files, workflow: run.workflow }), title: fields.title,
     records: {
