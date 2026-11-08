@@ -30,7 +30,7 @@ async function fixture(t) {
 }
 const adds = calls => calls.filter(c => c.args[0] === 'worktree' && c.args[1] === 'add');
 const readOnly = calls => calls.every(c => ['rev-parse', 'remote', 'symbolic-ref', 'merge-base'].includes(c.args[0])
-  || c.args[0] === 'worktree' && c.args[1] === 'list');
+  || c.args[0] === 'worktree' && c.args[1] === 'list' || c.args.join(' ') === 'config --bool --get core.bare');
 const metadata = (f, runId) => join(f.common, 'pdd', 'worktree-assignments', 'runs', runId + '.json');
 
 async function layoutFixture(t, layout) {
@@ -42,6 +42,13 @@ async function layoutFixture(t, layout) {
     await f.git('clone', '--bare', f.cwd, common);
     await f.gitAt(primary, 'remote', 'set-url', 'origin', 'https://github.com/Acme/Project.git');
   }
+  if (layout === 'dot-bare') {
+    // A project folder with the bare repository in .bare and a .git file that names it.
+    const holder = join(f.temp, 'holder'); primary = common = join(holder, '.bare');
+    await mkdir(holder); await f.git('clone', '--bare', f.cwd, primary);
+    await writeFile(join(holder, '.git'), 'gitdir: ./.bare\n');
+    await f.gitAt(primary, 'remote', 'set-url', 'origin', 'https://github.com/Acme/Project.git');
+  }
   if (layout !== 'normal') {
     cwd = join(f.temp, 'linked');
     await f.gitAt(primary, 'worktree', 'add', '-b', 'linked-base', cwd, 'main');
@@ -49,23 +56,138 @@ async function layoutFixture(t, layout) {
   return { ...f, primary, common, cwd };
 }
 
-test('2698: bare repository stored in .git refuses with independent normal clone guidance and no allocation', async t => {
-  const f = await layoutFixture(t, 'bare-in-dotgit'), input = f.input(2698, { cwd: f.cwd });
-  assert.equal((await f.gitAt(f.primary, 'config', '--get', 'core.bare')).stdout.trim(), 'true');
-  assert.equal((await f.gitAt(f.primary, 'rev-parse', '--absolute-git-dir')).stdout.trim(), f.common);
-  assert.equal((await f.gitAt(f.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir')).stdout.trim(), f.common);
+// Git's primary registration R, and the run worktrees folder the layout table documents.
+const LAYOUTS = {
+  normal: f => ({ root: f.cwd, bare: false, folder: join(f.temp, 'project.pdd-worktrees') }),
+  'linked-normal': f => ({ root: f.primary, bare: false, folder: join(f.temp, 'project.pdd-worktrees') }),
+  'linked-bare': f => ({ root: f.primary, bare: true, folder: join(f.temp, 'project.git.pdd-worktrees') }),
+  'bare-in-dotgit': f => ({ root: join(f.temp, 'mixed'), bare: true, folder: join(f.temp, 'mixed.pdd-worktrees') }),
+  'dot-bare': f => ({ root: join(f.temp, 'holder', '.bare'), bare: true, folder: join(f.temp, 'holder.pdd-worktrees') }),
+};
+// Reads that need no work tree: the only Git commands pdd may run in a bare primary or its project folder.
+const BARE_READS = ['rev-parse --is-bare-repository', 'config --bool --get core.bare', 'rev-parse --absolute-git-dir',
+  'rev-parse --path-format=absolute --git-common-dir', 'remote get-url origin'];
+
+for (const layout of Object.keys(LAYOUTS)) test(`2698: ${layout} allocates from its checkout into the documented folder and keeps the layout`, async t => {
+  const f = await layoutFixture(t, layout), want = LAYOUTS[layout](f), input = f.input(2698, { cwd: f.cwd });
+  await writeFile(join(f.cwd, 'source.txt'), 'person unsaved bytes\n');
+  const status = (await f.gitAt(f.cwd, 'status', '--porcelain=v1', '-z')).stdout;
+  const bareBefore = want.bare ? (await f.gitAt(f.common, 'config', '--get', 'core.bare')).stdout : null;
+  assert.deepEqual(await lookupRepositoryParent({ cwd: f.cwd, repository: 'acme/project', commonDir: f.common }, f.ports),
+    { state: 'ready', root: want.root, bare: want.bare });
+  const allocated = await allocateIssueWorktree(input, f.ports);
+  assert.equal(allocated.state, 'ready', allocated.message);
+  const a = allocated.assignment;
+  assert.equal(dirname(a.worktreePath), want.folder);
+  assert.equal(a.sourceRoot, f.cwd); assert.equal(a.commonDir, f.common);
+  assert.equal(a.gitDir, join(f.common, 'worktrees', basename(a.worktreePath)));
+  assert(!a.worktreePath.split('/').some(part => part.toLowerCase() === '.git'));
+  assert.deepEqual(adds(f.calls).map(c => c.cwd), [f.cwd]);
+  if (want.bare) for (const call of f.calls.filter(c => [want.root, f.common, dirname(f.common)].includes(c.cwd)))
+    assert(BARE_READS.includes(call.args.join(' ')), `${call.cwd}: git ${call.args.join(' ')}`);
+  assert.equal((await f.gitAt(a.worktreePath, 'rev-parse', '--show-toplevel')).stdout.trim(), a.worktreePath);
+  assert.equal((await f.gitAt(f.cwd, 'status', '--porcelain=v1', '-z')).stdout, status);
+  if (want.bare) assert.equal((await f.gitAt(f.common, 'config', '--get', 'core.bare')).stdout, bareBefore);
+  f.calls.length = 0;
+  for (const cwd of [f.cwd, a.worktreePath])
+    assert.deepEqual((await lookupIssueWorktree({ cwd, runId: input.runId }, f.ports)).assignment, a);
+  assert.deepEqual((await allocateIssueWorktree(input, f.ports)).assignment, a);
+  assert.equal(adds(f.calls).length, 0); assert(readOnly(f.calls));
+  assert.equal((await releaseIssueClaim({ cwd: f.cwd, runId: input.runId, issueNumber: 2698 }, f.ports)).state, 'released');
+  const again = await allocateIssueWorktree(f.input(2698, { cwd: f.cwd }), f.ports);
+  assert.equal(again.state, 'ready', again.message); assert.equal(dirname(again.assignment.worktreePath), want.folder);
+  assert.notEqual(again.assignment.worktreePath, a.worktreePath);
+});
+
+test('2698: a .bare run saved beside the bare directory stays valid; new runs use the project folder sibling', async t => {
+  const f = await layoutFixture(t, 'dot-bare'), input = f.input(2699, { cwd: f.cwd });
+  const id = randomUUID(), old = join(f.primary + '.pdd-worktrees', id);
+  const a = { version: 1, runId: input.runId, repository: input.repository, issueNumber: input.issueNumber,
+    workflowName: input.workflowName, commonDir: f.common, sourceRoot: f.cwd, worktreePath: old,
+    gitDir: join(f.common, 'worktrees', id), branch: `pdd/feature-2699-${id.slice(0, 8)}`, baseRef: 'main',
+    baseSha: (await f.gitAt(f.cwd, 'rev-parse', 'main')).stdout.trim() };
+  const run = metadata(f, input.runId), claim = join(f.common, 'pdd/worktree-assignments/issues/2699.json');
+  await mkdir(dirname(run), { recursive: true }); await mkdir(dirname(claim)); await mkdir(dirname(old));
+  await writeFile(run, JSON.stringify(a) + '\n'); await link(run, claim);
+  await f.gitAt(f.cwd, 'worktree', 'add', '-b', a.branch, a.worktreePath, a.baseSha);
+  f.calls.length = 0;
+  assert.deepEqual((await lookupIssueWorktree({ cwd: f.cwd, runId: input.runId }, f.ports)).assignment, a);
+  assert.deepEqual((await allocateIssueWorktree(input, f.ports)).assignment, a);
+  assert.equal(adds(f.calls).length, 0); assert(readOnly(f.calls));
+  const next = await allocateIssueWorktree(f.input(2700, { cwd: f.cwd }), f.ports);
+  assert.equal(next.state, 'ready', next.message);
+  assert.equal(dirname(next.assignment.worktreePath), join(f.temp, 'holder.pdd-worktrees'));
+});
+
+async function refusedWithoutRecord(f, input, words) {
   const before = (await f.gitAt(f.cwd, 'worktree', 'list', '--porcelain')).stdout;
-  assert.match(before, new RegExp('worktree ' + f.primary + '\\nbare\\n'));
   const refused = await allocateIssueWorktree(input, f.ports);
   assert.equal(refused.state, 'recovery_required'); assert.equal(refused.assignment, null);
+  assert.match(refused.message, /^Cannot establish repository or allocation metadata identity\. /);
+  assert.match(refused.message, /No allocation record or issue claim was saved\. No new worktree is confirmed\.$/);
+  for (const word of words) assert.ok(refused.message.includes(word), `${word} in ${refused.message}`);
+  assert.doesNotMatch(refused.message, /core\.bare/);
   assert.equal(adds(f.calls).length, 0);
   await assert.rejects(lstat(metadata(f, input.runId)), { code: 'ENOENT' });
-  await assert.rejects(lstat(join(f.common, 'pdd/worktree-assignments/issues/2698.json')), { code: 'ENOENT' });
+  await assert.rejects(lstat(join(f.common, `pdd/worktree-assignments/issues/${input.issueNumber}.json`)), { code: 'ENOENT' });
   assert.equal((await f.gitAt(f.cwd, 'worktree', 'list', '--porcelain')).stdout, before);
-  assert.equal((await f.gitAt(f.primary, 'config', '--get', 'core.bare')).stdout.trim(), 'true');
-  for (const words of [/bare repository/i, /\.git/, /linked worktrees/i, /independent normal clone/i, /run.*workflow.*there/i])
-    assert.match(refused.message, words);
-  assert.doesNotMatch(refused.message, /core\.bare/i);
+  return refused;
+}
+
+for (const layout of ['linked-normal', 'bare-in-dotgit']) test(`2698: ${layout} refuses when the primary origin names another repository`, async t => {
+  const f = await layoutFixture(t, layout), root = LAYOUTS[layout](f).root;
+  // Real per-worktree configuration, as Git documents it: each worktree keeps its own origin
+  // (and a bare primary its own core.bare) in config.worktree.
+  await f.gitAt(root, 'config', 'extensions.worktreeConfig', 'true');
+  if (layout === 'bare-in-dotgit') {
+    await f.gitAt(root, 'config', '--worktree', 'core.bare', 'true'); await f.gitAt(root, 'config', '--local', '--unset', 'core.bare');
+  }
+  await f.gitAt(root, 'config', '--worktree', 'remote.origin.url', 'https://github.com/Acme/Project.git');
+  await f.gitAt(root, 'config', '--local', '--unset', 'remote.origin.url');
+  await f.gitAt(f.cwd, 'config', '--worktree', 'remote.origin.url', 'https://github.com/Other/Thing.git');
+  assert.equal((await f.gitAt(f.cwd, 'remote', 'get-url', 'origin')).stdout.trim(), 'https://github.com/Other/Thing.git');
+  assert.equal((await f.gitAt(root, 'remote', 'get-url', 'origin')).stdout.trim(), 'https://github.com/Acme/Project.git');
+  await refusedWithoutRecord(f, f.input(2701, { cwd: f.cwd, repository: 'Other/Thing' }),
+    [JSON.stringify(root), 'names Acme/Project', 'this checkout names Other/Thing', 'Make both origins name the same GitHub repository']);
+  assert.equal((await lookupRepositoryParent({ cwd: f.cwd, repository: 'Other/Thing', commonDir: f.common }, f.ports)).state, 'recovery_required');
+});
+
+test('2698: a primary registration that names another common directory refuses and names both', async t => {
+  const f = await layoutFixture(t, 'bare-in-dotgit'), other = join(f.temp, 'other.git');
+  await f.git('clone', '--bare', f.cwd, other);
+  const original = f.ports.execFile;
+  // An injected stale registration: Git lists another real bare repository as the primary.
+  f.ports.execFile = async (file, args, options) => {
+    const reply = await original(file, args, options);
+    return args.join(' ') === 'worktree list --porcelain -z' ? { ...reply, stdout: reply.stdout.replace(`worktree ${f.primary}\0`, `worktree ${other}\0`) } : reply;
+  };
+  await refusedWithoutRecord(f, f.input(2702, { cwd: f.cwd }), [JSON.stringify(other), JSON.stringify(f.common), 'git worktree list']);
+  assert.equal((await lookupRepositoryParent({ cwd: f.cwd, repository: 'Acme/Project', commonDir: f.common }, f.ports)).state, 'recovery_required');
+  f.ports.execFile = original;
+  assert.equal((await lookupRepositoryParent({ cwd: f.cwd, repository: 'Acme/Project', commonDir: other }, f.ports)).state, 'recovery_required');
+});
+
+test('2698: a separate Git directory whose primary checkout Git cannot name refuses with the next step', async t => {
+  const f = await fixture(t), separate = join(f.temp, 'separate.git'), main = join(f.temp, 'main'), linked = join(f.temp, 'linked');
+  await f.git('clone', '--separate-git-dir', separate, f.cwd, main);
+  await f.gitAt(main, 'remote', 'set-url', 'origin', 'https://github.com/Acme/Project.git');
+  await f.gitAt(main, 'worktree', 'add', '-b', 'linked', linked, 'main');
+  const g = { ...f, cwd: linked, common: separate };
+  for (const cwd of [main, linked])
+    await refusedWithoutRecord(g, f.input(2703, { cwd }), [JSON.stringify(separate), 'finds no work tree', 'Run the workflow from a normal clone']);
+});
+
+for (const layout of ['linked-normal', 'bare-in-dotgit']) test(`2698: ${layout} whose primary folder name has a tab refuses before any folder, record or claim`, async t => {
+  const f = await fixture(t), primary = join(f.temp, 'pro\tject'), common = join(primary, '.git'), cwd = join(f.temp, 'linked');
+  if (layout === 'linked-normal') await f.git('clone', f.cwd, primary);
+  else { await mkdir(primary); await f.git('clone', '--bare', f.cwd, common); }
+  await f.gitAt(primary, 'remote', 'set-url', 'origin', 'https://github.com/Acme/Project.git');
+  await f.gitAt(primary, 'worktree', 'add', '-b', 'linked-base', cwd, 'main');
+  assert.equal((await f.gitAt(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir')).stdout.trim(), common);
+  const refused = await refusedWithoutRecord({ ...f, cwd, common }, f.input(2704, { cwd }), [JSON.stringify(primary), 'control character']);
+  assert.equal(refused.state, 'recovery_required');
+  for (const path of [join(common, 'pdd'), primary + '.pdd-worktrees']) await assert.rejects(lstat(path), { code: 'ENOENT' }, path);
+  assert.equal((await lookupRepositoryParent({ cwd, repository: 'Acme/Project', commonDir: common }, f.ports)).state, 'recovery_required');
 });
 
 test('2698: saved intent on bare-in-.git layout retains the unconfirmed allocation diagnostic and custody', async t => {

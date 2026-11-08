@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 584afdb67c309723339c57e51a379de74e94d550b95704b080c6c715f0bcda64).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 7dd1db6b39f2d524d96cb1c9cabac20109f34a19ff891bce0f87812eecd8ee50).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -105,6 +105,11 @@ async function assertParentRoot(command, workspaceId, root, cwd) {
     throw identityChanged(workspaceId, 'root_pane', root, {tabCount: tabs.length, paneCount: panes.length, pane: pane ?? null});
   return {tab, pane};
 }
+// A create intent for this parent and clone, with the checked pre-create inventory.
+function validCreateIntent(intent, parentRoot, commonDir) {
+  return id(intent.label) && samePath(intent.parentRoot, parentRoot) && samePath(intent.commonDir, commonDir) && Array.isArray(intent.workspaceIdsBefore)
+    && intent.workspaceIdsBefore.every(id) && new Set(intent.workspaceIdsBefore).size === intent.workspaceIdsBefore.length;
+}
 function parentIdentity(row, parentRoot, commonDir) {
   return row?.worktree?.is_linked_worktree === false
     && samePath(row.worktree.checkout_path, parentRoot) && samePath(row.worktree.repo_key, commonDir);
@@ -176,10 +181,7 @@ export async function openHerdrRunLayout(input, ports) {
     if (id(hint)) throw identityChanged(hint, 'workspace_id', hint, null);
     let pendingParent;
     if (createIntent) {
-      const validIntent = id(createIntent.label) && samePath(createIntent.parentRoot, parent.root)
-        && samePath(createIntent.commonDir, commonDir) && Array.isArray(createIntent.workspaceIdsBefore)
-        && createIntent.workspaceIdsBefore.every(id) && new Set(createIntent.workspaceIdsBefore).size === createIntent.workspaceIdsBefore.length;
-      if (!validIntent) throw problem('repository_parent_unverified');
+      if (!validCreateIntent(createIntent, parent.root, commonDir)) throw problem('repository_parent_unverified');
       const before = new Set(createIntent.workspaceIdsBefore), appeared = rows.filter(row => !before.has(row.workspace_id));
       pendingParent = appeared.find(row => row.workspace_id === parentHint);
       if (id(parentHint) && !before.has(parentHint) && !rows.some(row => row.workspace_id === parentHint))
@@ -200,10 +202,13 @@ export async function openHerdrRunLayout(input, ports) {
           throw identityChanged(parentHint, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, pendingParent.worktree);
         custody = {repoWorkspaceId: parentHint, repoRoot: savedRepoRoot, repoCreateIntent: createIntent};
         await save();
-        repo = await attachCreatedParent(command, parentHint, parent.root, commonDir, savedRepoRoot);
-        rows = await inventory(command);
-        custody = {repoWorkspaceId: repo.workspace_id, repoRoot: savedRepoRoot, repoCreateIntent: null};
-        await save();
+        if (parent.bare) repo = pendingParent;
+        else {
+          repo = await attachCreatedParent(command, parentHint, parent.root, commonDir, savedRepoRoot);
+          rows = await inventory(command);
+          custody = {repoWorkspaceId: repo.workspace_id, repoRoot: savedRepoRoot, repoCreateIntent: null};
+          await save();
+        }
       }
     }
     if (!repo) {
@@ -236,17 +241,21 @@ export async function openHerdrRunLayout(input, ports) {
       if (repo.worktree) {
         if (!parentIdentity(repo, parent.root, commonDir))
           throw identityChanged(repoId, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, repo.worktree);
-      } else {
+      } else if (!parent.bare) {
         repo = await attachCreatedParent(command, repoId, parent.root, commonDir, repoRoot);
         rows = await inventory(command);
       }
-      custody = {repoWorkspaceId: repoId, repoRoot, repoCreateIntent: null};
+      custody = {repoWorkspaceId: repoId, repoRoot, repoCreateIntent: repo.worktree ? null : intent};
       await save();
     }
+    // Herdr refuses `worktree open --path` on a bare repository folder. A bare parent gets its identity when it
+    // opens the run worktree, so its create intent and saved root stay pending until then.
+    const pendingBare = !repo.worktree;
     const repoRoot = (completeParentRoot(custody.repoRoot, parent.root) ? custody.repoRoot : undefined)
       ?? (owner?.layout?.repoWorkspaceId === repo.workspace_id && completeParentRoot(owner.layout.repoRoot, parent.root) ? owner.layout.repoRoot : undefined);
+    if (pendingBare && (!parent.bare || !repoRoot)) throw identityChanged(repo.workspace_id, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, null);
     custody = {repoWorkspaceId: repo.workspace_id, ...(repoRoot ? {repoRoot} : {}),
-      ...(Object.hasOwn(custody, 'repoCreateIntent') || createIntent ? {repoCreateIntent: null} : {})};
+      ...(Object.hasOwn(custody, 'repoCreateIntent') || createIntent ? {repoCreateIntent: pendingBare ? custody.repoCreateIntent ?? createIntent : null} : {})};
     await save();
     opened = await command(['worktree', 'open', '--workspace', repo.workspace_id, '--path', cwd, '--label', `${input.repository.split('/')[1]}#${input.issueNumber} ${input.workflowName}`, '--no-focus']);
     if (opened.id !== 'cli:worktree:open' || !id(opened.result?.workspace?.workspace_id)) throw problem('invalid_worktree_reply');
@@ -255,6 +264,28 @@ export async function openHerdrRunLayout(input, ports) {
     if (matches.length !== 1 || matches[0].workspace_id !== opened.result.workspace.workspace_id)
       throw identityChanged(opened.result.workspace.workspace_id, 'worktree', {checkout_path: cwd, repo_key: commonDir}, matches.map(w => w.worktree));
     workspace = matches[0];
+    if (pendingBare) {
+      const row = rows.find(w => w.workspace_id === repo.workspace_id);
+      if (!parentIdentity(row, parent.root, commonDir))
+        throw identityChanged(repo.workspace_id, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, row?.worktree ?? null);
+      await assertParentRoot(command, repo.workspace_id, repoRoot, parent.root);
+      repo = row; custody = {...custody, repoCreateIntent: null};
+      await save();
+    }
+  } else if (createIntent) {
+    // The run workspace exists, but the parent that opened it is still pending (a refused parent check or a lost
+    // run-open reply). Check that live parent again on every open; clear the intent only when identity and root pass.
+    if (!validCreateIntent(createIntent, parent.root, commonDir)) throw problem('repository_parent_unverified');
+    const pending = rows.find(row => row.workspace_id === parentHint && !createIntent.workspaceIdsBefore.includes(row.workspace_id));
+    if (pending) {
+      if (!parentIdentity(pending, parent.root, commonDir))
+        throw identityChanged(parentHint, 'worktree', {checkout_path: parent.root, repo_key: commonDir, is_linked_worktree: false}, pending.worktree ?? null);
+      if (savedRepoRoot && [savedRepoRoot.tabId, savedRepoRoot.paneId, savedRepoRoot.terminalId, savedRepoRoot.cwd].every(id))
+        await assertParentRoot(command, parentHint, savedRepoRoot, parent.root);
+      repo = pending;
+      custody = {repoWorkspaceId: parentHint, ...(savedRepoRoot ? {repoRoot: savedRepoRoot} : {}), repoCreateIntent: null};
+      await save();
+    }
   }
   const workspaceId = workspace.workspace_id;
   const root = await runRoot(command, workspaceId, cwd, owner, opened?.result, input.stageId);
