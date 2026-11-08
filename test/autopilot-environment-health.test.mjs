@@ -88,3 +88,18 @@ test('native killed suite runner and group leave read-only usable queue capacity
     for (const [file, bytes] of records) assert.equal(readFileSync(file, 'utf8'), bytes, 'preflight cannot rewrite records');
   }
 });
+
+for (const [checks,running] of [[1,1],[5,3]]) test(`release: retry preflight uses ${checks} shared slots with ${running} busy`, async t => {
+  const {mkdtempSync,writeFileSync,rmSync} = await import('node:fs');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {configureCheckCapacity} = await import('../src/test-suite-queue.mjs');
+  const {checkMachine} = await import('./helpers/check-machine.mjs');
+  const root=mkdtempSync(join(tmpdir(),'pdd-retry-capacity-'));
+  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const env={PDD_SUITE_QUEUE:root};
+  await configureCheckCapacity({env,checks},checkMachine({count:64}).ports);
+  for(let i=1;i<=running;i++) writeFileSync(join(root,`ticket-${i}.json`),JSON.stringify({ticket:i,pid:100+i,childPid:200+i,cwd:root,state:'running',queuedAt:1,startedAt:2,finishedAt:null}));
+  const machineResources=async()=>({cpuCount:64,load:0,memory:{available:2*1024**3,total:10*1024**3},pressure:{io:0,memory:0},disk:{available:4*1024**3,total:20*1024**3}});
+  assert.equal(await environmentHealthy({env,cwd:root},{machineResources,alive:()=>true}),running<checks);
+});

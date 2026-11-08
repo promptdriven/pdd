@@ -52,7 +52,10 @@ Optional shared suite queue integration is read-only and does not require #3056.
 Observe its `ticket-*.json` records at absolute PDD_SUITE_QUEUE, else
 PDD_VM_SUITE_LOCK plus `.queue`, else `/tmp/pdd-full-suite-UID`. No directory means
 no queue restriction; unreadable or malformed records block. A waiting ticket
-or three running tickets with effective ownership blocks admission. Use the queue's
+or enough effectively running tickets to fill the current shared check capacity
+blocks admission. Use optional `suiteLimit` from the current tick, else the queue
+status reader. Legacy custom queue-file ports without a supplied limit retain
+the three-slot fallback. Invalid or unavailable capacity blocks admission. Use the queue's
 read-only effective ownership rule: a waiting ticket with a confirmed-dead runner
 is finished for capacity; a running ticket is finished only when both its runner
 and its saved descendant process group are confirmed dead. Probe the runner with
@@ -75,6 +78,9 @@ machine admission decision (including disk) and shared machine reader before
 applying retry-only load, pressure, tool and queue restrictions.
 
 ## Dependencies
+
+- [Shared suite queue](test-suite-queue.prompt.md): required native capacity
+  observation for retry preflight. Reads never grant suite execution admission.
 
 - [Machine observations](machine-resources.prompt.md): required native generation
   and verification context for CPU, memory, pressure and disk reads.

@@ -4,7 +4,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: e14f04d0a44e8621d6f22e9b4630240ae21d8ef0fe747deca1900fb00f3f75a7).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 933bf9458973b54bb9b8da2d3cfb6a485e6161ffaf2f368805158c7ac92b5e71).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -461,7 +461,7 @@ async function environmentTick(state, p, waits, timeRules, pendingTimes, stateRo
     let healthy = false;
     try {
       healthy = await (p.environmentHealthy ?? (input => environmentHealthy(input, {
-        ...p, machineResources: async () => state.health?.resource?.resources,
+        ...p, suiteLimit:state.checkCapacity?.checks, machineResources: async () => state.health?.resource?.resources,
       })))({ env: p.env, reason: retry.reason, cwd: state.cwd });
     } catch { /* Unknown health blocks. */ }
     if (!healthy) continue;

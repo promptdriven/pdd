@@ -1076,6 +1076,7 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 Share one `machineResources({cwd})` observation between health, check capacity and
 validation retry in each tick. Native reads include the check affinity profile.
 Observe health before configuring capacity, then pass its resources to the queue.
+Pass the chosen check count as `suiteLimit` to validation retry preflight.
 Injected legacy machineHealth/checkCapacityPorts remain supported.
 
 Every enabled tick reads `machineHealth` (native environment module default) and,

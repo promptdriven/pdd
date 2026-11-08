@@ -1,5 +1,6 @@
-// Generated from prompts/cli/autopilot-environment.prompt.md (sha256: 152fc557875398e43a125994b297551965324c47147a8b3b21c72233a6893085).
+// Generated from prompts/cli/autopilot-environment.prompt.md (sha256: eadf6e1a90cb6fc3e90d68ee1dd86d4012d25f2ad2fee622c8794e80ff60059b).
 import { readFileSync, readdirSync, accessSync, constants } from 'node:fs';
+import { readCheckStatus } from './test-suite-queue.mjs';
 import { readMachineResources } from './machine-resources.mjs';
 import { join, isAbsolute } from 'node:path';
 
@@ -81,6 +82,7 @@ export async function environmentHealthy({ env = process.env, reason = '', cwd }
       if (row.state === 'waiting') return false;
       if (row.state === 'running') running++;
     }
-    return running < 3;
+    const limit = ports.suiteLimit ?? (ports.readDir || ports.readFile ? 3 : readCheckStatus({env}).checks);
+    return Number.isSafeInteger(limit) && limit > 0 && running < limit;
   } catch { return false; }
 }
