@@ -259,9 +259,9 @@ import { execFile as cb } from 'node:child_process'; import { promisify } from '
 const execFile=promisify(cb); const h=${JSON.stringify({ workspaces: f.herdr.workspaces, tabs: f.herdr.tabs, panes: f.herdr.panes })};
 const herdr=async args=>{const [g,v]=args; const flag=n=>args[args.indexOf(n)+1];
 if(g==='status')return {running:true,session:'pdd',compatible:true};
-if(g==='workspace'&&v==='list')return {result:{type:'workspace_list',workspaces:h.workspaces}};
-if(g==='tab'&&v==='list')return {result:{type:'tab_list',tabs:h.tabs.filter(t=>t.workspace_id===flag('--workspace'))}};
-if(g==='pane'&&v==='list')return {result:{type:'pane_list',panes:h.panes.filter(p=>p.workspace_id===flag('--workspace'))}};
+if(g==='workspace'&&v==='list')return {id:'cli:workspace:list',result:{type:'workspace_list',workspaces:h.workspaces}};
+if(g==='tab'&&v==='list')return {id:'cli:tab:list',result:{type:'tab_list',tabs:h.tabs.filter(t=>t.workspace_id===flag('--workspace'))}};
+if(g==='pane'&&v==='list')return {id:'cli:pane:list',result:{type:'pane_list',panes:h.panes.filter(p=>p.workspace_id===flag('--workspace'))}};
 if(g==='tab'&&v==='get')return {result:{tab:h.tabs.find(t=>t.tab_id===args[2])}};
 if(g==='agent'&&v==='get'){const p=h.panes.find(p=>p.pane_id===args[2]);return {result:{agent:{...p.agent,pane_id:p.pane_id}}};}
 if(g==='tab'&&v==='close'){process.send({closing:true}); await new Promise(()=>{});}
@@ -272,7 +272,7 @@ process.send({result}); process.disconnect();`);
   const child = spawn(process.execPath, [childFile], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
   const message = await Promise.race([once(child, 'message').then(([m]) => m), once(child, 'exit').then(([code]) => ({ exited: code }))]);
-  assert.equal(message.closing, true, 'Child reached a real pre-close interruption boundary');
+  assert.equal(message.closing, true, `Child reached a real pre-close interruption boundary: ${JSON.stringify(message)}`);
   const pending = f.record().chatReplacement;
   assert.equal(pending?.phase, 'closeRequested');
   const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited;
