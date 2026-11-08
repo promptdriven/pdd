@@ -40,9 +40,10 @@ const skillCount = folders => `${folders.length} PDD skill${folders.length === 1
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
 const staleLine = ({ found, stale }, version, cwd) => `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
+const profileOptions = plan => Object.fromEntries([['--model','model'],['--herdr-agent-name','herdrAgentName'],['--codex-threads','codexThreads']].filter(([flag]) => plan.options[flag] !== undefined).map(([flag,key]) => [key,plan.options[flag]]));
 const RUNNER_ROUTES = {
   'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
-  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}) }],
+  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], ...profileOptions(plan), agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}) }],
   'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], tests: plan.options['--test'] }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
   'workflow-park': plan => ['parkAutomaticRun', { reason: plan.options['--reason'], runtime: plan.options['--interpreter'] === true }],
@@ -53,7 +54,7 @@ const RUNNER_ROUTES = {
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
-  'workflow-open': plan => ['openRun', { ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
+  'workflow-open': plan => ['openRun', { ...profileOptions(plan), ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
 };
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
 const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
@@ -212,7 +213,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text), ...(['workflow-run', 'workflow-yield'].includes(plan.local) ? { env } : {}) });
+        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text), ...(['workflow-run', 'workflow-open', 'workflow-yield'].includes(plan.local) ? { env } : {}) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);

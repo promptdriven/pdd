@@ -1,3 +1,4 @@
+import { launchProfile, selectLaunchProfile, validLaunchProfile } from './workflow-launch-profile.mjs';
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
@@ -191,7 +192,7 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
 const sameFact = (a,b) => JSON.stringify(canonical(a ?? null)) === JSON.stringify(canonical(b ?? null));
 const lastChat = (run, area) => [...(run.chats ?? [])].reverse().find(chat => chat.area === area);
 // The chat identity and lifecycle fields that one observation may change.
-const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code'];
+const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code', 'launchProfile', 'herdrAgentName', 'namingError'];
 const sameChat = (a,b) => a.area === b.area && a.paneId === b.paneId;
 // Publication transports only the named fields produced by this observation.
 // PR entries and metadata are applied separately by their actual publishers.
@@ -522,7 +523,7 @@ function validAutomaticContext(value) {
     && (envelope || exactKeys(value.claim, ['commentId', 'labelEventId']) && nonempty(value.claim.commentId) && nonempty(value.claim.labelEventId));
 }
 
-async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgentName, codexThreads, base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const automatic = coordinator !== undefined || Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT');
   if (Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) {
@@ -544,6 +545,9 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
   // Save the initial profile for later chats; explicit Codex replacement may select another.
   const variable = homeVariable(agent), configDir = variable && profileEnv[variable] ? resolve(cwd, expandHome(profileEnv[variable], profileEnv)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
+  let initialProfile;
+  try { initialProfile = selectLaunchProfile({run: {agent, configDir}, model, herdrAgentName, codexThreads: codexThreads ?? (agent === 'codex' ? 5 : undefined)}, p); }
+  catch (error) { return fail(error.message); }
   const explicitBase = base !== undefined;
   const badBase = () => fail('Use --base with a branch name, for example feature/checkout.');
   if (explicitBase && (typeof base !== 'string' || !base || base === 'HEAD' || base.startsWith('-') || base.startsWith('refs/'))) return badBase();
@@ -682,6 +686,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', base, adoptCorpu
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
+  run.launchProfile = { ...initialProfile, herdrAgentName: herdrAgentName ?? launchProfile(run).herdrAgentName };
   mkdirSync(runDir, { recursive: true });
   if(adoption) {
     writeFileSync(join(runDir,'replay-adoption.json'),declarationBytes,{mode:0o600,flag:'wx'});
@@ -2930,7 +2935,8 @@ async function chatState(run, p, facts = {}) {
   const area = run.areas[run.area], failure = activeChatFailure(run), chat = currentChat(run);
   if (!chat) return failure || !run.gate && !prOf(run, area?.name) ? 'unconfirmed' : null;
   if (!(run.state === 'running' || run.gate || failure)) return null;
-  const live = await chatSession(chat, p);
+  const live = await chatSession(chat, {...p, run});
+  if (live.namingError) facts.namingError = live.namingError;
   if (live.workspaceClosed) return 'closed';
   // A never-seen chat after the grace counts as ended only when its own native session shows that the agent ran.
   const own = sessionEvidenceDue(chat, live, p.now()) && !observedSession(chat, chat.agent ?? run.agent) ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
@@ -2951,6 +2957,8 @@ async function chatState(run, p, facts = {}) {
   }
   // Status saves only positive facts: the exact live agent (running) or end evidence. An unclear observation changes nothing.
   const next = structuredClone(chat);
+  if (live.namingError) next.namingError = live.namingError;
+  else delete next.namingError;
   if (observed.state === 'ended' || observed.state === 'running' && observed.exact) applyLifecycle(next, observed);
   if (live.alive) delete next.startUnconfirmed;
   const recovered = live.alive && failure;
@@ -3008,6 +3016,9 @@ function detail(run, chat = null, facts = {}) {
       : `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.`) : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}${run.agentDefinition?.name ? ` ${JSON.stringify(run.agentDefinition.name)}` : ''}`,
     `State: ${describe(run, chat, facts)}`,
+    `Launch: model ${launchProfile(run).model ?? 'account default'}; account ${launchProfile(run).configDir ?? 'default folder'}; Codex threads ${launchProfile(run).codexThreads ?? 'account default'}`,
+    ...(tab?.herdrAgentName ? [`Herdr agent: ${tab.herdrAgentName}; pane ${tab.paneId}`] : []),
+    ...(facts.namingError ? [`Herdr name is not bound (${facts.namingError.code}); inspect the saved pane.`] : []),
     ...(pending ? [`Chat replacement pending: ${run.chatReplacement.phase}; retry pdd workflow open ${run.number} --new, or end with pdd workflow cancel ${run.number}.`] : []),
     ...(pending && run.chatReplacement.phase==='launchRequested' ? ['After startup grace, --new sends the saved launch once only if authoritative inspection proves the latest request never ran; unknown or agent processes keep it pending.'] : []),
     ...(area ? [`Area ${run.area + 1} of ${run.areas.length}: ${area.name} — ${steps.join(', ')}`] : []),
@@ -3023,7 +3034,7 @@ function detail(run, chat = null, facts = {}) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
-function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null } = {}) {
+function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, namingError = null } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat);
@@ -3053,6 +3064,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
   const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = ownStoryCount(run);
   return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
+    launchProfile: launchProfile(run), chat: lastChat(run, area?.name) ? {herdrAgentName: lastChat(run, area?.name).herdrAgentName ?? null, paneId: lastChat(run, area?.name).paneId, ...(namingError ? {namingError} : {})} : null,
     ...(cannotWork ? { chatProblem: { kind: cannotWork.kind, agent: cannotWork.agent, until: cannotWork.until !== null ? new Date(cannotWork.until).toISOString() : null, message: cannotWork.message } } : {}),
     ...((run.evidence??[]).some(e=>e.association?.stage==='pr1')?{pr1Stories:ownStoryCount(run,{stage:'pr1'})}:{}),
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
@@ -3115,9 +3127,11 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
 
 const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
 function validReplacement(record, run) {
-  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'configDir', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
+  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'configDir', 'launchProfile', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
   if (Object.hasOwn(record, 'configDir') && (record.configDir !== null && (typeof record.configDir !== 'string' || !record.configDir.length)
     || record.replacement && record.replacement.configDir !== record.configDir)) return false;
+  if (record.launchProfile !== undefined && (!validLaunchProfile(record.launchProfile) || record.launchProfile.agent !== run.agent
+    || record.launchProfile.configDir !== record.configDir || record.replacement && !sameFact(record.replacement.launchProfile, record.launchProfile))) return false;
   const recovery = record.recovery;
   if (recovery !== undefined && (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)
     || Object.keys(recovery).some(key => !['closeAcknowledged','resumeRequested','allocationLabel','tabIdsBefore','latestLaunchRequest','unsentProof'].includes(key))
@@ -3186,7 +3200,7 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
     }
   });
 }
-async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot = PACKAGE_ROOT }, ports) {
+async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrAgentName, codexThreads, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
@@ -3197,6 +3211,8 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   if (selected < 0) return fail(`Unknown area ${area}. Valid areas: ${run.areas.map(item => item.name).join(', ')}.`);
   if (selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
   const historical = selected < run.area;
+  const profileOptions = [model, herdrAgentName, codexThreads].some(value => value !== undefined);
+  if (profileOptions && (!newSession || historical)) return fail('Launch settings require --new for the current area.');
   if (!historical && run.area > 0 && (newSession || !chat)) {
     const ownershipFailure = await continuationOwnership(run, cwd, p);
     if (ownershipFailure) return fail(ownershipFailure);
@@ -3211,9 +3227,14 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     if (!['launched', 'rolledBack', 'ended'].includes(pending.phase) && !newSession) return fail(`Chat replacement is pending at ${pending.phase}. Retry: pdd workflow open ${run.number} --new`);
   }
   const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
-  const incoming = newSession && !recovering && run.agent === 'codex' && typeof p.env.CODEX_HOME === 'string' && p.env.CODEX_HOME.length ? p.env.CODEX_HOME : null;
-  const replacementConfig = incoming ? resolve(cwd, expandHome(incoming, p.env)) : run.configDir;
-  if (incoming && !isFolder(replacementConfig)) return fail(`CODEX_HOME is "${replacementConfig}", but that folder does not exist. Fix CODEX_HOME and run the command again.`);
+  const variable = homeVariable(run.agent);
+  const incoming = newSession && !recovering && variable && typeof p.env[variable] === 'string' && p.env[variable].length ? p.env[variable] : null;
+  const replacementConfig = incoming ? resolve(cwd, expandHome(incoming, p.env)) : launchProfile(run).configDir;
+  if (incoming && !isFolder(replacementConfig)) return fail(`${variable} is "${replacementConfig}", but that folder does not exist. Fix ${variable} and run the command again.`);
+  let replacementProfile;
+  try { replacementProfile = recovering ? pending.launchProfile : newSession
+    ? selectLaunchProfile({run, configDir: replacementConfig, model, herdrAgentName, codexThreads}, p) : launchProfile(run); }
+  catch (error) { return fail(error.message); }
   // Pending recovery checks the profile of each effect, which may be the original
   // chat's folder rather than either the current run or the retrying terminal.
   const missing = !recovering && missingHome({ ...run, configDir: replacementConfig }, p.env);
@@ -3247,13 +3268,14 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         ...(run.gate ? [`Open gate: ${run.gate.kind} for ${run.gate.area ?? currentArea.name}. Wait for the person to decide whether to approve or request changes; do not treat this new session as approval.`] : []),
         ...(openQuestion(run) ? [`Pending question: ${openQuestion(run).text}`] : []),
       ].join('\n') + '\n';
-      const replacementRun = { ...run, configDir: replacementConfig };
+      const replacementRun = { ...run, configDir: replacementConfig, launchProfile: replacementProfile };
       const checkpoint = async record => {
         if (!validReplacement(record, run)) throw Object.assign(Error('Invalid replacement checkpoint'), { code: 'invalid_replacement_checkpoint' });
         const admit = fresh => {
           if (!fresh || ended(fresh)) throw Object.assign(Error('The run ended during replacement.'), {code:'run_ended'});
           const prior = fresh.chatReplacement;
           const sameAttempt = prior && prior.id === record.id && prior.at === record.at && sameFact(prior.original, record.original);
+          if (sameAttempt && prior.launchProfile && !sameFact(prior.launchProfile, record.launchProfile)) throw Error('Replacement launch profile changed');
           if (sameAttempt && Object.hasOwn(prior, 'configDir') && prior.configDir !== record.configDir) throw Error('Replacement configuration changed');
           if (record.phase === 'intent' && !sameAttempt) {
             if (prior && !['launched','rolledBack','ended'].includes(prior.phase)) throw Error('Replacement already pending');
@@ -3269,7 +3291,10 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
           // Only the first current-area installation selects later-area inheritance.
           // Observation/recovery checkpoints must not retarget a newer saved account.
           if (record.phase === 'launchRequested' && record.area === fresh.areas[fresh.area]?.name
-            && !['launchRequested','launched'].includes(priorPhase)) fresh.configDir = record.configDir;
+            && !['launchRequested','launched'].includes(priorPhase)) {
+            fresh.configDir = record.configDir;
+            if (record.launchProfile) fresh.launchProfile = structuredClone(record.launchProfile);
+          }
           if (['launchRequested', 'launched', 'rolledBack'].includes(record.phase)) {
             fresh.chats = fresh.chats.filter(item => item.area !== record.area);
             fresh.chats.push(record.phase === 'rolledBack' ? {...record.original, messageFile: record.original.originalMessageFile} : {...record.replacement});
@@ -3279,11 +3304,12 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         Object.assign(replacementRun, run);
       };
       chat = await restartChat({ run: replacementRun, chat, message, pending: recovering ? pending : undefined }, { ...p, checkpoint });
-      if (run.chatReplacement?.phase === 'ended') return done(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
-      if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
+      const replacementResult = message => done([...(chat.namingError ? [`Herdr name is not bound (${chat.namingError.code}); inspect the saved pane.`] : []), message].join('\n'));
+      if (run.chatReplacement?.phase === 'ended') return replacementResult(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
+      if (run.chatReplacement?.phase === 'rolledBack') return replacementResult(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
       if (run.chatReplacement?.phase === 'launched' && chat.area === run.areas[run.area]?.name && !chat.startUnconfirmed) armCurrentAutomaticChat(run, p);
-      if (run.chatReplacement?.recovery?.resumeRequested) return done(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
-      return done(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
+      if (run.chatReplacement?.recovery?.resumeRequested) return replacementResult(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
+      return replacementResult(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
     }
     if (!chat) { chat = await startNextChat(run, p, packageRoot); defaultOriginal = structuredClone(chat); started = true; }
     p.say(`Opening the ${chat.area} chat in Herdr…`);
@@ -3311,7 +3337,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     const latest = readRun(run.runDir), gateRun = latest?.runId === run.runId ? latest : run;
     const shownGate = gateRun.gate?.promptSnapshot ? snapshotLines(gateRun.gate.promptSnapshot) : [];
     const where = `Herdr session pdd, tab "${chat.label}"`;
-    return done([...shownGate, ...(gateRun.gate ? [approvalGuide(gateRun, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
+    return done([...(opened.namingError ? [`Herdr name is not bound (${opened.namingError.code}); inspect the saved pane.`] : []), ...shownGate, ...(gateRun.gate ? [approvalGuide(gateRun, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
     if (newSession) return fail([`Chat replacement ${run.chatReplacement?.phase ?? 'refused'} (${failureReason(error)}).${run.chatReplacement ? ` Retry: pdd workflow open ${run.number} --new` : ''}`, ...failureDetails(error)].join('\n'));
@@ -3390,7 +3416,7 @@ async function yieldAutomaticCapacityCommand({ ref, cwd }, ports) {
   const chat = currentChat(run);
   if (!chat || chat.startUnconfirmed || run.chatFailure || run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
     return fail('Capacity handoff cannot confirm the current chat has stopped.');
-  const live = await chatSession(chat, p), now = p.now();
+  const live = await chatSession(chat, {...p, run}), now = p.now();
   const own = sessionEvidenceDue(chat, live, now) && !observedSession(chat, chat.agent ?? run.agent)
     ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
   const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);

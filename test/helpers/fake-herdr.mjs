@@ -79,7 +79,13 @@ export function fakeHerdr() {
     }
     // The plain-text screen of a pane (empty unless a test draws one, for example an agent dialog).
     if (group === 'pane' && verb === 'read') return (h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found')).screen ?? '';
-    if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
+    if (group === 'agent' && verb === 'rename') {
+      const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found');
+      if (!/^[a-z][a-z0-9_-]{0,31}$/.test(rest[1])) fail('invalid_agent_name');
+      if (h.panes.some(other => other !== p && other.agent?.name === rest[1])) fail('agent_name_conflict');
+      p.agent.name = rest[1]; return {result: {type: 'ok'}};
+    }
+    if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0] || p.agent?.name === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
     if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); if (p.agent.agent_status === 'blocked') fail('agent_blocked'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
     fail(`unexpected herdr ${args.join(' ')}`);
   };

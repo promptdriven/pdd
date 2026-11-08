@@ -209,7 +209,51 @@ Usage-limit text: `You've hit your … limit`, `You have reached your … limit`
 
 Limits: the screen is a fallback. A Claude error that comes after a tool call in the same turn is found only in the transcript. When no transcript is readable, a person's prompt that quotes a `⎿` error line on its second line can look like one. Codex wording that pdd does not know stays unknown. pdd reads a Codex time in its own local zone; when the Herdr server runs in another zone, `resetsAt` is off by the difference. A time without a date on the screen keeps `resetsAt` null, so status can still name that time after it has passed. A Claude error line so long that it wraps inside its limit sentence gives only the part on its first line as `message`.
 
+## Launch profiles
+
+The [launch profile owner](workflow-launch-profile.prompt.md) owns launch settings.
+Start each area with the run's profile and save a copy on the chat. Use the chat's
+snapshot for ordinary resume, changes, workspace reconstruction and rollback.
+For a fresh replacement, pin the selected profile in the envelope before effects,
+and copy it to the replacement chat. A legacy envelope without a profile acquires
+one from its replacement chat, else original chat, retaining its pinned configDir.
+Validate consistency between envelope and replacement before effects. Preserve
+legacy configDir recovery and all existing custody rules.
+Every native launch or resume passes the snapshot's model as shell-quoted
+`--model M` when present. Only Codex gets the configured invocation-only
+`-c features.multi_agent_v2.max_concurrent_threads_per_session=N`; no account
+configuration is written. Retain full-access, login and environment flags.
+
+After an acknowledged pane launch, inspect the pane through `chatSession` with
+the run and prepared chat snapshot. Bind with `herdr agent rename PANE NAME`
+only after the ownership proof below, including on the first observation. Herdr may
+not have detected the agent yet: `agent_not_found` defers binding. Name failures
+must never turn a successful launch or positive agent observation into absence
+or an unconfirmed launch. Report other failures as a naming warning with the
+Herdr error code; leave native lifecycle and launch acknowledgement intact.
+`chatSession` returns optional `namingError: {code}` when binding fails or cannot
+be verified. The runner shows this warning in detailed/JSON status and open, including the
+post-launch result of resume and fresh replacement. Chat observations retain
+optional `namingError: {code}` until a successful binding clears it; this warning
+never changes native lifecycle or pending replacement identity.
+
+On delayed binding, require the same agent kind and a matching saved UUID when
+present. For Codex also require its own native session lookup (using optional
+`ports.run`, the saved worktree, folder and launch time) to match the observed
+UUID. This proof is required even after another observation saved a UUID, so
+an unrelated occupant never gains naming authority from observation alone.
+Claude's preallocated or resumed UUID proves identity. Gemini and agy have no
+authoritative native-session lookup here; an observed UUID alone cannot prove
+ownership for renaming, so leave their names unbound and show the naming warning.
+Missing or ambiguous evidence defers binding. No name is
+needed to observe lifecycle or send an existing request.
+The stable saved name and pane let tools inspect and interrupt the chat with
+`herdr --session pdd agent get NAME` and
+`herdr --session pdd agent send-keys NAME ctrl-c`.
+
 ## Dependencies
+
+- [Launch profiles](workflow-launch-profile.prompt.md): required generation and verification context for profile snapshots, effective launch arguments and Herdr name derivation.
 
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
@@ -220,7 +264,7 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
