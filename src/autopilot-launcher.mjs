@@ -29,6 +29,8 @@ import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubEntry, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
+import { githubWriteRunner, githubWriteEnvironment, githubWriteUsages, observeGithubWriteClaims } from './github-write-proxy.mjs';
+import { githubWriteStatus } from './github-writes.mjs';
 import { lookupRepositoryParent, githubOriginRepository } from './workflow-worktree.mjs';
 
 import { readAutopilotState, saveAutopilotState, autopilotStateFiles } from './autopilot-store.mjs';
@@ -75,7 +77,7 @@ function portsFor(state, ports) {
   const githubRoot = ports.githubRoot ?? (typeof state?.stateFile === 'string' ? dirname(state.stateFile) : githubStateRoot(env, ports.stateRoot)), ledgers = new Map();
   const ledger = () => { const repo = state?.repo; if (typeof repo !== 'string' || !repo) return null; if (!ledgers.has(repo)) ledgers.set(repo, githubLedger({ root: githubRoot, repository: repo })); return ledgers.get(repo); };
   const authenticated = githubAppRunner(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { env, now, ...ports.githubApp });
-  const execute = countGithubCalls((command, args, options = {}) => authenticated(command, args, { cwd: state.cwd, env, ...options }), { ledger, now });
+  const execute = githubWriteRunner((command, args, options = {}) => authenticated(command, args, { cwd: state.cwd, env, ...options }), { root: githubRoot, env, ledger, now });
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
@@ -107,7 +109,7 @@ async function appPreflight(state, p) {
   githubLedger({ root: p.githubRoot, repository: state.repo }).record({ ...githubEntry(['api', 'rate_limit'], { stdout: checked.rate }, 'setup', p.now()), identity: checked.identity });
   return true;
 }
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'PDD_GITHUB_ROOT', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
 const gitRootIn = p => p.execute('git', ['rev-parse', '--show-toplevel'], { env: { ...p.env, LC_ALL: 'C', LANG: 'C' } });
@@ -578,6 +580,7 @@ function providerArgs(kind, cwd, context, codexHome, githubEnv = {}) {
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
     ...Object.entries(githubEnv).flatMap(([name, value]) => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(value)}`)]),
     '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`),
+    ...Object.entries(githubEnv).flatMap(([key, value]) => ['-c', quote(`shell_environment_policy.set.${key}=${tomlString(value)}`)]),
     ...(codexHome ? ['-c', quote(`shell_environment_policy.set.CODEX_HOME=${tomlString(codexHome)}`)] : [])];
   return [kind === 'gemini' ? '--yolo' : '--dangerously-skip-permissions'];
 }
@@ -985,7 +988,8 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   const definition = launchDefinition(state, p);
   if (definition.kind !== state.agent.kind) { p.warn('Run pdd autopilot start to select the changed agent profile.'); return false; }
   const context = JSON.stringify(envelope());
-  const githubEnv = state.githubIdentity ? githubAppEnvironment({ root: state.cwd, env: { ...p.env, ...definition.env } }) : {};
+  const appEnv = state.githubIdentity ? githubAppEnvironment({ root: state.cwd, env: { ...p.env, ...definition.env } }) : {};
+  const githubEnv = { ...appEnv, ...githubWriteEnvironment({ root: p.githubRoot, env: { ...p.env, ...definition.env, ...appEnv } }) };
   const args = providerArgs(definition.kind, state.cwd, context, state.environment?.CODEX_HOME, githubEnv);
   const childEnv = { ...keepEnv(p.env), ...definition.env, ...githubEnv, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context };
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME']) {
@@ -1203,11 +1207,16 @@ async function runTick(stateFile, ports, completion) {
       for (const claim of claims) {
         // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
         if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
-        if (saved && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
+        const lifetime = claim.legacy === true ? 24 * 60 * 60 * 1000 : STUCK_CLAIM_AFTER;
+        if (saved && !(Date.parse(claim.lastSeen) + lifetime > p.now())) continue;
+        if (claim.legacy !== true && p.now() - Date.parse(claim.lastSeen) < 2 * 60 * 60 * 1000) continue;
         try {
           const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
             { execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
-          if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') claim.lastSeen = beat.lastSeen;
+          if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') {
+            claim.lastSeen = beat.lastSeen;
+            delete claim.legacy;
+          }
         } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
       }
     };
@@ -1306,6 +1315,8 @@ async function runTick(stateFile, ports, completion) {
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
     const fleet = repositoryMachines({ claims: observedClaims, lease: state.reviewer }, p.now());
     if (!state.sharedLoginWarned && fleet.sharedLogins.length) { p.warn(sharedLoginWarning(fleet)); state.sharedLoginWarned = true; }
+
+    observeGithubWriteClaims({ root: p.githubRoot, env: p.env, now: p.now, machine: state.machine, repository: state.repo, claims: observedClaims });
     // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
     // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
     const self = { coordinatorId: state.coordinatorId, machine: state.machine }, limitedFor = claim => takeoverLimited(claim, self);
@@ -1749,7 +1760,8 @@ async function machineStatus(folder, ports, env, cwd) {
     try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
     let coordinator = { state: 'unavailable', reason: 'Herdr is not running' };
     if (serverRunning) { try { coordinator = await coordinatorHealth(state, p); } catch { coordinator = { state: 'unavailable', reason: 'status unreadable' }; } }
-    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state}${reviewQueueStatus(state).map(text => ` · ${text}`).join('')}`);
+    const writes = githubWriteUsages({ root: folder, env: p.env, now: p.now, machine: state.machine }).map(githubWriteStatus).join(' ');
+    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state} · ${writes}${reviewQueueStatus(state).map(text => ` · ${text}`).join('')}`);
   }
   return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
 }
@@ -1813,6 +1825,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       let fleet;
       try { const view = await (p.repositoryView ?? repositoryView)(state, p); fleet = repositoryMachineLines(view); if (!state.sharedLoginWarned && view.sharedLogins.length) fleet += '\n' + sharedLoginWarning(view); }
       catch { fleet = 'Repository machines: unavailable (GitHub claims or reviewer lease could not be read).'; }
+
+      github += `${github ? '\n' : ''}${githubWriteUsages({ root: p.githubRoot, env: p.env, now: p.now, machine: state.machine }).map(githubWriteStatus).join('\n')}`;
       const readiness = await workflowReadiness(state, p);
       const reviewQueue = reviewQueueStatus(state).map(text => `\n${text}`).join('');
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;

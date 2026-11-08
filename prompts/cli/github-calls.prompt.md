@@ -4,6 +4,7 @@ Own `src/github-calls.mjs`. Count pdd GitHub calls, budget from the active
 identity's observed limit, and keep conditional read caches. Personal gh login
 is the default. The [App adapter](github-app.prompt.md) authenticates native
 calls when configured; this module never records credentials.
+Autopilot chat calls pass through the same counter via its private gh wrapper.
 
 ## Exports
 
@@ -19,7 +20,7 @@ calls when configured; this module never records credentials.
 | `githubStateRoot(env, stateRoot)` | `stateRoot`, else `$HOME/.local/state/pdd/autopilot` |
 | `githubLedger({root, repository, fs})` | `{file, repository, record(entry), read(), compact(now)}` |
 | `githubMachineEntries({root, fs})` | The entries of every ledger under `root` |
-| `countGithubCalls(exec, {ledger, purpose, now})` | A runner like `exec` that records each `gh` call |
+| `countGithubCalls(exec, {ledger, purpose, now, writes, env})` | A runner like `exec` that records each `gh` call |
 | `nativeGithubCounter(exec, {env, stateRoot, purpose, fs, now})` | A counting runner that finds the ledger from the call |
 | `githubUsage(entries, now)` | The last hour: see [Usage](#usage) |
 | `githubBudgetSettings(value)` | `{share, floor}` from `autopilot.github` in `pdd.json` |
@@ -33,6 +34,15 @@ calls when configured; this module never records credentials.
 milliseconds (native `Date.now`).
 
 ## One call
+
+When a write-budget resolver is supplied, reserve content cost only for writes.
+Observe every gh outcome, including free REST reads and GraphQL queries, through
+the shared budget so a secondary-limit reply delays later writes from other
+runners. Resolve a free read's budget only after a throttle outcome; ordinary
+reads require no identity lookup or content reservation. Preserve the original
+read result or error if cooldown observation fails. Use the shared budget's
+`githubWriteThrottle` classification before resolving a free read's budget;
+successful payload text must not start a cooldown or an identity lookup.
 
 `githubCall` reads only the argument list. For `gh api`, the endpoint is the
 first word that is not an option and not the value of an option. These options
@@ -99,8 +109,13 @@ never changes or fails the call. A concurrent append survives compaction unless 
 
 `countGithubCalls` returns `(file, args, options)` that runs `exec`. For `gh`
 it removes `options.purpose` and `options.repository`, runs the call, then
-records one entry with the named purpose (else `purpose`, else `githubPurpose`)
-and returns the value or throws the error of `exec` unchanged. The ledger is an
+first reserves content writes through its optional `writes(args,options)` budget port,
+then records one entry with the named purpose (else `purpose`, else `githubPurpose`)
+and observes the write outcome for shared secondary-limit cooldowns. It returns
+the value or throws the error of `exec` unchanged. Budget refusal happens before
+dispatch and makes no call entry. Mark dispatched environments with
+`PDD_GITHUB_COUNTED=1`, preserving the explicit call environment (else injected
+`env`, native process.env), to prevent nested private gh wrappers from double counting. The ledger is an
 object, or a function of the arguments and `options.repository`; null records
 nothing. Other programs run unchanged, also without these two options.
 `nativeGithubCounter` uses the ledger of `githubRepository(args)`, else of a valid
@@ -236,7 +251,9 @@ a new entry changes its body, or GitHub serves the saved next page.
 
 - [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
 
-None: this module uses only the injected file port and clock. Its consumers, for
+The [shared write budget](github-writes.prompt.md) is required for native
+Autopilot write admission. Native counters use the private proxy process adapter
+when an Autopilot ledger exists. The file port and clock supply local state. Its consumers, for
 navigation only: the [Autopilot launcher](autopilot-launcher.prompt.md#github-budget)
 counts its calls, applies the budget, shows the status line and reads review
 pages with the full-last-page rule; the

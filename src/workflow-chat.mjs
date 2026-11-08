@@ -1,4 +1,6 @@
 // Implements prompts/cli/workflow-chat.prompt.md.
+import { githubWriteEnvironment } from './github-write-proxy.mjs';
+import { githubStateRoot } from './github-calls.mjs';
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { githubAppSettings, githubAppEnvironment } from './github-app.mjs';
 import { randomUUID } from 'node:crypto';
@@ -184,13 +186,17 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
   for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
   const unset = [...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
   const settings = githubAppSettings({ cwd: run.sourceRoot ?? run.root, env });
-  const githubEnv = settings ? githubAppEnvironment({ root: settings.root, env: { ...env, ...entry?.env } }) : null;
+  const appEnv = settings ? githubAppEnvironment({ root: settings.root, env: { ...env, ...entry?.env } }) : null;
+  const automatic = env.PDD_AUTOPILOT_CONTEXT || env.PDD_GITHUB_ROOT || run.metricsOrigin?.origin === 'autopilot' || run.automaticOrigin;
+  const githubEnv = automatic ? githubWriteEnvironment({ root: env.PDD_GITHUB_ROOT || githubStateRoot(env), env: { ...env, ...entry?.env, ...appEnv } }) : appEnv;
+  if (automatic && appEnv) Object.assign(githubEnv, { PDD_GITHUB_APP_ROOT: appEnv.PDD_GITHUB_APP_ROOT });
+  if (automatic && Object.hasOwn(values, 'PATH')) values.PATH = githubEnv.PATH;
   let loginFile = null;
   if (Object.keys(values).length) {
     loginFile = join(run.runDir, `login-${randomUUID()}.env`);
     writeFileSync(loginFile, Object.entries(values).map(([name, value]) => `export ${name}=${quote(value)}\n`).join(''), { mode: 0o600, flag: 'wx' });
   }
-  return { unset, loginFile, program: entry?.command ?? null, ...(githubEnv ? { githubEnv } : {}) };
+  return { unset, loginFile, program: entry?.command ?? null, ...(automatic || githubEnv ? { githubEnv } : {}) };
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env }) {

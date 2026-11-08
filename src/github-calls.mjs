@@ -4,6 +4,8 @@ import { githubAppRunner } from './github-app.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { githubWriteCost, githubWriteThrottle } from './github-writes.mjs';
+import { githubWriteRunner, githubOriginalExecutable } from './github-write-proxy.mjs';
 
 import { machineJson, withAutopilotStore } from './autopilot-store.mjs';
 
@@ -158,10 +160,14 @@ export function githubMachineEntries({ root, fs = nativeFs, store, identity = nu
 // A gh runner that records each gh call in a ledger. options.purpose names the purpose of one call and
 // options.repository its repository when the arguments do not name one; both are removed before the call runs.
 // Other programs run unchanged.
-export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {}) {
+export function countGithubCalls(exec, { ledger, purpose, now = Date.now, writes, env = process.env } = {}) {
   return async (file, args, options = {}) => {
     const { purpose: named, repository, ...rest } = options ?? {};
     if (file !== 'gh' || !Array.isArray(args)) return exec(file, args, rest);
+    const cost = githubWriteCost(args, rest);
+    let budget = writes && cost ? await writes(args, rest) : null;
+    if (cost) budget?.reserve(cost);
+    if (writes) rest.env = { ...(rest.env ?? env), PDD_GITHUB_COUNTED: '1' };
     let result, failure, failed = false;
     try { result = await exec(file, args, rest); } catch (error) { failure = error; failed = true; }
     try {
@@ -169,6 +175,13 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
       const outcome = failed ? failure : result;
       target?.record({ ...githubEntry(args, outcome, named ?? purpose, now()), ...(outcome?.githubIdentity ? { identity: outcome.githubIdentity } : {}) });
     } catch { /* best effort */ }
+    if (writes) {
+      try {
+        const outcome = failed ? failure : result;
+        if (!budget && githubWriteThrottle(outcome)) budget = await writes(args, rest);
+        budget?.observe(outcome);
+      } catch { /* Preserve the original outcome when observation fails. */ }
+    }
     if (failed) throw failure;
     return result;
   };
@@ -178,12 +191,21 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
 export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, appPorts = {}, store } = {}) {
-  return countGithubCalls(githubAppRunner(exec, { env, fs, now, ...appPorts }), { purpose, now, ledger: (args, named) => {
-    const repository = githubRepository(args) ?? (typeof named === 'string' && REPOSITORY.test(named) ? named.toLowerCase() : null);
-    if (!repository) return null;
-    const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs, store });
-    try { return ledger.exists() ? ledger : null; } catch { return null; }
-  } });
+  const runners = new Map();
+  return async (file, args, options = {}) => {
+    const repository = githubRepository(args) ?? (typeof options.repository === 'string' && REPOSITORY.test(options.repository) ? options.repository.toLowerCase() : null);
+    const root = env.PDD_GITHUB_ROOT || githubStateRoot(env, stateRoot);
+    const ledger = repository ? githubLedger({ root, repository, fs, store }) : null;
+    if (!ledger || !ledger.exists()) return countGithubCalls(githubAppRunner(exec, { env, fs, now, ...appPorts }), { purpose, now })(file, args, options);
+    const key = `${root}/${repository}`;
+    if (!runners.has(key)) {
+      const original = env.PDD_GITHUB_ROOT && (env.PATH??'').includes('/github-bin/') ? githubOriginalExecutable({env,fs}) : null;
+      const dispatch = original ? (file,args,options) => exec(file==='gh'?original:file,args,options) : exec;
+      runners.set(key, githubWriteRunner(githubAppRunner(dispatch, { env, fs, now, ...appPorts }), { root, env, fs, now, ledger }));
+    }
+    const runner = runners.get(key);
+    return runner(file, args, { ...options, purpose: options.purpose ?? purpose });
+  };
 }
 
 // Calls in the last hour, by purpose, and the newest limit that GitHub reported for each resource.

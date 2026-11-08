@@ -14,6 +14,7 @@ import { runIssueGraph } from '../src/issue-dependency-graph.mjs';
 import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { fixture as runnerFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
+import { githubLedger } from '../src/github-calls.mjs';
 
 // Issue #3032: claims carry a heartbeat, expire, and a lost claim stops work.
 const repo = 'owner/repo', hour = 60 * 60 * 1000, minute = 60 * 1000;
@@ -401,24 +402,62 @@ const timeRules = (f, kind) => f.prompts.flatMap(text => JSON.parse(text.trim().
 async function heartbeatTick(t) {
   const f = await tickFixture(t);
   f.issues = [tickIssue(7, { comments: 1, updated_at: at(NOW) })];
-  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine })];
+  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine,
+    lastSeen: f.claimComments.get('901')?.updated_at ?? at(NOW) })];
   assert.equal((await f.start()).exitCode, 0);
-  // The new claim comment is new trusted work once; the first heartbeat edit makes the tick read it.
-  f.issueComments = { 7: [f.ownComment(at(NOW))] }; f.status = 200; f.time += minute; await f.tick();
+  // The new claim comment is new trusted work once. Later heartbeats use its
+  // server edit time, as a dependency snapshot would report it.
+  f.time += minute;
+  f.issueComments = { 7: [f.ownComment(at(f.time))] }; f.issues[0].updated_at = at(f.time); f.status = 200; await f.tick();
   assert.ok(f.prompts.some(text => /"number":7,/.test(text)), 'the claim comment was seen');
   f.prompts.length = 0; f.patches.length = 0;
   return f;
 }
 
-test('tick: the owner refreshes its live claim at each tick with no AI call, and a heartbeat edit is not new work', async t => {
+test('tick: a fresh server-timed claim skips early heartbeats without an AI call', async t => {
   const f = await heartbeatTick(t);
   for (const i of [1, 2]) {
     f.time += 29 * minute; await f.tick();
-    assert.equal(f.patches.length, i, 'one heartbeat for the one own claim');
-    assert.equal(JSON.parse(/```json\n([\s\S]*?)\n```/.exec(f.patches.at(-1).body)[1]).lastSeen, at(f.time));
-    assert.equal(f.issues[0].updated_at, at(f.time), 'like GitHub, the edit moved the issue update time');
+    assert.equal(f.patches.length, 0);
+    assert.equal(f.claimComments.get('901').updated_at, at(NOW + minute));
   }
   assert.equal(f.prompts.length, 0, 'a heartbeat is neither an AI call nor new work');
+});
+
+for (const age of [hour, 23 * hour]) test(`tick: a live legacy claim at ${age / hour} hours gets its first heartbeat`, async t => {
+  const f = await tickFixture(t);
+  assert.equal((await f.start()).exitCode, 0);
+  const comment = f.ownComment(at(NOW - age));
+  f.issues = [tickIssue(7, { comments: 1, updated_at: comment.updated_at })];
+  f.issueComments = { 7: [comment] };
+  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId,
+    machine: state.machine, legacy: true, lastSeen: comment.updated_at })];
+  await f.tick();
+  assert.equal(f.patches.length, 1);
+  assert.equal(recordOf(f.claimComments.get('901').body).lastSeen, at(NOW));
+  assert.equal(f.state().githubIntake.claims[0].legacy, undefined);
+});
+
+test('tick: cached legacy claims use the 24-hour cutoff below the read floor', async t => {
+  for (const age of [23 * hour, 25 * hour]) {
+    const f = await tickFixture(t);
+    assert.equal((await f.start()).exitCode, 0);
+    f.ownComment(at(NOW - age));
+    const state = f.state();
+    state.githubIntake = { claims: [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId,
+      machine: state.machine, legacy: true, lastSeen: at(NOW - age) })] };
+    writeFileSync(f.stateFile(), JSON.stringify(state));
+    githubLedger({ root: f.ports.stateRoot, repository: repo }).record({ at: NOW, api: 'rest', purpose: 'claims',
+      status: 200, resource: 'core', remaining: 500, limit: 5000, resetAt: NOW + 3 * hour });
+    await f.tick();
+    assert.equal(f.patches.length, age < 24 * hour ? 1 : 0);
+    if (age < 24 * hour) {
+      assert.equal(f.state().githubIntake.claims[0].legacy, undefined);
+      f.time += hour;
+      await f.tick();
+      assert.equal(f.patches.length, 1);
+    }
+  }
 });
 
 // GitHub moves the issue updated_at to the edit time of a comment (measured on
@@ -431,7 +470,7 @@ test('tick: with only heartbeats for 60 minutes the idle-claim rule fires once',
   assert.deepEqual(timeRules(f, 'idle-claim').map(row => row.number), [7], 'heartbeats alone are not activity');
   for (let i = 0; i < 4; i++) { f.time += 30 * minute; await f.tick(); }
   assert.equal(timeRules(f, 'idle-claim').length, 1, 'the rule is sent once');
-  assert.equal(f.patches.length, 6, 'the claim was refreshed at each tick');
+  assert.equal(f.patches.length, 1, 'one heartbeat became due after two hours');
 });
 
 test('tick: real progress on a heartbeat claim keeps the idle-claim rule quiet', async t => {
@@ -445,7 +484,7 @@ test('tick: real progress on a heartbeat claim keeps the idle-claim rule quiet',
   assert.equal(timeRules(f, 'idle-claim').length, 0, 'a worker comment 45 minutes after the claim is activity');
   f.time += 30 * minute; await f.tick();
   assert.deepEqual(timeRules(f, 'idle-claim').map(row => row.number), [7], 'it fires 60 minutes after the last real progress');
-  assert.equal(f.patches.length, 4, 'the claim was refreshed at each tick');
+  assert.equal(f.patches.length, 1, 'one heartbeat became due after two hours');
 });
 
 test('tick: in off mode this machine sends no heartbeat, so its claims expire like a stopped machine', async t => {

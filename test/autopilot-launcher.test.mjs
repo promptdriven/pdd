@@ -33,6 +33,7 @@ async function fixture(t, options = {}) {
       if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
+      if (command === 'gh' && args[0] === 'api' && args.includes('user')) return {code:0,stdout:JSON.stringify({login:'owner'}),stderr:''};
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
       throw Error(`unexpected process ${command} ${args}`);
@@ -181,8 +182,10 @@ test('native startup: Codex chat commands get the Autopilot context under any sh
   assert.ok(Object.hasOwn(set, 'PDD_AUTOPILOT_CONTEXT'), `expected -c shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=..., got -c values ${JSON.stringify(f.configs)}`);
   assert.deepEqual(JSON.parse(set.PDD_AUTOPILOT_CONTEXT), envelope);
   assert.equal(set.PDD_AUTOPILOT_CONTEXT, f.call.env.PDD_AUTOPILOT_CONTEXT, 'chat commands get the same text as the coordinator process');
-  assert.deepEqual(Object.keys(set), ['PDD_AUTOPILOT_CONTEXT', 'CODEX_HOME'], 'no Herdr value that the launcher cannot know');
-  assert.equal(f.configs.filter(value => /^shell_environment_policy\./.test(value)).length, 2, 'no other policy key changes');
+  assert.equal(set.PDD_GITHUB_ROOT, f.ports.stateRoot);
+  assert.ok(existsSync(join(set.PATH.split(':')[0], 'gh')));
+  assert.deepEqual(Object.keys(set), ['PDD_AUTOPILOT_CONTEXT', 'PATH', 'PDD_GITHUB_ROOT', 'CODEX_HOME'], 'no Herdr value that the launcher cannot know');
+  assert.equal(f.configs.filter(value => /^shell_environment_policy\./.test(value)).length, 4, 'context, write route and saved profile only');
 });
 
 test('native startup: Codex chat commands keep an explicit CODEX_HOME and get none without one', async t => {

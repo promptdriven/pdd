@@ -450,6 +450,19 @@ the launched chat may still be starting.
 <a id="github-budget"></a>
 ## GitHub budget
 
+Use the [shared write guard](github-writes.prompt.md) for each launcher write.
+Observe active machines from each intake's claims before heartbeats. The same
+host/identity bucket covers all local repositories. Status, including --all, shows all local identity write use
+from local state, without a GitHub call. A write budget refusal retains progress
+and reports its retry time. It does not authorize an approval or merge.
+
+For coordinator chat launches, prepare the package's private gh wrapper from
+[the proxy](github-write-proxy.prompt.md). Put its directory first in PATH and
+pass PDD_GITHUB_ROOT to that same local state root. Codex command environments
+also get these two invocation-only shell_environment_policy.set values. Keep
+all other launch and profile rules. Worker launches preserve that routing.
+
+
 Autopilot uses the person's own `gh` sign-in, so its GitHub calls use the
 person's limit. Each `gh` call of the launcher goes through `countGithubCalls` of
 [GitHub calls](github-calls.prompt.md) into this repository's ledger on this
@@ -485,8 +498,8 @@ machine and the settings' `github` value:
   Autopilot waits until ISO, except the heartbeats of this machine's claims.`
   (`GraphQL points` for the GraphQL resource). It makes no other GitHub call: no
   intake, no issue list, no wake. It does not save a rate-limit wait (`retryAt`),
-  so each tick until `resetAt` computes the budget again and sends the
-  heartbeats again. The claims are the saved `claims` of the last intake, with
+  so each tick until `resetAt` computes the budget again and sends only due
+  heartbeats (two hours since the last server-confirmed edit). The claims are the saved `claims` of the last intake, with
   the filters of the `low` case below. A heartbeat is 2 REST calls (a read and an
   edit); when the newest `core` remaining is known and less than 2 for each of
   these claims, the tick sends none. Why: one reserve window ends at the reset,
@@ -638,7 +651,12 @@ Each tick keeps claims current without an AI call. Use the `claims` that the
 dependency intake returns; add no other GitHub read for them. For each active
 claim of this coordinator and machine, call the GitHub reader's
 [`refreshClaimHeartbeat`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry)
-with the current clock time, under the scan's admission guard. The tick, not the
+with the current clock time, under the scan's admission guard. Follow that
+reader's distinction between legacy activity and heartbeat time,
+including for cached claims below the read floor. A saved legacy observation
+expires under the reader's 24-hour rule. After its first successful heartbeat,
+remove its legacy marker from the saved observation so later ticks use heartbeat
+timing and do not renew it early. The tick, not the
 AI, writes the `lastSeen` time: the first heartbeat sets the existing value (the
 `"lastSeen": ""` marker of a new claim record), or adds the member when it is
 missing. A failed
@@ -1038,6 +1056,8 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 
 - [GitHub App identity](github-app.prompt.md): required native generation and verification context for authentication, preflight and shell routing.
+
+- [Write guard](github-writes.prompt.md) and [private gh transport](github-write-proxy.prompt.md): required native generation and verification context for shared write admission, chat routing and status.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 

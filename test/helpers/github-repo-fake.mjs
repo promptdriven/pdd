@@ -5,13 +5,14 @@
 import { createHash } from 'node:crypto';
 
 const endpointOf = args => args.find((word, index) => index > 0 && !String(word).startsWith('-') && !['GET', 'POST', 'PATCH', 'PUT', 'DELETE'].includes(word)
-  && !/^[A-Z][A-Za-z-]+: /.test(word) && args[index - 1] !== '--input' && args[index - 1] !== '-H' && args[index - 1] !== '--method');
+  && !/^[A-Z][A-Za-z-]+: /.test(word) && args[index - 1] !== '--input' && args[index - 1] !== '-H' && args[index - 1] !== '--method' && args[index - 1] !== '--hostname');
 const iso = ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acme', issues = 200, now = () => Date.parse('2026-11-07T12:00:00Z'), limit = 5000 } = {}) {
   const repo = repository.toLowerCase();
   const f = { repo, owner, now, limit, remaining: limit, graphqlRemaining: limit, resetAt: Math.floor(now() / 1000) + 3600,
     branches: new Map([['main', 'base-head']]), contents: new Map(), calls: [], issues: new Map(), nextComment: 900000, nextEvent: 700000, linkBumpsUpdate: false, failRest: null, failRead: null };
+  f.labelDefinitions = new Map(['phase:a','phase:b','pdd:tracked','ready','tracked','pdd:working','old'].map(name => [name, `L_${name}`]));
   const url = n => `https://github.com/${repo}/issues/${n}`;
   const touch = issue => { issue.updated = Math.max(f.now(), issue.updated + 1000); };
   f.add = (n, extra = {}) => {
@@ -72,6 +73,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   function rest(method, endpoint, input) {
     const [path, query = ''] = endpoint.split('?'), params = new URLSearchParams(query);
     const route = path.startsWith(`repos/${repo}`) ? path.slice(`repos/${repo}`.length) : null;
+    if (endpoint === 'user' && method === 'GET') return { status: 200, body: { login: owner } };
     if (route === null) return { status: 404, body: { message: 'Not Found' } };
     if (route === '' && method === 'GET') return { status: 200, body: { default_branch: 'main', full_name: repo, owner: { login: owner } } };
     if (route?.startsWith('/git/ref/heads/') && method === 'GET') {
@@ -97,6 +99,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     if (route === '/collaborators' && method === 'GET') return { status: 200, ...page(endpoint, [{ login: owner, permissions: { admin: true, maintain: true, push: true } }]) };
     let m = /^\/collaborators\/([^/]+)\/permission$/.exec(route);
     if (m) return { status: 200, body: { permission: decodeURIComponent(m[1]).toLowerCase() === owner ? 'admin' : 'read' } };
+    if (route === '/labels' && method === 'GET') return {status:200,...page(endpoint,[...f.labelDefinitions].map(([name,node_id]) => ({name,node_id})))};
     if (route === '/issues' && method === 'GET') {
       let list = live();
       if (params.get('state') !== 'all') list = list.filter(issue => issue.state === 'open');
@@ -120,7 +123,10 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     const issue = f.issues.get(Number(m[1]));
     if (!issue || issue.deleted) return { status: 404, body: { message: 'Not Found' } };
     const sub = m[2] ?? '';
+    if (sub === '' && method === 'PATCH') { const change = JSON.parse(input); if (change.labels) { for (const name of issue.labels.filter(x => !change.labels.includes(x))) f.unlabel(issue.number, name); for (const name of change.labels.filter(x => !issue.labels.includes(x))) f.label(issue.number, name); } return { status: 200, body: row(issue) }; }
     if (sub === '' && method === 'GET') return { status: 200, body: row(issue) };
+    if (sub === '/labels' && method === 'POST') { for (const name of JSON.parse(input).labels) if (!issue.labels.includes(name)) f.label(issue.number, name); return { status: 200, body: row(issue).labels }; }
+    if (sub.startsWith('/labels/') && method === 'DELETE') { f.unlabel(issue.number, decodeURIComponent(sub.slice(8))); return { status: 200, body: row(issue).labels }; }
     if (sub === '/comments' && method === 'POST') { const c = f.comment(issue.number, JSON.parse(input).body, owner); return { status: 201, body: comment(issue, c) }; }
     if (sub === '/comments') return { status: 200, ...page(endpoint, issue.comments.map(c => comment(issue, c))) };
     if (sub === '/dependencies/blocked_by' && method === 'POST') {
@@ -156,6 +162,14 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
         hasNextPage: offset + size < all.length, endCursor: String(offset + size),
       } } } } };
     }
+    if (query.startsWith('mutation')) {
+      const issue = [...f.issues.values()].find(issue => `I_${issue.id}` === variables.subject);
+      if (!issue) return {errors:[{message:'Unknown issue'}]};
+      const names = ids => ids.map(id => [...f.labelDefinitions].find(([,value]) => value === id)?.[0]);
+      for (const name of names(variables.add ?? [])) if (!issue.labels.includes(name)) f.label(issue.number,name);
+      for (const name of names(variables.remove ?? [])) if (issue.labels.includes(name)) f.unlabel(issue.number,name);
+      return {data:{addLabelsToLabelable:{clientMutationId:null},removeLabelsFromLabelable:{clientMutationId:null}}};
+    }
     for (const [name, value] of Object.entries(variables)) {
       const m = /^n([0-9]+)$/.exec(name); if (!m) continue;
       const issue = f.issues.get(value);
@@ -180,6 +194,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     if (f.now() >= f.resetAt * 1000) { f.resetAt = Math.floor(f.now() / 1000) + 3600; f.remaining = f.limit; f.graphqlRemaining = f.limit; }
     const call = { method, endpoint, conditional: !!sent, api: endpoint === 'graphql' ? 'graphql' : 'rest', at: f.now() };
     f.calls.push(call);
+    f.beforeRequest?.(call);
     if (endpoint === 'graphql') {
       call.query = JSON.parse(input).query;
       if (f.graphqlRemaining <= 0) { call.status = 403; return { code: 1, stdout: [...headers(403, { resource: 'graphql' }), '', JSON.stringify({ message: 'API rate limit exceeded' })].join('\r\n'), stderr: 'gh: HTTP 403\n' }; }

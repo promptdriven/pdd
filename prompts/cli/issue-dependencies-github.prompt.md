@@ -295,7 +295,8 @@ of each labeled issue: the earliest label event of the current claim era (a nati
 removal ends an era), and the one trusted comment by that event's actor whose JSON
 record names the repository, coordinatorId, machine and that labelEventId. Each
 claim is `{issue,owner,active,coordinatorId,machine,commentId,labelEventId}` with
-optional `lastSeen` (ISO time), `expired: true`, `stuckSince` (time of the
+optional `lastSeen` (ISO time), `legacy: true` (the observation uses the 24-hour
+legacy rule below), `expired: true`, `stuckSince` (time of the
 current `pdd:stuck` label event), `claimedAt`, `takeovers`, `previousOwner` and
 `longRunningAlertedAt` (see [takeovers](#takeovers)). The owners reply also
 gives `localMachine`, the machine of the local launcher state, next to
@@ -324,7 +325,14 @@ removes and adds `pdd:working`, so a new era starts and the old record no longer
 matches. Never edit or delete an old claim comment.
 
 `refreshClaimHeartbeat({cwd,repository,claim,coordinatorId,machine,at},ports)`
-acts only on an active claim of that coordinator and machine. It rereads the
+acts only on an active claim of that coordinator and machine. A claim whose
+server-derived heartbeat lastSeen is less than two hours old needs no heartbeat;
+skip it without a read or edit. At four hours or more, heartbeat expiry is final:
+skip it. A live `legacy: true` observation retains its first identity-checked
+refresh even when its issue-activity lastSeen is four to 24 hours old or less
+than two hours old. A missing lastSeen also retains the identity-checked refresh.
+Inactive legacy claims remain skipped. A retained legacy observation whose
+activity time is now at least 24 hours old also remains skipped. It rereads the
 comment by `commentId`, requires the same record identity and labelEventId, sets
 the top-level `lastSeen` to `at` (adds it when absent) and keeps every other byte
 of the comment. Before the edit, check that the new body parses to the same record

@@ -76,7 +76,15 @@ async function replayStep(t, step, world, root) {
         execFileSync('/bin/sh', ['-c', args[3]], { cwd, env: { PATH: '/usr/bin:/bin', HOME: env.HOME, ...pane.env }, timeout: 10000 });
         const call = JSON.parse(readFileSync(record, 'utf8').trim().split('\n')[calls]);
         const { set, config } = codexConfigs(call.argv);
-        world.launches.push({ pane_id: args[2], argv: call.argv, process_environment: call.env, codex_config: config, command_environment_set: Object.fromEntries(Object.entries(set).map(([name, value]) => [name, fromHost(value)])) });
+        // The existing context vectors keep all non-routing keys, including any
+        // forbidden Herdr key. The authorised write route has separate native
+        // checks and does not change the Story's original expected context.
+        const routing = new Set(['PATH','PDD_GITHUB_ROOT']);
+        assert.equal(set.PDD_GITHUB_ROOT,stateRoot);
+        assert.ok(existsSync(join(set.PATH.split(':')[0],'gh')));
+        world.launches.push({ pane_id: args[2], argv: call.argv, process_environment: call.env, codex_config: config,
+          write_environment_set: Object.fromEntries(Object.entries(set).filter(([name])=>routing.has(name))),
+          command_environment_set: Object.fromEntries(Object.entries(set).filter(([name])=>!routing.has(name)).map(([name, value]) => [name, fromHost(value)])) });
         return {};
       }
       if (args[0] === 'pane' && args[1] === 'read') return '';
