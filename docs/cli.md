@@ -250,6 +250,11 @@ no model call. It reads usage and the ordinary reset time. It does not spend,
 request credits, consume a usage reset, change sign-in or log out an account.
 Other agent kinds have no Codex usage check.
 Malformed protocol frames stop the connection and report unknown usage.
+The read waits at most one second for cleanup after selecting its result.
+It sends SIGTERM first and sends SIGKILL after 500 milliseconds if the direct
+child has not exited. If close has not arrived after another 500 milliseconds,
+it releases the connection's streams and process handle and returns the selected
+result. A descendant holding an inherited pipe cannot block the health read.
 
 Low resources, reached usage limits and unreadable health observations pause new
 automatic admissions. Claims, progress and heartbeats remain. One `resource` or
