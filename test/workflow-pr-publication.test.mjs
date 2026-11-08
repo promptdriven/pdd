@@ -43,28 +43,32 @@ const fs=require('node:fs'),cp=require('node:child_process');
 const file=process.env.PDD_PUBLICATION_GH_STATE,s=JSON.parse(fs.readFileSync(file,'utf8')),a=process.argv.slice(2);
 const flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?x:JSON.stringify(x));
 const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/topic'],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
+const remote=(ref='topic')=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/'+ref],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
-else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
-else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName==='topic'?{...found,headRefOid:remote()||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
+else if(a[1]==='list')out(s.prs.filter(p=>(!a.includes('--head')||p.headRefName===flag('--head'))&&(!a.includes('--search')||p.body.includes(flag('--search').split('"')[1]))).map(p=>({...p,headRefOid:remote(p.headRefName)||p.headRefOid})));
+else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName?{...found,headRefOid:remote(found.headRefName)||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
+else if(a[0]==='api'&&/^repos\\/example\\/project\\/pulls\\/\\d+\\/files\\?per_page=100$/.test(a[1])){
+ if(!a.includes('--paginate')||!a.includes('--slurp'))throw Error('file list must include every JSON page');
+ const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages);
+}
 else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
  const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
  if(kind==='edit'&&s.failEdit===s.events.filter(e=>e.kind==='edit').length){fs.writeFileSync(file,JSON.stringify(s));process.stderr.write('error: refused edit');process.exit(1)}
- if(kind==='create'){s.prs.push({number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
+ if(kind==='create'){const number=Math.max(22,...s.prs.map(p=>p.number))+1;s.prs.push({number,url:'https://github.com/example/project/pull/'+number,state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
  else{s.prs.find(p=>p.url===a[2]).body=body;out('updated')}
  fs.writeFileSync(file,JSON.stringify(s));
 }else throw Error('unexpected gh '+a.join(' '));
 `;
   writeFileSync(join(bin, 'gh'), fake); chmodSync(join(bin, 'gh'), 0o755);
   const save = () => writeFileSync(join(runDir, 'status.json'), JSON.stringify(run)); save();
-  const invoke = (summary, method = 'stepDone') => {
+  const invoke = (summary, method = 'stepDone', step = prompt ? 'check' : 'formal') => {
     const review=String(summary).split('\n').filter(row=>row.startsWith('Review:')).join('\n');if(review)writeFileSync(join(runDir,'review.md'),review);
     const verify=String(summary).split('\n').filter(row=>/^(?:Not fixed yet:|Proof \()/.test(row)).join('\n');if(verify)writeFileSync(join(runDir,'verify.md'),verify);
     const scope=String(summary).split('\n').filter(row=>row.startsWith('Not caught because:')).join('\n');if(scope)writeFileSync(join(runDir,'scope.md'),scope);
 
-    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'check' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
+    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
   const machine = (proved = head) => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: proved, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
@@ -540,6 +544,149 @@ test('READABLE-CODE: the code PR proof table reads the old-code proof and review
 // #3029: the formal status of a real code PR whose prompt area has no scenario vectors (PR 1 changed no scenario file,
 // as in prompt-runtime PRs #670 and #686). The code replay stays NOT REPLAYED; the formal block is read on its own.
 const VALUE_STORY = '# Value\n\nAs a maintainer, I want the value to be two,\nso that the report adds up.\n\n## Acceptance criteria\n\n1. The value is two.\n';
+
+// #3085: main can advance after the run starts. The PR diff excludes inherited
+// Stories even though the run's saved baseSha still sees them. Use the existing
+// publication fake: real local Git and gh redirected to the fixture's state file.
+for (const selection of ['docs', 'changed', 'named', 'approved', 'stacked-changed', 'stacked-named', 'stacked-approved']) {
+  test(`3085-STORY-SCOPE: ${selection} publication excludes inherited Stories and keeps its own`, t => {
+    const f = fixture(t);
+    const stacked = selection.startsWith('stacked-');
+    const ownPath = 'user_stories/own.md', inheritedPath = 'user_stories/inherited.md';
+    const own = VALUE_STORY.replace('two,', 'OWN3085,');
+    const inherited = VALUE_STORY.replace('two,', 'INHERITED3085,');
+    f.git('switch', 'main');
+    mkdirSync(join(f.root, 'user_stories'));
+    writeFileSync(join(f.root, inheritedPath), inherited);
+    if (['named', 'approved'].includes(selection)) writeFileSync(join(f.root, ownPath), own);
+    f.git('add', '.'); f.git('commit', '-qm', 'Upstream Stories after run start');
+    f.git('push', '-q', 'origin', 'main');
+    f.git('switch', 'topic'); f.git('merge', '--no-edit', 'main');
+    f.git('checkout', 'main', '--', 'value');
+    if (selection === 'changed' || stacked) writeFileSync(join(f.root, ownPath), own);
+    if (stacked) {
+      f.git('add', '.'); f.git('commit', '-qm', 'Own Story in prompt PR');
+      f.git('push', '-q', 'origin', 'HEAD:refs/heads/prompt-topic');
+      f.run.prBase = 'prompt-topic';
+      f.run.pr[0].branch = 'prompt-topic';
+    } else {
+      // A single-PR small-change, as in #3079.
+      f.run.areas = [{ name: 'change', steps: ['scope', 'change', 'verify', 'formal'], optional: [], gate: 'pr' }];
+      f.run.area = 0; f.run.pr = [];
+      f.run.done.change = f.run.done.build;
+    }
+    writeFileSync(join(f.root, 'CONTRIBUTING.md'), '# Contributing\n\nUse a shallow clone.\n');
+    f.git('add', '.'); f.git('commit', '-qm', 'Run documentation change');
+    if (selection.endsWith('named')) f.run.done.scope.summary = `Story: ${ownPath}`;
+    if (selection.endsWith('approved')) {
+      // Synthetic saved approval input, never a real approval command.
+      f.run.storyApproval = { fingerprint: { stories: [{ path: ownPath, criteria: ['AC1'] }] } };
+    }
+    f.save();
+    assert.ok(f.git('diff', '--name-only', f.run.baseSha).includes(inheritedPath), 'Reproduce the stale-base Story inventory.');
+    const result = f.invoke('Review: no must-fix');
+    assert.equal(result.exitCode, 0, result.message);
+    const body = f.data().prs[0].body, visible = body.split(DETAILS_OPEN)[0];
+    const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json')));
+    const facts = saved.pr.find(pr => pr.number === 23).readable.facts;
+    assert.equal(facts.stories.length, selection === 'docs' ? 0 : 1, 'Only this run owns the selected Story.');
+    assert.doesNotMatch(visible, /INHERITED3085/);
+    if (selection === 'docs') {
+      assert.deepEqual(facts.diff.files.map(file => file.path), ['CONTRIBUTING.md']);
+      assert.doesNotMatch(visible, /^## User story$/m);
+      assert.match(detailsOf(body).details, /User story:.*no Story applies/i);
+    } else {
+      assert.match(visible, /^## User story$/m);
+      assert.match(visible, /OWN3085/);
+      assert.equal(facts.stories.filter(story => story.includes('OWN3085')).length, 1);
+      if (stacked) assert.ok(!facts.diff.files.some(file => file.path === ownPath), 'PR 2 keeps its own Story from PR 1.');
+    }
+    // Refresh from saved facts must preserve the same scoped selection.
+    assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+    assert.doesNotMatch(f.data().prs[0].body.split(DETAILS_OPEN)[0], /INHERITED3085/);
+  });
+}
+
+for (const history of ['legacy-branch', 'legacy-head', 'published-merge', 'published-squash', 'legacy-branch-fast-forward', 'legacy-head-fast-forward']) {
+  test(`3085-MERGED-STORY: ${history} retains PR 1 ownership without a named Story or fingerprint`, t => {
+    const published = history.startsWith('published-');
+    const f = fixture(t, { prompt: published });
+    const ownPath = 'user_stories/own.md', inheritedPath = 'user_stories/inherited.md';
+    f.git('switch', 'main');
+    mkdirSync(join(f.root, 'user_stories'));
+    writeFileSync(join(f.root, inheritedPath), VALUE_STORY.replace('two,', 'INHERITED3085,'));
+    f.git('add', '.'); f.git('commit', '-qm', 'Unrelated upstream Story');
+    const upstream = f.git('rev-parse', 'HEAD');
+    f.git('push', '-q', 'origin', 'main');
+    f.git('switch', 'topic');
+    if (history.endsWith('fast-forward')) f.git('reset', '--hard', f.run.baseSha);
+    f.git('merge', '--no-edit', 'main');
+    if (history.endsWith('fast-forward')) assert.equal(f.git('rev-parse', 'HEAD'), upstream);
+    writeFileSync(join(f.root, ownPath), VALUE_STORY.replace('two,', 'OWN3085,'));
+    if (published) {
+      // The retained Story inventory must survive the readable diff's 40-file cap.
+      mkdirSync(join(f.root, 'aaa'));
+      for (let i = 0; i < 45; i++) writeFileSync(join(f.root, 'aaa', `${i}.txt`), 'spec\n');
+    }
+    f.git('add', '.'); f.git('commit', '-qm', 'Own Story in PR 1');
+    const pr1Head = f.git('rev-parse', 'HEAD');
+    let pr1;
+    if (published) {
+      const result = f.invoke('check done');
+      assert.equal(result.exitCode, 0, result.message);
+      Object.assign(f.run, JSON.parse(readFileSync(join(f.runDir, 'status.json'))));
+      pr1 = f.run.pr[0];
+      assert.equal(pr1.readable.facts.stories.length, 1);
+      assert.ok(!pr1.readable.facts.diff.files.some(file => file.path === ownPath));
+      assert.match(f.data().prs[0].body.split(DETAILS_OPEN)[0], /OWN3085/);
+    } else {
+      f.git('push', '-q', 'origin', 'HEAD:refs/heads/prompt-topic');
+      pr1 = f.run.pr[0];
+      if (history.startsWith('legacy-head')) pr1.publishedHeadSha = pr1Head;
+      // GitHub retains the PR's own diff after main merges it. Capture that diff
+      // with real Git before the merge, then serve its filenames as API pages.
+      const files = f.git('diff', '--name-only', '-z', `${upstream}...${pr1Head}`).split('\0').filter(Boolean);
+      assert.ok(files.includes(ownPath)); assert.ok(!files.includes(inheritedPath));
+      f.configure({ prFiles: { [pr1.number]: files.map(filename => [{ filename }]) } });
+    }
+    if (history === 'published-squash') {
+      f.git('switch', 'main'); f.git('merge', '--squash', 'topic');
+      f.git('commit', '-qm', 'Squash PR 1');
+    } else {
+      f.git('switch', 'main'); f.git('merge', '--no-ff', '--no-edit', 'topic');
+    }
+    const merged = f.git('rev-parse', 'HEAD');
+    assert.notEqual(merged, upstream);
+    f.git('push', '-q', 'origin', 'main');
+    // PR 2 starts from merged main, as codeBranch does. The old PR branch can be gone.
+    f.git('switch', '-qc', 'topic-code');
+    if (!history.startsWith('legacy-branch')) {
+      f.git('push', '-q', 'origin', '--delete', pr1.branch);
+      f.git('update-ref', '-d', `refs/remotes/origin/${pr1.branch}`);
+    }
+    if (published) f.configure({ prs: f.data().prs.map(pr => ({ ...pr, state: 'MERGED', mergeCommit: { oid: merged } })) });
+    f.run.branch = 'topic-code'; f.run.prBase = 'main';
+    f.run.area = 1; f.run.state = 'running'; delete f.run.gate;
+    writeFileSync(join(f.root, 'CONTRIBUTING.md'), '# Contribution change\n');
+    f.git('add', '.'); f.git('commit', '-qm', 'PR 2 change');
+    assert.equal(f.run.storyApproval, undefined);
+    f.save();
+    const result = f.invoke('Review: no must-fix', 'stepDone', 'formal');
+    assert.equal(result.exitCode, 0, result.message);
+    const codePr = f.data().prs.find(pr => pr.headRefName === 'topic-code');
+    const visible = codePr.body.split(DETAILS_OPEN)[0];
+    assert.match(visible, /OWN3085/, 'The code PR must retain the Story that its own PR 1 changed.');
+    assert.doesNotMatch(visible, /INHERITED3085/);
+    const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json')));
+    const facts = saved.pr.find(pr => pr.number === codePr.number).readable.facts;
+    assert.equal(facts.stories.length, 1);
+    assert.deepEqual(facts.diff.files.map(file => file.path), ['CONTRIBUTING.md']);
+    assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+    const refreshed = f.data().prs.find(pr => pr.number === codePr.number).body.split(DETAILS_OPEN)[0];
+    assert.match(refreshed, /OWN3085/); assert.doesNotMatch(refreshed, /INHERITED3085/);
+  });
+}
+
 // `story` is the Story path (null: the run has no Story file); `before` commits it before the run's base, so the run does not change it.
 function formalPublication(t, { rules, formal = null, story = 'user_stories/value.md', before = false, prepare = () => {}, summary = 'Review: no must-fix' }) {
   const f = fixture(t, { opted: true });
