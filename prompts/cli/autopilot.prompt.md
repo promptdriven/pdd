@@ -14,6 +14,8 @@ For any settings write, acquire the existing admission boundary only after all h
 
 Future workflow skills own run actions: in auto they record the checker’s PASS as approval words using `--said`, marked as decided by the checker; in off and observe the person approves as today. When GitHub supplies neither owner nor writers, only explicitly trusted names qualify for full auto; no other author's issue gets full auto. This does not change runtime approval enforcement or bypass strict approvals. See the [approval policy](approval-policy.prompt.md) for its independent policy.
 
+Autopilot config optionally accepts `parking: {hours,maxParked}`. Positive finite hours defaults to 48; positive safe-integer maxParked defaults to twice chosen run capacity. Expose recognized valid fields as optional parking in the native settings result; omit invalid fields so the defaults apply; preserve it on other setting edits.
+
 ## Dependencies
 
 - [GitHub calls](github-calls.prompt.md#budget): required generation and verification context for reading `autopilot.github` with `githubBudgetSettings`.
@@ -25,7 +27,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
 
 ```json
 {
-  "status": "approved",
+  "status": "draft",
   "entries": [
     {
       "operation": "runAutopilot",
@@ -95,6 +97,21 @@ Actions outside the stated set, invalid mode operands and missing or blank names
           },
           "exitCode": {
             "type": "integer"
+          },
+          "parking": {
+            "type": "object",
+            "properties": {
+              "hours": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxParked": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -308,7 +325,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256": "7a7f741dfd92652f680481b77c3ca2949eaa036e08fad2cc8c03b880d5fc3391"
+  "prose_sha256":"46bd1b91c0ddc879115f8deb6e7525817a7756efbff2196490c51fb521f64e7f"
 }
 ```
 </details>

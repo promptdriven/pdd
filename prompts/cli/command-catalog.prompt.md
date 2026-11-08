@@ -266,7 +266,9 @@ RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then `## Dependencies`, then one Runtime interface block.
+1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then `The workflow park options also include text `--blocker` and `--until`. Show `pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` for a named external blocker; clearing values belong to the runner contract.
+
+## Dependencies`, then one Runtime interface block.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
 4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.

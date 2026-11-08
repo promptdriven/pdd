@@ -1216,7 +1216,17 @@ Telemetry repository discovery uses the same injected native process port as the
 
 Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.
 
+## Park blocked runs and backfill (#3091)
+
+Use [parking policy](autopilot-parking.prompt.md) as required generation/runtime/testing context. Before stopped-chat recovery, including a tick deferred by the GitHub budget, reconcile this coordinator's blocked workers through that policy. Before offering fresh work, gather readiness across blocker kinds and perform one oldest-first wake pass. Never let a younger local blocker take capacity before an older ready interpreter/environment wait. On GitHub budget deferrals, preserve local wakes without GitHub reads. Before any such local wake can take capacity, gather interpreter/environment readiness too and admit those ready waits together in age order. With no ready local wake, retain the ordinary full-tick interpreter observation timing. Remove native-consumed runtime-ready rules from the coordinator packet. Preserve the interpreter retry and saved-batch safety rules. A single no-verdict does not put intake in test mode: retain observed wait identities across ticks; three consecutive new no-verdict observations open test mode (a known same-step repeat after its used issue retry retains the existing stuck route and is not a new shared-service observation), a saved verdict resets it at its completion time, excluding older or equal no-verdict waits even when both are first observed in one tick; retain that cutoff across ticks. A verdict discovered on a later tick must retain all already observed failures after its completion time; recompute their count from retained event times rather than discard their count while keeping deduplication. Exactly one interpreter run is admitted as a test until its verdict. A health outage still prevents unsafe sends; test mode gates interpreter work, not ordinary code/native work.
+
+Packet `parking` is `{working,parked,blockers,wakePending,limit}`; blockers maps display names to counts, and wakePending lists ready run numbers awaiting capacity in oldest-first order. Include the same local counts and interpreter test-mode streak in status without GitHub calls. Defer fresh issues while a ready wake remains pending. Issues in a saved #3053 group with a parked member go to its existing run via the request journal; do not offer a second run. Do not restrict different issues merely because their files overlap. Existing check slots, pane budget, area PR, daily cost, account, trust and ownership gates still apply. A parked run's claim receives heartbeats until release; the four-hour stuck rule must not expire it. Save parking/interpreter observations on all tick exit paths. Renew the existing interpreter queue test-mode lease through configureInterpreterTestMode; a terminal verdict removes that restriction immediately. No AI call in this tick work.
+
 ## Dependencies
+
+- [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
+
+- [Parking policy](autopilot-parking.prompt.md): required generation/runtime/testing context for resource-free parking, blocker shapes, wake precedence and age/count safety limits.
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
 

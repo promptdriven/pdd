@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: 41ad074fdf9d7f706de205e5e3550230b9ce2e45f1d798ada40d8a2c3e92ccaf).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 5b4aa5ded623174e7bf702e36bf25dbe986d0dc3e87a354cde37e32867d40206).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -101,8 +101,8 @@ function nativeGithub(root, exec) {
 }
 
 export async function runAutopilot(input, ports = {}) {
-  let mode = 'off', trust = [], warnings = [], github;
-  const result = (exitCode, message, trusted = false) => ({ mode, trust, ...(github ? { github } : {}), trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
+  let mode = 'off', trust = [], warnings = [], github, parking;
+  const result = (exitCode, message, trusted = false) => ({ mode, trust, ...(github ? { github } : {}), ...(parking ? {parking} : {}), trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
   const { action, names, author } = input;
   if (!['setup', 'mode', 'trust', 'untrust', 'isTrusted'].includes(action)
     || action === 'mode' && !modes.includes(input.mode)
@@ -127,6 +127,10 @@ export async function runAutopilot(input, ports = {}) {
     const saved = raw === null ? undefined : JSON.parse(raw), setting = object(saved) ? saved : {};
     mode = modes.includes(setting.mode) ? setting.mode : 'off';
     trust = unique(Array.isArray(setting.trust) ? setting.trust : []);
+    if (object(setting.parking)) parking = {
+      ...(Number.isFinite(setting.parking.hours) && setting.parking.hours > 0 ? {hours: setting.parking.hours} : {}),
+      ...(Number.isSafeInteger(setting.parking.maxParked) && setting.parking.maxParked > 0 ? {maxParked: setting.parking.maxParked} : {}),
+    };
     if (Object.hasOwn(setting, 'github')) github = githubBudgetSettings(setting.github);
     const invalid = raw !== null && (!object(saved) || Object.hasOwn(setting, 'mode') && !modes.includes(setting.mode));
     if (invalid) warnings.push(`Saved Autopilot mode ${JSON.stringify(object(saved) ? setting.mode : saved)} is invalid; ${action === 'mode' ? 'treating it as off.' : 'using off and leaving it unchanged.'}`);

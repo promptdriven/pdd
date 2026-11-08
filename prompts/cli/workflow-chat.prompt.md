@@ -369,6 +369,10 @@ The stable saved name and pane let tools inspect and interrupt the chat with
 `herdr --session pdd agent get NAME` and
 `herdr --session pdd agent send-keys NAME ctrl-c`.
 
+## Parking cleanup
+
+The existing close path accepts `reason: park`. Even with force it requires a positively saved native session for every agent chat before closing. Preserve sessions and use existing identity checks and checkpoints; closing the owned terminal stops its foreground chat process. Inject `processes.closeChat({runId,root,tabId,paneId,sessionId})` for the stop-and-close effect; its native default is the existing Herdr tab close, which owns terminal process shutdown. Keep the saved-session checkpoint before this effect and verify absence afterward. Foreground inspection stays on the injected Herdr process-info port. Confirm pane absence, including the run shell, before the runner frees capacity. A different or unknown process stays occupied. A background open that resumes a deliberately parked chat removes its closed mark after confirmed dispatch, so the canonical continuation path can deliver once. Preserve all other cleanup/reopen behavior.
+
 ## Dependencies
 
 - [Shared suite queue](test-suite-queue.prompt.md): required selector context for launch and resume environments.
@@ -386,7 +390,7 @@ The stable saved name and pane let tools inspect and interrupt the chat with
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"6aa3fb70939ab879387d3f92f3e20c97f476067a773f5f34d56cace8717e61ed","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"871246f1556670db5ee6342965278d0c832ecaa3657c2dba2bab499b0f52d41c","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
