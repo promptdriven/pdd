@@ -1339,11 +1339,19 @@ async function diffStat(run, p, base, head) {
   } catch { return null; }
 }
 // Coverage is a scope fact, never an agent's claim. Classify before savedReadable bounds the file list.
-function coverageOnlyDiff(diff) {
+async function coverageOnlyDiff(run, p, diff, head) {
   if (!diff?.files?.length || (diff.count !== undefined && diff.count !== diff.files.length)) return false;
-  const entry = path => /\.(?:test|spec)\.(?:[cm]?js|jsx|tsx?)$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go)$/.test(path);
-  const testPath = path => /^(?:tests?|__tests__)\//.test(path) || entry(path);
-  return diff.files.every(file => testPath(file.path)) && diff.files.some(file => entry(file.path) && file.added > 0);
+  const entries = new Set(diff.files.filter(file => /\.(?:test|spec)\.(?:[cm]?js|jsx|tsx?)$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go)$/.test(file.path)).map(file => file.path));
+  for (const file of diff.files) {
+    if (file.added <= 0 || !/(?:^|\/)tests?\/.*\.json$/.test(file.path)) continue;
+    try {
+      // Use the same head as the diff, not an uncommitted scenario or an arbitrary JSON fixture.
+      const doc = JSON.parse(await rawGit(p, run.root, 'show', `${head}:${file.path}`));
+      if (doc?.schema_version === 'prompt-runtime.program-scenario.v1' && Array.isArray(doc.steps) && doc.steps.length > 0) entries.add(file.path);
+    } catch { /* Missing or malformed scenario bytes cannot establish executable coverage. */ }
+  }
+  const testPath = path => /^(?:tests?|__tests__)\//.test(path) || entries.has(path);
+  return diff.files.every(file => testPath(file.path)) && diff.files.some(file => entries.has(file.path) && file.added > 0);
 }
 // Autopilot's mode for an automatic run (auto, observe or off), read like its handoff; a manual run has none.
 function automaticFacts(run, p) {
@@ -1470,7 +1478,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   const automatic = automaticFacts(run, p), mode = !automatic || automatic.mode === 'off' ? 'manual' : automatic.mode;
   const approvals = evidence.approvals ?? [];
   const proofDiff = (base ?? run.prBase ?? run.baseBranch) === run.baseBranch ? diff : await diffStat(run, p, run.baseBranch, head);
-  const proofKind = run.workflow === 'small-change' && label === 'the PR' && evidence.proofStatus === 'old-passes' && coverageOnlyDiff(proofDiff) ? 'coverage' : 'defect';
+  const proofKind = run.workflow === 'small-change' && label === 'the PR' && evidence.proofStatus === 'old-passes' && await coverageOnlyDiff(run, p, proofDiff, head) ? 'coverage' : 'defect';
   const formal = layout === 'code' && area.steps.includes('formal') && !replay ? readFormalEvidence(run) : null;
   const paths = (diff?.files ?? []).map(file => file.path);
   const prompts = paths.filter(path => path.endsWith('.prompt.md')), storyFiles = paths.filter(path => /(?:^|\/)user_stories\/[^/]+\.md$/.test(path));

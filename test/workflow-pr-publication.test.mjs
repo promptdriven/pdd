@@ -1132,6 +1132,83 @@ test('3088 publication records tests-only old-passes as coverage with no defect-
   assert.match(pr.details, /Proved \(solver\)/, 'The original agent report stays attributed in Details.');
 });
 
+test('3088 repair 1: scenario-only publication recognizes executable coverage and keeps scope guards', t => {
+  const scenario = { schema_version: 'prompt-runtime.program-scenario.v1', steps: [{ step_id: 'value',
+    entry_path: 'prompts/value.prompt.md', operation: 'value', checks: [
+      { criterion_id: 'AC1', target: 'result', path: '', op: 'equals', value: 2 },
+    ] }] };
+  for (const options of [
+    { path: 'test/runtime/coverage.json', coverage: true },
+    { path: 'tests/runtime/coverage.json', coverage: true },
+    { path: 'test/runtime/fixture.json', document: { steps: scenario.steps }, coverage: false },
+    { path: 'test/runtime/empty.json', document: { ...scenario, steps: [] }, coverage: false },
+    { path: 'test/runtime/coverage.json', scenarioRead: 'malformed', coverage: false },
+    { path: 'test/runtime/coverage.json', scenarioRead: 'unavailable', coverage: false },
+    { path: 'test/runtime/coverage.json', production: true, coverage: false },
+    { path: 'test/runtime/coverage.json', unavailableDiff: true, coverage: false },
+  ]) {
+    const f = fixture(t);
+    f.run.areas = [{ name: 'code', steps: ['scope', 'verify', 'formal'], optional: [], gate: 'pr' }];
+    f.run.area = 0; f.run.pr = [];
+    writeFileSync(join(f.root, 'value'), 'base');
+    mkdirSync(join(f.root, 'src'));
+    mkdirSync(join(f.root, 'test'), { recursive: true });
+    mkdirSync(dirname(join(f.root, options.path)), { recursive: true });
+    writeFileSync(join(f.root, 'src/value.mjs'), 'export function value() { return 2; }\n');
+    // This runner and production source already exist on the base. Only the scenario is overlaid.
+    const relativeScenario = options.path.startsWith('tests/') ? `../${options.path}` : `./${options.path.slice(5)}`;
+    writeFileSync(join(f.root, 'test/value.vectors.test.mjs'), `import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {value} from '../src/value.mjs';
+const scenario = JSON.parse(readFileSync(new URL(${JSON.stringify(relativeScenario)}, import.meta.url)));
+test('scenario coverage', () => {
+  for (const step of scenario.steps) for (const check of step.checks)
+    assert.equal(value(), check.value, 'ASSERT_3088_SCENARIO');
+});
+`);
+    f.git('add', '.'); f.git('commit', '-qm', 'existing production and vector runner');
+    f.git('push', '-q', 'origin', 'HEAD:refs/heads/main');
+    f.run.baseSha = f.git('rev-parse', 'HEAD');
+    writeFileSync(join(f.root, options.path), JSON.stringify(options.document ?? scenario));
+    if (options.production) writeFileSync(join(f.root, 'src/value.mjs'), 'export function value() { return 1 + 1; }\n');
+    f.git('add', '.'); f.git('commit', '-qm', 'scenario coverage'); f.save();
+    const script = `import {proveRun} from ${JSON.stringify(join(packageRoot, 'src/workflow-prove.mjs'))};
+const result = await proveRun({ref:'17', cwd:${JSON.stringify(f.root)}, test:'node --test test/value.vectors.test.mjs', expect:'ASSERT_3088_SCENARIO'});
+process.stdout.write(JSON.stringify(result));`;
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: f.root, encoding: 'utf8',
+      env: { ...process.env, PATH: `${join(f.base, 'bin')}:${process.env.PATH}`, GIT_ALLOW_PROTOCOL: 'file' } });
+    const proof = JSON.parse(readFileSync(join(f.runDir, 'old-code-proof.json')));
+    assert.equal(proof.outcome, 'old-passes');
+    assert.deepEqual(proof.paths, [options.path]);
+    for (const snapshot of [proof.base, proof.head]) {
+      assert.equal(snapshot.exitCode, 0);
+      assert.ok(snapshot.stdoutTail.includes('# pass 1'));
+      assert.ok(snapshot.stdoutTail.includes('# fail 0'));
+      assert.ok(snapshot.stdoutTail.includes('# skipped 0'));
+    }
+    if (options.unavailableDiff) {
+      const wrapper = join(f.base, 'bin/git');
+      writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n', '#!/usr/bin/env node\nif (process.argv.includes("--numstat")) process.exit(1);\n'));
+    }
+    if (options.scenarioRead) {
+      const wrapper = join(f.base, 'bin/git');
+      const failure = options.scenarioRead === 'malformed' ? 'process.stdout.write("{"); process.exit(0);' : 'process.exit(1);';
+      writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n',
+        `#!/usr/bin/env node\nif (process.argv[2] === 'show' && process.argv[3]?.endsWith(${JSON.stringify(`:${options.path}`)})) { ${failure} }\n`));
+    }
+    const out = f.invoke('Result: scenario coverage; both snapshots pass.');
+    assert.equal(out.exitCode, 0, out.message);
+    const pr = f.data().prs[0], saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'))).pr[0];
+    assert.equal(saved.readable.facts.records.proof.kind, options.coverage ? 'coverage' : 'defect', JSON.stringify(options));
+    assert.equal(saved.readable.facts.records.proof.status, 'old-passes');
+    if (options.coverage) {
+      assert.doesNotMatch(pr.body.split('\n')[0], /^⛔/);
+      assert.match(pr.body, /\| Coverage validation[^\n]+✓ pass[^\n]+✓ pass/);
+    } else assert.match(pr.body.split('\n')[0], /^⛔/);
+  }
+});
+
 for (const options of [{ production: true }, { fixtureOnly: true }]) test(`3088 non-coverage scope stays blocked ${JSON.stringify(options)}`, t => {
   const pr = evidence3088(t, options);
   assert.equal(pr.facts.records.proof.kind, 'defect');
