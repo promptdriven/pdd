@@ -25,7 +25,7 @@ PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests
 In `feature`, the understand step counts the separate behaviors in the issue. One behavior gets one Story and no plan. More behaviors get a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order.
 
 - Each Story in the plan has its own test file, `tests/<story>.json`.
-- At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply in your own words here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
+- At the story gate, the chat shows pdd's Story card as pdd prints it: the issue and what you asked, the verdict line, each Story with its acceptance criteria, what must not change and its rules to check, the test cases (case, input, expected), the prompts that change with their changed lines, the full file paths, the next step and "Approve, or tell me what to change." `pdd workflow card N` prints the same card at any time. In strict mode (`strict_approvals: true`), pdd prints no card: the chat gives the paths of the Story files and the plan, and ends with "Reply in your own words here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
 - The check step prints one `Prompt tests (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
 - `pdd workflow status` shows the count, for example `Stories: 4 of 5 pass (✗ refunds)`.
 
@@ -40,7 +40,7 @@ What each step does:
 | visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. For a page or a screen, it also writes the app map and its SVG mockups from the chosen design, so the Simulator shows the real screen (the Screen tab). The chat asks you first, and recommends this step for a page or a screen. |
 | prompt-story | Reads the full Prompting guide and `RUNBOOK.md` sections 2 to 4, then the sections that fit: a CLI, a prompt that calls another, check paths, money and dates, a page or screen, AI calls and test patterns. A page gets a `render` operation that returns its HTML and an app map, so you can try the page on the Screen, and its tests check what the page shows. Writes or changes the smallest prompt that owns the behavior, each Story in the person's words, and one `tests/<story>.json` for each Story. Takes the expected results from the requirement, not from the code. |
 | check | Runs `pdd test` once for all Stories as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. After a fix, it checks again only the Stories that failed, by name. It never sends the same check on the same files again: it reads a result again with `pdd test --read`. In `bug`, it checks every Story whose prompt changed. Puts one `Prompt tests` line and one report link for each Story in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
-| try? | Runs `pdd simulate` and makes a Simulator link for each Story that you want to try, as `RUNBOOK.md` says. Else it shows the plan or the bug in a safe local preview or demo. |
+| try? | Runs `pdd simulate` and makes a Simulator link for each Story that you want to try, as `RUNBOOK.md` says. Else it shows the plan or the bug in a safe local preview or demo. In a normal run, pdd skips this step and asks nothing: to try it, ask at the Story card. In strict mode, the chat asks you. |
 | build | Builds only what you approved. Tests through the public interface. |
 | verify | Runs the replay test of `RUNBOOK.md` section 17 on the code and on a planted mistake, then the tests and the repo's required checks. Writes the tables first, and the exact commands and their real output last, in a closed `<details>` block. |
 | formal | A fresh subagent that did not write the code runs the formal check of `RUNBOOK.md` section 17 for each Story with `## Rules to check`. Adds one result to `verify.md`, after the tables. |
@@ -66,15 +66,16 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 pdd workflow run feature 42        returns at once
   |
 chat 1  story: understand, visual?, prompt-story
-  |     gate: approve
-chat 2  prompt PR: check, try?
-  |     gate: you try it and approve
-  |     pdd opens PR 1 (prompt, Story, tests)
-  |     "Do you want the code PR now, or stop here and merge PR 1 first?"
-chat 3  code (only when you ask): build, verify, formal, review
+  |     gate: the Story card; you approve it and choose: stop after PR 1, or the code PR too
+chat 2  prompt PR: check (pdd skips try)
+  |     a full check pass: pdd opens PR 1 (prompt, Story, tests) and asks nothing
+  |     a changed Story or expected value: the Story card again, for you
+chat 3  code (only when you chose it): build, verify, formal, review
   |     pdd opens PR 2 (code), stacked on PR 1
 you     review and merge on GitHub
 ```
+
+Strict mode (`strict_approvals: true`) and Autopilot runs keep their own gates. In strict mode, chat 2 asks you to try it and approve before PR 1, and the chat asks the code question after PR 1.
 
 1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. An issue has one active run. A second `pdd workflow run` on the same issue still starts: it marks the old active run replaced and names it (id, worktree, last activity) in one warning. The old worktree and branch stay. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
@@ -115,9 +116,11 @@ The view uses saved local records and local Git/file reads. It works with Herdr 
 
 ### Simulate before PR 1
 
-The check comes first, then the simulation. At the story gate, the chat can offer a simulation before the check: `pdd simulate <story>`, or `pdd simulate <story> --new` when visual made an app map.
+The check comes first, then the simulation. At the story gate, the chat can offer a simulation before the check: `pdd simulate <story>`, or `pdd simulate <story> --new` when visual made an app map. The Story card says that you can ask for it.
 
-After the check and try steps, the chat shows one `Prompt tests` line for each Story (✓, ✗ or no verdict) with its report link, and the Simulator links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
+In a normal run, pdd reads its own saved check results after the check. When every criterion of every Story scenario in the default project check scope passes, and each saved result belongs to its batch and matches the current files, pdd opens PR 1 with no question and records the route `automatic-check-pass`. A failed check goes back to the agent: it repairs and checks again. A prompt-only repair that passes the check keeps your Story approval. A repair that changes a Story, the plan or an expected value shows the Story card again, with the change, and waits for you. These checks also apply when pdd updates an open PR 1. A Story or expected-value change must be approved before that update or code entry. A selective recheck can keep earlier results whose source is still current. An AI-service failure is no verdict: it is not a failed check, and the chat does not ask you to approve.
+
+In strict mode, after the check and try steps, the chat shows one `Prompt tests` line for each Story (✓, ✗ or no verdict) with its report link, and the Simulator links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
 The PR 1 body starts with a part for people: a status line, the user story, a summary (Problem, This PR, Verdict), the expected cases, what changed, a Checks table from pdd's own records (Prompt tests with one report link, lint, CI, checker), the Approval line and the Next line. In an Autopilot `auto` run the Approval line is "Automatic approval: Autopilot `auto` mode, started by <login> on <date>. No person was asked." and the Next line links PR 2, which starts by itself; in a manual run they show your approval words and "The code PR starts when you ask for it." The agent gives the summary and the cases as labeled lines in its `done` summaries ([RUNBOOK §15](../RUNBOOK.md#15-pr-text)). Then one closed "Details for tools and audits" section holds:
 
@@ -134,7 +137,7 @@ The PR 1 body starts with a part for people: a status line, the user story, a su
 
 `pdd workflow done check`, `try` and `verify` attach pdd's own latest results to the step: the newest `pdd test` and `pdd lint` batch for the run worktree, and the run's `pdd workflow prove` result. pdd reads them from its saved files. It does not run anything. The agent's `--summary` is kept apart, as an agent note. When pdd has no result of its own, `done` prints a warning and records the step anyway.
 
-When no person is at the Try step, the agent runs `pdd workflow done try --skipped "REASON"`. pdd records the skip and the reason. No agent writes run files by hand.
+In a normal run, pdd records the try step as skipped itself. When no person is at the Try step in strict mode, the agent runs `pdd workflow done try --skipped "REASON"`. pdd records the skip and the reason. No agent writes run files by hand.
 
 `pdd workflow prove` results count as pdd's own proof: the code PR shows them in its `Old-code proof:` line. Each phase has a 10-minute limit by default. Use `--timeout MIN` (1 to 120) to change it.
 
@@ -142,7 +145,9 @@ PR 1 has no `verify.md`, no Simulator links and no local paths.
 
 ### The code question
 
-Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
+In a normal run, you choose at the Story card: stop after PR 1 (the default), or go on to the code PR. The chat records the choice with the approval (`--through code`), or you give it at the start: `pdd workflow run NAME ISSUE --through code`. After PR 1 opens, pdd follows the choice and asks nothing.
+
+In strict mode, the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
 
 | You choose | What happens |
 |---|---|
@@ -156,9 +161,10 @@ PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instea
 
 ### Who can approve
 
-See [Record a chat approval](cli.md#record-a-chat-approval) for the safe agent commands, prompt snapshots and terminal or strict-mode approval. One workflow approval covers the ready gate and its draft prompts. The later code-or-stop decision is separate.
+See [Record a chat approval](cli.md#record-a-chat-approval) for the safe agent commands, prompt snapshots and terminal or strict-mode approval. One workflow approval covers the ready gate and its draft prompts. The later code-or-stop decision is separate, except that in a normal run the Story approval can carry it.
 
-- In a terminal: `pdd workflow approve N` asks y/N. The question shows the repo, the issue and its title. At the PR 1 gate, it asks whether to make the code PR now.
+- In a terminal: `pdd workflow approve N` asks y/N. The question shows the repo, the issue and its title. At the PR 1 gate, in strict mode or at a gate without a Story card, it asks whether to make the code PR now.
+- Several runs: `pdd workflow status` names the runs that wait for a Story approval. The chat shows the cards one after another, and you answer each card.
 
 ### The run folder
 

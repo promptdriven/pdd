@@ -39,7 +39,8 @@ export function approvalRecords(run) {
 }
 function approvalLines(records) {
   return records.flatMap(evidence => {
-    const label = evidence.route === 'said' ? 'Approved in chat:' : evidence.route === 'chat' ? 'Approved in area chat:' : 'Approved in terminal:';
+    const label = evidence.route === 'said' ? 'Approved in chat:' : evidence.route === 'chat' ? 'Approved in area chat:'
+      : evidence.route === 'automatic-check-pass' ? 'Opened after a full check pass (no person asked):' : evidence.route === 'card-choice' ? 'Code PR chosen at the Story card:' : 'Approved in terminal:';
     const values = [evidence.words !== undefined && evidence.words !== null ? approvalValue(evidence.words) : null,
       evidence.actor ? `actor ${approvalValue(evidence.actor.kind)} ${approvalValue(evidence.actor.id)}` : null,
       evidence.at !== undefined ? `at ${approvalValue(new Date(evidence.at).toISOString())}` : null,
