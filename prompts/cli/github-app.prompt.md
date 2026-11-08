@@ -74,6 +74,14 @@ only for the child, refuse HTTP redirects and disable credential prompts.
 Strip the wrapper directory from child PATH for both gh and Git, including local
 Git calls, to avoid recursion. Forward input and other process options.
 
+In App mode, disable inherited Git tracing and curl verbosity before any Git
+configuration probe or authenticated child runs. Override trace2 targets from
+Git config as well as environment settings, including config and environment
+dumps, and force HTTP trace redaction. Apply this to direct Git, both worker
+wrappers and Git started by gh. Git must not write the token or its Basic
+encoding to trace files; output redaction cannot protect files Git writes itself.
+Keep the parent environment, stored Git config and personal-mode tracing intact.
+
 Redact the token and its Basic encoding from stdout, stderr and thrown errors;
 discard raw exception details. Reject gh auth token and credential-changing auth
 commands. Annotate outcomes with non-secret githubIdentity. Never retry a write

@@ -179,12 +179,16 @@ export function githubUsage(entries, now, identity = null) {
     // A 304 reply does not count against the REST limit.
     if (entry.api !== 'graphql' && entry.status !== 304) counted++;
   }
+  return { calls: recent.length, rest, graphql, counted, conditional, notModified, byPurpose, rate: githubRates(entries, now) };
+}
+
+function githubRates(entries, now) {
   const rate = {};
   for (const entry of entries) {
     if (typeof entry.resource !== 'string' || !finite(entry.remaining) || !finite(entry.resetAt) || entry.resetAt <= now || entry.at > now) continue;
     if (!rate[entry.resource] || entry.at >= rate[entry.resource].at) rate[entry.resource] = { remaining: entry.remaining, ...(finite(entry.limit) ? { limit: entry.limit } : {}), resetAt: entry.resetAt, at: entry.at };
   }
-  return { calls: recent.length, rest, graphql, counted, conditional, notModified, byPurpose, rate };
+  return rate;
 }
 
 // The share and the floor from the repository's Autopilot settings, else the defaults.
@@ -264,7 +268,8 @@ export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.no
 // ledgers of this machine and follows the rate-limit headers of each later reply.
 export function githubFloorGuard({ floor = GITHUB_FLOOR, entries = [], now = Date.now } = {}) {
   const rate = {}; let stopped = false;
-  for (const [resource, value] of Object.entries(githubUsage(entries, now()).rate)) rate[resource] = { remaining: value.remaining, resetAt: value.resetAt };
+  // Callers have already selected the active identity's machine entries.
+  for (const [resource, value] of Object.entries(githubRates(entries, now()))) rate[resource] = { remaining: value.remaining, resetAt: value.resetAt };
   return {
     floor,
     // One reply of `gh api --include`, as githubReply reads it; a reply without rate-limit headers changes nothing.

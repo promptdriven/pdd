@@ -195,7 +195,7 @@ write failure gives an empty cache or a lost save; it only costs counted reads.
 ### Floor guard
 
 `githubFloorGuard({floor, entries, now})` starts from the newest valid rate of
-each resource in `entries` (as `githubUsage` gives it) and follows each later
+each resource in `entries` and follows each later
 reply: `observe(reply)` takes the `rate` of a `githubReply` result, and a reply
 without rate headers changes nothing. `blocked(resource)` (default `core`) is
 true while the newest remaining of that resource is less than `floor` and its
@@ -207,6 +207,13 @@ checks, heartbeats, trust and permission reads, the reads that a write depends
 on and readbacks after writes) and writes never ask it. A rate-limit reply (403
 or 429 with no calls left) is a reply with remaining 0, so the reads after it
 stop at once instead of failing one by one.
+
+The caller selects `entries` for the active identity before constructing the
+guard. Consume that selection without filtering it back to personal identity.
+Use the same rate validity rules as `githubUsage`, including reset expiry and
+future observation rejection. This preserves a known installation reserve
+breach before the first non-safety read. Personal and other installation limits
+must not override the caller's selected installation.
 
 <a id="full-last-page"></a>
 ### A full last page

@@ -15,6 +15,12 @@ const fail = reason => { throw Object.assign(Error(`GitHub App: ${reason}`), { c
 const digest = value => createHash('sha256').update(value).digest('hex');
 const required = { issues: 'write', pull_requests: 'write', contents: 'write', metadata: 'read', checks: 'read', statuses: 'read', actions: 'read' };
 const permissions = value => Object.entries(required).every(([key, level]) => value?.[key] === level || level === 'read' && value?.[key] === 'write');
+// Captured-output redaction cannot protect trace files written by Git itself.
+// Trace2 can also be enabled in Git config; explicit zero targets override it.
+const gitPrivateEnvironment = env => {
+  const child = Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('GIT_TRACE') && name !== 'GIT_CURL_VERBOSE'));
+  return { ...child, GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0', GIT_TRACE_REDACT: '1' };
+};
 const inside = (root, file) => { const path = relative(root, file); return path === '' || !path.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && path !== '..' && !isAbsolute(path); };
 
 export function githubAppSettings({ cwd = process.cwd(), env = process.env, fs = nativeFs } = {}) {
@@ -64,7 +70,7 @@ export function createGithubApp(settings, { fs = nativeFs, fetch = globalThis.fe
     try { pem = fs.readFileSync(settings.privateKeyFile, 'utf8'); key = createPrivateKey(pem); if (key.asymmetricKeyType !== 'rsa') throw Error(); }
     catch { fail('the private key is not a readable RSA private key.'); }
     let repository;
-    try { repository = githubOriginRepository((await exec('git', ['remote', 'get-url', 'origin'], { cwd: settings.root, encoding: 'utf8' })).stdout)?.toLowerCase(); }
+    try { repository = githubOriginRepository((await exec('git', ['remote', 'get-url', 'origin'], { cwd: settings.root, env: gitPrivateEnvironment(env), encoding: 'utf8' })).stdout)?.toLowerCase(); }
     catch { /* The reason below does not expose an origin URL or command output. */ }
     if (!repository) fail('origin must name a github.com repository.');
     let folder;
@@ -139,7 +145,8 @@ export function githubAppRunner(exec, ports = {}) {
     const { token, identity } = await instances.get(key).credentials();
     const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
     const redact = value => typeof value === 'string' ? [token, basic].reduce((text, secret) => text.split(secret).join('[redacted]'), value) : value;
-    const childEnv = { ...plainEnv, GH_TOKEN: token, GITHUB_TOKEN: token };
+    const privateEnv = gitPrivateEnvironment(plainEnv);
+    const childEnv = { ...privateEnv, GH_TOKEN: token, GITHUB_TOKEN: token };
     let childArgs = args;
     {
       // gh can invoke Git itself (for example, when creating a PR).
@@ -165,7 +172,7 @@ export function githubAppRunner(exec, ports = {}) {
         // explicit git-dir also excludes includes conditional on that checkout,
         // while retaining system/global config and inherited command settings.
         const context = file === 'git' && command === 'clone' ? [`--git-dir=${devNull}`] : [];
-        config = await exec('git', [...gitOptions, ...context, ...cloneConfig.flatMap(value => ['-c', value]), 'config', '--null', '--list'], { cwd: options.cwd, env: plainEnv, encoding: 'utf8' });
+        config = await exec('git', [...gitOptions, ...context, ...cloneConfig.flatMap(value => ['-c', value]), 'config', '--null', '--list'], { cwd: options.cwd, env: privateEnv, encoding: 'utf8' });
         if (config.code && config.code !== 0) throw Error();
       } catch { fail('cannot read Git configuration; check the checkout and Git settings.'); }
       for (const entry of String(config.stdout ?? '').split('\0')) {

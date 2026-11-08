@@ -137,6 +137,13 @@ output and errors redact the active token. Credential-printing and login-changin
 `gh auth` commands are refused in App mode. Removing App settings from a bound
 chat stops its `gh` route rather than silently switching to a person.
 
+App transport disables inherited Git tracing and curl verbosity. It also disables
+trace2 targets set in Git configuration and forces HTTP trace redaction. This
+applies to native commands, worker wrappers and Git started by gh. Git trace files
+must not receive installation credentials. Personal-mode tracing is unchanged.
+The local transport tests inspect trace files and check that only the private
+credential cache contains a synthetic token.
+
 The local ledger marks App calls with the App ID and installation ID. The
 budget and reserve floor select that installation's entries. Personal calls
 and other installations stay separate. Repositories in one installation share
@@ -145,6 +152,11 @@ when the repository already has an Autopilot ledger. Other machines share the
 GitHub installation allowance, but their local call ledgers are separate. The
 local budget is not a global quota broker. GitHub's secondary limits still
 apply. Conditional response caches are separated by authentication identity.
+
+The reserve guard uses the selected installation's saved limit before the first
+non-safety dependency read. Safety reads and writes can still use the reserve.
+The guard stops using an observation when its reset time arrives. To check these
+boundaries with local fakes, run `node --test test/github-app-floor.test.mjs`.
 
 See GitHub's [JWT rules](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app),
 [installation token rules](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)

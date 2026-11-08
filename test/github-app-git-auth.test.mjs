@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer as httpsServer } from 'node:https';
 import { createServer as httpServer } from 'node:http';
@@ -208,4 +208,95 @@ test('clone excludes source-only headers while retaining inherited and clone hea
   assert.ok(w.tokens.some(token => request.headers.authorization === `basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`));
   assert.equal(request.authorizationCount, 1);
   assert.equal(readFileSync(join(w.cwd, '.git', 'config'), 'utf8'), source);
+});
+
+// File tracing bypasses stdout/stderr redaction. These cases use real Git and
+// synthetic tokens only, and never include credential bytes in assertion output.
+for (const route of ['native Git', 'nested gh', 'worker Git', 'worker gh']) {
+  for (const mode of ['curl-default', 'curl-unredacted', 'trace2-config', 'trace2-env', 'trace2-persisted', 'trace2-options', 'trace2-parameters']) {
+    test(`App trace files contain no credential through ${route}: ${mode}`, async t => {
+      const w = await githubAppWorld(t), endpoint = await gitEndpoint(t, w);
+      w.time = Date.now();
+      const trace = join(w.dir, 'git.trace'), perf = join(w.dir, 'perf.trace'), event = join(w.dir, 'event.trace');
+      for (const file of [trace, perf, event]) writeFileSync(file, '');
+      const env = { ...endpoint.env };
+      let gitOptions = [];
+      if (mode.startsWith('curl')) Object.assign(env, { GIT_TRACE_CURL: trace, ...(mode === 'curl-unredacted' ? { GIT_TRACE_REDACT: '0' } : {}) });
+      else if (mode === 'trace2-config') Object.assign(env, { GIT_TRACE2_EVENT: event, GIT_TRACE2_CONFIG_PARAMS: 'http.*.extraheader' });
+      else if (mode === 'trace2-env') Object.assign(env, { GIT_TRACE2: trace, GIT_TRACE2_PERF: perf, GIT_TRACE2_EVENT: event,
+        GIT_TRACE2_ENV_VARS: 'GH_TOKEN,GITHUB_TOKEN,GIT_CONFIG_PARAMETERS,GIT_CONFIG_VALUE_2,PDD_GITHUB_APP_GIT_CONFIG_0' });
+      else {
+        const config = [['trace2.eventTarget', event], ['trace2.normalTarget', trace], ['trace2.perfTarget', perf],
+          ['trace2.configParams', 'http.*.extraheader'], ['trace2.envVars', 'GH_TOKEN,GITHUB_TOKEN,GIT_CONFIG_PARAMETERS']];
+        if (mode === 'trace2-persisted') {
+          // Git reads trace2 targets from global config during early startup.
+          env.GIT_CONFIG_GLOBAL = join(w.dir, 'trace-global.conf');
+          for (const [name, value] of config) execFileSync('git', ['config', '--file', env.GIT_CONFIG_GLOBAL, name, value]);
+        } else {
+          Object.assign(env, { GIT_TRACE2_EVENT: event, GIT_TRACE2_CONFIG_PARAMS: 'http.*.extraheader',
+            GIT_TRACE2_ENV_VARS: 'GH_TOKEN,GITHUB_TOKEN,GIT_CONFIG_PARAMETERS' });
+          if (mode === 'trace2-options') gitOptions = config.flatMap(([name, value]) => ['-c', `${name}=${value}`]);
+          else env.GIT_CONFIG_PARAMETERS = config.map(([name, value]) => `'${name}=${value}'`).join(' ');
+        }
+      }
+      const beforeEnv = { ...env }, configBefore = readFileSync(join(w.cwd, '.git', 'config'), 'utf8');
+      const gitArgs = [...gitOptions, 'ls-remote', url];
+      if (route.startsWith('worker')) {
+        // Seed a live private cache so the shell wrappers need no live endpoint.
+        await nativeGithubCounter(async (file, args, options) => file === 'git' ? execute(file, args, options) : { code: 0, stdout: '', stderr: '' },
+          { env: w.env, stateRoot: w.stateRoot, now: () => w.time, appPorts: w.appPorts })('gh', ['auth', 'status'], { cwd: w.cwd, env: w.env });
+        const bin = join(w.dir, 'trace-bin'), runDir = join(w.dir, 'trace-run'); mkdirSync(bin); mkdirSync(runDir);
+        writeFileSync(join(bin, 'gh'), `#!${process.execPath}
+const { spawnSync } = require('node:child_process');
+const r = spawnSync('git', ${JSON.stringify(gitArgs)}, { env:process.env, encoding:'utf8' });
+process.stdout.write(r.stdout); process.stderr.write(r.stderr); process.exitCode=r.status;
+`, { mode: 0o755 });
+        const workerEnv = { ...env, PATH: `${bin}:${env.PATH}` };
+        const launch = chatLaunch({ run: { sourceRoot: w.cwd, root: w.cwd, runDir }, agent: 'codex', env: workerEnv });
+        const { runAgentProcess } = await import('../src/agent-adapters.mjs');
+        const result = await runAgentProcess(route === 'worker Git' ? 'git' : 'gh',
+          route === 'worker Git' ? gitArgs : ['pr', 'create', '--repo', w.repository],
+          { cwd: w.cwd, env: { ...workerEnv, ...launch.githubEnv } });
+        assert.equal(result.code, 128);
+        assert.match(result.stderr, /403/);
+      } else {
+        const run = nativeGithubCounter((file, args, options) => execute(file === 'gh' ? 'git' : file, file === 'gh' ? gitArgs : args, options),
+          { env: w.env, stateRoot: w.stateRoot, now: () => w.time, appPorts: w.appPorts });
+        await assert.rejects(run(route === 'native Git' ? 'git' : 'gh',
+          route === 'native Git' ? gitArgs : ['pr', 'create', '--repo', w.repository],
+          { cwd: w.cwd, env, encoding: 'utf8', timeout: 5000 }), error => error.code === 128 && /403/.test(error.stderr));
+      }
+      assert.equal(endpoint.requests.length, 1);
+      assert.ok(w.tokens.some(token => endpoint.requests[0].headers.authorization === `basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`));
+      assert.equal(JSON.stringify(env) === JSON.stringify(beforeEnv), true, 'parent environment stays unchanged');
+      assert.equal(readFileSync(join(w.cwd, '.git', 'config'), 'utf8') === configBefore, true, 'stored Git config stays unchanged');
+      const containsSecret = text => w.tokens.some(token => text.includes(token) || text.includes(Buffer.from(`x-access-token:${token}`).toString('base64')));
+      for (const file of [trace, perf, event]) assert.equal(containsSecret(readFileSync(file, 'utf8')), false, 'Git trace must not contain an App credential');
+      const credentialFiles = [];
+      const scan = folder => {
+        for (const item of readdirSync(folder, { withFileTypes: true })) {
+          const file = join(folder, item.name);
+          if (item.isDirectory()) scan(file);
+          else if (item.isFile() && containsSecret(readFileSync(file, 'utf8'))) credentialFiles.push(file);
+        }
+      };
+      scan(w.dir);
+      const cache = join(w.home, '.cache', 'pdd', 'github-app');
+      assert.equal(credentialFiles.length, 1, 'only the private cache may persist the credential');
+      assert.equal(credentialFiles.every(file => file.startsWith(`${cache}/`)), true);
+      assert.equal(statSync(credentialFiles[0]).mode & 0o777, 0o600);
+      assert.equal(statSync(cache).mode & 0o777, 0o700);
+    });
+  }
+}
+
+test('personal mode preserves inherited Git file tracing', async t => {
+  const w = await githubAppWorld(t), endpoint = await gitEndpoint(t, w);
+  w.configure(undefined);
+  const trace = join(w.dir, 'personal.trace');
+  const run = nativeGithubCounter(execute, { env: w.env, stateRoot: w.stateRoot, appPorts: w.appPorts });
+  await assert.rejects(run('git', ['ls-remote', url], { cwd: w.cwd, env: { ...endpoint.env, GIT_TRACE_CURL: trace }, encoding: 'utf8', timeout: 5000 }),
+    error => error.code === 128 && /403/.test(error.stderr));
+  assert.ok(readFileSync(trace, 'utf8').length > 0);
+  assert.equal(w.tokens.length, 0);
 });
