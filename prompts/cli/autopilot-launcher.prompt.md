@@ -529,7 +529,10 @@ For full-suite progress, load the required
 [shared queue contract](test-suite-queue.prompt.md). Read suite intervals for each
 active run's worktree. Subtract their union from inactivity since the run record's
 mtime. While waiting or executing, offer no stuck-run or idle-claim rule for that
-run. After success, only elapsed time outside those intervals counts. A failed,
+run. An unavailable queue observation retains the valid run progress, warns with
+its cause, and withholds both inactivity rules without emitting a suite-failed
+rule. Retry observation on later ticks. After success, only elapsed time outside
+those intervals counts. A failed,
 timed out or interrupted suite produces one `suite-failed` time rule per ticket
 completion (keyed by run and ticket, including equal completion times) with its exact queue reason, requesting the `test-suite` alert and
 failure diagnosis. It does not produce `stuck-run` or `idle-claim`. Completion is
@@ -537,6 +540,13 @@ validation activity for the claim idle rule. Preserve the existing progress port
 optional `suite` carries the queue public status. The coordinator instruction
 requires full-suite validation through the absolute invoked CLI's
 `workflow suite --command COMMAND`, using the repository's actual test command.
+Preserve both `PDD_SUITE_QUEUE` and `PDD_VM_SUITE_LOCK` in saved environment,
+user timer definitions and coordinator launches. Use the shared queue contract's
+selector precedence. Forward selected values to Codex command environments with
+invocation-only `shell_environment_policy.set` overrides, so workflow launches
+inherit them even when the profile restricts environment inheritance. Include
+these overrides in the launch fingerprint. Do not depend on the Herdr server's
+environment for queue selection: unset missing selectors in the native child.
 The queue limits validation, not the number of issue workers.
 
 Elapsed time can also offer work without a GitHub change or an AI call in the

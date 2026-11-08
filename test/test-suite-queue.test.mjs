@@ -148,7 +148,7 @@ test('native CLI preserves cwd, env, closed stdin, stdout, stderr and exit code'
   assert.match(stdout, /suite-out/); assert.match(stderr, /suite-err/);
 });
 
-test('native timeout stops a suite process group before a waiter starts', async t => {
+test('native timeout stops a suite process group before its descendant can act', async t => {
   const f = fixture(t), marker = join(f.root,'escaped-child'), started = join(f.root,'child-started');
   // Admission and CLI timeout units are tested above. This injected native port
   // shortens only the execution clock, so the real signal path runs in milliseconds.
@@ -209,4 +209,22 @@ test('default queue identity is independent of repository homes and agent profil
   assert.equal(suiteQueueRoot({PDD_VM_SUITE_LOCK:'/shared/lock'}),'/shared/lock.queue');
   assert.equal(suiteQueueRoot({PDD_SUITE_QUEUE:'/explicit/queue',PDD_VM_SUITE_LOCK:'/shared/lock'}),'/explicit/queue');
   assert.throws(()=>suiteQueueRoot({PDD_SUITE_QUEUE:'relative'}));
+});
+
+for (const damage of ['malformed','unreadable']) test(`workflow JSON status exposes unavailable suite ownership (${damage}) without changing progress`, async t => {
+  const f=await workflowFixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(),queue=join(f.base,'suite-queue'); mkdirSync(queue);
+  const ticket=join(queue,'ticket-other-repository.json');
+  if(damage==='malformed') writeFileSync(ticket,'{'); else mkdirSync(ticket);
+  const owner=join(run.runDir,'.ordinary-owner'); mkdirSync(owner,{recursive:true});
+  writeFileSync(join(owner,'owner-suite-test.json'),JSON.stringify({pid:process.pid,hostname:'suite-test',token:'suite-test'}));
+  const before=readFileSync(join(run.runDir,'status.json'));
+  let status;
+  await assert.doesNotReject(async()=>{status=await runStatus({cwd:run.root,json:true},{...f.ports,env:{...f.ports.env,PDD_SUITE_QUEUE:queue}});},'status must return explicit queue uncertainty');
+  assert.equal(status.exitCode,0,status.message);
+  const item=JSON.parse(status.message).runs[0];
+  assert.equal(item.suite?.state,'unavailable'); assert.equal(item.suite?.pausedMs,0);
+  assert.ok(item.suite.reason.length>0); assert.match(item.words,/queue.*unavailable/i);
+  assert.ok(item.words.includes(item.suite.reason),'status retains the queue read cause');
+  assert.deepEqual(readFileSync(join(run.runDir,'status.json')),before);
 });

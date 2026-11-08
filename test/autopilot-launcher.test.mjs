@@ -1674,3 +1674,79 @@ test('different failed suite tickets with the same finish time each get one fail
   const rules=f.prompts.flatMap(text=>JSON.parse(text.trim().split('\n').at(-1)).timeRules??[]);
   assert.equal(rules.filter(rule=>rule.kind==='suite-failed').length,2);
 });
+
+for (const selector of ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK']) test(`shared suite selector ${selector} survives native launch and a later tick`, async t => {
+  const f = await fixture(t, {mode:'observe'}), selected = join(f.dir, "shared 'queue' $()"), bin = join(f.dir,'bin');
+  mkdirSync(bin);
+  const output = join(f.dir,'native-queue.json');
+  writeFileSync(join(bin,'codex'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(output)},JSON.stringify({queue:process.env.PDD_SUITE_QUEUE??null,legacy:process.env.PDD_VM_SUITE_LOCK??null,argv:process.argv.slice(2)}));\n`, {mode:0o755});
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    const result = await herdr(args);
+    if (args[0] === 'pane' && args[1] === 'run') execFileSync('/bin/sh',['-c',args[3]],{cwd:f.cwd,env:{HOME:f.home,PATH:`${bin}:/usr/bin:/bin`,PDD_SUITE_QUEUE:'/stale-server-queue',PDD_VM_SUITE_LOCK:'/stale-server-lock'},timeout:10000});
+    return result;
+  };
+  const result = await f.invoke('start',{env:{HOME:f.home,PATH:`${bin}:/usr/bin:/bin`,[selector]:selected}});
+  assert.equal(result.exitCode,0,result.message);
+  const actual = JSON.parse(readFileSync(output,'utf8'));
+  assert.equal(actual[selector === 'PDD_SUITE_QUEUE' ? 'queue' : 'legacy'],selected,'native coordinator inherits the exported queue selector');
+  assert.equal(actual[selector === 'PDD_SUITE_QUEUE' ? 'legacy' : 'queue'],null,'the other selector cannot come from the Herdr server');
+  assert.equal(codexConfigs(actual.argv).set[selector],selected,'coordinator commands forward the queue selector to worker launches');
+  assert.equal(f.state().environment[selector],selected,'saved environment retains queue selection');
+  assert.equal(f.timers.find(([action])=>action==='start')[1].environment[selector],selected,'timer retains queue selection');
+  const folder=join(f.cwd,'.git','pdd','runs','101'),worktree=join(f.dir,'worktree');
+  const queue=selector==='PDD_SUITE_QUEUE'?selected:`${selected}.queue`;
+  mkdirSync(folder,{recursive:true}); mkdirSync(worktree); mkdirSync(queue);
+  const changedAt=f.time-2*hour,statusFile=join(folder,'status.json');
+  writeFileSync(statusFile,JSON.stringify({v:1,number:101,repo:'owner/repo',state:'running',root:worktree}));
+  utimesSync(statusFile,new Date(changedAt),new Date(changedAt));
+  writeFileSync(join(queue,'ticket-1.json'),JSON.stringify({ticket:1,pid:process.pid,childPid:null,cwd:worktree,state:'waiting',queuedAt:changedAt,startedAt:null,finishedAt:null,reason:null}));
+  delete f.ports.readRunProgress; f.prompts.length=0;
+  // No selector is supplied to this tick. Only saved startup state can select it.
+  await f.tick();
+  const rules=f.prompts.flatMap(text=>JSON.parse(text.trim().split('\n').at(-1)).timeRules??[]);
+  assert.equal(rules.some(rule=>rule.number===101&&['stuck-run','idle-claim'].includes(rule.kind)),false,'later tick observes the configured queue');
+});
+
+for (const damage of ['malformed', 'unreadable']) test(`unavailable suite queue (${damage}) retains progress and defers inactivity until recovery`, async t => {
+  const f=await fixture(t); await f.invoke('start'); f.prompts.length=0;
+  delete f.ports.readRunProgress;
+  const worktree=join(f.dir,'worktree'),queue=join(f.dir,'queue'),folder=join(f.cwd,'.git','pdd','runs','101');
+  mkdirSync(worktree); mkdirSync(queue); mkdirSync(folder,{recursive:true});
+  const changedAt=f.time-2*hour,statusFile=join(folder,'status.json');
+  writeFileSync(statusFile,JSON.stringify({v:1,number:101,repo:'owner/repo',state:'running',root:worktree}));
+  utimesSync(statusFile,new Date(changedAt),new Date(changedAt));
+  const ticket=join(queue,'ticket-unrelated.json');
+  if(damage==='malformed') writeFileSync(ticket,'{'); else mkdirSync(ticket);
+  f.ports.env={HOME:f.home,PDD_SUITE_QUEUE:queue};
+  f.issues=[issue(101,{labels:['pdd:working'],updated_at:new Date(changedAt).toISOString()})];
+  await f.tick();
+  const rules=()=>f.prompts.flatMap(text=>JSON.parse(text.trim().split('\n').at(-1)).timeRules??[]);
+  assert.equal(rules().some(rule=>rule.number===101&&['stuck-run','idle-claim','suite-failed'].includes(rule.kind)),false,'unknown queue activity cannot establish inactivity or a failed suite');
+  assert.ok(f.warnings.some(text=>/101/.test(text)&&/queue.*unavailable/i.test(text)),'queue uncertainty and affected run are visible');
+  assert.ok(f.warnings.some(text=>damage==='malformed'?/JSON|Unexpected/i.test(text):/EISDIR|directory/i.test(text)),'warning retains the read cause');
+  const before=readFileSync(statusFile); rmSync(ticket,{recursive:true});
+  await f.tick();
+  assert.ok(rules().some(rule=>rule.number===101&&rule.kind==='stuck-run'),'recovered queue restores normal run inactivity checks');
+  assert.ok(rules().some(rule=>rule.number===101&&rule.kind==='idle-claim'),'recovered queue restores claim inactivity checks');
+  assert.deepEqual(readFileSync(statusFile),before,'observing queue uncertainty does not mutate run progress');
+});
+
+test('native timer definitions retain both exported shared suite selectors', async t => {
+  for (const platform of ['linux','darwin']) {
+    const f=await fixture(t,{mode:'observe'}); delete f.ports.timer; f.ports.platform=platform; f.ports.uid=123;
+    const selectors={PDD_SUITE_QUEUE:join(f.dir,'selected-queue'),PDD_VM_SUITE_LOCK:join(f.dir,'legacy-lock')};
+    const env={HOME:f.home,PATH:'/fixture/bin',XDG_CONFIG_HOME:join(f.home,'.config'),...selectors};
+    const run=f.ports.run;
+    f.ports.run=async(command,args,options)=>['systemctl','launchctl','loginctl'].includes(command)
+      ? {code:0,stdout:command==='loginctl'?'yes\n':'',stderr:''} : run(command,args,options);
+    const result=await f.invoke('start',{env}); assert.equal(result.exitCode,0,result.message);
+    const folder=platform==='linux'?join(f.home,'.config','systemd','user'):join(f.home,'Library','LaunchAgents');
+    const file=readdirSync(folder).find(name=>name.endsWith(platform==='linux'?'.service':'.plist'));
+    const definition=readFileSync(join(folder,file),'utf8');
+    for(const [name,value] of Object.entries(selectors)) {
+      assert.ok(definition.includes(name),`${platform} timer records ${name}`);
+      assert.ok(definition.includes(value),`${platform} timer records the selected path`);
+    }
+  }
+});

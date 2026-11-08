@@ -664,4 +664,8 @@ user ID. It is independent of repository, HOME and agent profile. All launchers
 on the machine must use the same queue directory. `PDD_SUITE_QUEUE` can select
 an absolute shared directory. `PDD_VM_SUITE_LOCK` selects `VALUE.queue` when
 `PDD_SUITE_QUEUE` is absent. `scripts/vm-suite-lock.sh` uses the same queue.
+Autopilot keeps both selectors in its saved environment, timers and coordinator
+and worker launches. Workflow status reports an unavailable queue with its cause.
+While queue activity is unknown, Autopilot withholds inactivity rules for the run
+and retries the read on later ticks.
 Queue records stay outside the repository and contain no commands or test output.

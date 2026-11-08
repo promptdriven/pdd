@@ -63,7 +63,10 @@ function pausedTime(all, since, now) {
   return total;
 }
 export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports = {}) {
-  const p = portsFor(env, ports), all = records(p), own = all.filter(row => row.cwd === resolve(cwd));
+  let p, all;
+  try { p = portsFor(env, ports); all = records(p); }
+  catch (error) { return { state: 'unavailable', reason: error.message, pausedMs: 0 }; }
+  const own = all.filter(row => row.cwd === resolve(cwd));
   if (!own.length) return null;
   const row = own.findLast(row => row.state !== 'finished') ?? own.at(-1);
   return { ticket: row.ticket, state: row.state, position: row.state === 'waiting' ? positionOf(all, row) : null,
@@ -71,7 +74,8 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
     pausedMs: pausedTime(own, since, p.now()) };
 }
 export function suiteStatusWords(suite) {
-  return suite.reason ? `full test suite failed: ${suite.reason}`
+  return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`
+    : suite.reason ? `full test suite failed: ${suite.reason}`
     : suite.state === 'waiting' ? `waiting for a test slot (position ${suite.position})`
     : suite.state === 'running' ? 'running the full test suite'
     : 'full test suite finished';

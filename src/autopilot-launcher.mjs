@@ -74,7 +74,7 @@ function portsFor(state, ports) {
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
 const gitRootIn = p => p.execute('git', ['rev-parse', '--show-toplevel'], { env: { ...p.env, LC_ALL: 'C', LANG: 'C' } });
@@ -352,6 +352,7 @@ async function readRunProgress(state, p) {
       if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase() && ['running', 'waiting'].includes(run.state)) {
         const changedAt = statSync(file).mtimeMs;
         const suite = (p.readSuiteProgress ?? readSuiteProgress)({cwd:run.root, since:changedAt, env:p.env}, p);
+        if (suite?.state === 'unavailable') p.warn(`Run #${run.number} full test suite queue unavailable: ${suite.reason}`);
         progress.push({ number: run.number, changedAt: changedAt + (suite?.pausedMs ?? 0), ...(suite ? {suite} : {}) });
       }
     } catch { /* Missing or unreadable records supply no progress fact. */ }
@@ -542,11 +543,13 @@ function profileBinding(state, p) {
 }
 // Codex builds each chat command's environment from shell_environment_policy; `set` applies after `inherit`.
 // An explicit saved CODEX_HOME also reaches the commands, so a pdd workflow run from the chat keeps the profile.
-function providerArgs(kind, cwd, context, codexHome) {
+function providerArgs(kind, cwd, context, codexHome, queueEnv = {}) {
   if (kind === 'codex') return ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`), '-c', quote('check_for_update_on_startup=false'),
     '-c', quote(`shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=${tomlString(context)}`),
-    ...(codexHome ? ['-c', quote(`shell_environment_policy.set.CODEX_HOME=${tomlString(codexHome)}`)] : [])];
+    ...(codexHome ? ['-c', quote(`shell_environment_policy.set.CODEX_HOME=${tomlString(codexHome)}`)] : []),
+    ...['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(name => typeof queueEnv[name] === 'string')
+      .flatMap(name => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(queueEnv[name])}`)])];
   return [kind === 'gemini' ? '--yolo' : '--dangerously-skip-permissions'];
 }
 function launchDefinition(state, p) {
@@ -561,7 +564,7 @@ export function autopilotLaunchFingerprint(state) {
   const root = resolve(state.packageRoot ?? dirname(dirname(self)));
   let version = null;
   try { version = read(join(root, 'package.json'))?.version ?? null; } catch { /* An unreadable package has no version. */ }
-  return digest({ version: 'pdd.autopilot-launch.v1', package: { root, version }, kind: state.agent.kind, start: startIn(state.cwd), args: providerArgs(state.agent.kind, state.cwd, '', state.environment?.CODEX_HOME) });
+  return digest({ version: 'pdd.autopilot-launch.v1', package: { root, version }, kind: state.agent.kind, start: startIn(state.cwd), args: providerArgs(state.agent.kind, state.cwd, '', state.environment?.CODEX_HOME, state.environment) });
 }
 function ownerLaunchMatches(state, p) {
   const launch = state.ownerLaunch;
@@ -952,13 +955,14 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
   const definition = launchDefinition(state, p);
   if (definition.kind !== state.agent.kind) { p.warn('Run pdd autopilot start to select the changed agent profile.'); return false; }
   const context = JSON.stringify(envelope());
-  const args = providerArgs(definition.kind, state.cwd, context, state.environment?.CODEX_HOME);
   const childEnv = { ...keepEnv(p.env), ...definition.env, HOME: state.environment?.HOME ?? p.env.HOME, PDD_AUTOPILOT_CONTEXT: context };
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME']) {
     if (state.environment?.[variable]) childEnv[variable] = state.environment?.[variable]; else delete childEnv[variable];
   }
+  const args = providerArgs(definition.kind, state.cwd, context, state.environment?.CODEX_HOME, childEnv);
   const env = Object.entries(childEnv).map(([k, v]) => `${k}=${quote(v)}`);
-  const unset = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME'].filter(k => !state.environment?.[k]).flatMap(k => ['-u', k]);
+  const unset = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME'].filter(k => !state.environment?.[k])
+    .concat(['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => !Object.hasOwn(childEnv, k))).flatMap(k => ['-u', k]);
   let terminal;
   try { terminal = (await herdr(['pane', 'get', state.paneId], p)).result?.pane?.terminal_id; }
   catch (error) { if (error.code !== 'pane_not_found') throw error; p.warn('Autopilot work remains pending: the coordinator pane closed before the launch; the next tick opens a fresh pane.'); return false; }
@@ -1323,6 +1327,7 @@ async function runTick(stateFile, ports, completion) {
     const runProgress = await (p.readRunProgress ?? readRunProgress)(state, p);
     const suiteByNumber = new Map(runProgress.filter(row => row.suite).map(row => [row.number, row.suite]));
     for (const { number, changedAt, suite } of runProgress) {
+      if (suite?.state === 'unavailable') continue;
       if (suite && (suite.state !== 'finished' || suite.reason)) {
         const key = `suite:${number}:${suite.ticket ?? suite.queuedAt}`;
         if (suite.reason && state.timeSeen[key] === undefined) {

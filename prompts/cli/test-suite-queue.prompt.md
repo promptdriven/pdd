@@ -10,7 +10,8 @@ operator or worker command; it does not schedule tests or approve publication.
 Export `suiteQueueRoot(env = process.env)`, returning the shared absolute queue
 path selected below, or throwing for a relative path. Export
 `suiteStatusWords(suite)`, returning one status line for the public status shape:
-waiting with position, running, failure with reason, or successful completion.
+waiting with position, running, failure with reason, successful completion, or
+queue unavailable with its cause.
 
 Export native port adapter `executeSuite(command, {cwd, env, timeoutMs, onChild})`,
 which resolves `{exitCode, reason}` after child cleanup.
@@ -22,6 +23,11 @@ queuedAt, startedAt, finishedAt, reason, pausedMs}`. `ticket` is the positive su
 absent start/end times are null, position is a positive integer only while
 waiting (otherwise null), reason is null unless a failed or interrupted suite.
 `pausedMs` is the union of suite intervals after `since` and before now.
+If queue selection, directory reading or any ownership record cannot be read,
+return `{state: "unavailable", reason, pausedMs: 0}` instead of throwing or
+returning null. `reason` retains the read error message. This state means unknown
+queue activity, never a failed suite or evidence of inactivity. Do not mutate
+records during observation; retry on the next read. Admission still fails closed.
 
 Use one shared local queue independent of repository, worktree, HOME and agent
 profile. Default to `/tmp/pdd-full-suite-UID`, with the operating system user ID.
