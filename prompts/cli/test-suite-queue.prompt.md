@@ -133,7 +133,16 @@ is read-only and must not mutate workflow state or touch a live chat. A successf
 suite resumes the prior stuck clock, rather than consuming it. A suite failure,
 timeout or interrupted runner has its own reason; it is not a stuck issue.
 
+`configureCheckCapacity` accepts optional input `resources`, the current shared
+machine observation. Use its load and available memory with its check profile
+for capacity; do not read the host again. Legacy observations without check metadata
+retain injected check adapters for affinity. Native synchronous fallback adapters
+come from the machine resource owner.
+
 ## Dependencies
+
+- [Machine observations](machine-resources.prompt.md): required shared native readers
+  and tick observation shape for machine-sized checks.
 
 - [Native admission lock](workflow-runner.prompt.md#native-admission-lock): only this
   independent interface selection is required context, supplying

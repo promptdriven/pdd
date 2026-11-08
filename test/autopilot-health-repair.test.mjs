@@ -102,3 +102,21 @@ console.log(JSON.stringify(await readCodexLimits({ command: ${JSON.stringify(fil
     });
   }
 }
+
+// Release integration: #3048 and #3067 must use the same tick sample.
+test('release: one machine observation controls health and check capacity', async t => {
+  const f = await launcher(t); await f.start(); delete f.ports.machineHealth;
+  let reads = 0;
+  const resources = {cpuCount:48,load:0,memory:{available:32*1024**3,total:64*1024**3},
+    pressure:{io:0,memory:0},disk:{available:8*1024**3,total:64*1024**3},
+    check:{cpuIds:Array.from({length:48},(_,i)=>i+4),platform:'linux',battery:false,virtualized:true,taskset:'/fake/taskset'}};
+  f.ports.machineResources = async input => { reads++; assert.deepEqual(input,{cwd:f.cwd}); return resources; };
+  for (const name of ['cores','memory','load','battery','virtualized','taskset'])
+    f.ports.checkCapacityPorts[name] = () => assert.fail('duplicate native observation');
+  await f.tick();
+  const state = JSON.parse(readFileSync(f.stateFile(),'utf8'));
+  assert.equal(reads,1);
+  assert.equal(state.health.paused,false);
+  assert.deepEqual([state.checkCapacity.cores,state.checkCapacity.checks,state.checkCapacity.coresPerCheck],[48,4,12]);
+  assert.deepEqual(state.checkCapacity.cpuIds,resources.check.cpuIds);
+});

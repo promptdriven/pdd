@@ -1073,6 +1073,11 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 ## No-AI machine and account health
 
+Share one `machineResources({cwd})` observation between health, check capacity and
+validation retry in each tick. Native reads include the check affinity profile.
+Observe health before configuring capacity, then pass its resources to the queue.
+Injected legacy machineHealth/checkCapacityPorts remain supported.
+
 Every enabled tick reads `machineHealth` (native environment module default) and,
 for Codex, `codexLimits` (native limits module default), before any GitHub
 rate-limit or budget early exit. Pass the saved selected command and profile:

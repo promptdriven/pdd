@@ -3,45 +3,18 @@ import * as files from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { availableParallelism, freemem, loadavg } from 'node:os';
+import { machineCheckPorts } from './machine-resources.mjs';
 
-function nativeCores() {
-  if (process.platform === 'linux') {
-    let list;
-    try { list = /^Cpus_allowed_list:\s*(.+)$/m.exec(files.readFileSync('/proc/self/status', 'utf8'))?.[1]; } catch { /* Use available parallelism without procfs. */ }
-    if (list) return list.split(',').flatMap(part => {
-      const [first, last = first] = part.split('-').map(Number);
-      return Array.from({length:last - first + 1}, (_, index) => first + index);
-    });
-  }
-  return Array.from({length:availableParallelism()}, (_, index) => index);
-}
-function nativeBattery() {
-  if (process.platform !== 'linux') return false;
-  let names;
-  try { names = files.readdirSync('/sys/class/power_supply'); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-  return names.some(name => files.readFileSync(join('/sys/class/power_supply', name, 'type'), 'utf8').trim() === 'Battery');
-}
-function nativeVirtualized(run = spawnSync) {
-  // Unknown detection reserves the person's CPU budget.
-  const result = run('systemd-detect-virt', ['--quiet'], {timeout:1000,stdio:'ignore'});
-  return result.status === 0;
-}
-function nativeTaskset(env) {
-  if (process.platform !== 'linux') return null;
-  for (const folder of (env.PATH ?? '').split(':').filter(isAbsolute)) {
-    const path = join(folder, 'taskset');
-    try { files.accessSync(path, files.constants.X_OK); if (files.statSync(path).isFile()) return path; } catch {}
-  }
-  return null;
-}
 export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
-  const cpuIds = (ports.cores ?? nativeCores)(), freeMemory = (ports.memory ?? freemem)(),
-    load = (ports.load ?? (() => loadavg()[0]))(), platform = ports.platform ?? process.platform;
-  const battery = platform === 'linux' ? (ports.battery ?? nativeBattery)() : false;
-  const virtualized = platform === 'linux' ? (ports.virtualized ?? (() => nativeVirtualized(ports.spawnSync ?? spawnSync)))() : false;
+  const native = machineCheckPorts(ports.env ?? process.env, ports);
+  ports = {...ports};
+  for (const [name, value] of Object.entries(native)) ports[name] ??= value;
+  const cpuIds = ports.cores(), freeMemory = ports.memory(),
+    load = ports.load(), platform = ports.platform ?? process.platform;
+  const battery = platform === 'linux' ? ports.battery() : false;
+  const virtualized = platform === 'linux' ? ports.virtualized() : false;
   const personal = platform === 'darwin' || platform === 'linux' && (battery || !virtualized);
-  const taskset = platform === 'linux' ? (ports.taskset ?? (() => nativeTaskset(ports.env ?? process.env)))() : null;
+  const taskset = platform === 'linux' ? ports.taskset() : null;
   if (typeof platform !== 'string' || typeof battery !== 'boolean' || typeof virtualized !== 'boolean' || !Array.isArray(cpuIds) || !cpuIds.length || cpuIds.some(id => !Number.isSafeInteger(id) || id < 0)
     || new Set(cpuIds).size !== cpuIds.length || !Number.isFinite(freeMemory) || freeMemory < 0
     || !Number.isFinite(load) || load < 0 || taskset !== null && (typeof taskset !== 'string' || !isAbsolute(taskset))
@@ -55,10 +28,15 @@ export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
     coresPerCheck:Math.max(1, Math.floor(usable.length / selected)), busy:load > usable.length};
 }
 const CAPACITY_LIFETIME = 31 * 60_000;
-export async function configureCheckCapacity({env = process.env, checks, runs, owner = null}, ports = {}) {
+export async function configureCheckCapacity({env = process.env, checks, runs, owner = null, resources}, ports = {}) {
   const p = portsFor(env, ports), observedAt = p.now();
   if (owner !== null && (typeof owner !== 'string' || !owner)) throw Error('Invalid check capacity owner.');
-  const capacity = {...calculateCheckCapacity({checks,runs}, {...p,env}), owner, observedAt, expiresAt:observedAt + CAPACITY_LIFETIME};
+  const shared = resources ? {
+    memory:()=>resources.memory?.available, load:()=>resources.load,
+    ...(resources.check ? {cores:()=>resources.check.cpuIds, platform:resources.check.platform,
+      battery:()=>resources.check.battery, virtualized:()=>resources.check.virtualized, taskset:()=>resources.check.taskset} : {}),
+  } : {};
+  const capacity = {...calculateCheckCapacity({checks,runs}, {...p,env,...shared}), owner, observedAt, expiresAt:observedAt + CAPACITY_LIFETIME};
   p.fs.mkdirSync(p.root, {recursive:true,mode:0o700});
   await underLock(p, () => {
     const path = join(p.root, 'capacity.json'), temp = `${path}.${p.uuid()}.tmp`;

@@ -1,3 +1,4 @@
+import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
@@ -481,7 +482,7 @@ function healthLine(health) {
 async function observeHealth(state, p) {
   const old = state.health;
   let resource, usage = { state: 'not-applicable', resetAt: null, usedPercent: null };
-  try { resource = await (p.machineHealth ?? (input => machineHealth(input, { machineResources: p.machineResources })))({ cwd: state.cwd }); }
+  try { resource = await (p.machineHealth ?? (input => machineHealth(input, { machineResources: p.machineResources ?? (input => readMachineResources(input, {includeChecks:true,env:p.env})) })))({ cwd: state.cwd }); }
   catch { resource = { healthy: false, causes: ['Machine resources cannot be read'], resources: null }; }
   if (state.agent.kind === 'codex') {
     const definition = launchDefinition(state, p), profile = profileBinding(state, p);
@@ -1283,8 +1284,10 @@ async function runTick(stateFile, ports, completion) {
       } finally { release(); }
     };
     p.scanGuard = scanGuard;
+    await observeHealth(state, p);
+    if (!await scanGuard(latest => { latest.health = state.health; })) return outcome('inactive', 'Autopilot changed.');
     let capacity;
-    if (!await scanGuard(async latest => { capacity = await configureCheckCapacity({env:p.env,checks:state.checks,runs:state.runs,owner:stateFile}, p.checkCapacityPorts ?? p); latest.checkCapacity = capacity; })) return outcome('inactive', 'Autopilot control changed.');
+    if (!await scanGuard(async latest => { capacity = await configureCheckCapacity({env:p.env,checks:state.checks,runs:state.runs,owner:stateFile,resources:state.health?.resource?.resources}, p.checkCapacityPorts ?? p); latest.checkCapacity = capacity; })) return outcome('inactive', 'Autopilot control changed.');
     state.checkCapacity = capacity;
     p.scanAction = async (action, cleanup = '') => {
       const release = await claimAdmission(state, p);
@@ -1303,8 +1306,6 @@ async function runTick(stateFile, ports, completion) {
       } finally { release(); }
     };
     p.scanTransport = action => p.scanAction(action, state.reconciliationIntent ? 'reconciliation' : 'intent');
-    await observeHealth(state, p);
-    if (!await scanGuard(latest => { latest.health = state.health; })) return outcome('inactive', 'Autopilot changed.');
     await healthAlerts(state, p, dirname(stateFile));
     // Native attention summary remains independent of GitHub budgets and AI coordinator activity.
     try {
