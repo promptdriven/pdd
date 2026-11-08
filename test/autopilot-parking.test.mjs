@@ -139,6 +139,18 @@ for (const previous of ['person', 'interpreter'])
     f.tick(); await tick();
     assert.deepEqual(f.record().parking.interpreterWait, parked.parking.interpreterWait);
     assert.deepEqual(f.record().parking.interpreterGate, changed.gate);
+    // A named person blocker still wins over the same inferred saved-check evidence.
+    const explicit = f.record(); explicit.blockedOn = {kind: 'person', until: null}; save(f, explicit);
+    await tick();
+    assert.deepEqual(f.record().parking.blocker, explicit.blockedOn);
+    assert.equal(f.record().parking.interpreterWait, undefined);
+    assert.equal(f.record().parking.at, age);
+    assert.deepEqual(f.record().gate, changed.gate);
+    const inferred = f.record(); delete inferred.blockedOn; save(f, inferred);
+    await tick();
+    assert.equal(f.record().parking.blocker.kind, 'interpreter');
+    assert.equal(f.record().parking.interpreterWait.batch, newBatch);
+    assert.deepEqual(f.record().parking.interpreterGate, changed.gate);
     ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
     await tick();
     assert.equal(f.record().parking, undefined);
