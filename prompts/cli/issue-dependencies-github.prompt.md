@@ -20,7 +20,9 @@ supplied ports override defaults. The factory delegates trust decisions to the
 existing Autopilot trust owner.
 Its native settings port reads current launcher state for automatic admission:
 `enabled: false` maps to mode `off`; missing or malformed state or enabled flag
-is unavailable and fails closed. For `enabled: true`, preserve the current configured mode, activation and cap;
+is unavailable and fails closed. Return `healthPaused: true` when saved health has paused true; missing legacy
+health means no health hold. This observation restricts only new automatic starts.
+For `enabled: true`, preserve the current configured mode, activation and cap;
 Expose `capacityRuns` from saved `checkCapacity.runs` when that snapshot exists;
 retain explicit `runs` separately. Malformed snapshots fail closed. The
 launcher owns calculation and refresh; the intake owns occupancy enforcement.

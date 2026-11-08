@@ -212,7 +212,41 @@ without a claim check and removes `pdd:working` when its run ends. A stopped
 launcher or `off` mode lets its claims expire after 4 hours. The heartbeat moves
 claimed issues to the top of "recently updated" every 30 minutes.
 
-### GitHub API budget
+## Machine and account health
+
+Each no-AI tick checks available memory and free disk on the checkout volume.
+Available memory must be at least 10% of total. Disk must have at least 1 GiB
+and 5% free. The shared machine observation port also supplies CPU count, load
+and Linux pressure for validation retries and machine-sized checks.
+Validation retries reuse the tick's checkout observation. They also check load,
+pressure, required tools and suite capacity before offering a retry.
+
+For the saved Codex profile, the tick starts a short app-server connection and
+uses only `initialize`, `initialized` and `account/rateLimits/read`. This makes
+no model call. It reads usage and the ordinary reset time. It does not spend,
+request credits, consume a usage reset, change sign-in or log out an account.
+Other agent kinds have no Codex usage check.
+Malformed protocol frames stop the connection and report unknown usage.
+
+Low resources, reached usage limits and unreadable health observations pause new
+automatic admissions. Claims, progress and heartbeats remain. One `resource` or
+`usage-limit` incident covers the affected issues on this repository and machine.
+The alert includes a known reset time. A later healthy read sends one recovery
+and wakes the coordinator. A busy coordinator keeps that wake pending. Passing
+the saved reset time alone does not establish recovery.
+
+`pdd autopilot status` and `status --all` show the saved Health line and observation
+time. Status does not probe an account or the machine. Before any observation,
+health is unknown. If no issue can own an alert, health stays visible and the
+next tick attaches the incident when an issue is known.
+
+When the GitHub budget permits reads, the tick removes an ended run's worktree only after a read-only PR lookup shows
+its branch closed or merged. It verifies allocator identity, a clean worktree,
+and a branch equal to its tracked upstream. Dirty, unpushed, active, waiting,
+locked and unverifiable worktrees stay. It does not delete branches or run
+records. Cleanup makes no push or fetch. A cleanup failure keeps the worktree.
+
+## GitHub API budget
 
 Autopilot uses your own `gh` sign-in, so its GitHub calls use your hourly limit
 (5,000 REST calls for a person). pdd counts each `gh` call of the Autopilot tick,

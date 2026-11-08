@@ -1117,7 +1117,7 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
     const result = await runAutopilot({ action: 'setup', interactive: false, inRepo: true }, { cwd: root, execFile: ports.execFile });
     if (result.exitCode !== 0 || !state || typeof state.enabled !== 'boolean') throw Error('Current activation unavailable');
     if (state.checkCapacity !== undefined && (!Number.isSafeInteger(state.checkCapacity?.runs) || state.checkCapacity.runs < 1)) throw Error('Current check capacity unavailable');
-    return { ...(state.checkCapacity === undefined ? {} : {capacityRuns:state.checkCapacity.runs}), mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }) };
+    return { ...(state.health?.paused === true ? { healthPaused: true } : {}), ...(state.checkCapacity === undefined ? {} : {capacityRuns:state.checkCapacity.runs}), mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }) };
   } };
   Object.defineProperty(settings, NATIVE_SETTINGS, { value: true });
   ports.settings = supplied.settings?.[NATIVE_SETTINGS] ? settings : supplied.settings ?? settings;

@@ -59,7 +59,8 @@ function setup(t) {
     } });
     f.outputs.push(stdout.text, stderr.text);
     assert.equal(exitCode, 0, stderr.text);
-    return stdout.text.trimEnd().split('\n');
+    // Health has separate status coverage; keep these assertions scoped to alert delivery.
+    return stdout.text.trimEnd().split('\n').filter(line => !line.startsWith('Health:'));
   };
   // The secret never reaches any output or local file other than the private destination (or no file at all for a token command).
   f.noSecret = ({ config = false } = {}) => {

@@ -1,4 +1,5 @@
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -38,7 +39,7 @@ async function fixture(t, initialReviews = [[]]) {
   f.setTrust = names => writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'observe', trust: names } }));
   f.setTrust(['helper']);
   f.addReview = (row = review(), page = 0) => { f.reviewPages[page].push(row); f.pageVersions[page]++; };
-  f.ports = { checkCapacityPorts: isolatedCheckCapacity(dir),
+  f.ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir),
     stateRoot, platform: 'linux', env: { HOME: home }, now: () => f.time,
     readRunProgress: async () => [], warn: text => f.warnings.push(text), allocationCheck: async () => ({ state: 'ready', message: '' }),
     reconcileDependencyIntake: async () => ({ eligible: f.rows.map(row => row.html_url), queued: [], skipped: [] }),

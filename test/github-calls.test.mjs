@@ -1,4 +1,5 @@
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,6 +33,7 @@ async function tickWorld(t, { github } = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], ...(github ? { github } : {}) } }));
   const w = { time: NOW, remaining: 4000, issues: [], since: [], gh: [], patches: [], intakes: 0, prompts: [], claim: null, warnings: [] };
   w.ports = {
+    ...healthyMachine,
     allocationCheck: async () => ({ state: 'ready', message: '' }),
     checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => w.time, readRunProgress: async () => [], warn: text => w.warnings.push(text),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [], timer: async () => true,

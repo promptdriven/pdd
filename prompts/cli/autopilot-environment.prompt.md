@@ -34,9 +34,13 @@ waiting; after delivery the run is running and has no retry-wait status.
 Export `environmentWakeTag(retry)`: `Environment validation wake for AREA:STEP at ISO attempt N.`
 with the failure time and next attempt. This is a per-failure delivery identity.
 
-Export async `environmentHealthy({env, reason}, ports = {})`, returning boolean.
-All host observations are behind `readFile`, `readDir`, `load`, `cpuCount`,
-`memory`, `toolPresent`, `alive` and `suiteAvailable` injectable ports, with native defaults.
+Export async `environmentHealthy({env, reason, cwd}, ports = {})`, returning boolean.
+Machine reads use the shared `machineResources({cwd})` port from the dependency
+below. Use the supplied checkout cwd, falling back to `ports.cwd` then the process
+cwd for standalone callers. A caller may supply its current observation through
+that port; apply retry policy to it without another machine read.
+Legacy injectable `readFile`, `readDir`, `load`, `cpuCount`, `memory`,
+`toolPresent`, `alive` and `suiteAvailable` ports remain supported for retries.
 Fail closed on malformed or unavailable observations. Healthy means one-minute
 load per CPU below 1, available memory at least 10%, Linux I/O and memory PSI
 `some avg10` below 10%, and suite capacity available. Read `/proc/meminfo` for
@@ -60,7 +64,20 @@ reclaim records, including records treated as effectively finished. This
 is a preflight only: the actual suite command must still use its normal queue
 admission, since another process can take the slot after this read.
 
+Export async `machineHealth({cwd}, ports={})` for the no-AI tick, returning
+`{healthy, causes, resources}`. `resources` is the shared machine observation;
+`causes` is an ordered string array: memory then disk. Require valid available
+memory >=10% of total and valid available disk >=1 GiB AND >=5% of total.
+Equality passes. Unknown or malformed values block with a fixed safe cause.
+No suite queue, load or PSI restriction applies to ordinary admission; those
+restrictions remain validation-retry policy. `environmentHealthy` uses the same
+machine admission decision (including disk) and shared machine reader before
+applying retry-only load, pressure, tool and queue restrictions.
+
 ## Dependencies
+
+- [Machine observations](machine-resources.prompt.md): required native generation
+  and verification context for CPU, memory, pressure and disk reads.
 
 Node filesystem and OS adapters supply bounded local host observations. No hosted
 interpreter binding is declared; native tests cover the public module boundary.

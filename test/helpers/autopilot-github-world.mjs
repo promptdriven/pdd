@@ -1,4 +1,5 @@
 import { isolatedCheckCapacity } from './check-machine.mjs';
+import { healthyMachine } from './healthy-machine.mjs';
 // An Autopilot world for GitHub call counts: a real Git checkout, the real launcher tick, the real dependency intake
 // and `pdd dependencies complete`, a fake Herdr coordinator and the counting fake GitHub of github-repo-fake.mjs.
 // `src` selects the source tree, so the same world measures another version of the code.
@@ -44,7 +45,7 @@ export async function autopilotGithubWorld({ src = fileURLToPath(new URL('../../
     }
     return {};
   };
-  w.ports = { checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot, now: () => w.time, sleep: async () => {}, readRunProgress: async () => [], warn: text => w.warnings.push(text),
+  w.ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot, now: () => w.time, sleep: async () => {}, readRunProgress: async () => [], warn: text => w.warnings.push(text),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [], timer: async () => true,
     run, herdr, wait: async () => {}, armCoordinatorIdle: (_identity, options) => { w.resume = options.resume; } };
   const launcher = await import(pathToFileURL(join(src, 'autopilot-launcher.mjs')).href);

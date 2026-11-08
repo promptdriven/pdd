@@ -693,6 +693,9 @@ its reason tells the coordinator to deliver the exact shared wake tag with
 `pdd workflow changes N`, oldest first as worker room allows. Rerun only that
 validation step with its original command and evidence. No whole-run restart,
 new approval, blind external resend, usage-limit change or person question.
+Pass the checkout cwd to the retry check. Its native default reuses this tick's
+`health.resource.resources` through `machineResources`, without probing the host
+again. Retain the injected retry ports and the dependency's retry-only checks.
 Use existing delivery/timeSeen custody per wake tag and 30-minute offer interval;
 reoffer an undelivered current park on a later interval, without replaying uncertain
 transport custody. Only worker delivery spends
@@ -1050,10 +1053,52 @@ a promise of later handling; the independent 30-minute tick remains fallback.
 Use the existing launcher ports and native defaults, including state, Git, settings,
 reconcile and wake boundaries; injected substitutes reach this same path.
 
+## No-AI machine and account health
+
+Every enabled tick reads `machineHealth` (native environment module default) and,
+for Codex, `codexLimits` (native limits module default), before any GitHub
+rate-limit or budget early exit. Pass the saved selected command and profile:
+resolve definition env, then pin saved HOME and CODEX_HOME; remove ambient
+CODEX_HOME when the saved profile has none. Non-Codex usage is not applicable.
+Persist `health:{at,paused,resource,usage,incidents,recoveryPending}` where at is
+an epoch millisecond observation time, paused is boolean, resource is machineHealth's
+result, usage is the normalized limits result (or state not-applicable with null
+metrics), incidents maps resource/usage-limit to the issue number that owns its
+open machine incident, and recoveryPending is a timestamp or null. Never persist
+raw account replies or subprocess diagnostics.
+Unknown readings pause admissions. They do not claim a quota reset or recovery.
+Use existing alerts for one incident per repository and machine: resource for
+low/unknown machine readings, usage-limit for limited/unknown Codex readings.
+Use an existing run/claim or observed issue number; if none exists, retain health
+and open the alert when an issue exists. Join other affected issues via that
+same incident, retry failed delivery through the existing alert store. Include
+safe cause and known reset ISO time, ask only to wait for the ordinary reset or
+free resources. Never suggest a reset purchase, credits or account logout.
+Recover each kind only on a positively healthy reading, using kind-scoped
+recovered alerts. When all blockers clear retain a recoveryPending timestamp
+until the existing guarded wake confirms delivery; wake even without fresh work.
+
+Keep dependency/progress reads and own claim heartbeats active while paused.
+Do not deliver dependency review prompts, environment/runtime retry wakes or
+ordinary coordinator work until healthy. Do not mark withheld work delivered.
+No run records, claims, heartbeats, gates or progress are erased by health.
+Save the latest hold under the shared admission lock before selection; automatic
+start admission reads it independently, including from an already working chat.
+Status and status --all append the saved Health line with observation time,
+paused/healthy, memory/disk cause and Codex usage/reset when known. Missing
+observations or malformed saved health show unknown without failing status.
+Status makes no new account or machine probe.
+
+When the existing GitHub budget permits reads, a tick also invokes
+`cleanupWorktrees` with the repository and cwd, defaulting to the cleanup
+dependency. GitHub deferrals skip cleanup, never health. Cleanup failure cannot
+skip health or heartbeats.
+
 ## Dependencies
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
 
+- [Codex limits](codex-limits.prompt.md) and [worktree cleanup](autopilot-cleanup.prompt.md): required native generation and verification context for read-only usage and safe ended-run removal.
 
 - [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
 

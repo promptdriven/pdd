@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { environmentHealthy } from '../src/autopilot-environment.mjs';
-const good = { cpuCount: () => 4, load: () => 1, memory: () => ({ available: 20, total: 100 }), platform: 'linux',
+const good = { statfs: () => ({ bavail: 2, blocks: 10, bsize: 1024 ** 3 }), cpuCount: () => 4, load: () => 1, memory: () => ({ available: 20, total: 100 }), platform: 'linux',
   readFile: () => 'some avg10=0.00 avg60=0.00 total=0', suiteAvailable: async () => true };
 const check = (ports = {}, reason = '') => environmentHealthy({ env: {}, reason }, { ...good, ...ports });
 test('load, available memory and I/O/memory pressure enforce exact health limits', async () => {
@@ -80,7 +80,7 @@ test('native killed suite runner and group leave read-only usable queue capacity
   t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } });
   const closed = once(child, 'close'); await once(child, 'spawn'); child.kill('SIGTERM'); await closed;
   for (const pid of [child.pid, -child.pid]) assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
-  const p = { cpuCount: good.cpuCount, load: good.load, memory: good.memory, platform: 'darwin' };
+  const p = { statfs: good.statfs, cpuCount: good.cpuCount, load: good.load, memory: good.memory, platform: 'darwin' };
   for (const state of ['waiting', 'running']) {
     const records = [1, 2, 3].map(n => [join(root, `ticket-${n}.json`), JSON.stringify(ticket(n, state, { pid: child.pid, childPid: child.pid }))]);
     for (const [file, bytes] of records) writeFileSync(file, bytes);

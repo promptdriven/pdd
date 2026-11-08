@@ -1,4 +1,5 @@
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
@@ -43,7 +44,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
   if (layout === 'separate-git-dir') separateGitDir(cwd);
   const f = { dir, home, cwd, time: Date.parse('2026-11-04T00:00:00Z'), calls: [], timers: [], prompts: [], herdrCalls: [], issues: [], warnings: [] };
   f.ports = {
-    checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time, warn: text => f.warnings.push(text),
+    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time, warn: text => f.warnings.push(text),
     readRunProgress: async () => [], pathDiagnostic: () => [],
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
     run: async (command, args, options = {}) => {
@@ -387,7 +388,8 @@ test('status --all lists every repository with Autopilot on this machine from an
   assert.equal(stderr.text, '');
   const lines = stdout.text.trimEnd().split('\n');
   assert.equal(lines[0], 'Autopilot on this machine (2):');
-  const row = repo => lines.find(text => text.startsWith(`${repo} in `));
+  const row = repo => lines.find(text => text.startsWith(`${repo} in `)).split(' · Health:')[0];
+  assert.equal(lines.slice(1).every(line => /Health:.*unknown/.test(line)), true);
   assert.equal(row('owner/one'), `owner/one in ${one} · mode auto · Autopilot enabled · timer active · coordinator idle`);
   assert.equal(row('owner/two'), `owner/two in ${two} · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`);
   assert.equal(lines.length, 3);
@@ -456,7 +458,7 @@ test('status --all keeps each line independent when a saved folder is gone or a 
     ['e'.repeat(20)]: `${'e'.repeat(20)}.json: saved state unreadable`,
     ['f'.repeat(20)]: `${'f'.repeat(20)}.json: saved state unreadable`,
   };
-  const lines = stdout.text.trimEnd().split('\n');
+  const lines = stdout.text.trimEnd().split('\n').map(line => line.split(' · Health:')[0]);
   assert.equal(lines[0], 'Autopilot on this machine (6):');
   assert.equal(lines[1], expected[goneId], 'the missing folder sorts first');
   assert.deepEqual(lines.slice(1), Object.keys(expected).sort().map(name => expected[name]));

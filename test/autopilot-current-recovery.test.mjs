@@ -1,4 +1,5 @@
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -18,7 +19,7 @@ test('fresh dependency request recovers version 2 custody on an idle coordinator
   const request={id:'new-request',repository:'example/repo',issues:['example/repo#42'],snapshotJson:JSON.stringify({repository:'example/repo'}),contextJson:JSON.stringify({source:[],requirements:[]})};
   let sent=[], delivered, savedAtSend;
   const live={pane_id:'p1',workspace_id:'w1',cwd,foreground_cwd:cwd,tab_id:'t1',terminal_id:'term1',agent:'codex',agent_status:'done',agent_session:'session'};
-  const ports={checkCapacityPorts:isolatedCheckCapacity(cwd),now:()=>100,run:async cmd=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:JSON.stringify({nameWithOwner:'example/repo',url:'https://github.com/example/repo'})},queryIssues:async()=>({status:304}),warn:()=>{},
+  const ports={...healthyMachine, checkCapacityPorts:isolatedCheckCapacity(cwd),now:()=>100,run:async cmd=>cmd==='git'?{code:0,stdout:cwd+'\n'}:{code:0,stdout:JSON.stringify({nameWithOwner:'example/repo',url:'https://github.com/example/repo'})},queryIssues:async()=>({status:304}),warn:()=>{},
     herdr:async args=>{ if(args[0]==='agent'&&args[1]==='get')return {result:{type:'agent_info',agent:live}}; if(args[0]==='workspace')return {result:{type:'workspace_info',workspace:{workspace_id:'w1'}}}; if(args[0]==='pane'&&args[1]==='get')return {result:{type:'pane_info',pane:live}}; if(args[0]==='pane'&&args[1]==='read')return ''; if(args[0]==='agent'&&args[1]==='prompt'){savedAtSend=JSON.parse(readFileSync(stateFile)); sent.push(args.at(-1)); return {result:{}};} throw Error(args.join(' '));},
     reconcileDependencyIntake:async (_input,{pending})=>{await pending.save({json:JSON.stringify({requested:['example/repo#42']})}); delivered=await pending.deliver({requestJson:JSON.stringify(request)});return {queued:[],eligible:[],skipped:[],pending:true};}};
   await tickAutopilot(stateFile,ports);
