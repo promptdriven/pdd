@@ -812,13 +812,13 @@ const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
 const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
 // A result is only its pdd parts, joined by " · " (mark and criteria, checks, other states, AI calls). Words an agent
 // wrote after them on the same line ("… 2 AI calls. Full suite: 4085 passed.") are not part of the result.
-const RESULT_PART = /^(?:(?:✓|✗|no verdict|running|busy|unknown|UNKNOWN|queued|refused|not run)(?: (?:\d+ of \d+ criteri(?:a|on)|passed))?|\d+ of \d+ criteri(?:a|on)|passed|criteria details not reported|\d+\/\d+ checks|(?:\d+ AI calls?(?: \(\d+ for reruns\))?|\d+ for reruns)(?: \+ \d+ unknown)?|\d+ (?:refused|not run|unknown|queued|running|ahead|not yet settled|Stor(?:y|ies) skipped)|\d+ AI calls? so far|step \d+(?: of \d+)?(?: \([^)]*\))?)$/;
+const RESULT_PART = /^(?:(?:waiting|sent|passed|failed|refused|partial|not run)(?: \([^()]+\))?|\d+ (?:waiting|sent|passed|failed|refused|partial|not run)(?: \([^()]+\))?|\d+ tests could not run|\d+ criteria not checked|(?:✓|✗|no verdict|running|busy|unknown|UNKNOWN|queued|refused|not run)(?: (?:\d+ of \d+ criteri(?:a|on)|passed))?|\d+ of \d+ criteri(?:a|on)|passed|criteria details not reported|\d+\/\d+ checks|(?:\d+ AI calls?(?: \(\d+ for reruns\))?|\d+ for reruns)(?: \+ \d+ unknown)?|\d+ (?:refused|not run|unknown|queued|running|ahead|not yet settled|Stor(?:y|ies) skipped)|\d+ AI calls? so far|step \d+(?: of \d+)?(?: \([^)]*\))?)$/;
 function resultParts(text) {
   const sentence = text.split(/\.\s/)[0].replace(/[.,]$/, ''), kept = [];
   for (const part of sentence.split(' · ')) {
     if (RESULT_PART.test(part)) { kept.push(part); continue; }
     // Without a step number, progress puts the step name directly after its own running marker.
-    if (part && kept.length > 1 && kept.at(-1) === 'running') { kept.push(part); continue; }
+    if (part && kept.length > 1 && (kept.at(-1) === 'running' || /^sent(?: \([^()]+\))?$/.test(kept.at(-1)))) { kept.push(part); continue; }
     const words = part.split(' ');
     for (let size = words.length - 1; size > 0; size--) if (RESULT_PART.test(words.slice(0, size).join(' '))) { kept.push(words.slice(0, size).join(' ')); break; }
     break;
