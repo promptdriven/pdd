@@ -16,7 +16,7 @@ import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag } from './workflow-runner.mjs';
 import { checkVerdictSince } from './workflow-results.mjs';
@@ -24,7 +24,7 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
-import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
+import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -249,19 +249,34 @@ async function queryIssues(state, p) {
   if (read.rateLimited) return read;
   return { status: 200, etag: read.etag, issues: read.rows, pages: read.pages, since: newestUpdate(read.rows), fullAt: p.now() };
 }
-async function githubGet(endpoint, p, etag) {
+// A GET of the tick. With an explicit ETag the caller keeps the page. Without one, the tick's ETag cache (p.etags) makes
+// the read conditional, except for a full last page; a 304 then returns the saved body and next page.
+async function githubGet(endpoint, p, etag, safety = false) {
+  if (!safety && p.githubFloor?.blocked('core')) throw Error('GitHub limit is below the floor; retry after reset.');
+  const saved = etag === undefined ? p.etags?.get(endpoint) : undefined;
+  let cached;
+  if (saved) try { cached = { value: JSON.parse(saved.body), next: saved.next ?? '' }; if (githubFullLastPage(endpoint, cached.value, cached.next)) cached = undefined; } catch { cached = undefined; }
+  const tag = etag ?? (cached ? saved.etag : undefined);
   const args = ['api', '--include', '--method', 'GET', endpoint];
-  if (etag) args.push('-H', `If-None-Match: ${etag}`);
+  if (tag) args.push('-H', `If-None-Match: ${tag}`);
   const result = await p.execute('gh', args);
+  p.githubFloor?.observe(githubReply(result.stdout));
   const r = response(result.stdout);
   if (r.rateLimited) throw Object.assign(Error('GitHub rate limited; waiting until reset.'), { resetAt: r.resetAt || p.now() + INTERVAL });
   if (r.status === 304 && etag) return r;
+  if (r.status === 304 && cached) return { ...r, status: 200, value: cached.value, link: cached.next ? `<https://api.github.com/${cached.next}>; rel="next"` : undefined };
   if (r.status === 404) return { ...r, value: null };
   if (r.status !== 200) throw Error('GitHub lookup unavailable; eligible work will be retried next tick.');
-  return { ...r, value: JSON.parse(r.body) };
+  const value = JSON.parse(r.body);
+  if (etag === undefined && r.etag) p.etags?.set(endpoint, { etag: r.etag, body: r.body, next: r.link?.match(/<https:\/\/api\.github\.com\/([^>]+)>; rel="next"/)?.[1] ?? '' });
+  return { ...r, value };
 }
-async function comments(number, state, p) {
+async function comments(number, state, p, issue) {
   if (p.comments) return p.comments(number);
+  // The intake of this tick, or a command just before it, read the same comments into the saved snapshot: when the
+  // saved read has the change facts of this issue row, it is the current answer.
+  const saved = issue && p.dependencySnapshot?.issues?.[number], version = issue ? issueRowVersion(issue) : null;
+  if (saved && version !== null && saved.version === version && Array.isArray(saved.kinds?.comments) && saved.kinds.comments.length === issue.comments) return saved.kinds.comments;
   let endpoint = `repos/${state.repo}/issues/${number}/comments?per_page=100`; const rows = [];
   while (endpoint) {
     const r = await githubGet(endpoint, p);
@@ -276,7 +291,7 @@ async function trusted(row, state, config, p) {
   if ([state.repo.split('/')[0], ...config.trust].some(name => name.toLowerCase() === login.toLowerCase())) return true;
   p.permissions ??= new Map();
   if (!p.permissions.has(login)) {
-    const result = await githubGet(`repos/${state.repo}/collaborators/${encodeURIComponent(login)}/permission`, p);
+    const result = await githubGet(`repos/${state.repo}/collaborators/${encodeURIComponent(login)}/permission`, p, undefined, true);
     p.permissions.set(login, ['admin', 'maintain', 'write'].includes(result.value?.permission));
   }
   return p.permissions.get(login);
@@ -698,6 +713,7 @@ async function currentRecoveryTargetMatches(state, p, verifyRepository = true, s
   } catch { return false; }
 }
 async function wake(state, makeText, p, prepare = async () => {}, explicitStartReconcile = false, semanticIdentity = null, capture = async () => {}) {
+  if (p.githubFloor?.blocked('core') || p.githubFloor?.blocked('graphql')) return false;
   if (p.scanGuard && !await p.scanGuard()) return false;
   const oldDelivery = state.deliveryIntent, oldReconciliation = state.reconciliationIntent;
   const oldIntent = oldReconciliation ?? oldDelivery;
@@ -1158,6 +1174,18 @@ async function runTick(stateFile, ports, completion) {
     // With a low budget, the dependency re-sync of all issues runs at most once an hour; between, the tick
     // uses the last eligible list and claims. Heartbeats of live claims keep their priority.
     const savedIntake = state.githubIntake;
+    // One ETag cache for the reads of this tick: the intake's and the tick's own comment, PR and permission reads.
+    const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now }); p.etags = etags;
+    let githubFloor;
+    try { githubFloor = githubFloorGuard({ floor: githubBudgetSettings(config.github).floor, entries: githubMachineEntries({ root: p.githubRoot }), now: p.now }); } catch { githubFloor = undefined; }
+    p.githubFloor = githubFloor;
+    if (githubFloor) {
+      const execute = p.execute;
+      p.execute = async (...args) => {
+        try { const result = await execute(...args); githubFloor.observe(githubReply(result.stdout)); return result; }
+        catch (error) { githubFloor.observe(githubReply(error.stdout)); throw error; }
+      };
+    }
     const deferIntake = budget.state === 'low' && savedIntake && Number.isFinite(savedIntake.at) && p.now() - savedIntake.at < LOW_BUDGET_INTAKE_EVERY
       && Array.isArray(savedIntake.eligible) && Array.isArray(savedIntake.claims);
     let intake;
@@ -1165,12 +1193,19 @@ async function runTick(stateFile, ports, completion) {
       intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, queued: [], skipped: [] };
       p.warn(`GitHub budget low: Autopilot on this machine used ${budget.used} of ${budget.allowed} calls (${budget.share}%) in the last hour; the dependency re-sync waits until ${new Date(savedIntake.at + LOW_BUDGET_INTAKE_EVERY).toISOString()}.`);
     } else {
-      const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo });
+      // The saved dependency snapshot of this repository and the floor guard go to the intake with the ETag cache.
+      const snapshotStore = dependencySnapshotStore({ root: p.githubRoot, repository: state.repo });
       try {
         intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
           { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-          { ...ports, env: p.env, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+          { ...ports, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
       } finally { etags.save(); }
+      try { p.dependencySnapshot = snapshotStore.load(); } catch { p.dependencySnapshot = null; }
+      if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {
+        const claims = ownClaimsOf(Array.isArray(savedIntake?.claims) ? savedIntake.claims : []);
+        await sendHeartbeats(claims, true);
+        return outcome('unknown', 'GitHub limit is below the floor; dependency progress is saved until reset.');
+      }
       if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [] };
       else delete state.githubIntake;
     }
@@ -1257,7 +1292,7 @@ async function runTick(stateFile, ports, completion) {
         let rows = [];
         if (issue.comments) {
           const cached = state.commentCache[issue.number];
-          rows = cached?.version === version ? cached.rows : await comments(issue.number, state, p);
+          rows = cached?.version === version ? cached.rows : await comments(issue.number, state, p, issue);
           state.commentCache[issue.number] = { version, rows };
         }
         const related = Object.values(state.pullCache).filter(pull => pull.refs.includes(issue.number)).sort((a, b) => a.row.number - b.row.number);
@@ -1410,6 +1445,8 @@ async function runTick(stateFile, ports, completion) {
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
       });
     } finally {
+      // The tick's own conditional reads after the intake keep their ETags too.
+      try { p?.etags?.save(); } catch { /* A lost cache only costs counted reads. */ }
       // Keep the ledger small: entries older than 2 hours go.
       if (p && state?.repo) githubLedger({ root: p.githubRoot, repository: state.repo }).compact(p.now());
       unlinkSync(lock);

@@ -1,18 +1,21 @@
 // Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 260f780d5f448c584ed824b4cc9bbb49453a3b83561e8c22ecceec3b994224b1).
 import { execFile as execCallback } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import * as nativeFs from 'node:fs';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { join, resolve, relative, isAbsolute } from 'node:path';
+import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { runAutopilot } from './autopilot.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
-import { githubFullLastPage, nativeGithubCounter } from './github-calls.mjs';
+import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, nativeGithubCounter } from './github-calls.mjs';
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
-const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners');
+const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners'), LIVE_GITHUB = Symbol('live github');
+const DEFAULT_CACHE = Symbol('default etag cache');
+const NATIVE_FLOORS = Symbol('native dependency floor guards');
 const NATIVE_READ_SCOPE = Symbol('native dependency read scope'), NATIVE_AUTHORITY = Symbol('native authority');
 const NATIVE_CONTEXT = Symbol('native context'), NATIVE_EVIDENCE = Symbol('native evidence'), NATIVE_SETTINGS = Symbol('native settings');
 const nativeReadScope = () => ({ repositories: new Map(), checkouts: new Map(), authorityData: new Map(), authorityResults: new Map() });
@@ -68,17 +71,33 @@ const notModified = text => /^HTTP\/\S+\s+304\b/.test(String(text ?? ''));
 
 function service(cwd, ports) {
   const exec = ports.execFile ?? execute;
-  async function run(file, args, input, purpose, conditional = false, repository) {
+  async function run(file, args, input, purpose, conditional = false, repository, guard = ports.githubFloor) {
     let r;
     try { r = await exec(file, args, { ...(cwd ? { cwd } : {}), ...(input === undefined ? {} : { input }), ...(purpose ? { purpose } : {}), ...(repository ? { repository } : {}) }); }
-    catch (error) { if (conditional && notModified(error?.stdout)) return String(error.stdout); throw error; }
+    catch (error) { guard?.observe(githubReply(error?.stdout)); if (conditional && notModified(error?.stdout)) return String(error.stdout); throw error; }
+    guard?.observe(githubReply(r.stdout));
     if (r.code !== undefined && r.code !== 0 && !(conditional && notModified(r.stdout))) throw Object.assign(Error('Service read failed'), { status: r.code });
     return String(r.stdout ?? '');
   }
   // purpose names what the read is for in the GitHub call ledger, repository the ledger of a GraphQL call. With a githubCache
   // port, a GET sends the saved ETag; a 304 reply returns the saved body and next page and does not count against the limit.
   // A saved full last page, or a saved body that does not parse, sends no ETag: a 304 cannot show a new next page.
-  async function api(endpoint, method = 'GET', input, purpose, repository) {
+  // With a githubFloor port, a read that is not a safety read stops while fewer calls than the floor are left.
+  async function api(endpoint, method = 'GET', input, purpose = 'dependencies', repository, safety = false) {
+    // Native callers share the guard even when they did not install one. Resolve it by repository so
+    // cross-repository safety reads cannot suppress the selected repository's reserve protection.
+    let guard = ports.githubFloor;
+    const repo = repository ?? /^repos\/([^/?#]+\/[^/?#]+)/.exec(endpoint)?.[1];
+    const floors = ports[NATIVE_FLOORS];
+    if (guard === undefined && repo && floors) {
+      const key = repo.toLowerCase();
+      if (!floors.has(key)) floors.set(key, commandGithubFloor({ cwd, repository: repo }, ports));
+      guard = await floors.get(key);
+    }
+    const write = method !== 'GET' && endpoint !== 'graphql';
+    // The batch GraphQL read also stops when REST is below the floor: without REST reads the snapshot is not complete.
+    if (guard && !write && !safety && !(ports.dependencyReads?.safety > 0) && (guard.blocked('core') || endpoint === 'graphql' && guard.blocked('graphql')))
+      throw Object.assign(Error('GitHub limit is below the floor'), { status: 0, floor: true });
     const cache = method === 'GET' ? ports.githubCache : null;
     let saved = cache?.get(endpoint);
     if (saved) {
@@ -86,7 +105,7 @@ function service(cwd, ports) {
       catch { saved = undefined; }
     }
     const executeRequest = () => run('gh', ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json',
-      ...(saved ? ['-H', `If-None-Match: ${saved.etag}`] : []), ...(input === undefined ? [] : ['--input', '-'])], input, purpose, !!saved, repository);
+      ...(saved ? ['-H', `If-None-Match: ${saved.etag}`] : []), ...(input === undefined ? [] : ['--input', '-'])], input, purpose, !!saved, repository, guard);
     const mutation = method === 'POST' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9][0-9]*\/(?:comments|dependencies\/blocked_by)$/.test(endpoint)
       || method === 'PATCH' && /^repos\/[^/]+\/[^/]+\/issues\/comments\/[1-9][0-9]*$/.test(endpoint);
     const raw = mutation && ports.admitMutation ? await ports.admitMutation(executeRequest) : await executeRequest();
@@ -153,24 +172,28 @@ async function bulkRoots(cwd, repository, roots, ports) {
   return result;
 }
 
-async function allPages(github, repository, kind, issue, purpose) {
+async function allPages(github, repository, kind, issue, purpose, safety = false) {
   const items = [], cursors = new Set(); let cursor = '';
   do {
+    let value;
     try {
       if (cursors.has(cursor)) throw Error('Repeated GitHub cursor');
       cursors.add(cursor);
-      const value = parse((await github.page({ repository, kind, issue, cursor, ...(purpose ? { purpose } : {}) })).json);
+      value = parse((await github.page({ repository, kind, issue, cursor, ...(purpose ? { purpose } : {}), ...(safety ? { safety } : {}) })).json);
       if (value.error || !Array.isArray(value.items) || typeof value.next !== 'string') throw Error(`Incomplete ${kind} observation`);
       items.push(...value.items); cursor = value.next;
-    } catch (error) { error.partialItems = items; throw error; }
+    } catch (error) { error.partialItems = [...items, ...(Array.isArray(value?.partialItems) ? value.partialItems : [])]; throw error; }
   } while (cursor);
   return items;
 }
 
 function rawGithub(cwd, ports) {
   const s = service(cwd, ports);
+  // The live claim checks, the history and comments that a write depends on, and readbacks are safety reads: the
+  // floor never stops them. The claim scan inside a snapshot is not one.
+  const safe = (purpose, safety) => safety === true;
   const github = {
-    page: async ({ repository, kind, issue, cursor, purpose }) => {
+    page: async ({ repository, kind, issue, cursor, purpose, safety }) => {
       const suffix = { issues: '?state=open&per_page=100', comments: `/${issue}/comments?per_page=100`,
         blockedBy: `/${issue}/dependencies/blocked_by?per_page=100`, blocking: `/${issue}/dependencies/blocking?per_page=100`, timeline: `/${issue}/timeline?per_page=100` }[kind];
       if (!repositoryName(repository) || suffix === undefined) return { json: JSON.stringify({ error: 'Invalid GitHub scope', status: 400 }) };
@@ -180,18 +203,19 @@ function rawGithub(cwd, ports) {
         const path = cursor.split(/[?#]/, 1)[0];
         const canonical = /^repositories\/[1-9][0-9]*\/(.+)$/.exec(path);
         if (cursor && path !== `repos/${repository}/${route}` && canonical?.[1] !== route) throw Error('Foreign pagination cursor');
-        const r = await s.api(cursor || `repos/${repository}/issues${suffix}`, 'GET', undefined, purpose);
+        const r = await s.api(cursor || `repos/${repository}/issues${suffix}`, 'GET', undefined, purpose, repository, safe(purpose, safety));
         return { json: JSON.stringify({ items: r.value, next: r.next }) };
       } catch (e) { return { json: JSON.stringify({ error: 'GitHub read unavailable', status: e.status ?? 0 }) }; }
     },
-    issue: async ({ repository, issue, purpose }) => {
-      try { return { json: JSON.stringify((await s.api(`repos/${repository}/issues/${issue}`, 'GET', undefined, purpose)).value) }; }
+    issue: async ({ repository, issue, purpose, safety }) => {
+      try { return { json: JSON.stringify((await s.api(`repos/${repository}/issues/${issue}`, 'GET', undefined, purpose, repository, safe(purpose, safety))).value) }; }
       catch (e) { return { json: JSON.stringify({ error: 'GitHub issue unavailable', status: e.status ?? 0 }) }; }
     },
     appendComment: async ({ repository, issue, body }) => {
-      // Recover an uncertain previous append by immutable record identity before another POST.
+      // Recover an uncertain previous append by immutable record identity before another POST. The search and the
+      // readback belong to the write: they are safety reads.
       const record = parseRecord(body);
-      const existing = await allPages(github, repository, 'comments', issue);
+      const existing = await allPages(github, repository, 'comments', issue, undefined, true);
       const equal = row => {
         const other = parseRecord(row.body);
         return record && other && record.type === other.type && JSON.stringify(record.value) === JSON.stringify(other.value);
@@ -200,13 +224,13 @@ function rawGithub(cwd, ports) {
       if (!row) {
         try { row = (await s.api(`repos/${repository}/issues/${issue}/comments`, 'POST', JSON.stringify({ body }))).value; }
         catch (error) {
-          const observed = (await allPages(github, repository, 'comments', issue)).filter(equal);
+          const observed = (await allPages(github, repository, 'comments', issue, undefined, true)).filter(equal);
           if (observed.length !== 1) throw error;
           [row] = observed;
         }
       }
       if (!/^[1-9][0-9]*$/.test(String(row?.id))) throw Error('Append has no native comment identity');
-      const readback = (await s.api(`repos/${repository}/issues/comments/${row.id}`)).value;
+      const readback = (await s.api(`repos/${repository}/issues/comments/${row.id}`, 'GET', undefined, undefined, undefined, true)).value;
       if (readback.id !== row.id || !equal(readback)) throw Error('Comment append readback is unresolved');
       return { json: JSON.stringify(readback) };
     },
@@ -218,6 +242,401 @@ function rawGithub(cwd, ports) {
     },
   };
   Object.defineProperty(github, NATIVE_GITHUB, { value: true });
+  Object.defineProperty(github, LIVE_GITHUB, { value: github });
+  return github;
+}
+
+// ---- The saved dependency snapshot (prompt section "Saved dependency snapshot") ----
+const STORE_VERSION = 1, FULL_REFRESH = 24 * 60 * 60 * 1000, SINCE_OVERLAP = 5 * 60 * 1000, HOUR = 60 * 60 * 1000;
+const STORE_BYTES = 64 * 1024 * 1024, STORE_ISSUES = 10000, KINDS = ['comments', 'blockedBy', 'blocking', 'timeline'];
+const short = text => hash(text).slice(0, 20);
+// The change facts of one GitHub issue row. A row without a valid update time has none, so its reads are never reused.
+export function issueRowVersion(row) {
+  return typeof row?.updated_at === 'string' && Number.isFinite(Date.parse(row.updated_at))
+    ? JSON.stringify([row.updated_at, row.comments ?? null, row.state ?? null, row.issue_dependencies_summary ?? null]) : null;
+}
+const login = user => object(user) ? { login: user.login } : user ?? null;
+const trimRow = row => ({ id: row.id, number: row.number, html_url: row.html_url, title: row.title, body: row.body ?? null, state: row.state,
+  state_reason: row.state_reason ?? null, user: login(row.user), labels: Array.isArray(row.labels) ? row.labels.map(l => typeof l === 'string' ? l : { name: l?.name }) : row.labels,
+  assignees: Array.isArray(row.assignees) ? row.assignees.map(a => object(a) ? { login: a.login } : a) : row.assignees, assignee: login(row.assignee),
+  created_at: row.created_at, updated_at: row.updated_at, comments: row.comments,
+  ...(row.nativeLinkVersion !== undefined ? { nativeLinkVersion: row.nativeLinkVersion } : {}),
+  ...(row.issue_dependencies_summary !== undefined ? { issue_dependencies_summary: row.issue_dependencies_summary } : {}) });
+const linkedIssue = value => object(value) ? { html_url: value.html_url, number: value.number, ...(object(value.repository) ? { repository: { full_name: value.repository.full_name } } : {}) } : value;
+const trimItems = {
+  comments: items => items.map(c => ({ id: c.id, body: c.body, user: login(c.user), created_at: c.created_at, updated_at: c.updated_at, ...(c.html_url ? { html_url: c.html_url } : {}) })),
+  blockedBy: items => items.map(x => ({ html_url: x.html_url })), blocking: items => items.map(x => ({ html_url: x.html_url })),
+  timeline: items => items.map(e => ({ id: e.id, event: e.event, actor: login(e.actor), created_at: e.created_at, ...(e.label ? { label: { name: e.label.name } } : {}),
+    ...(e.blocked_by ? { blocked_by: linkedIssue(e.blocked_by) } : {}), ...(e.blocking ? { blocking: linkedIssue(e.blocking) } : {}),
+    ...(object(e.source) ? { source: { issue: object(e.source.issue) ? { ...(e.source.issue.pull_request ? { pull_request: {} } : {}), state: e.source.issue.state } : e.source.issue } } : {}) })),
+};
+
+// Counts prove absence, but cannot distinguish equal-size swaps. Observe identities in both directions.
+const linkVersion = (blockedBy, blocking) => hash(JSON.stringify([blockedBy, blocking].map(items =>
+  [...new Set(items.map(x => info(x.html_url ?? x.url)?.key ?? fail('invalid-link')))].sort())));
+async function nativeLinkVersions(repository, rows, api) {
+  const versions = new Map(), needed = [];
+  for (const row of rows) {
+    const summary = row.issue_dependencies_summary;
+    if (object(summary) && ['blocked_by', 'blocking', 'total_blocked_by', 'total_blocking'].every(k => summary[k] === 0))
+      versions.set(row.number, linkVersion([], []));
+    else needed.push(row);
+  }
+  for (let offset = 0; offset < needed.length; offset += 25) {
+    const batch = needed.slice(offset, offset + 25), [owner, name] = repository.split('/');
+    const selection = 'url number blockedBy(first:100) { nodes { url } pageInfo { hasNextPage } } blocking(first:100) { nodes { url } pageInfo { hasNextPage } }';
+    const query = `query($owner:String!,$name:String!${batch.map((_, i) => `,$n${i}:Int!`).join('')}) { repository(owner:$owner,name:$name) { ${batch.map((_, i) => `i${i}:issue(number:$n${i}) { ${selection} }`).join(' ')} } }`;
+    let data;
+    try {
+      const reply = (await api('graphql', 'POST', JSON.stringify({ query, variables: { owner, name, ...Object.fromEntries(batch.map((r, i) => [`n${i}`, r.number])) } }), 'dependencies', repository)).value;
+      if (!reply.errors?.length) data = reply.data?.repository;
+    } catch { /* Complete REST pages below are the fallback. */ }
+    for (const [i, row] of batch.entries()) {
+      const live = data?.[`i${i}`];
+      try {
+        const complete = connection => object(connection) && Array.isArray(connection.nodes) && connection.pageInfo?.hasNextPage === false
+          && connection.nodes.every(x => info(x?.url));
+        if (live?.number === row.number && info(live.url)?.key === info(row.html_url)?.key && complete(live.blockedBy) && complete(live.blocking)) {
+          versions.set(row.number, linkVersion(live.blockedBy.nodes, live.blocking.nodes));
+          continue;
+        }
+        const pages = [];
+        for (const direction of ['blocked_by', 'blocking']) {
+          const items = [], seen = new Set();
+          let cursor = `repos/${repository}/issues/${row.number}/dependencies/${direction}?per_page=100`;
+          while (cursor) {
+            if (seen.has(cursor)) throw Error('Repeated GitHub cursor');
+            seen.add(cursor);
+            const reply = await api(cursor);
+            if (!Array.isArray(reply.value)) throw Error('Incomplete link identities');
+            items.push(...reply.value); cursor = reply.next;
+          }
+          pages.push(items);
+        }
+        versions.set(row.number, linkVersion(...pages));
+      } catch { throw Error('Current link identities unavailable'); }
+    }
+  }
+  return versions;
+}
+
+// One private, versioned, bounded file for each repository: the issue rows of the last list read and the full reads of
+// each issue, keyed by the change facts of its row. A save merges with the file as it is then: the newer list read
+// wins with its watermark, each issue keeps its newer observation, and an issue that a process wrote stays invalid.
+export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
+  const repo = String(repository).toLowerCase(), file = join(root, 'github', `${short(repo)}.snapshot.json`);
+  const valid = data => object(data) && data.v === STORE_VERSION && data.repository === repo && Number.isFinite(data.refreshedAt)
+    && object(data.list) && object(data.list.rows) && typeof data.list.since === 'string' && Number.isFinite(data.list.readAt) && object(data.issues);
+  const load = () => { try { const data = JSON.parse(fs.readFileSync(file, 'utf8')); return valid(data) ? data : null; } catch { return null; } };
+  const completionFile = join(root, 'github', `${short(repo)}.completion.json`);
+  const completion = {
+    file: completionFile,
+    read: () => { try { const value = JSON.parse(fs.readFileSync(completionFile, 'utf8')); return object(value) && value.v === STORE_VERSION ? value : null; } catch { return null; } },
+    save: value => {
+      const text = JSON.stringify({ v: STORE_VERSION, ...value });
+      if (Buffer.byteLength(text) > STORE_BYTES) return false;
+      fs.mkdirSync(dirname(completionFile), { recursive: true, mode: 0o700 });
+      const temp = `${completionFile}.${randomUUID()}.tmp`;
+      fs.writeFileSync(temp, text, { mode: 0o600 }); fs.renameSync(temp, completionFile);
+      return true;
+    },
+    clear: () => { try { fs.unlinkSync(completionFile); } catch (error) { if (error.code !== 'ENOENT') throw error; } },
+  };
+  return {
+    file, repository: repo, load, completion,
+    save(data) {
+      const lock = `${file}.lock`;
+      let held = false;
+      try {
+        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+        for (let attempt = 0; !held; attempt++) {
+          try { fs.mkdirSync(lock, { mode: 0o700 }); held = true; }
+          catch (error) {
+            if (error.code !== 'EEXIST' || attempt >= 200) return null;
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          }
+        }
+        const current = load(), epoch = Math.max(data.refreshedAt, current?.refreshedAt ?? -Infinity);
+        const sides = [current, data].filter(side => side && side.refreshedAt === epoch);
+        // On a tie the list of this save wins: it was read after the saved one.
+        const list = sides.length === 2 && current.list.readAt > data.list.readAt ? current.list : sides.at(-1).list;
+        const invalid = {};
+        for (const side of [current, data]) for (const [n, at] of Object.entries(side?.invalid ?? {}))
+          if (Number.isFinite(at)) invalid[n] = Math.max(invalid[n] ?? -Infinity, at);
+        const issues = {};
+        for (const side of sides) for (const [n, entry] of Object.entries(side.issues)) {
+          if (!object(entry) || !(entry.observedAt >= epoch) || invalid[n] > entry.observedAt) continue;
+          if (!issues[n] || entry.observedAt >= issues[n].observedAt) issues[n] = entry;
+        }
+        const pending = sides.map(side => side.pendingList).filter(value => object(value) && object(value.rows) && value.at >= list.readAt)
+          .sort((a, b) => b.at - a.at)[0];
+        const next = { v: STORE_VERSION, repository: repo, refreshedAt: epoch, list, issues, invalid,
+          ...(pending && (data.pendingList || pending.at > list.readAt) ? { pendingList: pending } : {}) };
+        let text = JSON.stringify(next);
+        // Bounded: the oldest issue reads go first; a list that is too large alone is not saved.
+        const ordered = Object.entries(issues).sort((a, b) => a[1].observedAt - b[1].observedAt);
+        while ((Buffer.byteLength(text) > STORE_BYTES || ordered.length > STORE_ISSUES) && ordered.length) {
+          const drop = ordered.splice(0, Math.max(1, Math.ceil(ordered.length / 10)));
+          for (const [n] of drop) delete issues[n];
+          text = JSON.stringify(next);
+        }
+        if (Buffer.byteLength(text) > STORE_BYTES) return null;
+        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+        const temp = `${file}.${randomUUID()}.tmp`;
+        fs.writeFileSync(temp, text, { mode: 0o600 });
+        fs.renameSync(temp, file);
+        return next;
+      } catch { return null; /* A lost save only costs reads. */ }
+      finally { if (held) try { fs.rmdirSync(lock); } catch { /* A leftover lock refuses future saves. */ } }
+    },
+  };
+}
+
+// The pdd command default: the saved snapshot and the ETag cache of a repository where Autopilot runs on this machine,
+// that is, where its call ledger exists in the state root.
+const autopilotRoot = ports => ports.autopilotStateRoot ?? join(stateDirFor(ports), 'autopilot');
+const autopilotRepository = (root, repository, fs = nativeFs) => { try { return fs.existsSync(githubLedger({ root, repository }).file); } catch { return false; } };
+function defaultStores(ports) {
+  if (ports.snapshotStore === null) return () => null;
+  if (ports.snapshotStore) return repository => sameRepo(ports.snapshotStore.repository, repository) ? ports.snapshotStore : null;
+  const root = autopilotRoot(ports);
+  return repository => autopilotRepository(root, repository) ? dependencySnapshotStore({ root, repository }) : null;
+}
+function defaultEtagCache(ports) {
+  const root = autopilotRoot(ports), caches = new Map();
+  const cacheFor = endpoint => {
+    const repo = /^repos\/([^/?#]+\/[^/?#]+)/.exec(String(endpoint))?.[1]?.toLowerCase();
+    if (!repo || !repositoryName(repo)) return null;
+    if (!caches.has(repo)) caches.set(repo, autopilotRepository(root, repo) ? githubEtagCache({ root, repository: repo }) : null);
+    return caches.get(repo);
+  };
+  const cache = { get: endpoint => cacheFor(endpoint)?.get(endpoint), set: (endpoint, entry) => cacheFor(endpoint)?.set(endpoint, entry),
+    save: () => { for (const each of caches.values()) each?.save(); } };
+  Object.defineProperty(cache, DEFAULT_CACHE, { value: true });
+  return cache;
+}
+const flushCache = ports => { try { if (ports.githubCache?.[DEFAULT_CACHE]) ports.githubCache.save(); } catch { /* best effort */ } };
+
+// The floor guard of native dependency reads for an Autopilot repository: the floor of `autopilot.github` in the
+// checkout's pdd.json (default 1,000) and the newest limit in the ledgers of this machine. Null for other repositories.
+export async function commandGithubFloor({ cwd = '', repository }, ports = {}) {
+  if (ports.githubFloor !== undefined || (ports.github && !ports.github[NATIVE_GITHUB]) || !repositoryName(repository)) return ports.githubFloor ?? null;
+  const root = autopilotRoot(ports);
+  if (!autopilotRepository(root, repository)) return null;
+  let setting;
+  try { const top = cwd ? (await gitContext(cwd, ports.execFile ? { execFile: ports.execFile } : {}))?.toplevel : null; if (top) setting = readJson(join(top, 'pdd.json'), {})?.autopilot?.github; } catch { /* The default floor applies. */ }
+  const now = typeof ports.now === 'function' ? ports.now : Date.now;
+  return githubFloorGuard({ floor: githubBudgetSettings(setting).floor, entries: githubMachineEntries({ root }), now });
+}
+
+// The reads of one pdd process (one tick, one command): the issue list and the issue reads of this process, the saved
+// snapshot, the comment bodies of the comment pages read, the claims of the last snapshot and the trust lookups.
+function readSession(storeFor, now) {
+  const repos = new Map();
+  const state = repository => {
+    const repo = String(repository).toLowerCase();
+    if (!repos.has(repo)) {
+      let store = null; try { store = storeFor(repo) ?? null; } catch { store = null; }
+      repos.set(repo, { repo, store, data: undefined, list: null, entries: new Map(), blocked: new Set(), invalid: {}, rawVersion: new Map(), live: false, liveIssues: new Set() });
+    }
+    return repos.get(repo);
+  };
+  const saved = s => { if (s.data === undefined) s.data = s.store?.load() ?? null; return s.data; };
+  const usable = (s, at) => { const d = saved(s); return d && at >= d.refreshedAt && at - d.refreshedAt < FULL_REFRESH ? d : null; };
+  // The current read of one issue: this process's own read, else a saved read whose change facts match the current row.
+  const matches = (entry, row, version) => version !== null && entry.version === version
+    && (row.nativeLinkVersion === undefined || Array.isArray(entry.kinds?.blockedBy) && Array.isArray(entry.kinds?.blocking)
+      && row.nativeLinkVersion === linkVersion(entry.kinds.blockedBy, entry.kinds.blocking));
+  const fresh = (s, n) => {
+    const row = s.list?.rows.get(n), version = row ? issueRowVersion(row) : undefined;
+    const own = s.entries.get(n);
+    if (own) return !row || matches(own, row, version) ? own : null;
+    if (s.blocked.has(n) || !s.list?.complete) return null;
+    const d = saved(s), entry = d?.issues?.[n];
+    if (!entry || d.refreshedAt !== s.list.refreshedAt || !(entry.observedAt >= d.refreshedAt) || d.invalid?.[n] > entry.observedAt) return null;
+    if (row) return matches(entry, row, version) ? entry : null;
+    // An issue outside the open list is current while since reads cover its changes; it needs its saved issue.
+    return s.list.mode !== 'refresh' && object(entry.raw) ? entry : null;
+  };
+  const entryFor = (s, n) => {
+    const row = s.list?.rows.get(n), version = row ? issueRowVersion(row) : s.rawVersion.get(n) ?? null;
+    let entry = s.entries.get(n);
+    if (!entry || entry.version !== version) { entry = { version, observedAt: now(), kinds: {}, ...(entry?.raw && !row ? { raw: entry.raw } : {}) }; s.entries.set(n, entry); }
+    return entry;
+  };
+  return {
+    comments: new Map(), commentIssues: new Set(), lookups: new Map(), owners: null, savedList: false, safety: 0,
+    stored: repository => !!state(repository).store,
+    // The kept completion beside the saved snapshot of this repository, or null.
+    completions: repository => state(repository).store?.completion ?? null,
+    // This process reads the issue live: its saved reads and the saved list are not used.
+    live(repository, n) { const s = state(repository); if (!Number.isSafeInteger(n)) return; s.entries.delete(n); s.blocked.add(n); s.live = true; s.liveIssues.add(n); },
+    liveIssue: (repository, n) => state(repository).liveIssues.has(n),
+    // True when the saved list was read within `within` milliseconds and its full refresh is still current.
+    recentList(repository, within) { const s = state(repository), at = now(), d = usable(s, at); return !!d && !d.pendingList && at >= d.list.readAt && at - d.list.readAt < within; },
+    // The open issues of the repository: a full read at the first read and once a day, else the changed issues since
+    // the watermark applied to the saved rows. An incomplete list never advances complete coverage; partial rows can be staged.
+    async readList(repository, api) {
+      const s = state(repository), at = now(), d = usable(s, at), repo = s.repo;
+      const rows = new Map(d ? Object.entries(d.list.rows).map(([n, row]) => [Number(n), row]) : []);
+      if (d && d.pendingList?.at >= d.list.readAt && object(d.pendingList.rows)) {
+        rows.clear(); for (const [n, row] of Object.entries(d.pendingList.rows)) rows.set(Number(n), row);
+      }
+      if (d && this.savedList && !s.live && !d.pendingList) {
+        s.list = { rows, complete: true, readAt: d.list.readAt, since: d.list.since, refreshedAt: d.refreshedAt, mode: 'saved' };
+        return [...rows.values()].sort((a, b) => b.number - a.number);
+      }
+      const mode = d ? 'since' : 'refresh', refreshedAt = d ? d.refreshedAt : at;
+      if (!d) rows.clear();
+      s.list = { rows, complete: false, readAt: at, since: d?.list.since, refreshedAt, mode };
+      const items = [], cursors = new Set();
+      let cursor = d ? `repos/${repo}/issues?state=all&sort=updated&direction=desc&since=${encodeURIComponent(d.list.since)}&per_page=100` : `repos/${repo}/issues?state=open&per_page=100`;
+      try {
+        while (cursor) {
+          const path = cursor.split(/[?#]/, 1)[0];
+          if (cursors.has(cursor) || path !== `repos/${repo}/issues` && !/^repositories\/[1-9][0-9]*\/issues$/.test(path)) throw Error('Foreign pagination cursor');
+          cursors.add(cursor);
+          const r = await api(cursor);
+          if (!Array.isArray(r.value)) throw Error('GitHub returned no issue list');
+          items.push(...r.value); cursor = r.next;
+        }
+      } catch (error) { apply(s, rows, items, d); error.partialItems = [...rows.values()].sort((a, b) => b.number - a.number); throw error; }
+      let newest = apply(s, rows, items, d);
+      try { if (d) {
+        // Links need not move updated_at. Revalidate only the open index metadata, so change facts outside
+        // `since` still invalidate the corresponding detail reads. Removals remain the daily refresh's job.
+        cursor = `repos/${repo}/issues?state=open&per_page=100`;
+        const seen = new Set();
+        while (cursor) {
+          if (seen.has(cursor)) throw Error('Repeated GitHub cursor');
+          seen.add(cursor);
+          const r = await api(cursor);
+          if (!Array.isArray(r.value)) throw Error('GitHub returned no issue list');
+          newest = Math.max(newest, apply(s, rows, r.value, d)); cursor = r.next;
+        }
+      } } catch (error) { error.partialItems = [...rows.values()].sort((a, b) => b.number - a.number); throw error; }
+      try {
+        const linked = [...rows.values(), ...Object.entries(d?.issues ?? {}).filter(([n, entry]) => !rows.has(Number(n)) && entry.raw).map(([, entry]) => ({ ...entry.raw, issue_dependencies_summary: undefined }))];
+        const versions = await nativeLinkVersions(repo, linked, api);
+        for (const row of linked) {
+          const version = versions.get(row.number);
+          if (rows.has(row.number)) row.nativeLinkVersion = version;
+          else {
+            const entry = d.issues[row.number];
+            if (linkVersion(entry.kinds.blockedBy, entry.kinds.blocking) !== version) {
+              s.entries.delete(row.number); s.blocked.add(row.number); s.invalid[row.number] = at;
+            }
+          }
+        }
+      } catch (error) { error.partialItems = [...rows.values()].sort((a, b) => b.number - a.number); throw error; }
+      const since = Number.isFinite(newest) ? new Date(Math.max(newest - SINCE_OVERLAP, d ? Date.parse(d.list.since) : -Infinity)).toISOString() : d?.list.since ?? new Date(at - HOUR).toISOString();
+      s.list = { rows, complete: true, readAt: at, since, refreshedAt, mode };
+      s.live = false;
+      return [...rows.values()].sort((a, b) => b.number - a.number);
+    },
+    row: (repository, n) => state(repository).list?.rows.get(n) ?? null,
+    // True when every kind of this issue has a current read.
+    current(repository, n) { const s = state(repository); if (!s.store) return false; const entry = fresh(s, n); return !!entry && KINDS.every(kind => Array.isArray(entry.kinds?.[kind])); },
+    noteComments(issueKey, items, complete) {
+      for (const key of this.comments.keys()) if (key.startsWith(`${issueKey}#issuecomment-`)) this.comments.delete(key);
+      for (const comment of items) if (/^[1-9][0-9]*$/.test(String(comment?.id ?? ''))) this.comments.set(`${issueKey}#issuecomment-${comment.id}`, comment);
+      if (complete) this.commentIssues.add(issueKey); else this.commentIssues.delete(issueKey);
+    },
+    // A saved full read of one issue for this kind, or null. A history from the batch read has only its PR references,
+    // so a claim check never takes it.
+    served(repository, n, kind, purpose) {
+      const s = state(repository); if (!s.store) return null;
+      const entry = fresh(s, n), items = entry?.kinds?.[kind];
+      if (!Array.isArray(items) || kind === 'timeline' && purpose === 'claims' && entry.partialTimeline) return null;
+      return items;
+    },
+    savedIssue(repository, n) { const s = state(repository); if (!s.store || s.list?.rows.has(n)) return null; return fresh(s, n)?.raw ?? null; },
+    record(repository, n, kind, items, partial = false) {
+      const s = state(repository); if (!s.store || !Number.isSafeInteger(n) || !KINDS.includes(kind)) return items;
+      const entry = entryFor(s, n), trimmed = trimItems[kind](items);
+      entry.kinds[kind] = trimmed;
+      if (kind === 'timeline') { if (partial) entry.partialTimeline = true; else delete entry.partialTimeline; }
+      return trimmed;
+    },
+    recordIssue(repository, n, raw) {
+      const s = state(repository); if (!s.store || s.list?.rows.has(n)) return;
+      s.rawVersion.set(n, issueRowVersion(raw));
+      entryFor(s, n).raw = trimRow(raw);
+    },
+    // A write to an issue: this process reads it live again, and no saved read of it before now is used again.
+    invalidate(repository, n) {
+      const s = state(repository); if (!Number.isSafeInteger(n)) return;
+      this.noteComments(`https://github.com/${s.repo}/issues/${n}`, [], false);
+      s.entries.delete(n); s.blocked.add(n); s.invalid[n] = now(); s.live = true;
+      s.list?.rows.delete(n);
+    },
+    // Save complete list coverage and full issue reads, or stage partial rows against the last complete list.
+    commit(repository) {
+      const s = state(repository); if (!s.store || !s.list) return;
+      const d = saved(s), issues = {};
+      if (!s.list.complete && (!d || d.refreshedAt !== s.list.refreshedAt)) return;
+      if (d && d.refreshedAt === s.list.refreshedAt) for (const [n, entry] of Object.entries(d.issues)) {
+        const number = Number(n), row = s.list.rows.get(number);
+        if (!s.blocked.has(number) && (row ? entry.version === issueRowVersion(row) : s.list.mode !== 'refresh' && object(entry.raw))) issues[n] = entry;
+      }
+      for (const [n, entry] of s.entries) if (KINDS.every(kind => Array.isArray(entry.kinds[kind])) && (s.list.rows.has(n) || object(entry.raw)) && entry.version !== null) issues[n] = entry;
+      const data = { v: STORE_VERSION, repository: s.repo, refreshedAt: s.list.refreshedAt,
+        list: s.list.complete ? { readAt: s.list.readAt, since: s.list.since, rows: Object.fromEntries(s.list.rows) } : d.list, issues,
+        ...(!s.list.complete ? { pendingList: { at: s.list.readAt, rows: Object.fromEntries(s.list.rows) } } : {}),
+        invalid: { ...(d && d.refreshedAt === s.list.refreshedAt ? d.invalid : {}), ...s.invalid } };
+      const merged = s.store.save(data);
+      if (merged) s.data = merged;
+    },
+  };
+  // Rows of an issue list read applied to the open rows: an open issue replaces its row, any other leaves the list,
+  // and a changed issue outside the list loses its saved read. Pull requests are not dependency subjects.
+  function apply(s, rows, items, d) {
+    let newest = -Infinity;
+    for (const row of items) {
+      const at = Date.parse(row?.updated_at); if (Number.isFinite(at)) newest = Math.max(newest, at);
+      if (!object(row) || row.pull_request || !Number.isSafeInteger(row.number) || row.number < 1) continue;
+      if (row.state === 'open') rows.set(row.number, trimRow(row));
+      else {
+        rows.delete(row.number);
+        const entry = d?.issues?.[row.number];
+        if (entry && entry.version !== issueRowVersion(row)) { s.blocked.add(row.number); s.invalid[row.number] = now(); }
+      }
+    }
+    return newest;
+  }
+}
+
+// The GitHub port of a process with a saved snapshot: an open root issue is its current list row, and a current saved
+// or own read of an issue serves its pages. Every other read goes to GitHub; each read in full is recorded. Writes go
+// to GitHub and make the issue live again in this process.
+function sessionGithub(raw, session) {
+  const numberOf = value => Number(value);
+  const github = {
+    page: async args => {
+      const { repository, kind, issue, cursor, purpose } = args;
+      if (cursor || kind === 'issues' || !session.stored(repository)) return raw.page(args);
+      if (session.liveIssue(repository, numberOf(issue))) return raw.page({ ...args, safety: true });
+      const hit = session.served(repository, numberOf(issue), kind, purpose);
+      if (hit) return { json: JSON.stringify({ items: hit, next: '' }) };
+      let items;
+      try { items = await allPages(raw, repository, kind, issue, purpose, args.safety); }
+      catch (error) { return { json: JSON.stringify({ error: 'GitHub read unavailable', status: error.status ?? 0, partialItems: error.partialItems ?? [] }) }; }
+      return { json: JSON.stringify({ items: session.record(repository, numberOf(issue), kind, items), next: '' }) };
+    },
+    issue: async args => {
+      if (session.liveIssue(args.repository, numberOf(args.issue))) return raw.issue({ ...args, safety: true });
+      if (!session.stored(args.repository)) return raw.issue(args);
+      const row = session.row(args.repository, numberOf(args.issue)) ?? session.savedIssue(args.repository, numberOf(args.issue));
+      if (row) return { json: JSON.stringify(row) };
+      const reply = await raw.issue(args);
+      try { const value = parse(reply.json); if (!value.error && info(value.html_url)?.key === `https://github.com/${args.repository.toLowerCase()}/issues/${args.issue}`) session.recordIssue(args.repository, numberOf(args.issue), value); } catch { /* not recorded */ }
+      return reply;
+    },
+    appendComment: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.appendComment(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
+    addBlocker: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.addBlocker(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
+  };
+  Object.defineProperty(github, NATIVE_GITHUB, { value: true });
+  Object.defineProperty(github, LIVE_GITHUB, { value: raw });
   return github;
 }
 
@@ -250,13 +669,18 @@ function nativeAuthority(cwd, ports) {
         try { const setting = readJson(join(root, 'pdd.json'), {}); raw = Object.hasOwn(setting, 'autopilot') ? JSON.stringify(setting.autopilot) : null; }
         catch { configKnown = false; }
       }
-      let lookup;
-      try {
-        const repo = (await s.api(`repos/${repository}`)).value;
-        const pages = []; let endpoint = `repos/${repository}/collaborators?per_page=100`;
-        while (endpoint) { const r = await s.api(endpoint); pages.push(...r.value); endpoint = r.next; }
-        lookup = { owner: repo.owner?.login ?? '', writers: pages.filter(p => p.permissions?.push || p.permissions?.maintain || p.permissions?.admin).map(p => p.login), complete: !!repo.owner?.login };
-      } catch { lookup = { owner: repository.split('/')[0], writers: [], complete: false }; }
+      // Trust is a safety read: the floor never stops it. One process reads it once for each repository.
+      const lookups = ports.dependencyReads?.lookups, lookupKey = repository.toLowerCase();
+      const read = async () => {
+        try {
+          const repo = (await s.api(`repos/${repository}`, 'GET', undefined, undefined, undefined, true)).value;
+          const pages = []; let endpoint = `repos/${repository}/collaborators?per_page=100`;
+          while (endpoint) { const r = await s.api(endpoint, 'GET', undefined, undefined, undefined, true); pages.push(...r.value); endpoint = r.next; }
+          return { owner: repo.owner?.login ?? '', writers: pages.filter(p => p.permissions?.push || p.permissions?.maintain || p.permissions?.admin).map(p => p.login), complete: !!repo.owner?.login };
+        } catch { return { owner: repository.split('/')[0], writers: [], complete: false }; }
+      };
+      if (lookups && !lookups.has(lookupKey)) lookups.set(lookupKey, read().then(value => { if (!value.complete) lookups.delete(lookupKey); return value; }));
+      const lookup = await (lookups ? lookups.get(lookupKey) : read());
       return { root, configKnown, raw, lookup };
     })());
     return scope.authorityData.get(key);
@@ -280,8 +704,16 @@ function nativeAuthority(cwd, ports) {
 async function readLocator(row, cwd, repository, ports, checkout = () => selectedCheckout(cwd, repository, ports)) {
   const key = canonical(row.key), s = service(cwd, ports), i = info(key);
   if (i?.comment) {
-    const comment = (await s.api(`repos/${i.repository}/issues/comments/${i.comment}`)).value;
-    if (canonical(comment.html_url) !== key || bookkeeping(comment.body)) throw Error('Unavailable requirement comment');
+    // The body comes from the comment pages that this process read in full. A comment that is not on its issue's
+    // complete pages is gone. Only a comment of an issue that this process did not read is one more read.
+    const reads = ports.dependencyReads;
+    let comment = reads?.comments.get(key);
+    if (!comment && reads?.commentIssues.has(i.key)) throw Error('Unavailable requirement comment');
+    if (!comment) {
+      comment = (await s.api(`repos/${i.repository}/issues/comments/${i.comment}`)).value;
+      if (canonical(comment.html_url) !== key) throw Error('Unavailable requirement comment');
+    }
+    if (bookkeeping(comment.body)) throw Error('Unavailable requirement comment');
     const authority = await ports.authority.read({ repository: i.repository, author: comment.user?.login ?? '' });
     if (authority.authority !== 'trusted') throw Error('Requirement authority is unknown');
     return { key, revision: hash(comment.body ?? ''), text: comment.body ?? '', issue: i.key };
@@ -319,7 +751,8 @@ function nativeContext(cwd, ports) {
 }
 
 function nativeEvidence(cwd, ports) {
-  const evidence = { read: async ({ cwd: at = cwd, repository, issues }) => {
+  const evidence = { read: async args => { try { return await readEvidence(args); } finally { flushCache(ports); } } };
+  const readEvidence = async ({ cwd: at = cwd, repository, issues }) => {
     const readPorts = createDependencyReadPorts({ cwd: at }, ports, nativeReadScope());
     const source = [], requirements = [], required = new Map();
     for (const key of issues) {
@@ -359,7 +792,7 @@ function nativeEvidence(cwd, ports) {
       if (item.path) source.push({ ...item, issues: [...targets] });
     } catch { /* Unavailable required rows stay absent on completion. */ }
     return { json: JSON.stringify({ source, requirements }) };
-  } };
+  };
   Object.defineProperty(evidence, NATIVE_EVIDENCE, { value: true });
   return evidence;
 }
@@ -433,13 +866,13 @@ export function withoutClaimHeartbeat(body) {
   return text;
 }
 
-async function winningClaim(repository, key, github, authority, now = NaN) {
-  // Claim checks are their own purpose in the GitHub call ledger.
-  const i = info(key), raw = parse((await github.issue({ repository, issue: i.issue, purpose: 'claims' })).json);
+async function winningClaim(repository, key, github, authority, now = NaN, safety = false) {
+  // Claim checks are their own purpose in the GitHub call ledger; a live claim check is a safety read.
+  const i = info(key), raw = parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', ...(safety ? { safety } : {}) })).json);
   if (raw.error) throw Error('Current claim issue unavailable');
   const labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
   if (!labels.includes('pdd:working')) return null;
-  const timeline = await allPages(github, repository, 'timeline', i.issue, 'claims'), comments = await allPages(github, repository, 'comments', i.issue, 'claims');
+  const timeline = await allPages(github, repository, 'timeline', i.issue, 'claims', safety), comments = await allPages(github, repository, 'comments', i.issue, 'claims', safety);
   let candidates = [], stuck = null;
   // Claim eras in order ({winner, start, end, index}; the current era has no end) and the
   // removals of pdd:stuck, for the takeover count below.
@@ -549,13 +982,13 @@ async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorI
   const i = info(claim?.issue), s = service(cwd, ports);
   if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
     || !claim.labelEventId || claim.active !== true || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !Number.isFinite(time(at))) return null;
-  const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`, comment = (await s.api(endpoint)).value;
+  const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`, comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value;
   const record = claimRecord(comment?.body);
   if (String(comment?.id) !== String(claim.commentId) || !record || !sameRepo(record.value.repository, repository) || record.value.coordinatorId !== coordinatorId
     || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return null;
   const value = iso(time(at)), body = editClaimRecord(comment.body, record, { ...record.value, [name]: value }, name);
   if (body === null) throw Error(`Claim record cannot take ${name === 'lastSeen' ? 'a heartbeat' : name} without other changes`);
-  const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }))).value;
+  const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository)).value;
   if (String(saved?.id) !== String(claim.commentId) || claimRecord(saved.body)?.value[name] !== value) throw Error(name === 'lastSeen' ? 'Claim heartbeat readback is unresolved' : 'Claim record readback is unresolved');
   return value;
 }
@@ -645,12 +1078,17 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
   return { runs, runsKnown };
 }
 
-function nativeOwners(cwd, ports) {
+// The default owners port is live: each claim check asks GitHub (a 304 is a live answer). Only the claim scan inside one
+// snapshot (live false) reads through that snapshot's reads.
+function nativeOwners(cwd, ports, { live = true } = {}) {
   const owner = { read: async ({ repository, issues }) => {
-    const state = await launcherState(cwd, repository, ports), claims = [];
-    let now = NaN; try { now = time((await ports.clock.now({})).iso); } catch { /* An unknown clock expires no claim. */ }
-    for (const key of issues) { const claim = await winningClaim(repository, key, ports.github, ports.authority, now); if (claim) claims.push(claim); }
-    return { json: JSON.stringify({ localOwner: state?.coordinatorId ?? '', localMachine: state?.machine ?? '', claims, ...await readLocalOccupied({ cwd, repository }, ports) }) };
+    try {
+      const github = live ? ports.github[LIVE_GITHUB] ?? ports.github : ports.github;
+      const state = await launcherState(cwd, repository, ports), claims = [];
+      let now = NaN; try { now = time((await ports.clock.now({})).iso); } catch { /* An unknown clock expires no claim. */ }
+      for (const key of issues) { const claim = await winningClaim(repository, key, github, ports.authority, now, live && !!ports.github[LIVE_GITHUB]); if (claim) claims.push(claim); }
+      return { json: JSON.stringify({ localOwner: state?.coordinatorId ?? '', localMachine: state?.machine ?? '', claims, ...await readLocalOccupied({ cwd, repository }, ports) }) };
+    } finally { if (live) flushCache(ports); }
   } };
   Object.defineProperty(owner, NATIVE_OWNERS, { value: true });
   return owner;
@@ -659,7 +1097,14 @@ function nativeOwners(cwd, ports) {
 export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scope = nativeReadScope()) {
   const ports = { ...supplied };
   Object.defineProperty(ports, NATIVE_READ_SCOPE, { value: scope });
-  ports.github ??= rawGithub(cwd, ports);
+  // This enumerable symbol follows derived ports, unlike the per-observation scope.
+  if (!supplied.github || supplied.github[NATIVE_GITHUB]) ports[NATIVE_FLOORS] ??= new Map();
+  if (!supplied.github) {
+    // The native reader of one process: its reads, the saved snapshot of an Autopilot repository, and the ETag cache.
+    ports.dependencyReads ??= readSession(defaultStores(ports), typeof supplied.now === 'function' ? supplied.now : Date.now);
+    if (ports.githubCache === undefined) ports.githubCache = defaultEtagCache(ports);
+  }
+  ports.github ??= ports.dependencyReads ? sessionGithub(rawGithub(cwd, ports), ports.dependencyReads) : rawGithub(cwd, ports);
   ports.authority = supplied.authority?.[NATIVE_AUTHORITY] ? nativeAuthority(cwd, ports) : supplied.authority ?? nativeAuthority(cwd, ports);
   ports.context = supplied.context?.[NATIVE_CONTEXT] ? nativeContext(cwd, ports) : supplied.context ?? nativeContext(cwd, ports);
   ports.evidence = supplied.evidence?.[NATIVE_EVIDENCE] ? nativeEvidence(cwd, ports) : supplied.evidence ?? nativeEvidence(cwd, ports);
@@ -707,8 +1152,15 @@ function normalizedRecord(comment, issue, authority) {
     id: String(comment.id), host: issue, authority, trusted: authority === 'trusted', intact: intact && record.valid } };
 }
 
-export async function readDependencySnapshot({ cwd = '', repository, inputs = [] } = {}, supplied = {}) {
-  const scope = nativeReadScope(), ports = createDependencyReadPorts({ cwd }, supplied, scope);
+export async function readDependencySnapshot(input = {}, supplied = {}) {
+  const scope = nativeReadScope(), ports = createDependencyReadPorts({ cwd: input?.cwd ?? '' }, supplied, scope);
+  try { return await observeSnapshot(input ?? {}, ports, scope); } finally { flushCache(ports); }
+}
+
+async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, scope) {
+  const reads = ports.dependencyReads;
+  // The claim scan of one snapshot reads through the snapshot's own reads; the default owners port stays live.
+  if (ports.owners[NATIVE_OWNERS]) ports.owners = nativeOwners(cwd, ports, { live: false });
   const readContext = args => ports.context[NATIVE_CONTEXT] ? ports.context.read({ ...args, [NATIVE_READ_SCOPE]: scope }) : ports.context.read(args);
   if (!repository) {
     const selected = await resolveWorkflowRepository({ cwd }, ports);
@@ -727,10 +1179,18 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
   let complete = true, contextKnown = true, context = { inputs: [], conditions: [], execution: [] };
   const coverage = { scope: true, issues: [] }, coverageByKey = new Map(), rootIndex = new Map();
   const warn = text => { complete = false; warnings.push(text); };
-  try { context = parse((await readContext({ cwd, repository, ...(inputs.length ? { inputs } : {}) })).json); }
+  // The native context reads the supplied inputs once, with the saved review rows at the end, from the comment
+  // pages of this snapshot; a supplied context port keeps its first read with the inputs.
+  try { context = parse((await readContext({ cwd, repository, ...(inputs.length && !ports.context[NATIVE_CONTEXT] ? { inputs } : {}) })).json); }
   catch { contextKnown = false; warn('Required context is unavailable'); }
   let roots = [];
-  try { roots = await allPages(ports.github, repository, 'issues', 0); } catch (e) { roots = e.partialItems ?? []; coverage.scope = false; warn('Open issue pages are incomplete'); }
+  const stored = !!reads?.stored(repository) && !!ports.github[NATIVE_GITHUB];
+  try {
+    const api = service(cwd, ports).api;
+    roots = stored ? await reads.readList(repository, (endpoint, method, input, purpose = 'dependencies', repo = repository) =>
+      api(endpoint, method, input, purpose, repo))
+      : await allPages(ports.github, repository, 'issues', 0);
+  } catch (e) { roots = e.partialItems ?? []; coverage.scope = false; warn('Open issue pages are incomplete'); }
   let invalidIndex = false;
   for (const raw of roots.filter(r => !r.pull_request)) {
     const key = info(raw.html_url)?.key;
@@ -740,13 +1200,20 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
   if (invalidIndex) warn('Open issue index is incomplete');
   const queue = [...rootIndex.keys()];
   // Supplied GitHub ports retain the exact existing contract and call behavior.
-  if (ports.github[NATIVE_GITHUB] && roots.length) {
-    const bulk = await bulkRoots(cwd, repository, roots, ports), github = ports.github;
+  // With a saved snapshot, the batch reads only the roots whose saved reads are not current.
+  const batched = stored ? roots.filter(row => !reads.liveIssue(repository, row.number) && !reads.current(repository, row.number)) : roots;
+  if (ports.github[NATIVE_GITHUB] && batched.length) {
+    const bulk = await bulkRoots(cwd, repository, batched, ports), github = ports.github;
     ports.github = { ...github,
       issue: async args => { const hit = bulk.get(`https://github.com/${args.repository.toLowerCase()}/issues/${args.issue}`); return hit ? {json:JSON.stringify(hit.raw)} : github.issue(args); },
-      page: async args => { const hit = bulk.get(`https://github.com/${args.repository.toLowerCase()}/issues/${args.issue}`); return hit && !args.cursor && hit.pages[args.kind] ? {json:JSON.stringify({items:hit.pages[args.kind],next:''})} : github.page(args); },
+      page: async args => {
+        const hit = bulk.get(`https://github.com/${args.repository.toLowerCase()}/issues/${args.issue}`);
+        if (!hit || args.cursor || !hit.pages[args.kind]) return github.page(args);
+        // The batch history has only its PR references: a claim check never takes it from the saved snapshot.
+        const items = stored ? reads.record(args.repository, Number(args.issue), args.kind, hit.pages[args.kind], args.kind === 'timeline') : hit.pages[args.kind];
+        return {json:JSON.stringify({items,next:''})};
+      },
     };
-    if (ports.owners[NATIVE_OWNERS]) ports.owners = nativeOwners(cwd, ports);
   }
   async function read(key) {
     if (known.has(key)) return; known.add(key);
@@ -780,7 +1247,10 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     issues.push(issue);
     for (const kind of ['comments', 'blockedBy', 'blocking', 'timeline']) {
       let items;
-      try { items = await allPages(ports.github, i.repository, kind, i.issue); } catch (e) { items = e.partialItems ?? []; missing(kind, `Incomplete ${kind}: ${key}`); }
+      let read = true;
+      try { items = await allPages(ports.github, i.repository, kind, i.issue); } catch (e) { read = false; items = e.partialItems ?? []; missing(kind, `Incomplete ${kind}: ${key}`); }
+      // The comment bodies of these pages serve the review rows that name them: no read for each comment.
+      if (kind === 'comments') reads?.noteComments(key, items, read);
       if (kind === 'comments') for (const comment of items) {
         const current = await authorityFor(i.repository, comment.user?.login ?? '');
         if (!['trusted','outsider'].includes(current.authority)) missing('comments', `Comment authority unavailable: ${key}`);
@@ -803,9 +1273,12 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
   for (let at = 0; at < queue.length; at++) await read(queue[at]);
   if (context.nativeExecution) {
     const local = issues.filter(i => info(i.key)?.repository === repository && i.state !== 'unknown');
+    if (reads && ports.owners[NATIVE_OWNERS]) reads.owners = { repository, issues: local.map(i => i.key), json: null };
     try {
       const observation = parse((await ports.owners.read({ repository, issues: local.map(i => i.key) })).json);
       if (!Array.isArray(observation.claims) || !Array.isArray(observation.runs) || typeof observation.runsKnown !== 'boolean') throw Error('Incomplete execution observation');
+      // The claims of this scan serve the tick and prepare: they need not read the same claims again.
+      if (reads && ports.owners[NATIVE_OWNERS]) reads.owners = { repository, issues: local.map(i => i.key), json: JSON.stringify(observation) };
       for (const issue of local) {
         const claims = observation.claims.filter(c => canonical(c.issue) === issue.key && c.active);
         const expired = !claims.length && observation.claims.find(c => canonical(c.issue) === issue.key && c.active === false && c.expired === true && c.lastSeen);
@@ -846,6 +1319,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
   }
   const dedupEdges = [...new Map(edges.map(e => [`${e.dependent}\n${e.blocker}`, e])).values()];
   const capturedAt = (await ports.clock.now({})).iso;
+  if (stored) reads.commit(repository);
   return { snapshot: { repository, capturedAt, complete, issues, edges: dedupEdges, reviews, impacts, inputs: uniqueRows(context.inputs ?? []), coverage, warnings }, warnings };
 }
 
@@ -874,6 +1348,7 @@ async function saveRecord({ repository, issue, value, type }, supplied) {
     if (!raw.id) throw Error('No native comment confirmation');
     return { id: String(raw.id), state: 'saved', warnings: [] };
   } catch { return { id: '', state: 'pending', warnings: ['The comment append is unresolved; reread this analysis before retry.'] }; }
+  finally { flushCache(ports); }
 }
 
 export async function saveDependencyReview({ repository, issue, review }, ports = {}) {
@@ -913,8 +1388,9 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
   const refusal = async current => {
     const missing = absent(current);
     if (!missing.length) return { blockers: [] };
-    let history;
-    try { history = await allPages(ports.github, repository, 'timeline', target.issue); } catch { return null; }
+    // The history that a write depends on is a live safety read, never a saved one.
+    let history; const live = ports.github[LIVE_GITHUB];
+    try { history = await allPages(live ?? ports.github, repository, 'timeline', target.issue, undefined, !!live); } catch { return null; }
     const { removed } = dependencyLinks({ snapshot: current, issue: target.key }), byPerson = new Set(); let unknown = false;
     for (const event of history) { const blocker = blockedByRemoval(event); if (blocker === undefined) continue; if (blocker) byPerson.add(blocker); else unknown = true; }
     if (unknown) return { blockers: missing, why: 'unknown' };
@@ -956,7 +1432,10 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
     if (ports.admitEffect && !await ports.admitEffect()) return pending('Automatic control changed before dependency effect');
     try { await ports.github.addBlocker({ repository, issue: target.issue, blockerId: blocker.nodeId }); }
     catch { /* An unclear reply is resolved only by observing the native edge. */ }
+    // The readback after a write is a safety read: the floor does not stop it.
+    if (ports.dependencyReads) ports.dependencyReads.safety++;
     try { snapshot = await read(inputs); } catch { return pending('Dependency effect readback is unknown'); }
+    finally { if (ports.dependencyReads) ports.dependencyReads.safety--; }
     if (!snapshot.edges.some(e => info(e.dependent)?.key === target.key && info(e.blocker)?.key === info(dependency.key)?.key)) return pending('Dependency effect remains unobserved');
     added.push(info(dependency.key).key); lastWasWrite = true;
     if (!accepted(snapshot)) return pending('Inputs changed after a native effect');

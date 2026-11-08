@@ -295,8 +295,19 @@ The tick names the purpose: the dependency intake `dependencies` (its claim
 checks name `claims`), heartbeats `claims`, the issue list `issues`; other calls
 take the purpose of their arguments. The intake also gets the ETag cache of this
 repository as its `githubCache` port, saved after the intake ([conditional
-reads](issue-dependencies-github.prompt.md#conditional-reads)). At the end of
-each tick, after the state save, `compact` keeps the ledger to its last 2 hours.
+reads](issue-dependencies-github.prompt.md#conditional-reads)), the
+[saved dependency snapshot](issue-dependencies-github.prompt.md#saved-dependency-snapshot)
+of this repository in `ROOT` as `snapshotStore`, the tick clock as `now`, and a
+[floor guard](github-calls.prompt.md#floor-guard) as `githubFloor`, with the
+settings' floor and the ledgers of this machine. The tick's own comment, PR and
+permission reads use the same ETag cache (a full last page is read without its
+ETag), saved again at the end of the tick. At the end of each tick, after the
+state save, `compact` keeps the ledger to its last 2 hours.
+
+The floor guard also covers the launcher's non-safety comment, PR and review
+reads after intake. Every reply updates the guard. Hold-label index reads and
+permission checks stay live. Crossing the floor during intake does not permit
+new work delivery from an incomplete observation.
 
 After the settings read and the existing rate-limit wait, and before the
 intake, the tick computes `githubBudget` from the entries of all ledgers on this
@@ -327,9 +338,13 @@ machine and the settings' `github` value:
 After each intake the tick saves `{at, eligible, claims}` (when `eligible` is a
 list), and a successful heartbeat updates the saved claim's `lastSeen`. These
 are local facts for the next tick; they are not a GitHub observation. The
-60-minute interval is a constant. Only the tick uses this budget. Claim checks
-outside the tick, such as the workflow start boundary, other `pdd` commands and
-the coordinator and worker chats never wait for it.
+60-minute interval is a constant. The floor default is 1,000. Only the tick uses
+the share. Native dependency observations outside the tick follow the shared
+[floor guard](github-calls.prompt.md#floor-guard), including prepare, complete
+and automatic start. A stopped completion is kept for the next tick after the
+reset. Safety reads, including the workflow start's live subject and claim
+checks, continue below the floor. The coordinator and worker chats never wait
+for this budget.
 
 ## Tick and the skill boundary
 
@@ -366,7 +381,11 @@ issue leaves the list at the next full read. The issue list needs no
 newest first, a new or changed issue changes the first page, and a changed page
 gives a fresh next page.
 HTTP 304 reuses metadata, not a model turn. On changed candidates only, fetch
-comments needed to identify trusted consent and filter their text. HTTP 429 is
+comments needed to identify trusted consent and filter their text. When the
+saved dependency snapshot (as the intake of this tick left it) has a read of the
+issue with the same change facts (`issueRowVersion`) as the tick's row and the
+same comment count, its comments are the current answer: the intake read them in
+this tick, or a completion read them just before. HTTP 429 is
 a rate limit; HTTP 403 counts only when the remaining allowance is zero or its
 body says rate limit. Save its reset time; intervening timer firings do not retry.
 An ordinary forbidden response has no rate-limit cooldown. Candidate-specific
@@ -742,7 +761,7 @@ artifact's existing proof and retention rules.
 
 ## Dependency review and automatic-start context
 
-After an actual dependency completion, if its fresh reconciliation has current work to deliver but the matching coordinator is busy, arm one detached native wait for that coordinator pane to become idle or done. After the wait, verify the saved enabled coordinator, repository, pane, workspace and control identity and run the existing fresh completion reconciliation outside its locks. It must not replay a saved payload or arm on a tick-lock conflict; mode, trust, custody and stop guards still apply. A failed or unavailable wait leaves reconciliation pending.
+After an actual dependency completion, if its fresh reconciliation has current work to deliver but the matching coordinator is busy, arm one detached native wait for that coordinator pane to become idle or done. The completion tick, the tick after that wait and the tick after a worker yield are `completion` reconciliations: within 10 minutes of the last full observation they deliver the next request from the saved dependency snapshot and read no dependency issue list ([one reconciliation path](issue-dependencies-intake.prompt.md#one-reconciliation-path)). After the wait, verify the saved enabled coordinator, repository, pane, workspace and control identity and run the existing fresh completion reconciliation outside its locks. It must not replay a saved payload or arm on a tick-lock conflict; mode, trust, custody and stop guards still apply. A failed or unavailable wait leaves reconciliation pending.
 
 A first semantic request may combine the startup readiness instruction and current dependency artifact in one guarded wake. Require bounded readiness before analysis and mark the recipe delivered only after confirmed delivery; busy or uncertain delivery remains pending. For a semantic `pending.deliver({repository,requestJson})` wake, preserve the
 exact UTF-8 bytes of `requestJson` in a private local request artifact. Do not

@@ -24,6 +24,10 @@ JSON, unknown fields, wrong repository/issue identity or invalid analysis return
 exit 2 before writes. Do not interpolate JSON into shell code. The agent uses
 these supported commands, never an ad hoc import, shell-eval JavaScript or raw
 GitHub write. Prepare is read-only. Complete is the explicit save/effect route.
+For a repository where Autopilot runs on this machine, both commands get the
+[floor guard](issue-dependencies-github.prompt.md#saved-dependency-snapshot)
+(`commandGithubFloor`): below the floor their non-safety reads stop, and a
+stopped completion is [kept](#kept-completion).
 
 Prepare rereads GitHub, repository-bound trust and current ownership, then
 projects with the model. Queue only root-repository subjects the owner can receive;
@@ -56,7 +60,7 @@ explicit `--issue` prepare names only that subject. The request `issues` lists t
 selected subjects; `snapshotJson` retains their prior heads, which each review's
 base must name. A positive affected head queues that subject on the next prepare.
 Unexplained omission of a required subject remains invalid.
-Read ownership once for the selected subjects; with none, prepare needs no ownership lookup. Question heads with unchanged input/candidate/head fingerprints need no automatic
+Read ownership once for the selected subjects; with none, prepare needs no ownership lookup. When the native snapshot of this process scanned the claims of those root issues, use that observation (the read session's `owners`) instead of a second read. Question heads with unchanged input/candidate/head fingerprints need no automatic
 semantic redelivery. A person's answer (a trusted comment that the question did not
 examine) makes the head stale in the model, so the next prepare queues it.
 Explicit prepare of a named issue may request another look.
@@ -129,6 +133,7 @@ Every pending result names a `reason`, so the coordinator can act on it:
 | `answer-row-mismatch` | A review did not copy its base heads, candidates or required rows exactly from the request. |
 | `owner-changed` | Another or unknown owner holds a subject. |
 | `write-unconfirmed` | An impact, review or link write is not confirmed; `pendingStage` names it. |
+| `github-limit` | The reread is incomplete because the [floor guard](github-calls.prompt.md#floor-guard) stopped its reads: fewer calls than the floor are left until the reset. |
 
 `rows` (at most 20, omitted when empty) names the rows behind the reason. For a
 mismatch it gives the row the request expects: key `ISSUE#base` carries the
@@ -173,14 +178,58 @@ work current. Relevant source changes queue
 only subjects with changed recorded requirement inputs. Persist impact through
 `reviews.saveImpact`, whose default is the GitHub adapter's append-only impact save.
 
+<a id="kept-completion"></a>
+### Finished work is kept
+
+A completion can stop partway: a read fails, the GitHub limit runs out, or a write
+is not confirmed after some reviews are saved. The saved reviews stay on GitHub,
+and the analysis of the other subjects is finished work too. So:
+
+- A completion skips each review of its request that is already saved: a trusted,
+  intact review on the subject, not in the prepared snapshot, with the same
+  analysis, base, continuation, candidates, inputs (without the link row),
+  outcome, dependencies, questions and effects. The checks of this section then
+  cover only the other subjects; the result lists the saved ID for each skipped
+  review in request order. A repeated or resumed completion of the same request so
+  saves no duplicate intent and needs no new analysis. A saved pending link intent
+  is unfinished: resume its effects through the GitHub owner before reporting
+  completion. Confirm already present edges without adding them twice. A confirmed
+  continuation ends that intent; an existing question continuation returns its
+  questions. An unconfirmed effect returns `write-unconfirmed` at
+  `edge-confirmation` and keeps the completion for another retry.
+- A pending result with reason `observations-incomplete`, `write-unconfirmed` or
+  `github-limit` keeps `{request, analysis, reason, attempts}` through the
+  `completions` port (`read`, `save`, `clear`), default the kept completion file
+  of the [saved snapshot](issue-dependencies-github.prompt.md#saved-dependency-snapshot)
+  for an Autopilot repository; `attempts` counts the kept results of the same
+  request. Any other result of the same request clears it. A failed keep only
+  means a new analysis later.
+- After a complete or question result that saved a review, and with a saved
+  snapshot, completion reads the snapshot once more, so the saved snapshot holds
+  the new reviews. A failure there does not change the result.
+
 ## One reconciliation path
 
 Startup, restart, fallback tick, event hint, completion and explicit refresh are
 caller-owned triggers for `reconcileDependencyIntake`; completion does not itself
 run reconciliation. `completeDependencyIntake` owns the validation and durable
 review, impact and effect operations specified above. Each reconciliation initially reads GitHub and existing
-pending state once. Non-off reconciliation also reads current ownership once for
-its selected root subjects before recovery, delivery or eligibility handoff.
+pending state once. A `completion` trigger (after `pdd dependencies complete`,
+after the idle wake of a busy coordinator, or after a worker yield) whose saved
+snapshot list was read less than 10 minutes ago reads no issue list: it asks the
+snapshot for the saved list and delivers the next request from it. Other triggers
+read what changed. Then a non-off reconciliation finishes a [kept
+completion](#kept-completion) of this repository: it runs the same completion
+with the kept request and analysis, after `admitEffect`, and reads the snapshot
+again when that saved or ended something. A kept value of another repository,
+or that completion rejects is removed. Transient outages and repeated floor
+waits keep the analysis without a retry cap; they do not make finished work
+invalid. Non-off
+reconciliation also reads current ownership once for
+its selected root subjects before recovery, delivery or eligibility handoff; the
+claims of the native snapshot's own claim scan are that read, so the open issues
+are not read again. If that native scan fails, return pending with no queued or
+eligible subjects; do not replace it with a live all-issue scan.
 It reprojects saved decisions and
 coalesces pending subjects. Native close/reopen/merge/relation changes normally
 need only reprojection; substantive changes require the selected coordinator.
@@ -259,6 +308,8 @@ restart retains it. Two coordinators on one machine have different identities.
 The claim comment carries this identity with the machine using the existing
 single-comment policy. Missing/legacy identity is unknown, not this coordinator.
 
+The subject is read live: before the snapshot, the read session marks it, so its
+issue, claim, labels and links come from GitHub, not from the saved snapshot.
 Read current mode via `settings.read({cwd,repository})`, bound to the existing
 Autopilot settings owner for mode and existing repository launcher state for the
 original activation and optional configured runs cap, plus fresh snapshot and

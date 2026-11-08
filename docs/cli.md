@@ -184,17 +184,34 @@ GitHub calls in the last hour: 212 (dependencies 120, claims 14, issues 60, pull
 tick and the counted `pdd` commands, not the chats.
 
 A conditional read sends the ETag of the last reply. A `304` reply means that
-nothing changed, and GitHub does not count it against the limit. The tick and the
-dependency re-sync use conditional reads. The dependency re-sync keeps its ETags
-and reply bodies in the same folder. The dependency re-sync and the review reads
-read a full page (100 items) that has no next page without its ETag: a `304`
-reply does not show that a next page came.
+nothing changed, and GitHub does not count it against the limit. The tick, the
+dependency re-sync, `pdd dependencies prepare` and `complete` and the workflow
+claim checks use conditional reads for an Autopilot repository. They share one
+file of ETags and reply bodies in the same folder. A full page (100 items) that
+has no next page is read without its ETag: a `304` reply does not show that a
+next page came.
 
-The budget acts only on the tick. It has two settings in `pdd.json`, a share
-(default 30%) and a floor (default 500 calls):
+Autopilot keeps one saved dependency snapshot for each repository in the same
+folder (`*.snapshot.json`, private to you). The tick, `pdd dependencies complete`
+and the claim scan use it. A read asks GitHub only for the issues that changed
+since the last read (`since`, in update order), and reads the comments, links and
+history of an issue again when its update time, comment count or link identities
+changed. It checks the open index with conditional requests and compares native
+link identities in batches. Equal link counts can still mean different blockers.
+Incomplete batch connections fall back to complete REST link pages. Once a day
+it rebuilds the open list, so a deleted or moved issue leaves it. Safety reads always ask GitHub (a `304` is fine): the claim
+checks before a start, a push and a merge, heartbeats, trust, and the readback
+after each write. A quiet tick then makes a few calls instead of hundreds, and
+a batch reuses the same observations. After `pdd dependencies complete`, the next
+request comes from the saved snapshot: the completion tick and the idle wake
+reuse the dependency issue list for 10 minutes after its last complete read.
+
+The budget acts on the tick, and its floor on the dependency commands too. It
+has two settings in `pdd.json`, a share (default 30%) and a floor (default 1,000
+calls):
 
 ```json
-{"autopilot":{"mode":"auto","trust":[],"github":{"share":30,"floor":500}}}
+{"autopilot":{"mode":"auto","trust":[],"github":{"share":30,"floor":1000}}}
 ```
 
 `share` is a whole percent from 1 to 100; `floor` is a whole number of calls. A
@@ -210,14 +227,30 @@ missing or invalid value uses the default.
   heartbeat of each live claim of this machine (2 REST calls each). So a claim
   does not expire while its chat works. With fewer REST calls left than these
   heartbeats need, it sends none. The tick also wakes no chat with new work
-  until the reset.
+  until the reset. Native dependency observations for an Autopilot repository
+  also stop non-safety reads. This includes `pdd dependencies prepare`,
+  `complete`, direct snapshot reads and automatic workflow start. A reply that
+  shows fewer calls than the floor stops the reads
+  after it. A stopped `complete` keeps its request and analysis; the first tick
+  after the reset saves the remaining reviews without a new analysis. Reviews
+  that were already saved are never saved twice.
 
-Nothing else waits for the budget. The coordinator and worker chats go on, and
-their own `gh` calls are not counted. `pdd` commands are counted but do not
-wait, also the workflow start's claim check. So the budget does not keep 70% of
-the limit, or the last 500 calls, for you: it only makes the tick read less. To
+The coordinator and worker chats go on, and their own `gh` calls are not counted.
+Safety reads, including workflow start's live subject and claim checks, trust,
+permissions and write readbacks, can use the reserve. Writes can use it too.
+Other `pdd` operations are counted but do not wait for this floor. The budget
+does not keep 70% of the limit for you. The floor makes the tick and native
+dependency observations read less. To
 give Autopilot a limit of its own, see the design note
 [A GitHub App token for Autopilot](autopilot-github-app-token.md).
+
+The dependency snapshot is saved beside the repository's GitHub call ledger as
+`github/H.snapshot.json` in the Autopilot state folder. Its temporary lock is
+`github/H.snapshot.json.lock`, with the same repository hash `H` as the ledger.
+If a writer exits while holding this lock, later saves refuse to replace the
+snapshot. To recover, stop local PDD operations for that repository and confirm
+that no snapshot writer is still running. Then remove only that empty lock
+directory. Keep the snapshot and ledger files. The next observation can save again.
 
 ### Alerts
 
