@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8fd52eec7dd4feae322e4aec64700b24429dc35c570f69c03a8c58075164df74).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8c8140f98887df23bffb86896ae60ccb8befc0fb5a98c8a94c4a58a5fde86ae1).
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -1316,13 +1316,13 @@ function nativeSourceIdentity(context, rows) {
 }
 
 // Local omissions are evidence too; recording them needs no owner token or job.
-function saveLocalNativeResult(context, rows, intent) {
+function saveLocalNativeResult(context, rows, intent, problems = []) {
   const startedAt = context.ports.now(), batch = batchId(startedAt, context.ports.randomUUID);
   for (const row of rows) row.unsent = true;
   context.sourceSelection = {tests:[],exclude_fixture_projects:context.excludeFixtureProjects === true};
   context.nativeSource = nativeSourceIdentity(context, rows);
   const capture = context.ports.captureSource(context.root,{tests:[],appMap:null,excludeFixtureProjects:context.excludeFixtureProjects === true});
-  Object.assign(context,{localOnly:true,startedAt,batch,intent,capture,rows,identity:{login:null,userId:null},lint:{state:'not_run',request_ids:[]}});
+  Object.assign(context,{localOnly:true,startedAt,batch,intent,capture,rows,identity:{login:null,userId:null},lint:{state:'not_run',request_ids:[],...(problems.length ? {problems} : {})}});
   context.folder = context.store.folder('batches',batch);
   saveBatch(context);
   context.store.saveRepo(context.root,{...context.store.repo(context.root),last_batch:batch});
@@ -1912,7 +1912,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.excludeFixtureProjects = words.length === 0;
   const paths = words.length ? undefined : [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md'));
   const findings = paths ? interfaceFindings({root,paths}).filter(localInterfaceProblem) : [];
-  if (findings.length) {
+  if (findings.length && !found.tests.length) {
     const summary = 'Lint refused Runtime interfaces. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout,JSON.stringify({repo:root,exit_code:4,lint_state:'refused',problems:findings,rows:[],summary_line:summary}));
     else for (const text of [...findings.map(item => `${item.code}: ${item.message}`),summary]) line(ports.stdout,text);
@@ -1931,7 +1931,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
-  if (rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[]); }
+  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[]); }
   const local = row => row.phase === 'local';
   const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -1948,7 +1948,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     try { return local(row) ? row : {...row,refusals:row.steps.flatMap(step => problemsFor(step.entry_path,seen))}; }
     catch (error) { if (!sourceUnavailable(error)) throw error; refuseSource(row,error); return row; }
   });
-  const limited = limitRows.some(row => !local(row) && row.refusals.length);
+  const limited = findings.length > 0 || limitRows.some(row => !local(row) && row.refusals.length);
   if (!limited && rows.every(local)) {
     if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context,rows,'lint-only');
     return printLintResult(context,rows,[],found.warnings);
@@ -1956,13 +1956,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   if (limited) {
     const refusedRows = limitRows.map(row => ({...row,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals,
       ...(row.unsent ? {unsent:true} : {})})).sort((a,b)=>Number(!!b.unsent)-Number(!!a.unsent));
-    const problems = [];
+    const problems = [...findings];
     for (const problem of refusedRows.flatMap(row => row.refusals)) {
       if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
     }
     if (refusedRows.some(row => row.native_only?.length)) {
       context.warnings = found.warnings;
-      saveLocalNativeResult(context, refusedRows, 'lint-only');
+      saveLocalNativeResult(context, refusedRows, 'lint-only', problems);
       return printLintResult(context, refusedRows, problems);
     }
     const broken = refusedRows.filter(row=>row.unsent).length;
@@ -2091,7 +2091,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
     if (problem.code === 'lint-refused' && !problem.path) continue;
     if (!problems.some(item => item.code === problem.code && (item.path ?? null) === (problem.path ?? null))) problems.push({ ...problem, path: problem.path ?? null, section: null });
   }
-  const localRefusal = context.localOnly && rows.some(row => row.state === 'refused');
+  const localRefusal = context.localOnly && (problems.length > 0 || rows.some(row => row.state === 'refused'));
   const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = localRefusal ? 4 : exitCodeFor(rows);
   const broken = rows.filter(row=>row.unsent).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
   const summary = `Lint: ${passing} of ${rows.length} tests pass.${broken ? ` ${broken} tests could not run.` : ''}${unchecked ? ` ${unchecked} criteria not checked. The Story is not a full pass.` : ''} 0 AI calls. No checks were sent.`;
@@ -2283,7 +2283,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   if (saved.local_only === true && saved.rows.length && saved.rows.every(row => row.unsent && ['refused','not_run'].includes(row.state) && !row.request_ids?.length)) {
     Object.assign(context,{localOnly:true,batch:name,intent:saved.intent,coverage:saved.coverage,rows:saved.rows,warnings:saved.warnings ?? [],
       capture:{sha256:saved.source_sha256},startedAt:Date.parse(saved.created_at),lint:saved.lint});
-    return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,[]) : printResult(context,saved.rows);
+    return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,saved.lint?.problems ?? []) : printResult(context,saved.rows);
   }
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
   const identity = signIn(ports.gh, context.store);

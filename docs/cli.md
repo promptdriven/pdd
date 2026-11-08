@@ -1056,7 +1056,10 @@ Test output, workflow status and saved PR evidence include `Runtime coverage: N 
 Saved reads preserve native-only outcomes and reasons while other selected rows
 wait for lint or complete it. Local lint also saves coverage and omission evidence
 when another selected row is refused before upload. These local results can be
-read without authentication. Temporary lint failures retain local paths, reasons,
+read without authentication. Repository-wide `pdd lint` preserves this evidence
+when any prompt lacks an interface, including an unselected prompt. Its saved
+read retains the global diagnostics and exit 4. Repositories without Story tests
+still get global missing-interface diagnostics. Temporary lint failures retain local paths, reasons,
 refusals and coverage in text and JSON, and return exit 5. Named lint targets
 include only executable scenarios present in the uploaded archive. The files
 preview uses that same selection and shows native omissions with their reasons.

@@ -875,6 +875,14 @@ workflow evidence retain coverage and reasons. Preserve the public lint state/re
 exit 4 for a local lint refusal beside a native-only omission, including its
 saved read.
 
+Repository-wide lint without Story operands has the same local evidence rules.
+Build selected rows and coverage before returning global interface findings;
+retain selected refusals and native-only omissions in the local batch. Keep
+global findings in `lint.problems` so saved reads retain diagnostics and exit 4
+even when the finding is outside every selected scenario. A repository with no
+Story tests still reports global interface findings locally with exit 4 and
+empty rows. These paths require neither authentication nor Runtime requests.
+
 ## Native selection and no-verdict lint
 
 The files preview uses the same native omission selection as a check. Exclude
