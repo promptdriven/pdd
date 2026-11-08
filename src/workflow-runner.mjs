@@ -3451,7 +3451,7 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
   let closed = 0;
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
   const candidates = runs.flatMap(run => {
-    const chats = finishedChats(run);
+    const chats = finishedChats(run).filter(chat => !Number.isFinite(chat.closed?.confirmedAt));
     if (chats.length) return chats.map(chat => ({run,chat,at:finishedAt(run,chat)}));
     return ended(run) && run.layout?.workspaceId && run.layout.phase !== 'closed'
       ? [{run,chat:null,at:run.cancelled?.at ?? run.updatedAt ?? run.startedAt}] : [];

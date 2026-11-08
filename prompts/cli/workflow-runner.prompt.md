@@ -622,7 +622,10 @@ runs including archived runs, globally oldest finished chat first and stopping b
 run lock and skipping busy/uncertain owners. Include ended runs with outstanding
 saved run-layout cleanup even when no chat was recorded, such as failed startup
 before the first area tab. Order these shell-only candidates by cancellation or
-saved update/start time. Apply the same lock, caller, ownership, occupancy and
+saved update/start time. Exclude chats with confirmed close marks from the candidate
+list; an ended run with retained layout custody remains a shell-only candidate.
+Fully reclaimed history consumes no sweep time. Pending close marks remain
+candidates for reconciliation. Apply the same lock, caller, ownership, occupancy and
 pending-intent reconciliation guards; report retained shells and retry them on
 later sweeps. Revalidate run/chat identity at each
 checkpoint. Persist the chat owner's retained shell reason until a fresh shell

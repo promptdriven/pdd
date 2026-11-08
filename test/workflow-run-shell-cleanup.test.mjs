@@ -169,3 +169,26 @@ test('2709 repair: a skipped shell check preserves its last retained reason', as
   assert.equal(f.record().layout.phase, 'closed');
   assert.deepEqual(f.record().cleanupKept, []);
 });
+
+for (const history of [1, 18]) test(`release: bounded tidy reaches new work after ${history} reclaimed runs`, async t => {
+  const {f} = await completed(t);
+  for (let i = 0; i < history; i++) {
+    assert.equal((await sweep(f)).kept, 0);
+    assert.equal(f.record().layout.phase, 'closed');
+    assert.equal((await f.run()).exitCode, 0);
+    const run = f.record(); run.state = 'completed'; run.chats[0].endedAt = f.clock;
+    writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+    f.tick(16 * 60_000); f.herdr.idle();
+  }
+  const target = f.record(), command = f.ports.herdr;
+  let elapsed = 0;
+  f.ports.elapsedNow = () => elapsed;
+  f.ports.herdr = async args => {
+    if (args[0] === 'workspace' && args[1] === 'list') elapsed += history === 1 ? 6000 : 300;
+    return command(args);
+  };
+  for (let tick = 0; tick < 3 && f.herdr.paneOf(target.chats[0]); tick++)
+    await runner.tidyRuns({timeBudgetMs:5000}, f.ports);
+  assert.equal(f.herdr.paneOf(target.chats[0]), undefined);
+  assert.equal(f.record().layout.phase, 'closed');
+});

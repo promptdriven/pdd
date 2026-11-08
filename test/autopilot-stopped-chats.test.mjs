@@ -5,6 +5,9 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
 import {acknowledgeRequest, askPerson, cancelRun, changeRun, openRun, runStatus, stepDone} from '../src/workflow-runner.mjs';
+import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
+import {healthyMachine} from './helpers/healthy-machine.mjs';
+import {closeFinishedChats} from '../src/workflow-chat.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
 const origin = {repository: 'example/project', coordinatorId: 'coordinator-a', machine: 'machine-a', claim: {commentId: '11', labelEventId: '12'}};
@@ -23,7 +26,7 @@ async function setup(t, agent = 'claude', {observe = true} = {}) {
     agent: {id: agent, kind: agent, command: agent}, environment: f.ports.env,
     retryAt: f.clock + 86400000}));
   const warnings = [], alerts = [];
-  const ports = {...f.ports, run: async (file, args, options) => ({code: 0, ...await f.ports.execFile(file, args, options)}),
+  const ports = {...healthyMachine, ...f.ports, checkCapacityPorts:isolatedCheckCapacity(f.base), run: async (file, args, options) => ({code: 0, ...await f.ports.execFile(file, args, options)}),
     warn: text => warnings.push(text), sendAlert: async input => {alerts.push(input); return {exitCode: 0};}};
   const tick = () => tickAutopilot(stateFile, ports);
   const stop = () => {f.herdr.paneOf(f.record().chats.at(-1)).agent = null; f.herdr.calls.length = 0; f.tick(60001);};
@@ -488,4 +491,29 @@ for (const confirmed of [false, true]) test(`3068 repair 2: ${confirmed ? 'confi
   assert.equal(f.record().chatResumes, undefined);
   assert.equal(f.record().chatResumeLimit, undefined);
   assert.equal(f.record().state, 'running');
+});
+
+for (const confirmed of [false, true]) test(`release: cleanup-owned close mark blocks tick resume (${confirmed})`, async t => {
+  const {f, tick, ports, alerts} = await setup(t);
+  const run = f.record(), chat = run.chats.at(-1), command = ports.herdr;
+  f.herdr.idle();
+  const cleanup = await closeFinishedChats(run, {...ports, force:true, graceMs:0,
+    checkpoint:async marked => { if (marked) { Object.assign(chat, marked); save(f, run); } },
+    herdr:async args => {
+      if (!confirmed && ['tab', 'workspace'].includes(args[0]) && args[1] === 'close')
+        throw Object.assign(Error('controlled refusal'), {code:'herdr_failed'});
+      return command(args);
+    }});
+  assert.equal(cleanup.closed, confirmed ? 1 : 0);
+  assert.ok(f.record().chats.at(-1).closed);
+  assert.equal(Number.isFinite(f.record().chats.at(-1).closed.confirmedAt), confirmed);
+  assert.ok(!['closed','close_intent'].includes(f.record().layout.phase));
+  const remaining = f.herdr.paneOf(chat); if (remaining) remaining.agent = null;
+  const before = f.record(); f.herdr.calls.length = 0; f.tick(60001);
+  await tick();
+  assert.equal(launches(f).length, 0);
+  assert.deepEqual(f.record().chatResumes, before.chatResumes);
+  assert.equal(f.record().chatResumeLimit, undefined);
+  assert.deepEqual(f.record().chats.at(-1).closed, before.chats.at(-1).closed);
+  assert.equal(alerts.length, 0);
 });
