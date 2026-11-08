@@ -1,5 +1,7 @@
 # Local command catalog
 
+The `pdd test --files` usage form also accepts optional `--json` for its manifest and per-test local refusals, as owned by the runtime client.
+
 
 The public command catalog also includes `pdd autopilot off`, `pdd autopilot observe`, `pdd autopilot auto`, `pdd autopilot trust <name>...`, and `pdd autopilot untrust <name>`. Expose these forms in help and completion; reject missing or extra operands through the existing parser contract.
 
@@ -67,6 +69,8 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.approve `workflow approve [ISSUE] [--said WORDS] [--draft]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 `workflow.approve` also accepts Boolean flag `--draft` to strengthen publication policy at the current unpublished gate; the runner owns eligibility and persistence. Expose both draft flags in help and completion, including the quiet workflow-start alias. Preserve generic duplicate/unknown-option validation.
 
+For `workflow.run` and `workflow.approve`, also accept the value option `--through` with the choices `prompt-pr` and `code`. Keep both existing help forms unchanged and name the option in their help descriptions: it saves where a normal run goes after PR 1 (stop, or go on to the code PR). The runner owns where it applies and refuses it elsewhere.
+- workflow.card `workflow card [ISSUE]` (local `workflow-card`): one optional issue operand, no options. Help says it prints the run's Story card from its real files, read-only, with no GitHub, Herdr or interpreter call.
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
 - workflow.cancel `workflow cancel ISSUE`.
 - workflow.open `workflow open ISSUE [AREA] [--new]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.

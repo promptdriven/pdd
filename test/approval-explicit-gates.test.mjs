@@ -1,3 +1,4 @@
+import { legacyManualGates } from './helpers/legacy-manual-gates.mjs';
 import test from 'node:test';
 import { readWorkflowAreas, formatWorkflowList } from '../src/workflow-areas.mjs';
 import assert from 'node:assert/strict';
@@ -149,6 +150,7 @@ async function ready(t, kind = 'approve') {
  await f.finish();
  if(kind!=='approve') {
   let out=await approveRun({ref:'17',cwd:f.source},f.ports); assert.equal(out.exitCode,0,out.message);
+  legacyManualGates(f);
   await f.finish();
  }
  if(kind==='ask-code') {

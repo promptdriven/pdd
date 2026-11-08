@@ -60,8 +60,9 @@ as not replayed, never success; counts must reflect that. Unsupported versions a
   A crash, empty failure list, unknown assertion, survived control or not-run control is never detection.
   For not_run, command and exit_code may be null and a nonblank reason is required; never invent an exit.
 - formal: {result:proved_bounded|proved_solver|failed|not_run|not_applicable,scope:nonblank,reason:nonblank,
-  control_outcome:assertion_failure|crash|survived|not_run,counterexample?}. failed requires a counterexample;
-  proved results require assertion_failure control. Not-run/not-applicable remain explicit scoped results.
+  control_outcome:assertion_failure|crash|survived|not_run,control_command?:nonblank,control_exit_code?:integer0..255,
+  counterexample?}. failed requires a counterexample; proved results require assertion_failure control (see
+  [The formal result](#the-formal-result)). Not-run/not-applicable remain explicit scoped results.
 
 All identifier/reason/command strings are bounded (at most1000characters); collections stay within the limits
 above. Reject wrong types and unsupported versions; never coerce truthy flags or counts. SHA256 comparison
@@ -103,6 +104,56 @@ actual recorded data. A copied example is not execution evidence.
 }
 ```
 
+## The formal result
+
+pdd reads the `formal` block on its own, also when the prompt area has no scenario vectors or the scenario
+replay stops early. The code replay status does not change: NOT REPLAYED or BLOCKED never becomes a pass.
+The "Formal check" line of the replay section and the Formal check row of the code PR's Proof table show
+one formal status, with the same words:
+
+| Status | Meaning | Repair step |
+|---|---|---|
+| recorded | pdd accepted the block. The line shows its result, scope, reason and control. | none |
+| missing | There is no `replay-evidence.json`, or the file has no `formal` key. | Write the formal block. |
+| malformed (FIELD) | FIELD is wrong: the file, its JSON, `schema_version`, `run_id`, `source`, a `formal.*` field or `mutation`. | Correct FIELD. |
+| stale (source changed) | `source.sha256` is not the current source fingerprint. | Run the formal check on the current source and write a new block. |
+
+After the repair, run `pdd workflow done formal` again. A line that is not recorded always gives the reason
+and the repair step. When the file holds a block that pdd did not accept, the line says what the block
+claims and why pdd did not accept it.
+
+A proved result needs `control_outcome: "assertion_failure"`: the planted mistake (in a bug run, the old
+code) fails the formal check by an assertion, not by a crash. With scenario vectors, the semantic mutation
+control must also detect the mistake. With no scenario vectors, the formal block holds its own control,
+the control command and its nonzero exit code:
+
+```json
+"formal": {
+  "result": "proved_bounded", "scope": "All 5 rules of the Story over 5192 bounded inputs",
+  "reason": "Every input passes the oracle written from the Story", "control_outcome": "assertion_failure",
+  "control_command": "node --test test/price.formal.test.mjs (on the old code)", "control_exit_code": 1
+}
+```
+
+Named Story paths can contain Unicode and spaces. Name the complete repository-relative path in a step summary, bare, quoted, in a code span or in a Markdown link. pdd resolves it against Git-visible Story files and checks every resolved Story. Absolute paths, `..` components and control characters are refused.
+
+When a Story of the run has `## Rules to check`, the code PR is not ready to merge until the formal status
+is recorded with Proved (bounded), Proved (solver) or Not applicable. A Failed result stays publishable with
+its failure line and is not ready to merge.
+
+With scenario vectors, the code replay needs a typed formal block of any result, also when no Story has
+`## Rules to check`. So the line and the row then always give the formal status, the reason and the repair step.
+A missing, malformed or stale block holds the PR. A recorded Not run does not hold it when no Story has
+`## Rules to check`.
+
+The line says "Formal check: not needed (no Rules to check in the Story)" only when pdd read the Stories of the
+run, none has `## Rules to check`, and the prompt area has no scenario vectors. Then the formal check does not
+hold the PR, except a Failed result. pdd finds the Stories of the run in the changed files and in the step
+summaries (`user_stories/**/NAME.md`), and in the `story_path` of each anchored scenario. When pdd finds no
+Story file, it cannot tell, so the formal check counts as needed. The line then adds: "pdd found no Story file
+of this run, so the formal check counts as needed. When the Story has no Rules to check, name its path
+(user_stories/NAME.md) in the formal step summary."
+
 ## Reading the PR status
 
 The canonical section appears above free-form summaries and prompt Runtime-check results. It reports
@@ -125,9 +176,99 @@ independently prove execution or prompt/code equivalence. The schema does not au
 execution claims. Review commands, results and committed replay tests before merging.
 
 New bundled feature/bug code areas opt in explicitly. Saved areas and custom workflows without the field,
-and small-change, keep their publication behavior. Custom opt-in without corpus adoption needs an approved prompt area with
-`then: "ask-code"` to establish the original-vector anchor. [Corpus adoption](#adopt-an-unchanged-approved-corpus) can instead supply that anchor to a fresh workflow whose first area is code. Otherwise absent anchors are blocked, never reconstructed
+and small-change, keep their publication behavior. A custom opt-in with an approved prompt area uses
+`then: "ask-code"` to establish the original-vector anchor. A workflow whose code area has no such earlier area
+gets the [approved scenarios on the base](#approved-scenarios-on-the-base) that link to its changes, or all of
+them when the repository asks for that.
+[Corpus adoption](#adopt-an-unchanged-approved-corpus) can instead supply a declared anchor to a fresh workflow whose first area is code. Absent anchors are blocked, never reconstructed
 from code-space files.
+
+## Approved scenarios on the base
+
+A file on the run's base branch counts as approved: it was reviewed and merged there. So the anchor also
+holds the approved scenario files on the base commit that belong to the area that the run changes. You give
+no flag. Manual and Autopilot runs work the same. pdd reads the base with local Git only and makes no GitHub
+or AI call.
+
+A base scenario belongs to the run when one of its links names a file in the changed area:
+
+- Its links are its `story_path`, each step `entry_path` and its `entry_paths`.
+- The changed area is every file that the run changed against its base, the links of each changed scenario,
+  and, for each changed file that the base `pdd-bindings.json` declares as a `module`, its `stories` and
+  `prompt` (see [module binding inventory](runtime-bindings.md)).
+- The changed area also holds each prompt that a changed file names in its PDD header. For both these
+  prompts and changed prompt files, it includes their Stories (the `story_path` of each base scenario
+  that links to the prompt).
+
+A changed code file links to scenarios in two ways: through `pdd-bindings.json`, or through its own
+header. pdd reads the header from the file on the base commit and from the file in the run. The header is
+one of the first 10 lines of the file, for example:
+
+```text
+// Generated from prompts/cli/workflow-runner.prompt.md.
+# Generated from prompts/modules/src/app/policy.py.prompt.md.
+"""Generated from prompts/app.prompt.md."""
+<!-- Generated from prompts/page.prompt.md -->
+```
+
+The line can start with a comment mark (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`, `"""` or `'''`). Then it
+has `Generated from` and a repository path that ends in `.prompt.md`. After the path, it can have
+` (sha256: HEX)` with 64 lowercase hex characters, and a `.`. A line without such a path is not a header.
+For example, `Generated from the canonical m1_policy prompt` names no file, so it adds no link.
+Lines longer than 1,100 characters are not parsed as headers. Git color settings do not affect selection.
+
+pdd uses no other link: no folder, file name or text match. When the repository records no link, pdd adds
+no base file and the PR says why.
+
+With an approved prompt area, pdd builds the anchor at each prompt-space publication. A base file that PR 1
+changes is a changed scenario, with its PR 1 bytes. When code space starts, the anchor freezes. Without a
+prompt area before code, pdd builds the anchor at each code step and publication from the files changed so
+far. It always takes those files from the base commit, so a code-space edit cannot change their values.
+
+Each base file in `replayBaseline` keeps its path, raw SHA256, snapshot, check identities and `base` (the
+full base commit). The anchor keeps `base.select` (`linked` or `all`). The PR line counts the files and checks
+of each source, for example:
+
+```text
+Anchor: 3 changed scenarios (40 checks) + 18 linked approved on base 6b58b76 (1,722 checks).
+Anchor: 0 changed scenarios (0 checks) + all 18 approved on base 6b58b76 (1,722 checks; pdd.json sets replay.base_scenarios to "all").
+```
+
+When pdd adds no base file, the line gives the reason. All anchor limits apply to the whole anchor; a
+blocked anchor names its file or check count and the limit. Base approval never gives a pass by itself.
+The agent still replays every anchored check. Changed, removed and added files follow the same rules as
+other anchored files: in prompt space a removed or renamed base scenario blocks the anchor. The changed
+inventory includes both the old and new paths of a rename, so the old path cannot survive as an unchanged
+base vector. In code space the saved-value rule
+above lists each change, and a record of the old bytes cannot pass. The explicit `--adopt-corpus` route
+below keeps its declared inventory and never adds base files.
+
+pdd does not read a schema search match over 10 MiB. The Anchor line names each such file, its byte size
+and the limit, even when other files join the anchor. These files have not been inspected or replayed.
+A selected scenario over 2 MiB and at most 10 MiB blocks under the per-file limit and names its path.
+
+### Add all approved base scenarios
+
+A repository can ask for every approved scenario file on the base, linked or not. Set this in the root
+`pdd.json`:
+
+```json
+{"replay": {"base_scenarios": "all"}}
+```
+
+The values are `"linked"` (the default: the link rule above) and `"all"`. pdd reads the setting from
+`pdd.json` on the run's base commit, not from the run's copy. So a run cannot change its own selection. A
+`pdd.json` that is not valid JSON or not an object blocks the anchor. A `replay` that is not an object,
+an unknown key inside `replay`, or an invalid `base_scenarios` value also blocks. The reason names
+`pdd.json` and the unknown key or invalid setting.
+
+With `"all"`, every run with replay evidence adds every scenario file on the base commit, within the same
+limits for the whole anchor: 200 files, 2 MiB for each file, 10 MiB in all, 10,000 steps and 10,000 checks.
+Over a limit, the anchor blocks and states the count. A run with `--adopt-corpus` keeps its declared inventory and adds no base files.
+
+Cost: expect to write a replay test for each base scenario for the first run after you set `"all"`.
+Keep these tests in the repository and configure CI to run them. Later agents can use them to replay
+the scenarios. pdd does not write or run these tests itself.
 
 ## Adopt an unchanged approved corpus
 

@@ -97,7 +97,7 @@ for (const [place, edit] of Object.entries(malformedPlaces)) {
     const r = await c.run([command, 'place-order', '--json']);
     assert.equal(r.code, 5, r.err);
     const view = JSON.parse(r.out);
-    assert.equal(view.exit_code, 5); assert.equal(view.rows[0].state, 'not_run');
+    assert.equal(view.exit_code, 5); assert.equal(view.rows[0].state, 'not run');
     assert.equal(view.rows[0].compatibility.state, 'unknown');
     assert.equal(view.rows[0].compatibility.issue, 'capability-report-unavailable');
     assert.equal(view.rows[0].compatibility.reported.complete, true);
@@ -128,7 +128,7 @@ for (const change of ['missing', 'changed']) test(`COMPAT repeated saved reads r
   else writeFileSync(path, Buffer.concat([original, Buffer.from('\nChanged source.\n')]));
   for (let read = 0; read < 3; read++) {
     const r = await c.run('check', { '--read': first.json.batch }, []);
-    assert.equal(r.code, 5); assert.equal(r.json.rows[0].state, 'not_run');
+    assert.equal(r.code, 5); assert.equal(r.json.rows[0].state, 'not run');
     assert.match(r.err, change === 'missing' ? /No checks were sent.*saved source cannot be verified/ : /No checks were sent.*source changed/);
     assert.equal(r.clock.uuids, 0); assert.equal(paid(c.f).length, 0);
     assert.equal(r.json.rows[0].request_id, null); assert.equal(r.json.rows[0].calls, 0);

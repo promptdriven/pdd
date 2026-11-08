@@ -24,8 +24,8 @@ for (const pending of [false, true]) for (const [variant, state, exit] of [
     const r = await c.run('check', { '--read': json ? initial.json.batch : true, '--json': json }, []);
     assert.equal(r.code, exit, r.err);
     const summary = JSON.parse(readFileSync(join(c.h.state, 'batches', initial.json.batch, 'summary.json')));
-    assert.equal(summary.lint_state, state);
-    assert.equal(summary.rows[0].state, state);
+    assert.equal(summary.lint_state, state === 'not_run' ? 'not run' : state);
+    assert.equal(summary.rows[0].state, state === 'not_run' ? 'not run' : state);
     assert.equal(summary.capabilities_complete, null);
     assert.equal(summary.rows[0].compatibility.association, 'matched');
     assert.equal(summary.rows[0].compatibility.state, variant === 'unsupported' ? 'unsupported-capability' : variant);

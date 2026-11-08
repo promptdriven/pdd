@@ -106,7 +106,7 @@ for (const reply of ['running', 'wrong-id']) test(`SAVED-LINT unresolved control
   const posts = r.f.posts.length;
   const result = await r.invoke(['test', '--read', r.batch, '--timeout', '1', '--json']);
   assert.equal(result.code, 3, 'unresolved lint remains pending/unknown');
-  assert.equal(result.json.rows[0].state, 'not_run');
+  assert.equal(result.json.rows[0].state, 'not run');
   assert.equal(result.json.rows[0].calls, 0);
   assert.equal(r.f.posts.length, posts, 'unresolved lint cannot send a lint or Check');
   assert.ok(r.saved().rows.every(row => !row.request_ids.length));

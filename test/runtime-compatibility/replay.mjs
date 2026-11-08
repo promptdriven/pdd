@@ -170,7 +170,7 @@ export const viewCases = {
     for (const variant of ['absent','malformed','conflict','duplicate','incomplete','incomplete-blocker']) {
       const c = await client(t, { variant }), result = await c.run('lint');
       assert.equal(result.code, variant === 'incomplete-blocker' ? 4 : 5, result.err);
-      assert.equal(result.json.rows[0].state, variant === 'incomplete-blocker' ? 'refused' : 'not_run');
+      assert.equal(result.json.rows[0].state, variant === 'incomplete-blocker' ? 'refused' : 'not run');
       assert.equal(paid(c.f).length, 0); if (variant.startsWith('incomplete')) assert.equal(result.json.rows[0].compatibility.reported.complete, false);
     }
   },
@@ -232,7 +232,7 @@ export const paidCases = {
     for (const variant of ['absent','malformed','conflict','duplicate','incomplete','unknown','unknown-build','no-source','source-mismatch','scenario-mismatch','build-mismatch','version-mismatch'])
       for (const mode of ['check','try']) {
         const c = await client(t, { variant }), r = await c.run(mode); assert.equal(r.code, 5, `${variant}/${mode}: ${r.err}`); assert.equal(paid(c.f).length, 0);
-        if (r.json?.rows[0]) { assert.equal(r.json.rows[0].state, 'not_run'); assert.equal(r.json.rows[0].calls, 0); }
+        if (r.json?.rows[0]) { assert.equal(r.json.rows[0].state, 'not run'); assert.equal(r.json.rows[0].calls, 0); }
       }
     const c = await client(t); const r = await c.run('check', {}, ['place-order'], { captureSource(root, options) {
       const capture = captureSource(root, options); return { ...capture, sources: undefined };

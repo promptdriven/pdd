@@ -2,7 +2,7 @@
 name: pdd-merge
 description: Use when Autopilot has a fresh checker PASS on a PDD pull request and must decide to merge it, write "would merge", or leave it for a person.
 metadata:
-  pdd-skills: 0.1.22
+  pdd-skills: 0.1.24
 ---
 
 # PDD merge

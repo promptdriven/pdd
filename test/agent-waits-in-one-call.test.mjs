@@ -105,7 +105,7 @@ for (const read of [false, true]) test(`ONE-CALL explicit 60s timeout on ${read 
   const r = await f.run({ '--timeout': '1', ...(read ? { '--read': true } : {}) }, { batch: seed?.batch });
   assert.equal(r.code, 3); assert.equal(r.elapsed, 60000); assert.equal(r.saved.timeout_min, 1);
   assert.match(r.err, /pdd test --read/); assert.equal(progress(r).length, 1);
-  assert.equal(r.saved.rows[0].state, 'running');
+  assert.equal(r.saved.rows[0].state, 'sent');
   if (read) { assert.equal(f.posts.length, before); assert.equal(r.clock.uuids, 0); assert.deepEqual(r.saved.rows[0].request_ids, seed.saved.rows[0].request_ids); }
 });
 test('ONE-CALL interruption resumes once without another check', async t => {
