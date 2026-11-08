@@ -1,3 +1,4 @@
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
@@ -20,6 +21,7 @@ async function fixture(t, options = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: options.mode ?? 'auto', trust: ['helper'] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
+    ...healthyMachine,
     stateRoot: join(home, 'state'), now: () => f.time,
     // These fakes stand for a checkout where pdd workflows can start (#3050).
     allocationCheck: async () => ({ state: 'ready', message: '' }),

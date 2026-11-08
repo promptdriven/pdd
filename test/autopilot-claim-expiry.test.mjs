@@ -1,3 +1,4 @@
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
@@ -340,6 +341,7 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode, trust: [] } }));
   const f = { time: NOW, prompts: [], patches: [], warnings: [], issues: [], issueComments: {}, claimComments: new Map(), status: 200, claims: () => [], eligible: () => [] };
   f.ports = {
+    ...healthyMachine,
     stateRoot: join(home, 'state'), now: () => f.time, readRunProgress: async () => [], warn: text => f.warnings.push(text), allocationCheck: async () => ({ state: 'ready', message: '' }),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [],
     run: async (command, args, options = {}) => {

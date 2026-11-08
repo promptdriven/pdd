@@ -1,0 +1,20 @@
+# Machine resource observations
+
+Own `src/machine-resources.mjs`. Export async `readMachineResources({cwd}, ports={})`.
+This is the single machine observation port for health and machine-sized check
+slots (#3067). It reads no credentials and makes no network or model call.
+Return `{cpuCount, load, memory:{available,total}, pressure:{io,memory}, disk:{available,total}}`.
+CPU count is a positive integer; load is the one-minute OS load. Memory and disk
+quantities are bytes; pressure numbers are Linux PSI `some avg10` percentages.
+Use Linux MemAvailable and MemTotal (convert KiB to bytes), else OS free/total
+memory. Non-Linux pressure is null for each metric. Use statfs on cwd's volume,
+with bavail (space available to this user) and blocks times bsize. Failed or
+malformed individual observations return null for that metric; never fabricate a
+healthy value. An unreadable pressure file does not hide other observations.
+Ports: `readFile(path)`, `statfs(path)`, `cpuCount()`, `load()`, `memory()` and
+`platform`, with native Node defaults. Callers can inject `machineResources`
+with the same input/output contract; policy belongs to those callers.
+
+## Dependencies
+
+Node fs and os supply native local observations only. Native tests cover this port.

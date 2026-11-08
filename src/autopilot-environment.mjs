@@ -1,6 +1,6 @@
 // Owned by prompts/cli/autopilot-environment.prompt.md.
 import { readFileSync, readdirSync, accessSync, constants } from 'node:fs';
-import { loadavg, cpus, freemem, totalmem } from 'node:os';
+import { readMachineResources } from './machine-resources.mjs';
 import { join, isAbsolute } from 'node:path';
 
 export const ENVIRONMENT_BACKOFF = Object.freeze([15 * 60_000, 60 * 60_000, 4 * 60 * 60_000]);
@@ -33,10 +33,19 @@ export function environmentStatus(run) {
 }
 export const environmentWakeTag = retry => `Environment validation wake for ${retry.area}:${retry.step} at ${new Date(retry.at).toISOString()} attempt ${retry.attempts + 1}.`;
 const missingTool = reason => /missing tool\s*:?\s*([\w.-]+)|tool\s+([\w.-]+)\s+(?:is\s+)?not found/i.exec(reason ?? '');
-const psi = text => {
-  const value = /^some\s+.*?\bavg10=([\d.]+)(?:\s|$)/m.exec(text)?.[1];
-  return value !== undefined && Number.isFinite(Number(value)) && Number(value) < 10;
-};
+const validPair = row => row && Number.isFinite(row.available) && row.available >= 0 && Number.isFinite(row.total) && row.total > 0 && row.available <= row.total;
+const memoryHealthy = row => validPair(row) && row.available / row.total >= 0.1;
+const resourcesFor = (input, ports) => (ports.machineResources ?? (input => readMachineResources(input, ports)))(input);
+export async function machineHealth({ cwd } = {}, ports = {}) {
+  let resources;
+  try { resources = await resourcesFor({ cwd }, ports); } catch { resources = null; }
+  const causes = [];
+  if (!memoryHealthy(resources?.memory)) causes.push('Available memory is below 10% or cannot be read');
+  const disk = resources?.disk;
+  if (!validPair(disk) || disk.available < 1024 ** 3 || disk.available / disk.total < 0.05)
+    causes.push('Free disk is below 1 GiB or 5% or cannot be read');
+  return { healthy: !causes.length, causes, resources };
+}
 export async function environmentHealthy({ env = process.env, reason = '' } = {}, ports = {}) {
   const readFile = ports.readFile ?? (path => readFileSync(path, 'utf8'));
   const readDir = ports.readDir ?? readdirSync;
@@ -45,15 +54,13 @@ export async function environmentHealthy({ env = process.env, reason = '' } = {}
     catch (error) { return error.code === 'ESRCH' ? false : undefined; }
   });
   try {
-    const count = (ports.cpuCount ?? (() => cpus().length))(), load = (ports.load ?? (() => loadavg()[0]))();
+    const health = await machineHealth({ cwd: ports.cwd ?? process.cwd() }, ports);
+    if (!health.healthy) return false;
+    const resources = health.resources;
+    const count = resources.cpuCount, load = resources.load;
     if (!Number.isFinite(count) || count <= 0 || !Number.isFinite(load) || load < 0 || load / count >= 1) return false;
-    const memory = await (ports.memory ?? (() => {
-      if (process.platform !== 'linux') return { available: freemem(), total: totalmem() };
-      const text = readFile('/proc/meminfo');
-      return { available: Number(/^MemAvailable:\s+(\d+)/m.exec(text)?.[1]), total: Number(/^MemTotal:\s+(\d+)/m.exec(text)?.[1]) };
-    }))();
-    if (!Number.isFinite(memory.available) || !Number.isFinite(memory.total) || memory.total <= 0 || memory.available / memory.total < 0.1) return false;
-    if ((ports.platform ?? process.platform) === 'linux' && (!psi(await readFile('/proc/pressure/io')) || !psi(await readFile('/proc/pressure/memory')))) return false;
+    if ((ports.platform ?? process.platform) === 'linux' && [resources.pressure.io, resources.pressure.memory]
+      .some(value => !Number.isFinite(value) || value < 0 || value >= 10)) return false;
     if (/missing tool|tool.*not found/i.test(reason)) {
       const match = missingTool(reason), tool = match?.[1] ?? match?.[2];
       if (!tool || !await (ports.toolPresent ?? (tool => (env.PATH ?? '').split(':').filter(Boolean).some(dir => { try { accessSync(join(dir, tool), constants.X_OK); return true; } catch { return false; } })))(tool)) return false;

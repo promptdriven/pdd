@@ -1,3 +1,4 @@
+import { healthyMachine } from './helpers/healthy-machine.mjs';
 // #3039: an interpreter outage parks only the runs that need the interpreter, frees their slots, alerts once and recovers by itself.
 // Every the interpreter, health, HTTP, Discord and clock port is injected; no test calls the real the interpreter or a chat service.
 import test from 'node:test';
@@ -243,6 +244,7 @@ async function launcher(t) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-06T12:00:00Z'), prompts: [], issues: [], waits: [], health: { state: 'healthy', detail: 'HTTP 200' }, healthCalls: 0, probe: 'pending', alerts: [], sent: [] };
   f.ports = {
+    ...healthyMachine,
     allocationCheck: async () => ({ state: 'ready', message: '' }),
     stateRoot: join(home, 'state'), now: () => f.time, readRunProgress: async () => [], warn: () => {},
     readRuntimeWaits: async () => structuredClone(f.waits),
