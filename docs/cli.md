@@ -96,7 +96,9 @@ get one actionable line. Linux uses a systemd user timer; macOS uses a
 LaunchAgent. On Linux, start warns when user-session lingering is off or
 unavailable: `loginctl enable-linger` keeps the timer after logout. The tick
 service preserves a Herdr server it starts when the tick exits. See the chat with
-`herdr session attach pdd-autopilot`.
+`herdr session attach pdd-autopilot`. The coordinator chat starts with a `cd` to the
+repository, so a `cd` in your shell startup file (for example `~/.zshrc`) does not
+change where the agent works.
 
 A Codex coordinator also gets
 `-c shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=…` for this launch only, so

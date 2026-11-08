@@ -37,12 +37,12 @@ const replay = {
     assert.equal(next.tabId === first.tabId, expected.reuseTab);
     assert.equal(mutations({...f, herdr: {...f.herdr, calls: f.herdr.calls.slice(at)}}).length, expected.creates);
   },
-  async 'area-label-wrong-cwd'(t, expected) {
+  async 'area-label-moved-shell'(t, expected) {
     const f = await liveLayout(t), first = await f.open();
     const pane = f.herdr.paneOf(first); pane.cwd = f.source;
-    const peer = structuredClone(pane), next = await f.open({run: ownerFor(f, first)});
-    assert.equal(next.tabId === first.tabId, expected.adoptWrongTab);
-    assert.equal(JSON.stringify(f.herdr.paneOf(first)) === JSON.stringify(peer), expected.preservePeer);
+    const before = structuredClone(pane), at = f.herdr.calls.length, next = await f.open({run: ownerFor(f, first)});
+    assert.equal(next.tabId === first.tabId && next.paneId === first.paneId, expected.adoptSameTab);
+    assert.equal(JSON.stringify(f.herdr.paneOf(first)) === JSON.stringify(before) && mutations({...f, herdr: {...f.herdr, calls: f.herdr.calls.slice(at)}}).length === 0, expected.preservePane);
   },
   async 'already-open'(t, expected) {
     const f = await liveLayout(t), command = f.ports.command;

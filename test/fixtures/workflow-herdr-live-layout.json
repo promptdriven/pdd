@@ -3,7 +3,7 @@
   "story_path": "user_stories/retry-with-live-herdr-layout.md",
   "criteria": [
     {"id": "AC1", "text": "Starting a new run from a linked checkout starts its story chat even when an old layout registry points at another linked checkout of the same clone, contains an old run intent, and Herdr lists that old workspace without worktree metadata."},
-    {"id": "AC2", "text": "Starting or reopening uses the unique live run workspace for the assigned checkout and clone, and the area tab with the matching name and checkout; retrying an allocation adopts Herdr's verified \"already_open\" result without creating duplicates."},
+    {"id": "AC2", "text": "Starting or reopening uses the unique live run workspace for the assigned checkout and clone, and the area tab with the matching name in that workspace, also when a `cd` in the shell startup file put its shell in another folder; retrying an allocation adopts Herdr's verified \"already_open\" result without creating duplicates."},
     {"id": "AC3", "text": "An existing non-linked workspace of this clone can serve as the parent, including one the person opened; other clones, ambiguous run matches and changed checkout identities cannot supply the run's workspace."},
     {"id": "AC4", "text": "PDD neither reads nor changes its old layout registry; \"pdd workflow status --all\" discovers clones only through the run index."},
     {"id": "AC5", "text": "Existing unrelated workspaces, labels, native sessions and Git checkouts stay intact. Cleanup preserves adopted parents and refuses to close a run with changed roots, extra tabs or extra panes."},
@@ -23,10 +23,10 @@
       "verification": "native PR 2 pending"
     },
     {
-      "id": "area-label-wrong-cwd", "criteria": ["AC2", "AC5"],
-      "given": {"live": "verified run; existing story tab pane belongs to another cwd"},
-      "expected": {"adoptWrongTab": false, "preservePeer": true},
-      "verification": "native PR 2 pending"
+      "id": "area-label-moved-shell", "criteria": ["AC2", "AC5"],
+      "given": {"live": "verified run; the shell of its story tab moved to another folder (a shell startup cd)"},
+      "expected": {"adoptSameTab": true, "preservePane": true},
+      "verification": "native test/workflow-herdr-live-layout.vectors.test.mjs (2903)"
     },
     {
       "id": "already-open", "criteria": ["AC2"],

@@ -62,7 +62,7 @@ test('Codex chats: new and resumed launches keep PDD_BIN and PDD_AGENT_SESSION u
 
 test('Codex chats: a worktree path with a control character stays one valid TOML project key', t => {
   const root = temp(t), bin = join(root, 'bin'), cwd = join(root, 'work \u007f\t tree "x" \\ é');
-  mkdirSync(bin); writeFileSync(join(bin, 'codex'), nativeScript, { mode: 0o755 }); writeFileSync(join(root, 'start.md'), 'Use the pdd-bug skill.');
+  mkdirSync(bin); mkdirSync(cwd); writeFileSync(join(bin, 'codex'), nativeScript, { mode: 0o755 }); writeFileSync(join(root, 'start.md'), 'Use the pdd-bug skill.');
   for (const options of [{ messageFile: join(root, 'start.md') }, { resumeId: '11111111-1111-4111-8111-111111111111' }]) {
     const out = JSON.parse(execFileSync('/bin/sh', ['-c', chatCommand({ agent: 'codex', cwd, ...options })], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
     const table = /^\{("(?:\\.|[^"\\])*")=\{trust_level="trusted"\}\}$/.exec(codexConfigs(out.argv).config.projects);

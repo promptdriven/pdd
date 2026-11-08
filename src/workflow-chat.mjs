@@ -114,9 +114,11 @@ export function herdrCommand(ports = {}) {
 
 export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [] }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
+  if (typeof cwd !== 'string' || !cwd) throw problem('invalid_worktree', 'The chat has no worktree folder, so pdd will not start it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
+  // A shell startup file can cd a new pane elsewhere; the agent starts in the worktree, or not at all.
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
-  const env = ['env', 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
+  const env = ['cd', quote(cwd), '&&', 'env', 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
   // agy asks "Do you trust the contents of this project?" in a new worktree; --settings trusts it for this session only.
   if (agent === 'agy') return [...env, 'agy', '--dangerously-skip-permissions', '--settings', quote(JSON.stringify({ trustedWorkspaces: [cwd] })),
@@ -367,6 +369,11 @@ export async function openChat({ run, chat }, ports = {}) {
   return { resumed, attached: attach };
 }
 
+// A cleanup failure as its code, or `code: first message line` with the code once (a layout identity refusal says what changed).
+const warningReason = error => {
+  const code = error?.code ?? 'error', text = String(error?.message ?? '').split('\n')[0].trim(), rest = text.startsWith(`${code}: `) ? text.slice(code.length + 2) : text;
+  return !rest || rest === code ? code : `${code}: ${rest}`;
+};
 export async function closeChats(run, ports = {}) {
   const herdr = herdrCommand(ports), warnings = [];
   const chats = run.chats ?? [];
@@ -382,9 +389,9 @@ export async function closeChats(run, ports = {}) {
       await withHerdrLayoutLock(async () => {
         await closeHerdrRunLayout({ runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody }, layoutPorts);
         try { await closeHerdrRepoLayoutIfIdle({ repository: run.repo, commonDir: run.commonDir }, layoutPorts); }
-        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${error.code ?? 'error'}).`); }
+        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${warningReason(error)}).`); }
       }, { directory: ports.layoutDirectory });
-    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${error.code ?? 'error'}).`); }
+    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${warningReason(error)}).`); }
   }
   return { warnings };
 }
@@ -437,7 +444,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     const owned = target => {
       const tab = tabs.find(row => row.tab_id === target.tabId), rows = panes.filter(row => row.tab_id === target.tabId);
       if (!tab && !rows.length) return false;
-      if (!tab || tab.workspace_id !== target.workspaceId || rows.length !== 1 || rows[0].pane_id !== target.paneId || rows[0].workspace_id !== target.workspaceId || !samePath(rows[0].cwd, run.root) || target.terminalId && rows[0].terminal_id !== target.terminalId) throw invalid();
+      if (!tab || tab.workspace_id !== target.workspaceId || rows.length !== 1 || rows[0].pane_id !== target.paneId || rows[0].workspace_id !== target.workspaceId || target.terminalId && rows[0].terminal_id !== target.terminalId) throw invalid();
       return true;
     };
     const observe = async target => {
@@ -481,7 +488,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         if(peers.length!==1) return true;
         const peer=peers[0],rows=panes.filter(row=>row.tab_id===tab.tab_id);
         return peer.workspaceId!==original.workspaceId || tab.workspace_id!==peer.workspaceId || rows.length!==1 ||
-          rows[0].workspace_id!==peer.workspaceId || rows[0].pane_id!==peer.paneId || !samePath(rows[0].cwd,run.root) ||
+          rows[0].workspace_id!==peer.workspaceId || rows[0].pane_id!==peer.paneId ||
           peer.terminalId && rows[0].terminal_id!==peer.terminalId;
       });
     };
@@ -508,7 +515,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         if(unexplained.length) {
           if(unexplained.length!==1 || unexplained[0].label!==record.recovery.allocationLabel)throw uncertain();
           const rows=panes.filter(row=>row.tab_id===unexplained[0].tab_id);
-          if(rows.length!==1 || !samePath(rows[0].cwd,run.root) || rows[0].workspace_id!==original.workspaceId)throw invalid();
+          if(rows.length!==1 || rows[0].workspace_id!==original.workspaceId)throw invalid();
           const native=await observe({...original,tabId:unexplained[0].tab_id,paneId:rows[0].pane_id,session:null});
           if(native)throw uncertain();
         }
@@ -608,7 +615,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         const matching=unexplained.filter(row=>row.label===record.recovery.allocationLabel);
         if(unexplained.length!==1 || matching.length!==1) throw uncertain();
         const rows=panes.filter(row=>row.tab_id===matching[0].tab_id);
-        if(rows.length!==1||!samePath(rows[0].cwd,run.root)||rows[0].workspace_id!==original.workspaceId) throw invalid();
+        if(rows.length!==1||rows[0].workspace_id!==original.workspaceId) throw invalid();
         record.replacement={area:record.area,agent,tabId:matching[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
       }
       await save('prepared');
