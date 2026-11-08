@@ -148,7 +148,7 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
 // Wrong: malformed references/options reach effects, or an owner failure is retried.
 test('ALPHA8: runner argument failures and invalid replies are finite without a second call', async () => {
   const invalid = [['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','feature','42','extra'],
-    ['workflow','run','feature','42','--agent','other'],['workflow','run','bug','2','--base'],
+    ['workflow','run','feature','42','--agent',''],['workflow','run','feature','42','--agent','   '],['workflow','run','bug','2','--base'],
     ['workflow','run','bug','2','--base','one','--base','two'],['workflow','done'],['workflow','done','Scope'],['workflow','done','scope','--summary'],
     ['workflow','approve','7','8'],['workflow','approve','a1234567-1234-4123-8123-123456789abc'],['workflow','changes','7'],['workflow','cancel'],
     ['workflow','open'],['workflow','resume','7'],['workflow','attach','7'],['workflow','status','7','--brief'],['workflow','status','--all','--all']];
@@ -172,13 +172,14 @@ test('workflow evidence routes required saved summary file without progressing s
   assert.equal(input, null);
 });
 
-test('Try accepts named local launchers while workflow agent choices stay bounded', () => {
+test('Try and workflow accept named local launchers; workflow completion keeps the built-in agent choices', () => {
   for (const name of ['Codex (work5)', 'Claude (work3)', 'codex', 'claude', 'gemini']) {
     const plan=parseArgv(['simulate','my-story','--agent',name]);
     assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);
   }
-  for (const args of [['simulate','--agent'],['simulate','--agent',''],['simulate','--agent','   '],['workflow','run','bug','42','--agent','Codex (work5)'],['workflow','run','bug','42','--agent','other']]) assert.throws(()=>parseArgv(args),CommandInputError);
-  for (const agent of ['codex','claude','gemini','agy']) assert.equal(parseArgv(['workflow','run','bug','42','--agent',agent]).options['--agent'],agent);
+  for (const args of [['simulate','--agent'],['simulate','--agent',''],['simulate','--agent','   '],['workflow','run','bug','42','--agent'],['workflow','run','bug','42','--agent',''],['workflow','run','bug','42','--agent','   ']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  // 2901: a workflow --agent may name an agents.json entry; the workflow agents owner refuses an unknown name, not the parser.
+  for (const agent of ['codex','claude','gemini','agy','Codex (work5)','other']) assert.equal(parseArgv(['workflow','run','bug','42','--agent',agent]).options['--agent'],agent);
   for (const shell of ['bash','zsh']) {
     const completion=renderCompletion(shell);
     assert.doesNotMatch(completion,/(?:try|sim|simulate):--agent\)/);

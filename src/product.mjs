@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: fc5127717989e3995a3b1b02784f73754fb002d3bd503aac72b9d358356a4360).
+// Generated from prompts/cli/product.prompt.md (sha256: 320403f38b3664ebe5ccc2bc84b6037dfec81894673020a53ff7dd9416187cf3).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { listRuns } from './workflow-runs.mjs';
+import { workflowAgentEntry } from './workflow-agents.mjs';
 import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { causeText } from './runtime-output.mjs';
@@ -564,7 +565,8 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
   try {
     const p = portsFor(given), { product, boundaries } = await documents({ cwd }, p), planned = product.runs.find(row => row.run === run);
     if (!planned) invalid(`Unknown planned run ${run}.`);
-    if (!['codex', 'claude', 'gemini', 'agy'].includes(agent)) invalid(`Unknown agent ${agent}.`);
+    const chosen = workflowAgentEntry(agent, { cwd, env: given.env ?? process.env });
+    if (!chosen.ok) invalid(chosen.message);
     const state = await progress({ cwd }, given, run), { repo, localRuns } = state;
     const selected = state.details.find(detail => detail.run.run === run);
     issue = selected.issue;

@@ -206,7 +206,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
-        input.agent = selected.agent;
+        // A named agents.json entry goes to the runner by name; the runner resolves it again and saves it.
+        input.agent = typeof selected.name === 'string' ? selected.name : selected.agent;
       }
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
