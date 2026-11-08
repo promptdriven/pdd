@@ -43,6 +43,10 @@ safely, require full fallback for its reachable consumer. The scanner does not
 parse interpolation expressions: any reachable interpolated template requires
 full fallback before masking, including nested templates, braces, comments and
 computed dependencies. Uncertainty must select more tests, never fewer.
+Executable references to `require` outside a direct call can alias the loader.
+Unclassified Unicode escapes in executable identifiers can also hide loaders.
+Treat either consumer as depending on every changed path and include its reverse
+consumers, or require full fallback; never discard them for lacking a literal edge.
 An unclassified slash outside a string or comment can start a regex literal or
 division expression. Require full fallback for its reachable consumer before
 quotes or comment markers in that syntax can hide later dependencies.

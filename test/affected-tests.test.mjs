@@ -301,6 +301,18 @@ test('native regex quotes cannot hide the consumer of a broken required module',
   });
 });
 
+for (const [name, adapterSource] of [
+  ['aliased require', "const load = require; module.exports = load('./target');"],
+  ['escaped require', String.raw`module.exports = requ\u0069re('./target');`],
+  ['escaped loader alias', String.raw`const load = requ\u{69}re; module.exports = load('./target');`],
+]) test(`native indirect CommonJS loader preserves broken reverse consumer: ${name}`, t => {
+  brokenRequireConsumer(t, {
+    target: 'src/target.js',
+    candidates: { 'src/target.js': 'module.exports = { value: 1 };' },
+    adapterSource,
+  });
+});
+
 test('native extensionless require keeps its loaded file among ESM and directory candidates', t => {
   brokenRequireConsumer(t, {
     target: 'src/target.js',

@@ -86,10 +86,15 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
       if (uncertainSlash) errors.push(`unsupported-slash-syntax:${path}`);
       const computedImport = [...source.matchAll(/\b(?:import|require)\s*\(/g)].some(match =>
         mask[match.index] && !/^\s*(?:'[^'\\\r\n]*'|"[^"\\\r\n]*")\s*(?:\)|,)/.test(source.slice(match.index + match[0].length)));
+      // A loader can escape the direct-call matcher through an alias or a
+      // Unicode identifier escape. Their consumers still depend on any change.
+      const indirectLoader = [...source.matchAll(/\brequire\b/g)].some(match =>
+        mask[match.index] && !/^\s*\(/.test(source.slice(match.index + match[0].length)));
+      const escapedIdentifier = [...source.matchAll(/\\u/g)].some(match => mask[match.index]);
       // Computed access is an explicit overapproximation, including reads made by
       // a helper or a spawned CLI. Its reverse consumers inherit the dependency.
       if (mask.includes(2) || /\b(?:getBuiltinModule|createRequire|eval|Function|binding)\b/.test(text) || /['"](?:node:)?(?:fs(?:\/promises)?|child_process)['"]/.test(text) || /\b(?:readFile(?:Sync)?|readdir(?:Sync)?|opendir(?:Sync)?|spawn(?:Sync)?|execFile(?:Sync)?|execSync)\b/.test(text)
-        || /\b(?:import|require)\s*\(\s*(?!['"])/.test(text) || computedImport) opaque.add(path);
+        || /\b(?:import|require)\s*\(\s*(?!['"])/.test(text) || computedImport || indirectLoader || escapedIdentifier) opaque.add(path);
       const imports = /\b(?:import\s+(?:[^;'"]*?\s+from\s*)?|export\s+[^;'"]*?\s+from\s*|(?:import|require)\s*\(\s*)['"]([^'"\n]+)['"]/g;
       for (const match of source.matchAll(imports)) {
         if (!mask[match.index]) continue;

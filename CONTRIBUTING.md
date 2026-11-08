@@ -53,6 +53,8 @@ The selector retains all plausible extensionless file and index targets. It uses
 full fallback for reachable directory package entry points and unclassified slash
 syntax, including regex and division expressions. These fallbacks protect test
 coverage when the scanner cannot determine the loaded dependencies.
+Loader aliases and unclassified Unicode escapes in executable identifiers select
+their consumers and all reverse consumers conservatively.
 
 Record the working files, command, mode, fallback cause, counts and `suiteMinutes`
 in the PR. Keep these results separate from the merge result. The merge owner
