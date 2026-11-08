@@ -50,7 +50,9 @@ A failed observation shows an unavailable repository view, never an empty fleet.
 lease, warn once per saved launcher when multiple coordinators share a GitHub
 login. This warning does not grant ownership and uses the existing state save
 boundary. Status is read-only and may show the warning without persisting it;
-the tick records the once-only warning. The GitHub usage ledger remains local.
+the tick records the once-only warning. The GitHub usage ledger remains local. Alert delivery controls only the optional
+`Alerts:` line. Successful delivery removes that line when no other alert needs
+attention; repository fleet, workflow readiness and GitHub budget lines remain.
 
 ## Review backlog admission
 

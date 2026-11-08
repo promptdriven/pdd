@@ -61,6 +61,7 @@ function setup(t) {
     assert.equal(exitCode, 0, stderr.text);
     return stdout.text.trimEnd().split('\n');
   };
+  f.alertLines = async () => (await f.status()).filter(line => line.startsWith('Alerts:'));
   // The secret never reaches any output or local file other than the private destination (or no file at all for a token command).
   f.noSecret = ({ config = false } = {}) => {
     const files = readdirSync(home, { recursive: true }).map(name => join(home, name)).filter(path => statSync(path).isFile() && (config || path !== f.config));
@@ -234,7 +235,7 @@ test('an alert names repo, issue link, cause, attempt and need, and a repeat wit
   const actions = f.record().log.map(row => `${row.kind}:${row.action}:${row.result}`);
   assert.deepEqual(actions, ['usage-limit:alert:delivered', 'usage-limit:repeat:not-sent', 'usage-limit:repeat:not-sent', 'usage-limit:repeat:not-sent', 'usage-limit:update:delivered', 'decision:alert:delivered']);
   assert.equal(statSync(f.recordFile()).mode & 0o777, 0o600);
-  assert.deepEqual((await f.status()).length, 1, 'delivered alerts add no status line');
+  assert.deepEqual((await f.alertLines()).length, 0, 'delivered alerts add no status line');
   f.noSecret();
 });
 
@@ -249,16 +250,16 @@ test('a failed delivery is recorded, does not stop work, shows in status, and th
   assert.equal(f.record().incidents['usage-limit@test-host'].result, 'failed');
 
   const lines = await f.status();
-  assert.equal(lines.length, 2);
+  assert.equal(lines.filter(line => line.startsWith('Alerts:')).length, 1);
   assert.match(lines[0], /^Autopilot enabled; .*owner\/repo/);
-  assert.equal(lines[1], 'Alerts: 1 open alert not delivered; last delivery failed (HTTP 500) for #12 usage-limit at 2026-11-06T10:00:00.000Z; check with pdd autopilot alerts test.');
+  assert.equal(lines.find(line => line.startsWith('Alerts:')), 'Alerts: 1 open alert not delivered; last delivery failed (HTTP 500) for #12 usage-limit at 2026-11-06T10:00:00.000Z; check with pdd autopilot alerts test.');
 
   f.time += 30 * 60 * 1000;
   f.replies.push(echo);
   const retried = await f.alert(12, 'usage-limit', usage);
   assert.equal(f.requests.length, 2, 'a failed alert is sent again on the next call');
   assert.match(retried.stdout, /confirmed/);
-  assert.equal((await f.status()).length, 1, 'the status line ends after delivery');
+  assert.equal((await f.alertLines()).length, 0, 'the status line ends after delivery');
 
   f.replies.push(Object.assign(Error(`connect ECONNREFUSED ${DISCORD}`), { code: 'unreached' }));
   const unreached = await f.alert(14, 'resource', { cause: 'Disk full on the runner', tried: 'Stopped new runs', need: 'Free disk space' });
@@ -268,7 +269,7 @@ test('a failed delivery is recorded, does not stop work, shows in status, and th
   const again = await f.alert(15, 'stuck', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'A person to look' });
   assert.match(again.stdout, /nothing sent/, 'an unconfirmed alert may exist, so it is not sent again');
   assert.equal(f.requests.length, 4);
-  assert.match((await f.status())[1], /^Alerts: 2 open alerts not delivered; last delivery unconfirmed \(no reply\) for #15 stuck/);
+  assert.match((await f.alertLines())[0], /^Alerts: 2 open alerts not delivered; last delivery unconfirmed \(no reply\) for #15 stuck/);
   f.noSecret();
 });
 
@@ -281,7 +282,7 @@ test('without a destination an alert is recorded locally, work continues and sta
   assert.equal(f.requests.length, 0);
   assert.deepEqual(f.record().incidents['usage-limit@test-host'].fields, usage);
   assert.equal(f.record().incidents['usage-limit@test-host'].result, 'not-configured');
-  assert.equal((await f.status())[1], 'Alerts: 1 open alert not delivered; set one with pdd autopilot alerts set.');
+  assert.equal((await f.alertLines())[0], 'Alerts: 1 open alert not delivered; set one with pdd autopilot alerts set.');
 
   assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /nothing sent/, 'no destination: a repeat adds no send');
   await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
@@ -463,22 +464,22 @@ test('a delivered alerts test ends the status line of an older failed recovery; 
   await f.alert(30, 'decision', { cause: 'Two layouts fit', tried: 'Asked on the issue', need: 'Pick one' });
   assert.match((await f.alert(30, 'recovered', { cause: 'The layout was chosen', kind: 'decision' })).stdout, /delivery failed \(HTTP 500\)/);
   assert.deepEqual(f.record().incidents, {}, 'the recovery closed the incident');
-  assert.match((await f.status())[1], /^Alerts: last delivery failed \(HTTP 500\) for #30 decision at /);
+  assert.match((await f.alertLines())[0], /^Alerts: last delivery failed \(HTTP 500\) for #30 decision at /);
 
   f.time += 60 * 1000;
   f.replies.push(echo);
   assert.equal((await f.pdd(['autopilot', 'alerts', 'test'])).exitCode, 0);
-  assert.equal((await f.status()).length, 1, 'the delivered test is the newest send');
+  assert.equal((await f.alertLines()).length, 0, 'the delivered test is the newest send');
   assert.deepEqual(f.record().log.at(-1), { at: '2026-11-06T10:01:00.000Z', kind: 'test', action: 'test', result: 'delivered' });
 
   f.replies.push({ status: 500, text: '' });
   await f.alert(31, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' });
   f.replies.push(echo);
   await f.pdd(['autopilot', 'alerts', 'test']);
-  assert.equal((await f.status())[1], 'Alerts: 1 open alert not delivered; check with pdd autopilot alerts test.');
+  assert.equal((await f.alertLines())[0], 'Alerts: 1 open alert not delivered; check with pdd autopilot alerts test.');
   f.replies.push(echo);
   assert.match((await f.alert(31, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' })).stdout, /Alert sent for #31 stuck/);
-  assert.equal((await f.status()).length, 1);
+  assert.equal((await f.alertLines()).length, 0);
   f.noSecret();
 });
 
@@ -579,7 +580,7 @@ test('a Discord bot with a stdin token: set saves it privately; test checks bot 
   assert.deepEqual(f.requests.slice(4).map(f.route), [`POST /channels/${CHANNEL}/messages`, `GET /channels/${CHANNEL}/messages/1300000000000000101`]);
   assert.match(f.requests[4].body.content, /^PDD Autopilot alert: usage-limit \(test-host\)\nRepository: owner\/repo\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/12\n/);
   assert.equal(f.record().incidents['usage-limit@test-host'].result, 'delivered');
-  assert.equal((await f.status()).length, 1);
+  assert.equal((await f.alertLines()).length, 0);
   f.noSecret();
 });
 
@@ -591,7 +592,7 @@ test('a Discord bot readback mismatch is unconfirmed, shown in status and not se
   assert.equal(sent.exitCode, 0, 'work continues');
   assert.match(sent.stdout, /delivery unconfirmed \(readback mismatch\)/);
   assert.equal(f.record().incidents['12:stuck'].result, 'unconfirmed');
-  assert.match((await f.status())[1], /^Alerts: 1 open alert not delivered; last delivery unconfirmed \(readback mismatch\) for #12 stuck/);
+  assert.match((await f.alertLines())[0], /^Alerts: 1 open alert not delivered; last delivery unconfirmed \(readback mismatch\) for #12 stuck/);
   const count = f.requests.length;
   assert.match((await f.alert(12, 'stuck', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'A person to look' })).stdout, /nothing sent/);
   assert.equal(f.requests.length, count, 'an unconfirmed bot message may exist, so it is not posted again');
@@ -609,7 +610,7 @@ test('a Discord bot readback that changed only line ends or end spaces is delive
   assert.equal(sent.stdout, 'Alert sent for #12 stuck; the Discord bot readback confirmed it.\n');
   assert.match(f.requests.at(-2).body.content, /\nCause: Line one {2}\r\nLine two\rLine three\n/, 'the sent text is unchanged');
   assert.equal(f.record().incidents['12:stuck'].result, 'delivered');
-  assert.equal((await f.status()).length, 1, 'no false unconfirmed alert in status');
+  assert.equal((await f.alertLines()).length, 0, 'no false unconfirmed alert in status');
   f.noSecret();
 });
 
@@ -642,7 +643,7 @@ test('a bot token command runs at each send, the token never reaches disk or out
   await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true']);
   assert.match((await f.alert(15, 'decision', { cause: 'Two layouts', tried: 'Asked on the issue', need: 'Pick one' })).stdout, /token command gave no token/);
   assert.equal(f.requests.length, count, 'no request is sent without a token');
-  assert.match((await f.status())[1], /last delivery failed \(token command gave no token\) for #15 decision/);
+  assert.match((await f.alertLines())[0], /last delivery failed \(token command gave no token\) for #15 decision/);
 
   f.noSecret({ config: true });
 });
