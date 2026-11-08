@@ -9,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 19c11a47d2daf25aa4cab321c08426863d98bf2719437709cb449cc57ae154d1).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 768aabc389622f378dbce6ef040274e026cb87b760248f847c042b95f2662ea7).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -301,7 +301,12 @@ async function refreshReplayBaseline(run,p,enteringCode=false,sourcePaths=null) 
     await rawGit(p,run.root,'fetch','origin',`refs/heads/${run.baseBranch}:refs/remotes/origin/${run.baseBranch}`);
     if (enteringCode) {const failure=await codeEntryFailure(run,p);if(failure)return failure;}
     const comparison = await git(p,run.root,'merge-base','HEAD',`refs/remotes/origin/${run.baseBranch}`);
-    const owned = sourcePaths ?? prOf(run,askArea(run)?.name)?.sourcePaths ?? [];
+    const saved = new Set(run.replayBaseline?.vectors?.map(vector=>vector.path) ?? []);
+    const owned = (sourcePaths ?? prOf(run,askArea(run)?.name)?.sourcePaths ?? []).filter(path=>{
+      if (!path.endsWith('.json') || saved.has(path)) return true;
+      try { (p.fs?.lstatSync ?? lstatSync)(join(run.root,path)); return true; }
+      catch (error) { if (error.code==='ENOENT') return false; throw error; }
+    });
     const changed = [...new Set([...await changedFiles({...run,baseSha:comparison},p,true), ...owned])], paths = await scenarioInventory(run,p,changed);
     run.replayBaseline = pinRunAnchor(run.root,{paths,commit:run.baseSha,changed,scenarios:paths});
   }
