@@ -656,6 +656,8 @@ You need Node.js 22 or newer. The package has no dependencies and no build step.
 
 Check, remote lint and simulation setup use [local bookkeeping and capacity waiting](lint-capacity.md); they share a local slot cap when `PDD_MAX_JOBS` is set. Local waiting, maintenance and interpreter queue time all use the existing caller wait. `pdd simulate` uses one five-minute setup allowance for lint and the rest of setup in every shell; it adds no timeout flag.
 
+A saved Simulator setup is read by its original request ID before any new setup is considered. A plain repeat keeps that ID when the setup is pending, unknown, missing, expired or ended; it does not create a replacement. Recovery diagnostics name the original UUID and its authenticated `GET /v1/runs/<UUID>` status endpoint. A known running setup reuses its existing link. Start a separate setup deliberately with `--new` after reconciling the original outcome. An unknown setup result does not prove zero AI calls or zero external effects.
+
 `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`
 
 Use the program in your own terminal. Copy the printed PATH line or run the absolute shim path.
