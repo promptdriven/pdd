@@ -250,11 +250,11 @@ test('2897 repair: returned automatic code resume arms completion for its new at
   assert.equal(arms[0].coordinatorPaneId,'fake-coordinator');
 });
 
-test('2897 repair: owning draft prompt passes local interpreter freshness admission',async()=>{
+test('2897 repair: owning prompt passes local interpreter freshness admission',async()=>{
   const {interfaceBlocks,proseSha256,promptRefusal}=await import('../src/runtime-preflight.mjs');
   const path='prompts/cli/workflow-runner.prompt.md',text=readFileSync(join(packageRoot,path),'utf8');
   const iface=JSON.parse(interfaceBlocks(text)[0][1]);
-  assert.equal(iface.status,'draft');
+  assert.ok(['draft','approved'].includes(iface.status));
   assert.equal(promptRefusal({path,interface:iface,prose:proseSha256(text)},'Runtime interface'),null);
 });
 

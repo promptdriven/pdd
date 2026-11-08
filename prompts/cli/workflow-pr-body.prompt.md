@@ -81,8 +81,8 @@ add a record, verdict, filesystem read or model call.
 
 ```json
 {
-  "status": "draft",
-  "prose_sha256": "9cf014084fb1993049961c68962ace7cf3d57d957e30a777660172ddb2e0884f",
+  "status": "approved",
+  "prose_sha256": "ee5ee817b8790876ca74a686efc744743568241a0932daafb2aee53b17898e0c",
   "entries": [
     {
       "operation": "readablePrTitle",

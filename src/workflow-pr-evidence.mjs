@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 8e38c3f8e190fe0931ec0ddce0e5081b1f19587a96565fb3c156b12124c75582).
+// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 0ba96c7d10243edbf12dfcb73d66fe1451a27c38b9a167d48655f25167f718e1).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

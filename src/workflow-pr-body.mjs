@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 2544e1a9a8bfad496013e9d3acf1cdcb447c7c9e4d867850229d645ccd79ff09).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: e231ad3d2a648d60da85ed700c6a4c72f207db94a74c46f047069bb8a5380167).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.

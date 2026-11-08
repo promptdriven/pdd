@@ -50,7 +50,7 @@ Also export `approvalRecords(run)`: the same approval rows that `approvalLines` 
 ```json
 {
   "status": "approved",
-  "prose_sha256": "a92071c5e92e167649f7367ba2b93080035d268aaa72d638de19050de5aae9ba",
+  "prose_sha256": "9fcbb417378d37f73db33ea48acb055bb48adb44fd99c6a99ec1c2523e544d33",
   "entries": [
     {
       "operation": "preparePrEvidence",

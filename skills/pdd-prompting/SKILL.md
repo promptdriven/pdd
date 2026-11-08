@@ -2,7 +2,7 @@
 name: pdd-prompting
 description: The PDD Prompting guide. Use when you write, change or review a module prompt (*.prompt.md), a Story or test cases, when the person asks how to write prompts in PDD, or asks to set up real behavior verification for a repository. In PDD, prompts are the source and code follows them.
 metadata:
-  pdd-skills: 0.1.26
+  pdd-skills: 0.1.27
 ---
 
 # PDD prompting

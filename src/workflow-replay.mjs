@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: a27ba959ee6d3f00a69598392f8c2c8099a7ec838a025492621a59e62e956c69).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 60fdb78236a539bf97b9126e0ce66595c6cee86d8c0975a96be07e987daa2f3b).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
