@@ -15,7 +15,12 @@ delivery port also supports controlled unsent failures. No test contacts GitHub,
 a model, the interpreter or a live Herdr session.
 
 The idle cases check manual and automatic saved-session resumes for Claude and
-Codex, with existing and rebuilt workspaces. They check first observation,
+Codex, with existing and rebuilt workspaces.
+They also restore and attach sessions held at approval gates, open questions and
+paused interpreter waits without reserving or sending a continue notice. Controlled
+holds during native resume or journal custody prevent notice creation. Holds at final submission
+prevent sending and keep the journal request pending.
+They check first observation,
 10-minute boundaries, three attempts per area, recorded progress, working and
 held agents, pending and uncertain delivery, concurrent changes and one stuck
 alert. Alert tests use the real alert service with controlled HTTP responses.

@@ -2808,6 +2808,7 @@ Nothing was sent to the chat.` };
   let accepted;
   try {
     accepted = await deliveryJournal(run, p, journal => {
+      if (notice && !targetCurrent(latest())) throw Error('The run changed before notice delivery');
       let entry = journal.requests.find(item => matches(item) && item.kind === kind && item.text === request && item.state !== 'delivered');
       if (!entry) { entry = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
       return { ...entry };
@@ -3429,7 +3430,8 @@ const deliverContinue = (run, text, p) => p.deliverContinue ? p.deliverContinue(
 
 async function continueResumedChat(run, chat, p, packageRoot) {
   const anchor = chat.resumedAt, latest = readRun(run.runDir);
-  const sameTarget = fresh => fresh && runIdentity(fresh) === runIdentity(run) && !ended(fresh)
+  const sameTarget = fresh => fresh && runIdentity(fresh) === runIdentity(run)
+    && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh)
     && fresh.area === run.area && !layoutClosing(fresh) && !currentChat(fresh)?.closed
     && currentChat(fresh)?.paneId === chat.paneId && currentChat(fresh)?.session?.id === chat.session?.id
     && currentChat(fresh)?.resumedAt === anchor;

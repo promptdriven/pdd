@@ -11,6 +11,22 @@ const WAIT = 600000;
 const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
 const prompts = f => f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt');
 const launches = f => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run');
+function holdRun(f, hold) {
+  const run = f.record();
+  if (hold === 'gate') run.gate = {area: run.chats.at(-1).area, kind: 'approve', at: f.clock};
+  if (hold === 'question') run.question = {text: 'Choose a case.', at: f.clock};
+  if (hold === 'interpreter') {
+    run.state = 'paused';
+    run.runtimeWait = {reason: 'check-slot', batch: 'controlled-batch', at: f.clock};
+  }
+  save(f, run);
+  return run;
+}
+function assertHold(f, held) {
+  const saved = f.record();
+  for (const key of ['state', 'gate', 'question', 'runtimeWait', 'done', 'decisions', 'area'])
+    assert.deepEqual(saved[key], held[key], `resume must preserve ${key}`);
+}
 function useAlertService(f, ports) {
   const config = join(f.ports.env.HOME, '.config', 'pdd');
   mkdirSync(config, {recursive: true});
@@ -78,6 +94,84 @@ for (const agent of ['claude', 'codex']) for (const automatic of [false, true]) 
     await tick();
     assert.equal(prompts(f).length, 1, 'opening the live chat and another tick must not repeat the continue');
     if (!automatic) {assert.equal(attached, 1); assert.equal(promptsAtAttach, 1, 'continue must precede terminal attachment');}
+  });
+
+for (const hold of ['gate', 'question', 'interpreter']) for (const agent of ['claude', 'codex']) for (const rebuilt of [false, true])
+  test(`3072 repair 2: restore held ${hold} session, ${agent}, rebuilt=${rebuilt}`, async t => {
+    const {f, pane} = await setup(t, agent), original = f.record().chats.at(-1);
+    pane().agent = null; f.tick(60001);
+    if (rebuilt) await f.herdr.herdr(['workspace', 'close', original.workspaceId]);
+    const held = holdRun(f, hold);
+    let attached = 0, promptsAtAttach;
+    const ports = {...f.ports, attach: async () => {
+      attached++;
+      promptsAtAttach = prompts(f).length;
+    }};
+    assert.equal((await openRun({ref: '17', cwd: f.source, packageRoot}, ports)).exitCode, 0);
+    assert.equal(attached, 1);
+    assert.equal(launches(f).length, 1);
+    assert.equal(f.record().chats.at(-1).session.id, original.session.id);
+    assert.equal(prompts(f).length, 0, '3072: a deliberate hold must not receive a resume notice');
+    assert.equal(promptsAtAttach, 0);
+    assert.equal(f.record().chats.at(-1).continueAnchor, undefined);
+    assert.equal(existsSync(join(held.runDir, 'delivery-journal.json')), false);
+    assertHold(f, held);
+    await openRun({ref: '17', cwd: f.source, packageRoot}, ports);
+    assert.equal(launches(f).length, 1);
+    assert.equal(prompts(f).length, 0);
+    assertHold(f, held);
+  });
+
+for (const hold of ['gate', 'question', 'interpreter'])
+  test(`3072 repair 2: ${hold} arriving at journal custody prevents notice creation`, async t => {
+    const {f, pane} = await setup(t);
+    pane().agent = null; f.tick(60001);
+    let held, attached = 0;
+    const ports = {...f.ports, deliveryFiles: {mkdirSync: (path, options) => {
+      if (!held && path.endsWith('/.delivery-journal.lock')) held = holdRun(f, hold);
+      return mkdirSync(path, options);
+    }}, attach: async () => {attached++;}};
+    assert.equal((await openRun({ref: '17', cwd: f.source, packageRoot}, ports)).exitCode, 0);
+    assert.ok(held);
+    assert.equal(attached, 1);
+    assert.equal(launches(f).length, 1);
+    assert.equal(prompts(f).length, 0);
+    assert.equal(existsSync(join(held.runDir, 'delivery-journal.json')), false,
+      '3072: a deliberate hold must prevent journal notice creation');
+    assertHold(f, held);
+  });
+
+for (const hold of ['gate', 'question', 'interpreter'])
+  test(`3072 repair 2: ${hold} arriving during submission or resume wins`, async t => {
+    // First check the final submission guard. Then move the same hold earlier,
+    // into native resume, before the runner reserves its continue notice.
+    for (const phase of ['submission', 'resume']) {
+      const {f, pane} = await setup(t);
+      pane().agent = null; f.tick(60001);
+      let held, attached = 0;
+      const herdr = f.ports.herdr;
+      const ports = {...f.ports, herdr: async args => {
+        const target = phase === 'resume' ? args[0] === 'pane' && args[1] === 'run'
+          : args[0] === 'pane' && args[1] === 'read' && existsSync(join(f.record().runDir, 'delivery-journal.json'));
+        if (!held && target) held = holdRun(f, hold);
+        return herdr(args);
+      }, attach: async () => {attached++;}};
+      assert.equal((await openRun({ref: '17', cwd: f.source, packageRoot}, ports)).exitCode, 0);
+      assert.ok(held, `controlled hold must reach ${phase}`);
+      assert.equal(attached, 1);
+      assert.equal(launches(f).length, 1);
+      assert.equal(prompts(f).length, 0, '3072: a concurrent hold must prevent resume continuation');
+      assertHold(f, held);
+      if (phase === 'resume') {
+        assert.equal(f.record().chats.at(-1).continueAnchor, undefined);
+        assert.equal(existsSync(join(held.runDir, 'delivery-journal.json')), false);
+      } else {
+        const journal = JSON.parse(readFileSync(join(held.runDir, 'delivery-journal.json'), 'utf8'));
+        assert.equal(journal.requests.length, 1);
+        assert.equal(journal.requests[0].state, 'pending');
+        assert.equal(journal.requests[0].inFlight, undefined);
+      }
+    }
   });
 
 test('3072 idle timing, three per-area nudges, then one stuck alert across ticks', async t => {

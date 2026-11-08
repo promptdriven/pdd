@@ -451,6 +451,11 @@ After a confirmed current-area saved-session resume, manual or automatic, send o
 continue notice through the existing change-request delivery journal and guarded
 transport. This also applies after workspace reconstruction. Send it before terminal
 attachment. Opening an already live chat or a historical area sends no notice.
+Reopening a deliberately held chat still restores and attaches its saved session,
+but sends no continue notice. Require a running state with no approval gate or
+open question before saving `continueAnchor`, inside the journal claim before
+creating a notice, and at submission. Paused interpreter waits are holds too. A hold
+that arrives during resume or delivery wins; preserve it and send nothing.
 The notice names the current unfinished step, its bundled step brief and the run's
 STEP.md. It preserves completed work, approvals and any gate or question; it grants
 no approval. Save `continueAnchor` on the chat (epoch milliseconds of the resume)
