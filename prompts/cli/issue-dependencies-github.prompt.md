@@ -512,9 +512,20 @@ Winning claims with a known comment author also expose optional `login`, the
 GitHub author's login. This is fleet display and shared-login evidence only;
 coordinator and machine identity still determine ownership.
 
+Expose `reviewQueue.read({repository})` as an injectable read port. The native
+port reads the complete open issue pages, then calls the shared
+[PR review limit](autopilot-pr-limit.prompt.md) reader through the existing counted,
+floor-aware GitHub transport. Return `{json}` containing its serialized area-count mapping; propagate incomplete
+observations. Native settings include `maxOpenPrs` when configured, as returned
+by Autopilot settings. Do not save queue state here.
+
 ## Dependencies
 
 - [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
+
+
+- [PR review limit](autopilot-pr-limit.prompt.md): required context for the review queue port.
+
 
 - [GitHub calls](github-calls.prompt.md): required native generation and verification context for the call ledger and the ETag cache.
 - [Pure dependency model](issue-dependencies.prompt.md): required for authoring,

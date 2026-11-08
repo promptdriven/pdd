@@ -1,4 +1,5 @@
 // Implements prompts/cli/issue-dependencies-github.prompt.md.
+import { readReviewQueue } from './autopilot-pr-limit.mjs';
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1105,10 +1106,13 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
     if (!root) throw Error('Current repository settings unavailable');
     const result = await runAutopilot({ action: 'setup', interactive: false, inRepo: true }, { cwd: root, execFile: ports.execFile });
     if (result.exitCode !== 0 || !state || typeof state.enabled !== 'boolean') throw Error('Current activation unavailable');
-    return { mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }) };
+    return { mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }), ...(result.maxOpenPrs === undefined ? {} : { maxOpenPrs: result.maxOpenPrs }) };
   } };
   Object.defineProperty(settings, NATIVE_SETTINGS, { value: true });
   ports.settings = supplied.settings?.[NATIVE_SETTINGS] ? settings : supplied.settings ?? settings;
+  ports.reviewQueue ??= { read: async ({ repository }) => ({ json: JSON.stringify(await readReviewQueue({ repository,
+    rows: await allPages(ports.github, repository, 'issues', 0),
+  }, { request: async (query, variables) => (await service(cwd, ports).api('graphql', 'POST', JSON.stringify({ query, variables }), 'pr-review', repository)).value })) }) };
   return ports;
 }
 

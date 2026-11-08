@@ -1560,7 +1560,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   const machineEnd = slot < 0 ? evidence.lines.length : slot;
   const native = evidence.nativeLine ? [run.publicationPending ? 'Native tests: publication-pending.' : evidence.nativeLine] : [];
   const preparedLines = [...evidence.lines.slice(0, machineEnd), ...native, ...inventory, ...evidence.lines.slice(machineEnd)].map(line => hideLocalPaths(redactTry(line), run));
-  const body = (text, lifted, approvals = [], section = []) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(approvals.length ? ['', ...approvals] : []), ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+  const body = (text, lifted, approvals = [], section = []) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(approvals.length ? ['', ...approvals] : []), ...(run.productMarker ? ['', run.productMarker] : []), ...(validSavedAutomaticOrigin(run) ? ['', '<!-- pdd:autopilot-pr -->', `<!-- pdd:autopilot-issue:${run.number} -->`] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(section.length ? ['', ...section] : []),
     ...(!noted && hasReportLink([...lines, ...Object.values(full), ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);

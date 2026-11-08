@@ -1,5 +1,6 @@
 // Implements prompts/cli/autopilot-launcher.prompt.md.
 import { reviewerLease, repositoryMachines, repositoryMachineLines } from './autopilot-reviewer.mjs';
+import { readReviewQueue, reviewWait, maxOpenPrs } from './autopilot-pr-limit.mjs';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -60,6 +61,10 @@ async function settings(state, p) {
 }
 const ok = message => ({ exitCode: 0, message });
 const bad = message => ({ exitCode: 1, message: line(message) });
+const reviewQueueStatus = state => state.reviewQueueUnknown ? ['PR review queue observations unavailable; fresh work waits.']
+  : Object.entries(state.reviewQueue ?? {}).filter(([, count]) => count >= maxOpenPrs(state.reviewQueueLimit))
+    .map(([area, count]) => `${line(area)}: waiting: ${count} PRs wait for review`);
+
 function portsFor(state, ports) {
   const env = { ...process.env, ...state?.environment, ...ports.env };
   const run = ports.run ?? runAgentProcess, now = ports.now ?? Date.now;
@@ -1447,12 +1452,40 @@ async function runTick(stateFile, ports, completion) {
     // Fresh work leads to a claim and a workflow start, so offer it only where workflows can start.
     // A held issue (pdd:stuck, pdd:code-pending) is not fresh: its reviews and trusted comments still go out.
     const fresh = work.filter(item => item.eligible && !held.has(item) && (!item.claimed || item.expiredClaim));
-    if (fresh.length) {
+    if (fresh.length || state.reviewQueue || state.reviewQueueUnknown) {
+      state.reviewQueueLimit = maxOpenPrs(config.maxOpenPrs);
+      try {
+        state.reviewQueue = await readReviewQueue({ repository: state.repo, rows: state.cachedIssues }, {
+          request: async (query, variables) => {
+            if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) throw Error('GitHub limit is below the floor; retry after reset.');
+            const result = await p.execute('gh', ['api', '--include', '--method', 'POST', 'graphql', '--input', '-'], {
+              input: JSON.stringify({ query, variables }), purpose: 'pr-review', repository: state.repo,
+            });
+            if (result.code !== 0) throw Error('PR review observations unavailable; retry next tick.');
+            return JSON.parse(response(result.stdout).body);
+          },
+        });
+        delete state.reviewQueueUnknown;
+      } catch (error) {
+        delete state.reviewQueue;
+        state.reviewQueueUnknown = true;
+        p.warn(line(error.message));
+      }
+      for (const item of fresh) {
+        const row = state.cachedIssues.find(row => row.number === item.number);
+        const wait = state.reviewQueueUnknown ? null : reviewWait(row.labels, state.reviewQueue, state.reviewQueueLimit);
+        if (!wait && !state.reviewQueueUnknown) continue;
+        work.splice(work.indexOf(item), 1); delete pending[item.number];
+        const selection = selections.find(row => row.number === item.number);
+        if (selection) { selection.state = 'waiting'; selection.reasons = [state.reviewQueueUnknown ? 'pr-review-unknown' : 'pr-review-limit']; }
+      }
+    }
+    if (fresh.some(item => work.includes(item))) {
       const readiness = await workflowReadiness(state, p);
       if (readiness.state !== 'ready') {
         warnings.push(`Autopilot held ${fresh.length} issue(s): pdd workflows cannot start in ${state.cwd}. ${line(readiness.message)}`);
         p.warn(warnings.at(-1));
-        for (const item of fresh) {
+        for (const item of fresh.filter(item => work.includes(item))) {
           work.splice(work.indexOf(item), 1); delete pending[item.number];
           const selection = selections.find(row => row.number === item.number);
           if (selection) { selection.state = 'waiting'; selection.reasons = ['workflows-unavailable']; }
@@ -1527,7 +1560,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','reviewer','reviewerLogin','sharedLoginWarned']) {
+        for (const key of ['retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','reviewer','reviewerLogin','sharedLoginWarned','reviewQueue','reviewQueueLimit','reviewQueueUnknown']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
@@ -1698,7 +1731,7 @@ async function machineStatus(folder, ports, env, cwd) {
     try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
     let coordinator = { state: 'unavailable', reason: 'Herdr is not running' };
     if (serverRunning) { try { coordinator = await coordinatorHealth(state, p); } catch { coordinator = { state: 'unavailable', reason: 'status unreadable' }; } }
-    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state}`);
+    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state}${reviewQueueStatus(state).map(text => ` · ${text}`).join('')}`);
   }
   return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
 }
@@ -1763,8 +1796,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       try { const view = await (p.repositoryView ?? repositoryView)(state, p); fleet = repositoryMachineLines(view); if (!state.sharedLoginWarned && view.sharedLogins.length) fleet += '\n' + sharedLoginWarning(view); }
       catch { fleet = 'Repository machines: unavailable (GitHub claims or reviewer lease could not be read).'; }
       const readiness = await workflowReadiness(state, p);
+      const reviewQueue = reviewQueueStatus(state).map(text => `\n${text}`).join('');
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}\n${fleet}`);
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}${reviewQueue}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}\n${fleet}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state, ports); }

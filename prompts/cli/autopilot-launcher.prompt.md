@@ -45,6 +45,26 @@ login. This warning does not grant ownership and uses the existing state save
 boundary. Status is read-only and may show the warning without persisting it;
 the tick records the once-only warning. The GitHub usage ledger remains local.
 
+## Review backlog admission
+
+On each reconciliation with fresh work or a prior review queue observation, use the shared [PR review limit](autopilot-pr-limit.prompt.md)
+reader on the current open-issue rows and current settings. Its rule owns PR identity,
+areas and which reviews count. Fetch through the existing counted process port,
+with each queue page and source-issue lookup subject to the
+[GitHub budget floor guard](#github-budget). A floor-stopped read is unavailable
+and follows the read-failure path below; never save partial counts as complete.
+Persist the latest complete counts as `reviewQueue`, and the effective limit as
+`reviewQueueLimit`. Hold fresh work at the limit with selection state `waiting`
+and reason `pr-review-limit`; do not mark it seen. Keep claimed/held work, reviews,
+dependency analysis, time rules and heartbeats running. A read failure holds fresh
+work with `pr-review-unknown`, clears old queue counts and persists
+`reviewQueueUnknown: true`. A later complete read clears that flag. Retry on the
+next reconciliation even if the issue content is unchanged.
+
+Status and status --all read these saved observations only. Show each full area as
+`AREA: waiting: N PRs wait for review`, or say review queue observations are
+unavailable. No status GitHub call is added. State how many PRs wait, not CI jobs.
+
 ## Native Codex startup
 
 For a selected Codex launcher, apply invocation-only config overrides that trust
@@ -998,6 +1018,9 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 - [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
 - [Shared reviewer](autopilot-reviewer.prompt.md): required native generation and verification context for the lease and repository machine view.
+
+- [PR review limit](autopilot-pr-limit.prompt.md): required context for review backlog admission and status.
+
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
