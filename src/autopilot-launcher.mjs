@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 3de2dd2afaf40003b2081290f4084b97638f2995ff3f90de49914a08de32c6a6).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -18,7 +18,7 @@ import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
-import { acquireRunLock, runtimeWakeTag } from './workflow-runner.mjs';
+import { acquireRunLock, runtimeWakeTag, automaticAttention } from './workflow-runner.mjs';
 import { checkVerdictSince } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -1148,6 +1148,14 @@ async function runTick(stateFile, ports, completion) {
       } finally { release(); }
     };
     p.scanTransport = action => p.scanAction(action, state.reconciliationIntent ? 'reconciliation' : 'intent');
+    // Native attention summary remains independent of GitHub budgets and AI coordinator activity.
+    try {
+      const attention = await (p.readAttention ?? ((state, p) => automaticAttention({ repo: state.repo, machine: state.machine }, { env: p.env })))(state, p);
+      const input = { action: 'digest', cwd: state.cwd, env: p.env, attention };
+      const alertPorts = { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now,
+        hostname: () => state.machine };
+      await (p.sendDigest ?? runAutopilotAlerts)(input, alertPorts);
+    } catch { /* Digest failures never stop feasible work. */ }
     if (state.retryAt > p.now()) return outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
     // The GitHub budget of the tick on this machine, from the local ledgers and the newest limit that GitHub reported.
     let budget = { state: 'normal' }, restLeft;
@@ -1285,7 +1293,7 @@ async function runTick(stateFile, ports, completion) {
         const ceiling = takeover && repair ? 'takeover limit and the repair limit' : takeover ? 'takeover limit' : repair ? 'repair limit' : null;
         timeRules.push({ kind: 'stuck-claim', number, reason: ceiling
           ? `Issue #${number} has been stuck for 4 hours after the ${ceiling}. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet. ${repair ? `To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.` : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'} Its claim is no longer refreshed and expires in 4 hours.`
-          : `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
+          : `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Send no new alert if the cause and required decision are unchanged; another review alone is not a material change. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
         pendingTimes[key] = claim.stuckSince;
       }
     }

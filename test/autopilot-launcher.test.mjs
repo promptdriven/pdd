@@ -1623,3 +1623,65 @@ test('2903: the relaunch close compares the folder when no terminal id is saved,
   f.status = 304; f.time += 60 * 1000; await f.tick();
   assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.state().paneId, 'w2:p1');
 });
+
+
+test('native attention digest includes parallel automatic runs without waking the coordinator', async t => {
+  const f = await fixture(t);
+  const digests = [];
+  f.ports.sendDigest = async (input, ports) => {
+    digests.push(structuredClone(input));
+    assert.equal((await ports.repository()).nameWithOwner, 'owner/repo');
+    assert.equal(ports.hostname(), f.state().machine);
+    return { exitCode: 0, message: 'recorded' };
+  };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const machine = f.state().machine, common = join(f.cwd, '.git');
+  const seed = (number, extra = {}) => {
+    const runDir = join(common, 'pdd', 'runs', String(number));
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'status.json'), JSON.stringify({ v: 1, number, runDir, repo: 'owner/repo', state: 'running',
+      automaticOrigin: { machine }, ...extra }));
+    return { number, runDir };
+  };
+  const runs = [seed(41, { state: 'stuck', parkReason: 'Required check unavailable' }),
+    seed(42, { state: 'paused', runtimeWait: { reason: 'Interpreter busy' } }),
+    seed(43, { state: 'question', question: { at: 2, text: 'Choose retention' } }),
+    seed(44, { automaticOrigin: null, state: 'stuck' }),
+    seed(45, { state: 'stuck', automaticOrigin: { machine: 'other-machine' } }),
+    seed(46, { repo: 'other/project', state: 'stuck' }),
+    seed(47, { state: 'cancelled' }), seed(48, { state: 'completed' }),
+    seed(49, { state: 'completed', gate: { kind: 'ask-code', at: 3 }, question: { at: 1, text: 'Old question' } })];
+  const index = join(f.home, '.local', 'state', 'pdd');
+  mkdirSync(index, { recursive: true });
+  writeFileSync(join(index, 'runs.json'), JSON.stringify({ version: 1, runs }));
+  const prompts = f.prompts.length;
+  f.time += 30 * 60 * 1000;
+  assert.equal((await f.tick()).exitCode, 0);
+  assert.equal(digests.length, 2, 'every enabled tick must attempt the native digest before considering AI work');
+  assert.deepEqual(digests.at(-1).attention, [
+    { number: 41, category: 'stuck', cause: 'Required check unavailable' },
+    { number: 42, category: 'parked', cause: 'Interpreter busy' },
+    { number: 43, category: 'decision', cause: 'Choose retention' },
+    { number: 49, category: 'decision', cause: 'ask-code' }]);
+  assert.equal(f.prompts.length, prompts, 'digest collection must not wake an AI agent');
+  const saved = JSON.parse(readFileSync(join(common, 'pdd', 'runs', '41', 'status.json'), 'utf8'));
+  assert.equal(saved.state, 'stuck');
+  assert.equal(saved.parkReason, 'Required check unavailable');
+});
+
+test('digest runs before rate-limit retry and its failure does not stop the launcher', async t => {
+  const f = await fixture(t);
+  let attempts = 0;
+  f.ports.readAttention = () => [{ number: 41, category: 'stuck', cause: 'Check unavailable' }];
+  f.ports.sendDigest = async input => { attempts++; assert.equal(input.attention[0].number, 41); throw Error('synthetic delivery failure'); };
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const saved = f.state(); saved.retryAt = f.time + 60 * 60 * 1000;
+  writeFileSync(f.stateFile(), JSON.stringify(saved));
+  const polls = f.polls.length;
+  assert.equal((await f.tick()).exitCode, 0);
+  assert.equal(attempts, 2, 'a GitHub retry must not suppress the native attention digest');
+  assert.equal(f.polls.length, polls);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'off', trust: [] } }));
+  await f.tick();
+  assert.equal(attempts, 2, 'off mode must not send a digest');
+});

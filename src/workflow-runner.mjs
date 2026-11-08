@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3d453475ed32491dfff636433a0d2f4198e63e0d4a8f977c3f1f7ac5ce058df0).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d206f1f9a184fe7827f4681fe573208699e733723d33533d482af98bd17d2c98).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -433,6 +433,18 @@ function clearChatFailure(run) {
 const revising = run => { const last = run.changes?.at(-1); return Boolean(last && !last.answer && last.stage === run.gate.area && last.at >= run.gate.at); };
 // A run stopped at the repair limit keeps that one-line reason, also after a later park (#3041).
 const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.parkReason ?? 'automatic work stopped';
+// Read saved facts only. The digest must not probe or wake native workers.
+export function automaticAttention({ repo, machine }, ports = {}) {
+  return (ports.readRuns ? ports.readRuns() : allRuns({}, ports)).flatMap(run => {
+    if (run.repo?.toLowerCase() !== repo?.toLowerCase() || !run.automaticOrigin || run.automaticOrigin.machine !== machine
+      || run.state === 'cancelled' || run.state === 'completed' && run.gate?.kind !== 'ask-code') return [];
+    const question = openQuestion(run);
+    const item = run.state === 'stuck' ? { category: 'stuck', cause: stuckReason(run) }
+      : run.state === 'paused' ? { category: 'parked', cause: run.runtimeWait?.reason ?? run.parkReason ?? 'automatic work paused' }
+      : question || run.gate ? { category: 'decision', cause: question?.text ?? run.gate.kind } : null;
+    return item ? [{ number: run.number, ...item }] : [];
+  }).sort((a, b) => a.number - b.number);
+}
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
 function describe(run, chat = null, { drafts = [], nothing = false, health = null } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
