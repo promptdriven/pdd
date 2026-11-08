@@ -50,6 +50,7 @@ export async function readCodexLimits({ command = 'codex', cwd, env = process.en
         while (!done && (end = buffer.indexOf('\n')) !== -1) {
           const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
           let row; try { row = JSON.parse(line); } catch { finish(unknown()); return; }
+          if (!object(row)) { finish(unknown()); return; }
           if (row.id === 1 && !initialized) {
             if (row.error || !object(row.result)) { finish(unknown()); return; }
             initialized = true;

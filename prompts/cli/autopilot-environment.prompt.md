@@ -34,9 +34,12 @@ waiting; after delivery the run is running and has no retry-wait status.
 Export `environmentWakeTag(retry)`: `Environment validation wake for AREA:STEP at ISO attempt N.`
 with the failure time and next attempt. This is a per-failure delivery identity.
 
-Export async `environmentHealthy({env, reason}, ports = {})`, returning boolean.
+Export async `environmentHealthy({env, reason, cwd}, ports = {})`, returning boolean.
 Machine reads use the shared `machineResources({cwd})` port from the dependency
-below. Legacy injectable `readFile`, `readDir`, `load`, `cpuCount`, `memory`,
+below. Use the supplied checkout cwd, falling back to `ports.cwd` then the process
+cwd for standalone callers. A caller may supply its current observation through
+that port; apply retry policy to it without another machine read.
+Legacy injectable `readFile`, `readDir`, `load`, `cpuCount`, `memory`,
 `toolPresent`, `alive` and `suiteAvailable` ports remain supported for retries.
 Fail closed on malformed or unavailable observations. Healthy means one-minute
 load per CPU below 1, available memory at least 10%, Linux I/O and memory PSI

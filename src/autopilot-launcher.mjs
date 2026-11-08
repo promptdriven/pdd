@@ -417,7 +417,11 @@ async function environmentTick(state, p, waits, timeRules, pendingTimes, stateRo
     const tag = environmentWakeTag(retry), key = `environment:${retry.number}`, offer = `${tag}:${Math.floor(p.now() / INTERVAL)}`;
     if (p.now() < retry.nextAt || state.timeSeen[key] === offer) continue;
     let healthy = false;
-    try { healthy = await (p.environmentHealthy ?? environmentHealthy)({ env: p.env, reason: retry.reason }); } catch { /* Unknown health blocks. */ }
+    try {
+      healthy = await (p.environmentHealthy ?? (input => environmentHealthy(input, {
+        ...p, machineResources: async () => state.health?.resource?.resources,
+      })))({ env: p.env, reason: retry.reason, cwd: state.cwd });
+    } catch { /* Unknown health blocks. */ }
     if (!healthy) continue;
     const text = `${tag} Rerun only the failed validation step ${retry.step}, using its original command and retained evidence. Preserve completed work, area, gates, branch and claim. Do not restart the run or replay build, approvals, publication or any external operation with an unknown outcome. If it fails again, classify its actual cause and park it with --step ${retry.step}.`;
     timeRules.push({ kind: 'environment-ready', number: retry.number, step: retry.step, attempt: retry.attempts + 1, limit: ENVIRONMENT_BACKOFF.length, nextAt: retry.nextAt,

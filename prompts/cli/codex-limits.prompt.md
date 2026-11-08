@@ -20,6 +20,9 @@ A window is valid only with finite usedPercent >=0; resetsAt may be null or a
 finite nonnegative Unix seconds value within Date range. Missing windows with
 no explicit reached type, malformed windows/bucket, protocol errors, missing
 binary, timeout and early exit are unknown. Maximum used percent is returned.
+Each parsed protocol frame must be a non-null, non-array object. A JSON null,
+array or scalar is a protocol error: return unknown and stop the child without
+throwing from the stream callback.
 For reached windows return the latest reset (both must clear); if any has unknown
 reset return null. A past reset timestamp alone never proves recovery: read the
 account again. Unknown returns null metrics. Ignore all unrelated fields.

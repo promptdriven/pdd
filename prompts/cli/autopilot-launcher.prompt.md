@@ -650,6 +650,9 @@ its reason tells the coordinator to deliver the exact shared wake tag with
 `pdd workflow changes N`, oldest first as worker room allows. Rerun only that
 validation step with its original command and evidence. No whole-run restart,
 new approval, blind external resend, usage-limit change or person question.
+Pass the checkout cwd to the retry check. Its native default reuses this tick's
+`health.resource.resources` through `machineResources`, without probing the host
+again. Retain the injected retry ports and the dependency's retry-only checks.
 Use existing delivery/timeSeen custody per wake tag and 30-minute offer interval;
 reoffer an undelivered current park on a later interval, without replaying uncertain
 transport custody. Only worker delivery spends

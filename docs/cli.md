@@ -218,12 +218,15 @@ Each no-AI tick checks available memory and free disk on the checkout volume.
 Available memory must be at least 10% of total. Disk must have at least 1 GiB
 and 5% free. The shared machine observation port also supplies CPU count, load
 and Linux pressure for validation retries and machine-sized checks.
+Validation retries reuse the tick's checkout observation. They also check load,
+pressure, required tools and suite capacity before offering a retry.
 
 For the saved Codex profile, the tick starts a short app-server connection and
 uses only `initialize`, `initialized` and `account/rateLimits/read`. This makes
 no model call. It reads usage and the ordinary reset time. It does not spend,
 request credits, consume a usage reset, change sign-in or log out an account.
 Other agent kinds have no Codex usage check.
+Malformed protocol frames stop the connection and report unknown usage.
 
 Low resources, reached usage limits and unreadable health observations pause new
 automatic admissions. Claims, progress and heartbeats remain. One `resource` or

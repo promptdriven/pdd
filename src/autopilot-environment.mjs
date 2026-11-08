@@ -46,7 +46,7 @@ export async function machineHealth({ cwd } = {}, ports = {}) {
     causes.push('Free disk is below 1 GiB or 5% or cannot be read');
   return { healthy: !causes.length, causes, resources };
 }
-export async function environmentHealthy({ env = process.env, reason = '' } = {}, ports = {}) {
+export async function environmentHealthy({ env = process.env, reason = '', cwd } = {}, ports = {}) {
   const readFile = ports.readFile ?? (path => readFileSync(path, 'utf8'));
   const readDir = ports.readDir ?? readdirSync;
   const alive = ports.alive ?? (pid => {
@@ -54,7 +54,7 @@ export async function environmentHealthy({ env = process.env, reason = '' } = {}
     catch (error) { return error.code === 'ESRCH' ? false : undefined; }
   });
   try {
-    const health = await machineHealth({ cwd: ports.cwd ?? process.cwd() }, ports);
+    const health = await machineHealth({ cwd: cwd ?? ports.cwd ?? process.cwd() }, ports);
     if (!health.healthy) return false;
     const resources = health.resources;
     const count = resources.cpuCount, load = resources.load;
