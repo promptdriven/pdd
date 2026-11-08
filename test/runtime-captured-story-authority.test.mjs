@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {harbor,storyTest,fakeRuntime,portsFor} from './runtime-fake.mjs';
 import {runCheck} from '../src/runtime-client.mjs';
 import {captureSource} from '../src/runtime-preflight.mjs';
@@ -48,4 +49,13 @@ test(`captured Story authority: ${variant} in ${mode}`, async t=>{
       assert.ok(downstream[0].stories.some(line=>line.includes('place-order') && !line.includes('✓')));
     }
   }
+});
+
+test('context selection seed has no Story coverage and can select prompt dependencies',t=>{
+  const {repo}=harbor(t);
+  writeFileSync(join(repo,'context-seed'),JSON.stringify({entry_paths:['prompts/place_order.prompt.md']}));
+  execFileSync('git',['add','context-seed'],{cwd:repo});
+  let captured;assert.doesNotThrow(()=>{captured=captureSource(repo,{tests:['context-seed']});});
+  assert.ok(captured.files.some(file=>file.path==='prompts/place_order.prompt.md'));
+  assert.equal(captured.stories?.length??0,0);
 });

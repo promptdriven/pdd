@@ -1551,7 +1551,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     if (format === 'scenario') {
       let doc; try { doc = JSON.parse(content.toString('utf8')); } catch { /* Keep invalid-source handling. */ }
       const expected = matchTests(names.filter(isStoryPath), names).tests.find(test=>test.path===file.path);
-      const authority = isObject(doc) && (typeof doc.story_path !== 'string' || !doc.story_path)
+      const authority = doc?.schema_version !== TEST_SCHEMA ? null : isObject(doc) && (typeof doc.story_path !== 'string' || !doc.story_path)
         ? refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its Story.')
         : discoveryRefusal({path:file.path,storyPath:expected?.storyPath,doc});
       if (authority) throw Object.assign(new PreflightError(4, `${file.path}: ${authority.message}`), authority,
