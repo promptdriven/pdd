@@ -419,3 +419,19 @@ test('2640 repair 2 F7: oversized linked search matches are named in the PR Anch
     if(small)assert.equal(anchor.vectors.length,2,'keep the readable linked files');
   }
 });
+
+for (const [kind, config] of [
+  ['valid-all', JSON.stringify({replay:{base_scenarios:'all'}, padding:' '.repeat(10*1024*1024)})],
+  ['broken', '{"replay":' + ' '.repeat(10*1024*1024)]
+]) test(`2640 integration config: oversized ${kind} base config blocks publication replay`, async t => {
+  const {f,run}=await baseRun(t,{files:{...BASE,'pdd.json':config,'pdd-bindings.json':BINDINGS}});
+  put(run.root,'pdd.json',JSON.stringify({replay:{base_scenarios:'linked'}}));
+  put(run.root,'value.mjs','export const value=2;\n');
+  record(run,['tests/add.empty.json','tests/add.json']);
+  const out=await stepDone({step:'verify',summary:'Linked record',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.record().replayBaseline.outcome,'blocked');
+  assert.match(f.record().replayBaseline.reason,/pdd\.json/);
+  assert.equal(f.record().replayEvidence.outcome,'blocked');
+  assert.doesNotMatch(f.prs.at(-1).body,/^Code replay: PASS/m);
+});

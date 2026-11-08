@@ -368,10 +368,14 @@ function baseScenarios(root,commit,changed,scenarios,codeSpace) {
   let named;const changedSet=new Set(changed);
   try {named=new Set(localGit(root,'grep','--no-color','-l','-z','-F','-e','prompt-runtime.program-scenario.v1',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
   catch(error) {if(error.status!==1)throw Error('The base scenario search failed.');named=new Set();}
-  const rows=localGit(root,'ls-tree','-r','-l','-z','--full-tree',commit).toString('utf8').split('\0').filter(Boolean).map(row=>{
+  const inventory=localGit(root,'ls-tree','-r','-l','-z','--full-tree',commit).toString('utf8').split('\0').filter(Boolean).map(row=>{
     const match=/^(\d+) (\w+) ([a-f0-9]+) +(-|\d+)\t([\s\S]+)$/.exec(row);
     requireThat(match,'Invalid Git tree inventory.');return {mode:match[1],type:match[2],oid:match[3],size:Number(match[4])||0,path:match[5]};
-  }).filter(row=>row.type==='blob'&&['100644','100755'].includes(row.mode)&&(named.has(row.path)||['pdd-bindings.json','pdd.json'].includes(row.path)||changedSet.has(row.path))&&canonicalPath(row.path));
+  });
+  const config=inventory.find(row=>row.path==='pdd.json');
+  requireThat(!config || config.type==='blob' && ['100644','100755'].includes(config.mode) && config.size<=10*1024*1024,
+    `pdd.json on base ${commit.slice(0,7)} cannot be read: it must be a regular blob within 10 MiB.`);
+  const rows=inventory.filter(row=>row.type==='blob'&&['100644','100755'].includes(row.mode)&&(named.has(row.path)||['pdd-bindings.json','pdd.json'].includes(row.path)||changedSet.has(row.path))&&canonicalPath(row.path));
   const oversized=rows.filter(row=>named.has(row.path)&&row.size>10*1024*1024);
   const readable=rows.filter(row=>row.size<=10*1024*1024);
   const blobs=batchBlobs(root,readable),docs=new Map(),select=baseSelection(blobs.get('pdd.json'),commit);
