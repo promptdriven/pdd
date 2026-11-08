@@ -170,6 +170,22 @@ With `compact: true`, apply the same discovery, reference validation, status, re
 
 Remove only JSON whitespace (space, tab, CR and LF) between tokens inside the root interface object's original span. Preserve every field, member order, duplicate non-hash member, number spelling, escape spelling and string byte, including whitespace and escaped quotes inside strings. Do not parse and reserialize to obtain compact bytes. Leave all prose, fences, wrappers and whitespace outside that root span exact. Apart from the normal hash-string replacement, the compacted interface's parsed value must equal the original. The prose hash remains the hash of the same outside-block bytes; never change status or approval rules. An already compact, current draft causes no write and no `compacted` record. This operation is local and adds no AI or network call.
 
+## Source capture public boundary
+
+The module exports the synchronous function `captureSource(root, options = {})`.
+`root` is the repository root; `options` may supply `tests`, `appMap`,
+`attempts`, `prepareSource` and `workspace` as specified below. `attempts`
+defaults to 3; `prepareSource` is a synchronous function, not JSON data.
+The returned object has `tar` (archive Buffer), `sha256` (hex digest of that
+archive), `files` (sorted `{path, size}` records, with `target` for accepted
+links), `bytes` (selected content byte total), `references`, `stories`,
+`warnings`, `raw_file_hashes`, `raw_prompt_hashes`, `reads`, and `sources`
+(sorted `{path, bytes}` records with Buffer bytes). Failure throws instead of
+returning a result. The capture rules below own the contents, effects and
+refusals. Git discovery, file and link metadata, file reads, workspace loading,
+reference expansion, archive construction and hashing are part of this boundary;
+the preparation callback's short-lived read/stat ports do not replace them.
+
 ## Source capture
 
 Return `raw_file_hashes`, keyed by repository-relative path, containing SHA-256 of exact authored Story, test and reached prompt bytes from the same captured snapshot. Keep these separate from effective source hashes, including when interface formatting or reference expansion changes effective bytes.
