@@ -230,7 +230,7 @@ for (const change of ['batch', 'check', 'result', 'verdict'])
       const wait = parked.parking.interpreterWait;
       const pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
       assert.equal(pattern.streak, 2);
-      if (change === 'batch') {
+      if (change === 'check') {
         // Refresh a different gate at the same clock value and saved batch.
         changed.gate = {...changed.gate, at: f.clock};
         const nextGate = f.record(); nextGate.gate = changed.gate; save(f, nextGate);
