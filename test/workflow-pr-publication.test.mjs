@@ -662,6 +662,7 @@ function namedStoryPublication(t, { story, rules, reference = story, vectors = f
 
 for (const [story, reference] of [
   ['user_stories/règle.md', 'user_stories/règle.md'],
+  ['user_stories/dot règle.md', './user_stories/dot règle.md'],
   ['user_stories/a name.md', '`user_stories/a name.md`'],
   ['user_stories/café.md', '[Story](user_stories/café.md)']
 ]) {

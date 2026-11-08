@@ -1328,7 +1328,8 @@ function namedStories(run, extra = '') {
   // Match actual repository names, not an ASCII approximation or a relative suffix of an unsafe reference.
   return paths.filter(path => summaries.some(summary => {
     for (let at = summary.indexOf(path); at !== -1; at = summary.indexOf(path, at + 1)) {
-      const before = summary[at - 1] ?? '', after = summary.slice(at + path.length);
+      const start = summary.slice(Math.max(0, at - 2), at) === './' ? at - 2 : at;
+      const before = summary[start - 1] ?? '', after = summary.slice(at + path.length);
       if (!/[\p{L}\p{N}_./\\-]/u.test(before) && !/^[\p{L}\p{N}_/\\-]|^\.[\p{L}\p{N}_]/u.test(after)) return true;
     }
     return false;
