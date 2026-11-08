@@ -579,6 +579,10 @@ the original tracker closes only after both complete. Observe retains the split
 proposal. Missing area evidence, policy or work order gets `pdd:needs-owner`
 and one question. More complex owner or order choices also need a person.
 Person assignees and live claims prevent all issue writes. Writes are
+guarded inside native admission. Closing a split tracker checks its ownership,
+state and inputs again after reading both child completions. Malformed sort
+records cannot abort the snapshot read. Invalid trusted heads hold selection;
+outsider records do not block it. Writes are
 serial and wait at least one second between effects. Each invocation routes at
 most 10 unfinished issues. Record saves, group effects and routing share a limit
 of 20 write attempts. A low or reserve GitHub budget stops further effects. The

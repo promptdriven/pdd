@@ -56,11 +56,17 @@ async function pages(ports, repository, issue, kind) {
 }
 export async function currentSplitParent({ repository, snapshot, route }, ports, complete = false) {
   const subject = snapshot.issues.find(x => x.key === route.issue);
-  const raw = parse((await ports.github.issue({ repository, issue: Number(route.issue.split('/').pop()) })).json);
-  const owners = parse((await ports.owners.read({ repository, issues: [route.issue] })).json);
+  const currentParent = async () => {
+    const owners = parse((await ports.owners.read({ repository, issues: [route.issue] })).json);
+    const raw = parse((await ports.github.issue({ repository, issue: Number(route.issue.split('/').pop()) })).json);
+    const labels = Array.isArray(raw.labels) ? raw.labels.map(x => typeof x === 'string' ? x : x.name) : null;
+    if (raw.state !== 'open' || !Array.isArray(raw.assignees) || raw.assignees.length || !Array.isArray(owners.claims) || owners.claims.some(x => x.issue === route.issue && x.active) || !labels || labels.includes('pdd:working')) return null;
+    if (raw.title !== subject.title || raw.body !== subject.sortText || JSON.stringify(labels.slice().sort()) !== JSON.stringify(subject.labels.slice().sort())) return null;
+    return raw;
+  };
+  const raw = await currentParent();
+  if (!raw) return false;
   const labels = raw.labels?.map(x => typeof x === 'string' ? x : x.name);
-  if (raw.state !== 'open' || !Array.isArray(raw.assignees) || raw.assignees.length || !Array.isArray(owners.claims) || owners.claims.some(x => x.issue === route.issue && x.active) || !labels || labels.includes('pdd:working')) return false;
-  if (raw.title !== subject.title || raw.body !== subject.sortText || JSON.stringify(labels.slice().sort()) !== JSON.stringify(subject.labels.slice().sort())) return false;
   const authorityFor = author => ports.authority.read({ repository, author });
   const comments = await pages(ports, repository, raw.number, 'comments');
   const timeline = await pages(ports, repository, raw.number, 'timeline');
@@ -73,7 +79,9 @@ export async function currentSplitParent({ repository, snapshot, route }, ports,
     const child = parse((await ports.github.issue({ repository, issue: Number(p.issue.split('/').pop()) })).json);
     if (child.state !== 'closed' || child.state_reason !== 'completed' || (await authorityFor(child.user?.login ?? '')).authority !== 'trusted') return false;
   }
-  return true;
+  // Child and trust reads can outlive the first ownership observation. Keep
+  // this reread inside the guard that native admission calls before transport.
+  return !!await currentParent();
 }
 export async function syncMixedParts({ cwd = '', repository, snapshot, mode }, ports, write) {
   if (mode !== 'auto' || !snapshot.complete) return;

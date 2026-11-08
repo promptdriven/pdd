@@ -388,3 +388,62 @@ test('Runtime helper schemas admit native mixed metadata and graph projections',
     if (result !== undefined) assert.deepEqual(checkInput(result, entry.result_schema, 0).refusals, [], `${name} must admit native result`);
   }
 });
+
+for (const change of ['person', 'claim', 'closed', 'labels', 'title', 'body', 'missing-assignees', 'missing-labels']) test(`split-parent close rejects late ${change} during final native child validation`, async () => {
+  const w = mixedFixture('split'); await w.seed(); await tick(w);
+  assert.equal(w.issues.length, 3);
+  w.issues.slice(1).forEach(x => { x.state = 'closed'; x.state_reason = 'completed'; });
+  let insideAdmission = false, injected = false, patches = 0;
+  const issue = w.ports.github.issue;
+  w.ports.github.issue = async args => {
+    const result = await issue(args);
+    if (insideAdmission && !injected && args.issue === w.issues.at(-1).number) {
+      injected = true;
+      const parent = w.issues[0];
+      if (change === 'person') parent.assignees = [{ login: 'person' }];
+      if (change === 'claim') w.claims.push({ issue: key(1), active: true, owner: 'worker' });
+      if (change === 'closed') parent.state = 'closed';
+      if (change === 'labels') w.label('pdd:owner-whole');
+      if (change === 'title') parent.title += ' changed';
+      if (change === 'body') parent.body += ' changed';
+      if (change === 'missing-assignees') delete parent.assignees;
+      if (change === 'missing-labels') delete parent.labels;
+    }
+    return result;
+  };
+  const native = createDependencyReadPorts({}, {
+    admitMutation: async action => {
+      insideAdmission = true;
+      try { return await action(); } finally { insideAdmission = false; }
+    },
+    execFile: async (_file, args) => {
+      if (args[args.indexOf('--method') + 1] === 'PATCH') { patches++; w.issues[0].state = 'closed'; }
+      return { code: 0, stdout: JSON.stringify(w.issues[0]) };
+    },
+  });
+  w.ports.github.sortUpdate = native.github.sortUpdate;
+  await tick(w);
+  assert.equal(injected, true, 'reach the final child read inside native admission');
+  assert.equal(patches, 0, 'changed parent must not receive a PATCH');
+  assert.equal(w.issues[0].state, change === 'closed' ? 'closed' : 'open');
+});
+
+for (const authority of ['outsider', 'owner']) test(`malformed mixed elements from ${authority} preserve snapshot and sort authority`, async () => {
+  const valid = { area: 'cli', evidence: ['src/cli.mjs'] };
+  for (const touchedAreas of [[null], [valid, null], [false], [17], ['runtime'], [[]], [{}], [{ area: null, evidence: ['source'] }], [{ area: 'cli', evidence: null }], [{ area: 'cli', evidence: [null] }], [valid, valid]]) {
+    const w = mixedFixture(); const original = await w.seed();
+    const malformed = { ...original, touchedAreas };
+    const comment = w.append(1, `<!-- pdd-issue-sort:v1 -->\n\`\`\`json\n${JSON.stringify(malformed)}\n\`\`\``, authority);
+    let snapshot;
+    await assert.doesNotReject(async () => { snapshot = await read(w); });
+    assert.equal(snapshot.complete, true);
+    const subject = snapshot.issues.find(x => x.key === key(1));
+    const head = subject.sorts.find(x => x.id === String(comment.id));
+    assert.equal(head.record, null);
+    assert.equal(head.intact, false);
+    assert.equal(head.authority, authority === 'owner' ? 'trusted' : 'outsider');
+    assert.equal(validSort(malformed), false);
+    assert.deepEqual(selectedSort(snapshot, subject), authority === 'owner' ? null : original);
+    assert.equal(sortPlan({ snapshot }).queued.includes(key(1)), authority === 'owner');
+  }
+});
