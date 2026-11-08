@@ -395,7 +395,11 @@ line ends with one newline. Invalid input and errors never call a model.
 
 The [command catalog](command-catalog.prompt.md) owns CLI syntax.
 
+The native gh runner records each `gh` call in the GitHub call ledger of the repository that the call names, through `nativeGithubCounter` of [GitHub calls](github-calls.prompt.md#ledger). Counting never changes a call or its result; an injected `execFile` is not wrapped.
+
 ## Dependencies
+
+- [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
 - [Product file formats](../../skills/pdd-product/references/files.md): required authoring, generation and verification context for tables, size paths and contracts.
 - [Workflow runs](workflow-runs.prompt.md): required generation/runtime context for repository-scoped `listRuns`, which reuses runsIn.

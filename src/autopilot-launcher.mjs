@@ -24,6 +24,7 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
+import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -31,6 +32,10 @@ const CLAIM_IDLE_AFTER = 60 * 60 * 1000;
 const STUCK_CLAIM_AFTER = 4 * 60 * 60 * 1000;
 const LONG_RUNNING_AFTER = 24 * 60 * 60 * 1000;
 const HEARTBEAT_SLACK = 5 * 1000;
+// With a low GitHub budget the dependency re-sync runs at most once in this time.
+const LOW_BUDGET_INTAKE_EVERY = 60 * 60 * 1000;
+// The issue list reads only changed issues; the whole open list is read again after this time.
+const FULL_ISSUE_LIST_EVERY = 6 * 60 * 60 * 1000;
 const SESSION = 'pdd-autopilot';
 const ACK = '<!-- pdd:autopilot:thanks -->';
 const ACK_TEXT = `thanks, a maintainer will look\n\n${ACK}`;
@@ -56,10 +61,14 @@ const ok = message => ({ exitCode: 0, message });
 const bad = message => ({ exitCode: 1, message: line(message) });
 function portsFor(state, ports) {
   const env = { ...process.env, ...state?.environment, ...ports.env };
-  const run = ports.run ?? runAgentProcess;
-  const execute = async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options });
-  const checked = async (command, args) => { const result = await execute(command, args); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
-  return { ...ports, env, run, execute, checked, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now: ports.now ?? Date.now };
+  const run = ports.run ?? runAgentProcess, now = ports.now ?? Date.now;
+  // Each gh call goes to this repository's GitHub ledger on this machine; options.purpose names its purpose.
+  // The ledgers sit beside the launcher state files.
+  const githubRoot = ports.githubRoot ?? (typeof state?.stateFile === 'string' ? dirname(state.stateFile) : githubStateRoot(env, ports.stateRoot)), ledgers = new Map();
+  const ledger = () => { const repo = state?.repo; if (typeof repo !== 'string' || !repo) return null; if (!ledgers.has(repo)) ledgers.set(repo, githubLedger({ root: githubRoot, repository: repo })); return ledgers.get(repo); };
+  const execute = countGithubCalls(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { ledger, now });
+  const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
+  return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 async function selectAgent(state, p, saved = null) {
@@ -199,26 +208,46 @@ function response(text) {
   const rateLimited = status === 429 || status === 403 && (header('x-ratelimit-remaining') === '0' || /rate.?limit/i.test(body));
   return { status, etag: header('etag'), link: header('link'), resetAt: Number(header('x-ratelimit-reset')) * 1000, rateLimited, body };
 }
-async function queryIssues(state, p) {
-  let endpoint = `repos/${state.repo}/issues?state=open&sort=updated&direction=desc&per_page=100`;
-  const issues = [], pages = {}; let first = true, etag;
+// Each page is a conditional request with its saved ETag; a 304 reuses the saved page.
+async function issuePages(endpoint, state, p) {
+  const rows = [], pages = {}; let first = true, etag, changed = false;
   while (endpoint) {
     const old = state.pages?.[endpoint];
     const args = ['api', '--include', '--method', 'GET', endpoint];
     if (old?.etag) args.push('-H', `If-None-Match: ${old.etag}`);
-    const r = response((await p.execute('gh', args)).stdout);
+    const r = response((await p.execute('gh', args, { purpose: 'issues' })).stdout);
     if (r.rateLimited) return { status: r.status, rateLimited: true, resetAt: r.resetAt || p.now() + INTERVAL };
     let page;
     if (r.status === 304 && old) page = old;
     else {
       if (r.status !== 200) throw Error('GitHub issue check failed; check gh auth status.');
-      const rows = JSON.parse(r.body); if (!Array.isArray(rows)) throw Error('GitHub returned no issue list.');
-      page = { etag: r.etag, rows, next: r.link?.match(/<https:\/\/api\.github\.com\/([^>]+)>; rel="next"/)?.[1] };
+      const list = JSON.parse(r.body); if (!Array.isArray(list)) throw Error('GitHub returned no issue list.');
+      page = { etag: r.etag, rows: list, next: r.link?.match(/<https:\/\/api\.github\.com\/([^>]+)>; rel="next"/)?.[1] }; changed = true;
     }
     if (first) { etag = page.etag; first = false; }
-    pages[endpoint] = page; issues.push(...page.rows); endpoint = page.next;
+    pages[endpoint] = page; rows.push(...page.rows); endpoint = page.next;
   }
-  return { status: 200, etag, issues, pages };
+  return { status: 200, etag, rows, pages, changed };
+}
+const newestUpdate = rows => rows.map(row => row?.updated_at).filter(value => typeof value === 'string' && Number.isFinite(Date.parse(value))).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+async function queryIssues(state, p) {
+  // A list of more than one page is read in full only every 6 hours. Between, the tick reads the issues and PRs
+  // changed since the newest update of that full read (open and closed) and applies them to the cached open list:
+  // a closed row leaves it. The URL stays the same until the next full read, so an unchanged list is a 304.
+  const fullPages = Object.keys(state.pages ?? {}).filter(key => !key.includes('&since=')).length;
+  if (fullPages > 1 && typeof state.issuesSince === 'string' && Array.isArray(state.cachedIssues) && Number.isFinite(state.issuesFullAt) && p.now() - state.issuesFullAt < FULL_ISSUE_LIST_EVERY) {
+    const read = await issuePages(`repos/${state.repo}/issues?state=all&sort=updated&direction=desc&since=${encodeURIComponent(state.issuesSince)}&per_page=100`, state, p);
+    if (read.rateLimited) return read;
+    const pages = { ...Object.fromEntries(Object.entries(state.pages).filter(([key]) => !key.includes('&since='))), ...read.pages };
+    if (!read.changed) return { status: 304, pages };
+    const byNumber = new Map(state.cachedIssues.map(row => [row.number, row]));
+    for (const row of read.rows) { if (row?.state === 'open') byNumber.set(row.number, row); else byNumber.delete(row?.number); }
+    const issues = [...byNumber.values()].sort((a, b) => (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0));
+    return { status: 200, etag: state.etag, issues, pages };
+  }
+  const read = await issuePages(`repos/${state.repo}/issues?state=open&sort=updated&direction=desc&per_page=100`, state, p);
+  if (read.rateLimited) return read;
+  return { status: 200, etag: read.etag, issues: read.rows, pages: read.pages, since: newestUpdate(read.rows), fullAt: p.now() };
 }
 async function githubGet(endpoint, p, etag) {
   const args = ['api', '--include', '--method', 'GET', endpoint];
@@ -949,7 +978,8 @@ async function reviewSubmissions(pull, state, p) {
     let endpoint = `repos/${state.repo}/pulls/${pull.row.number}/reviews?per_page=100`;
     const pages = {}, rows = [];
     while (endpoint) {
-      const old = pull.reviewPages?.[endpoint], r = await githubGet(endpoint, p, old?.etag);
+      // Reviews come in ascending order: a full last page keeps its ETag when review 101 arrives, so it is read in full.
+      const old = pull.reviewPages?.[endpoint], r = await githubGet(endpoint, p, old && !githubFullLastPage(endpoint, old.rows, old.next) ? old.etag : undefined);
       const page = r.status === 304 ? old : { etag: r.etag, rows: r.value, next: r.link?.match(/<https:\/\/api\.github\.com\/([^>]+)>; rel="next"/)?.[1] };
       if (!Array.isArray(page?.rows)) throw Error('GitHub reviews unavailable; retry next tick.');
       pages[endpoint] = page; rows.push(...page.rows); endpoint = page.next;
@@ -1019,7 +1049,7 @@ async function runTick(stateFile, ports, completion) {
     state = read(stateFile);
     if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.');
     if (ports.expectedStart && !['cwd','repo','coordinatorId','machine','controlRevision'].every(key => state[key] === ports.expectedStart[key])) return outcome('inactive', 'Autopilot start was superseded.');
-    p = portsFor(state, ports);
+    p = portsFor(state, { ...ports, githubRoot: dirname(stateFile) });
     if (!state.coordinatorId || !state.machine) {
       const release = await claimAdmission(state, p);
       if (!release) throw Error('Timed out waiting for automatic admission; retry.');
@@ -1061,6 +1091,38 @@ async function runTick(stateFile, ports, completion) {
     };
     p.scanTransport = action => p.scanAction(action, state.reconciliationIntent ? 'reconciliation' : 'intent');
     if (state.retryAt > p.now()) return outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
+    // The GitHub budget of the tick on this machine, from the local ledgers and the newest limit that GitHub reported.
+    let budget = { state: 'normal' }, restLeft;
+    try {
+      const usage = githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now());
+      restLeft = usage.rate.core?.remaining;
+      budget = githubBudget({ usage, ...githubBudgetSettings(config.github) });
+    } catch { /* An unreadable ledger leaves the budget normal. */ }
+    // Heartbeats of this coordinator's own live claims (no AI call). A saved claim can have expired since it was
+    // observed: expiry is final, so it gets no heartbeat.
+    const ownClaimsOf = claims => claims.filter(claim => claim && typeof claim.issue === 'string' && claim.active === true && claim.coordinatorId === state.coordinatorId
+      && claim.machine === state.machine && claim.commentId && claim.labelEventId);
+    const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
+    const sendHeartbeats = async (claims, saved) => {
+      for (const claim of claims) {
+        // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
+        if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
+        if (saved && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
+        try {
+          const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
+            { execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
+          if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') claim.lastSeen = beat.lastSeen;
+        } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
+      }
+    };
+    if (budget.state === 'reserve' && budget.resetAt > p.now()) {
+      // Below the floor: no GitHub call until the reset, except the heartbeats of the own live claims of the last intake
+      // (2 REST calls each), so a claim does not expire while its chat works when reserve comes back after each reset.
+      // No rate-limit wait is saved: each tick until the reset computes the budget again and sends the heartbeats again.
+      const claims = ownClaimsOf(Array.isArray(state.githubIntake?.claims) ? state.githubIntake.claims : []);
+      if (!(Number.isFinite(restLeft) && restLeft < 2 * claims.length)) await sendHeartbeats(claims, true);
+      return outcome('unknown', `GitHub limit low: ${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor}; Autopilot waits until ${new Date(budget.resetAt).toISOString()}, except the heartbeats of this machine's claims.`);
+    }
     // A due relaunch wakes even without new work; the fresh chat starts with the recipe.
     const relaunch = relaunchTarget(state, p);
     if (relaunch && relaunchHeld(state, relaunch)) {
@@ -1093,9 +1155,25 @@ async function runTick(stateFile, ports, completion) {
         finally { artifact.close(); }
       },
     };
-    const intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
-      { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-      { ...ports, env: p.env, execFile: async (file, args, options) => p.execute(file, args, options), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+    // With a low budget, the dependency re-sync of all issues runs at most once an hour; between, the tick
+    // uses the last eligible list and claims. Heartbeats of live claims keep their priority.
+    const savedIntake = state.githubIntake;
+    const deferIntake = budget.state === 'low' && savedIntake && Number.isFinite(savedIntake.at) && p.now() - savedIntake.at < LOW_BUDGET_INTAKE_EVERY
+      && Array.isArray(savedIntake.eligible) && Array.isArray(savedIntake.claims);
+    let intake;
+    if (deferIntake) {
+      intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, queued: [], skipped: [] };
+      p.warn(`GitHub budget low: Autopilot on this machine used ${budget.used} of ${budget.allowed} calls (${budget.share}%) in the last hour; the dependency re-sync waits until ${new Date(savedIntake.at + LOW_BUDGET_INTAKE_EVERY).toISOString()}.`);
+    } else {
+      const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo });
+      try {
+        intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
+          { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
+          { ...ports, env: p.env, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+      } finally { etags.save(); }
+      if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [] };
+      else delete state.githubIntake;
+    }
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
@@ -1104,22 +1182,17 @@ async function runTick(stateFile, ports, completion) {
     const self = { coordinatorId: state.coordinatorId, machine: state.machine }, limitedFor = claim => takeoverLimited(claim, self);
     const limitedClaims = new Map(observedClaims.filter(limitedFor).map(claim => [claim.issue.toLowerCase(), claim]));
     const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false && !limitedFor(claim)).map(claim => [claim.issue.toLowerCase(), claim]));
-    const ownClaims = observedClaims.filter(claim => claim.active === true && claim.coordinatorId === state.coordinatorId && claim.machine === state.machine && claim.commentId && claim.labelEventId);
-    const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
-    for (const claim of ownClaims) {
-      // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
-      if (stuckFor(claim) >= STUCK_CLAIM_AFTER) continue;
-      try {
-        await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
-          { execFile: async (file, args, options) => p.execute(file, args, options), admitMutation: action => p.scanAction(action) });
-      } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
-    }
+    const ownClaims = ownClaimsOf(observedClaims);
+    await sendHeartbeats(ownClaims, deferIntake);
 
     const result = p.queryIssues ? await p.queryIssues(state) : await queryIssues(state, p);
     if (result.status === 429 || result.rateLimited) { state.retryAt = result.resetAt || p.now() + INTERVAL; return outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
     if (![200, 304].includes(result.status)) throw Error('GitHub issue check failed; check gh auth status.');
     delete state.retryAt;
-    if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; if (result.pages) state.pages = result.pages; }
+    if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; }
+    if (result.pages) state.pages = result.pages;
+    if (typeof result.since === 'string') state.issuesSince = result.since; else if (Number.isFinite(result.fullAt)) delete state.issuesSince;
+    if (Number.isFinite(result.fullAt)) state.issuesFullAt = result.fullAt;
     state.acknowledged ??= {}; state.commentCache ??= {}; state.seen ??= {}; state.timeSeen ??= {};
     cachePullRequests(state);
     const work = [], pending = {}, warnings = [], selections = [];
@@ -1331,12 +1404,16 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['retryAt','cachedIssues','etag','pages','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime']) {
+        for (const key of ['retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
       });
-    } finally { unlinkSync(lock); }
+    } finally {
+      // Keep the ledger small: entries older than 2 hours go.
+      if (p && state?.repo) githubLedger({ root: p.githubRoot, repository: state.repo }).compact(p.now());
+      unlinkSync(lock);
+    }
   }
 }
 
@@ -1499,7 +1576,20 @@ export async function runAutopilotLauncher(input, ports = {}) {
           ? '\nCoordinator relaunch held: the launch settings changed again after a relaunch for the same settings, so the current chat stays and gets work. Close the coordinator pane in Herdr to start a fresh chat with the current settings.' : '');
       let alerts = '';
       try { alerts = (ports.alertStatusLine ?? alertStatusLine)({ repo: state.repo, env: p.env }, { stateRoot: ports.stateRoot }); } catch { /* Alerts never change status. */ }
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${relaunch}${alerts ? `\n${alerts}` : ''}`);
+      // The GitHub calls of the last hour, from the local ledgers only: status makes no GitHub call.
+      let github = '';
+      try {
+        if (state.repo) {
+          const now = p.now(), usage = githubUsage(githubLedger({ root: p.githubRoot, repository: state.repo }).read(), now);
+          const machine = githubUsage(githubMachineEntries({ root: p.githubRoot }), now);
+          if (usage.calls || machine.calls) {
+            let setting;
+            try { setting = (await settings(state, p)).github; } catch { /* The defaults apply. */ }
+            github = githubStatusLine({ usage, machine, budget: githubBudget({ usage: machine, ...githubBudgetSettings(setting) }) });
+          }
+        }
+      } catch { /* The GitHub line never changes status. */ }
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ?? state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${relaunch}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }

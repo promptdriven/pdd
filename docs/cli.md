@@ -47,7 +47,7 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 |---|---|
 | `pdd autopilot start [--runs N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` sets an optional concurrent-run cap; omission has no fixed cap. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line shows a pending or held coordinator relaunch, and one line an [alert](#alerts) that was not delivered |
+| `pdd autopilot status` | Show this machine's repo, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line shows a pending or held coordinator relaunch, one line an [alert](#alerts) that was not delivered, and one line the [GitHub calls](#github-api-budget) of the last hour |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
 | `pdd autopilot alerts set` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
@@ -111,7 +111,10 @@ receive no tick prompt; pending changes are coalesced until they are idle.
 Empty ticks use no AI. This applies to Claude
 Code too: the user timer keeps empty ticks out of the conversation. Paginated
 queues revalidate every cached page; changed candidates may require comment and
-write-permission lookups. GitHub rate limits wait until the reset time.
+write-permission lookups. GitHub rate limits wait until the reset time. When the
+open issue list has more than one page, the tick reads it in full every 6 hours.
+Between, it reads only the issues and PRs that changed since that full read
+(`since=`), so an unchanged list costs no counted call.
 
 Every open issue can enter the queue, old or new, with or without `pdd:autopilot`.
 Autopilot starts fresh work only on an issue that the current dependency review
@@ -146,6 +149,75 @@ the middle of a step. Older pdd sends no heartbeat, so its claims follow the
 without a claim check and removes `pdd:working` when its run ends. A stopped
 launcher or `off` mode lets its claims expire after 4 hours. The heartbeat moves
 claimed issues to the top of "recently updated" every 30 minutes.
+
+### GitHub API budget
+
+Autopilot uses your own `gh` sign-in, so its GitHub calls use your hourly limit
+(5,000 REST calls for a person). pdd counts each `gh` call of the Autopilot tick,
+and of `pdd` commands in a repository where Autopilot runs on this machine, with
+its purpose and the limit that GitHub reports in the reply headers:
+
+| Purpose | Calls |
+|---|---|
+| `dependencies` | The dependency re-sync: open issues, comments, links, history |
+| `claims` | Claim checks and the `lastSeen` heartbeat |
+| `issues` | The tick's issue list, comments and permission lookups |
+| `pulls` | PR, review and check reads |
+| `writes` | Other writes, such as a PR or a reply |
+| `setup` | Sign-in, repository and settings calls |
+| `other` | Everything else, such as `pdd metrics` |
+
+pdd does not count the `gh` calls that the coordinator and worker chats make
+themselves, such as `gh pr checks` or `gh run watch`. It also does not count
+other machines or your own work on the same login. All of them use the same
+limit. Their use shows only in the limit that is left on the status line.
+
+The counts stay on this machine, one file for each repository in
+`~/.local/state/pdd/autopilot/github/`. `pdd autopilot status` shows one line
+when there was a call in the last hour, for example:
+
+```text
+GitHub calls in the last hour: 212 (dependencies 120, claims 14, issues 60, pulls 18); 150 of 190 conditional reads were 304 (79%); REST limit 4210 of 5000 left until 17:05Z; budget normal: Autopilot on this machine used 61 of 1500 (30%).
+```
+
+"Autopilot on this machine used 61" is the counted calls of this machine: the
+tick and the counted `pdd` commands, not the chats.
+
+A conditional read sends the ETag of the last reply. A `304` reply means that
+nothing changed, and GitHub does not count it against the limit. The tick and the
+dependency re-sync use conditional reads. The dependency re-sync keeps its ETags
+and reply bodies in the same folder. The dependency re-sync and the review reads
+read a full page (100 items) that has no next page without its ETag: a `304`
+reply does not show that a next page came.
+
+The budget acts only on the tick. It has two settings in `pdd.json`, a share
+(default 30%) and a floor (default 500 calls):
+
+```json
+{"autopilot":{"mode":"auto","trust":[],"github":{"share":30,"floor":500}}}
+```
+
+`share` is a whole percent from 1 to 100; `floor` is a whole number of calls. A
+missing or invalid value uses the default.
+
+- **Low.** The counted REST calls of all Autopilot repositories on this machine
+  in the last hour reach the share. A 304 reply does not count. Then the tick
+  runs the dependency re-sync at most once an hour and uses its last result
+  between. All other calls of the tick go on: the issue list, comment, review
+  and PR reads, heartbeats and wakes.
+- **Reserve.** GitHub reports fewer calls left than the floor, for REST or
+  GraphQL. Then the tick makes no GitHub call until the reset time, except the
+  heartbeat of each live claim of this machine (2 REST calls each). So a claim
+  does not expire while its chat works. With fewer REST calls left than these
+  heartbeats need, it sends none. The tick also wakes no chat with new work
+  until the reset.
+
+Nothing else waits for the budget. The coordinator and worker chats go on, and
+their own `gh` calls are not counted. `pdd` commands are counted but do not
+wait, also the workflow start's claim check. So the budget does not keep 70% of
+the limit, or the last 500 calls, for you: it only makes the tick read less. To
+give Autopilot a limit of its own, see the design note
+[A GitHub App token for Autopilot](autopilot-github-app-token.md).
 
 ### Alerts
 

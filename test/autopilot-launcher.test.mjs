@@ -416,7 +416,8 @@ test('native HTTP tick uses ETags and revalidates cached later pages, including 
     return run(command, args, opts);
   };
   await f.invoke('start'); assert.match(f.prompts[0], /"number":31,/);
-  phase = 1; await f.tick();
+  // Between full reads a tick reads only changed issues (#3046); the full read 6 hours later revalidates every page.
+  phase = 1; f.time += 6 * 60 * 60 * 1000; await f.tick();
   assert.equal(f.prompts.length, 1); assert.equal(f.state().cachedIssues.length, 0);
   assert.ok(queries[2].includes('If-None-Match: "first"'));
   assert.ok(queries[3].includes('If-None-Match: "second"'));

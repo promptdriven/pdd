@@ -9,6 +9,7 @@ import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
+import { githubFullLastPage, nativeGithubCounter } from './github-calls.mjs';
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners');
@@ -46,11 +47,13 @@ const blockedByRemoval = event => {
   if (!REMOVAL.test(name) || /^blocking(?:[_-]|$)/i.test(name)) return undefined;
   return eventIssue(event.blocked_by);
 };
+// A pdd command outside the Autopilot tick records its gh calls in the ledger of the repository that each call names.
+const execute = nativeGithubCounter(spawnRead, { purpose: 'dependencies' });
 const uniqueRows = rows => [...new Map(rows.map(r => [canonical(r.key), { key: canonical(r.key), revision: r.revision }])).values()];
 const bookkeeping = body => /<!--\s*pdd(?:-dependency-(?:review|impact)|[: -](?:autopilot|claim|working|sync))/i.test(body ?? '')
   || /"coordinatorId"\s*:/.test(body ?? '') && /"labelEventId"\s*:/.test(body ?? '');
 
-function execute(file, args, options = {}) {
+function spawnRead(file, args, options = {}) {
   return new Promise((resolveResult, reject) => {
     const { input, ...rest } = options;
     const child = execCallback(file, args, { ...rest, encoding: 'utf8', shell: false, maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -60,28 +63,46 @@ function execute(file, args, options = {}) {
   });
 }
 
+// gh exits with 1 for a 304 reply and prints its headers; a conditional request reads them from the failed command.
+const notModified = text => /^HTTP\/\S+\s+304\b/.test(String(text ?? ''));
+
 function service(cwd, ports) {
   const exec = ports.execFile ?? execute;
-  async function run(file, args, input) {
-    const r = await exec(file, args, { ...(cwd ? { cwd } : {}), ...(input === undefined ? {} : { input }) });
-    if (r.code !== undefined && r.code !== 0) throw Object.assign(Error('Service read failed'), { status: r.code });
+  async function run(file, args, input, purpose, conditional = false, repository) {
+    let r;
+    try { r = await exec(file, args, { ...(cwd ? { cwd } : {}), ...(input === undefined ? {} : { input }), ...(purpose ? { purpose } : {}), ...(repository ? { repository } : {}) }); }
+    catch (error) { if (conditional && notModified(error?.stdout)) return String(error.stdout); throw error; }
+    if (r.code !== undefined && r.code !== 0 && !(conditional && notModified(r.stdout))) throw Object.assign(Error('Service read failed'), { status: r.code });
     return String(r.stdout ?? '');
   }
-  async function api(endpoint, method = 'GET', input) {
+  // purpose names what the read is for in the GitHub call ledger, repository the ledger of a GraphQL call. With a githubCache
+  // port, a GET sends the saved ETag; a 304 reply returns the saved body and next page and does not count against the limit.
+  // A saved full last page, or a saved body that does not parse, sends no ETag: a 304 cannot show a new next page.
+  async function api(endpoint, method = 'GET', input, purpose, repository) {
+    const cache = method === 'GET' ? ports.githubCache : null;
+    let saved = cache?.get(endpoint);
+    if (saved) {
+      try { saved = { ...saved, value: parse(saved.body) }; if (githubFullLastPage(endpoint, saved.value, saved.next)) saved = undefined; }
+      catch { saved = undefined; }
+    }
     const executeRequest = () => run('gh', ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json',
-      ...(input === undefined ? [] : ['--input', '-'])], input);
+      ...(saved ? ['-H', `If-None-Match: ${saved.etag}`] : []), ...(input === undefined ? [] : ['--input', '-'])], input, purpose, !!saved, repository);
     const mutation = method === 'POST' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9][0-9]*\/(?:comments|dependencies\/blocked_by)$/.test(endpoint)
       || method === 'PATCH' && /^repos\/[^/]+\/[^/]+\/issues\/comments\/[1-9][0-9]*$/.test(endpoint);
     const raw = mutation && ports.admitMutation ? await ports.admitMutation(executeRequest) : await executeRequest();
     const boundary = raw.search(/\r?\n\r?\n/), header = boundary >= 0 ? raw.slice(0, boundary) : '';
     const body = boundary >= 0 ? raw.slice(boundary).trim() : raw;
     const status = Number(header.match(/^HTTP\/\S+\s+(\d+)/m)?.[1] ?? 200);
+    if (status === 304 && saved) return { value: saved.value, next: saved.next ?? '' };
     if (status < 200 || status >= 300) throw Object.assign(Error('GitHub observation unavailable'), { status });
     const link = header.match(/^link:\s*(.*)$/im)?.[1] ?? '';
     const nextRelation = link.match(/<([^>]+)>\s*;\s*rel=(?:"next"|next)\s*(?:,|$)/i)?.[1];
     const next = nextRelation?.match(/^https:\/\/api\.github\.com\/([^#]+)$/i)?.[1] ?? '';
     if (nextRelation && !next) throw Error('Unsupported GitHub pagination link');
-    return { value: parse(body), next };
+    const etag = header.match(/^etag:[ \t]*(.*?)[ \t]*\r?$/im)?.[1];
+    const value = parse(body);
+    if (cache && status === 200 && etag) cache.set(endpoint, { etag, body, next });
+    return { value, next };
   }
   return { run, api };
 }
@@ -104,7 +125,7 @@ async function bulkRoots(cwd, repository, roots, ports) {
     const query = `query($owner:String!,$name:String!${batch.map((_, index) => `,$n${index}:Int!`).join('')}) { repository(owner:$owner,name:$name) { ${batch.map((_, index) => `i${index}:issue(number:$n${index}) { ${selection} }`).join(' ')} } }`;
     const variables = { owner, name, ...Object.fromEntries(batch.map((row, index) => [`n${index}`, row.number])) };
     let response;
-    try { response = (await s.api('graphql', 'POST', JSON.stringify({ query, variables }))).value; if (response.errors?.length || !object(response.data?.repository)) throw Error('Incomplete batch'); }
+    try { response = (await s.api('graphql', 'POST', JSON.stringify({ query, variables }), undefined, repository)).value; if (response.errors?.length || !object(response.data?.repository)) throw Error('Incomplete batch'); }
     catch { continue; }
     batch.forEach((root, index) => {
       const row = response.data.repository[`i${index}`], fields = ['labels','assignees','comments','blockedBy','blocking','timelineItems'];
@@ -132,13 +153,13 @@ async function bulkRoots(cwd, repository, roots, ports) {
   return result;
 }
 
-async function allPages(github, repository, kind, issue) {
+async function allPages(github, repository, kind, issue, purpose) {
   const items = [], cursors = new Set(); let cursor = '';
   do {
     try {
       if (cursors.has(cursor)) throw Error('Repeated GitHub cursor');
       cursors.add(cursor);
-      const value = parse((await github.page({ repository, kind, issue, cursor })).json);
+      const value = parse((await github.page({ repository, kind, issue, cursor, ...(purpose ? { purpose } : {}) })).json);
       if (value.error || !Array.isArray(value.items) || typeof value.next !== 'string') throw Error(`Incomplete ${kind} observation`);
       items.push(...value.items); cursor = value.next;
     } catch (error) { error.partialItems = items; throw error; }
@@ -149,7 +170,7 @@ async function allPages(github, repository, kind, issue) {
 function rawGithub(cwd, ports) {
   const s = service(cwd, ports);
   const github = {
-    page: async ({ repository, kind, issue, cursor }) => {
+    page: async ({ repository, kind, issue, cursor, purpose }) => {
       const suffix = { issues: '?state=open&per_page=100', comments: `/${issue}/comments?per_page=100`,
         blockedBy: `/${issue}/dependencies/blocked_by?per_page=100`, blocking: `/${issue}/dependencies/blocking?per_page=100`, timeline: `/${issue}/timeline?per_page=100` }[kind];
       if (!repositoryName(repository) || suffix === undefined) return { json: JSON.stringify({ error: 'Invalid GitHub scope', status: 400 }) };
@@ -159,12 +180,12 @@ function rawGithub(cwd, ports) {
         const path = cursor.split(/[?#]/, 1)[0];
         const canonical = /^repositories\/[1-9][0-9]*\/(.+)$/.exec(path);
         if (cursor && path !== `repos/${repository}/${route}` && canonical?.[1] !== route) throw Error('Foreign pagination cursor');
-        const r = await s.api(cursor || `repos/${repository}/issues${suffix}`);
+        const r = await s.api(cursor || `repos/${repository}/issues${suffix}`, 'GET', undefined, purpose);
         return { json: JSON.stringify({ items: r.value, next: r.next }) };
       } catch (e) { return { json: JSON.stringify({ error: 'GitHub read unavailable', status: e.status ?? 0 }) }; }
     },
-    issue: async ({ repository, issue }) => {
-      try { return { json: JSON.stringify((await s.api(`repos/${repository}/issues/${issue}`)).value) }; }
+    issue: async ({ repository, issue, purpose }) => {
+      try { return { json: JSON.stringify((await s.api(`repos/${repository}/issues/${issue}`, 'GET', undefined, purpose)).value) }; }
       catch (e) { return { json: JSON.stringify({ error: 'GitHub issue unavailable', status: e.status ?? 0 }) }; }
     },
     appendComment: async ({ repository, issue, body }) => {
@@ -413,11 +434,12 @@ export function withoutClaimHeartbeat(body) {
 }
 
 async function winningClaim(repository, key, github, authority, now = NaN) {
-  const i = info(key), raw = parse((await github.issue({ repository, issue: i.issue })).json);
+  // Claim checks are their own purpose in the GitHub call ledger.
+  const i = info(key), raw = parse((await github.issue({ repository, issue: i.issue, purpose: 'claims' })).json);
   if (raw.error) throw Error('Current claim issue unavailable');
   const labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
   if (!labels.includes('pdd:working')) return null;
-  const timeline = await allPages(github, repository, 'timeline', i.issue), comments = await allPages(github, repository, 'comments', i.issue);
+  const timeline = await allPages(github, repository, 'timeline', i.issue, 'claims'), comments = await allPages(github, repository, 'comments', i.issue, 'claims');
   let candidates = [], stuck = null;
   // Claim eras in order ({winner, start, end, index}; the current era has no end) and the
   // removals of pdd:stuck, for the takeover count below.
