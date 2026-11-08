@@ -20,3 +20,13 @@ After a failed check, find its real cause and change the repair before another p
 A prompt that a test, command or prompt runs needs an interface block: draft it through pdd from the prompt text and save it; one that nothing runs needs none.
 
 A screen change gets before/after screenshots in the code PR.
+
+During native work and repairs, use the repository-declared safe affected-test
+selector plus its fixed smoke set. For PDD use `node scripts/affected-tests.mjs
+--base BASE --run --report REPORT`, with the run base and an external run-folder
+report. If selection is unavailable or unsafe, run the full suite through the
+shared suite queue (`pdd workflow suite --command "npm test"` when installed,
+else the repository queue adapter). Put working test files, commands, counts and
+fallback causes in verify.md and the PR. The merge owner obtains one queued full
+suite on the exact clean PR head, reuses a green result on that head, and shows
+its head/result separately in the PR. An affected pass cannot satisfy that gate.

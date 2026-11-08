@@ -317,7 +317,11 @@ async function areaMessage(run, index, p, packageRoot) {
     ...(automatic ? [automatic] : []),
     `Issue: ${run.repo}#${run.number} "${oneLine(run.issue.title)}" ${run.issue.url}`,
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
-    `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
+    `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with exact commands, selected files, counts and fallback causes for the PR. Use the working test policy plus smoke, or the full fallback through the shared queue. Before merge, show the queued full-suite result and exact clean PR head separately, or pending; reuse an existing green result on that head. An affected pass does not satisfy that gate. Native test policy: ${JSON.stringify({
+      working: { mode: existsSync(join(run.root, 'scripts/affected-tests.mjs')) ? 'affected' : 'full',
+        argv: existsSync(join(run.root, 'scripts/affected-tests.mjs')) ? ['node', 'scripts/affected-tests.mjs', '--base', run.baseSha, '--run', '--report', join(run.runDir, 'working-tests.json')] : null },
+      beforeMerge: { mode: 'full', queue: true, exactHead: true, reuseGreenHead: true },
+    })}`,
     ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => area.optional.includes(step) ? `${step} (optional: ask the person)` : step).join(', ')}.`,
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
