@@ -276,6 +276,103 @@ authority and prompt/dependency checks. Scenario changes follow its saved-value 
 do not block publication. Public-boundary execution, mutation and formal checks still apply.
 Adoption supplies no PASS or fresh execution attestation.
 
+## Return to prompt space after code entry
+
+For a two-PR run whose code area has started, explicit `workflow open ISSUE prompt-pr`
+(or its Story area, with optional `--new`) reopens prompt work when the owned PR 1
+is still open. Manual and automatic runs use this same route and current ownership
+checks. Refuse a dirty worktree, unavailable/closed/merged PR 1, or pending chat
+replacement before branch or progress effects. Switch to PR 1's recorded branch; fetch its remote head and fast-forward it.
+Fetch the run's selected base branch and merge its pinned current commit into
+PR 1 without rewriting history. Refuse merge conflicts with explicit resolution
+advice, leaving PR 1 current so the worker can resolve and rerun its checks.
+All prompt checks must cover the integrated source before PR 1 is updated;
+
+never carry code changes into that branch. Preserve both PR identities and decisions
+as history. Record the return and reason (a prompt correction found during code work)
+for status, area briefs and both PR descriptions. Plain historical open for other
+workflows retains its inspection behavior.
+
+Clear completed steps from the selected area onward, current gate/question, stale
+code check results, inventory, proof/replay evidence and source associations. Old
+results cannot become new evidence merely because source bytes match. Reopen the
+selected chat through the ordinary chat path; `--new` now replaces that current
+prompt chat. A prompt-only correction reruns the prompt checks. A changed Story or
+scenario expected contract reopens the existing Story approval gate before prompt
+publication; do not invent a new gate format or reuse the old decision. Keep prompt
+work on PR 1 even while that gate is open. Finishing the prompt area updates its
+existing PR 1 through ordinary publication, then uses the normal code-choice gate. Preserve the normal Story card and its
+saved code-or-stop choice. For a returned automatic run with unchanged Story
+coverage, a full current prompt check pass updates PR 1 and resumes code without
+a new person decision, using the existing scoped operator delegation. Record code continuation with route
+`prompt-reentry`, null words and `basis {storyEvidenceId, priorCodeApprovalId}`.
+The prior code approval must be the actual saved code-entry decision, not a
+prompt publication decision. Strict
+terminal approvals still apply. A changed Story always returns to its Story gate.
+
+Bind every displayed Story approval gate to the selected Story files and scenario
+contract, including paths and expected checks. Select the run's changed contract against the current merge-base of its saved
+base branch, so unrelated base integrations do not remove valid approval.
+Select Stories with the runtime's canonical Story-path rule, including `user_stories` directories at any depth and
+its index-file exclusions. Additions, edits and deletions all change coverage.
+Save its contract identity with the
+gate and the actual approval decision. Check the shown identity both before taking
+an explicit reply and immediately before saving approval. A changed or unreadable
+contract, or missing saved coverage, requires showing the gate again and a later
+decision; terminal confirmation displays and binds the current contract first.
+On return, compare fetched PR 1 content against the last actual Story decision's
+contract, never against content first observed during return. Changed or unknown
+coverage reopens the Story gate before prompt publication or code entry. Retain
+older decisions only as history. A newly displayed gate does not itself approve
+the new contract. Recheck the approved Story contract and published scenario
+bytes after code-entry confirmation or an explicit reply, after prompt
+synchronization, and before saving the code decision or switching branches.
+Bind code entry to an immutable fetched upstream commit, through the explicit
+reply, terminal confirmation and normal Story-card choice routes. Validate the
+fetched source itself, including Stories and scenario bytes, against the last
+approved contract and published replay anchor before a code decision is saved.
+After PR 1 merges, scope prompt and scenario byte comparisons to PR 1's
+published paths and the saved replay anchor. Unrelated prompts and scenarios
+added on the saved base do not invalidate this run's checks or gate. When its
+approved contract and published bytes are unchanged, initial code entry starts
+from the pinned merged base, including that unrelated work. Changes to owned
+specifications and unsafe code merges still refuse entry.
+A Story or scenario path confirmed absent from the pinned Git tree is a deletion
+in the contract comparison. Preserve and fast-forward the fetched peer commit on
+PR 1 and reopen Story approval before saving any code decision. Failure to read
+the pinned tree or a present file is unavailable source, never evidence of
+deletion; refuse code entry without saving a decision.
+A changed fetched contract returns to Story approval on PR 1. Other changed
+scenario bytes require prompt checks, publication and anchor refresh. Do not
+validate only the unchanged local worktree. Merge only the pinned validated
+commit into the existing code branch, and validate the resulting source again
+before saving any code decision or advancing. A conflict or failed validation
+returns to PR 1, preserves code and peer commits and records no new code decision.
+A changed contract reopens Story approval; unpublished scenario bytes keep the
+run in prompt space. Neither route records a code-entry decision. This also
+applies to the second terminal confirmation immediately after opening PR 1.
+
+When code resumes, reuse its recorded branch and PR 2. Merge the updated PR 1 into
+that branch without rewriting published history; a conflict stops with recovery
+advice and retains prompt-space progress. Code generation and every code check run
+again. PR 2 must contain no prompt changes relative to PR 1;
+Compare against the fetched remote reference for the selected PR base, including
+the saved default or topic base after PR 1 merges; a stale local branch cannot
+classify already published prompts as PR 2 edits. Apply this guard only to areas
+after the prompt area's code-choice gate; a future code-choice area cannot make
+an earlier area's publication a code publication. Refuse publication before
+committing or pushing prompt edits and direct the worker
+back to prompt space. Recheck the staged tree before an automatic commit. Bind
+publication to one immutable candidate commit, independently of informational
+inventory availability. Before any push, compare that candidate's prompt tree
+with the fetched PR base and push only that checked SHA. An edit arriving during
+staging, commit or publication preparation must not enter PR 2. Refuse unsafe
+candidates with prompt-space recovery advice and retain the person's work. Story and scenario corrections made during this return go
+to PR 1. Preserve the replay owner's saved-value warning policy for code-space vectors. The refreshed ordinary replay anchor comes only from this
+run's changed scenarios, excluding unrelated scenarios brought in from the original
+base branch. Compare with the current merge-base of that original branch, retaining
+immutable `baseSha`; adopted runs keep their declared scope and authority.
+
 ## Failed chat startup and recovery
 
 A Herdr request failure is not evidence that an agent is working. If an initial or later-area start, or explicit open/resume, fails, keep the same run, allocated worktree, selected base, issue claim, completed steps and decisions. Save `chatFailure {area, phase, code, message, at}` (phase `start` or `open`, finite one-line reason: the first line of the error message), set the active run to `waiting`, and report the failure with `pdd workflow open N` for explicit recovery after Herdr is available. Start, approve, open and status all report the error's code once with the first line of its message, never the code alone; a message that starts with the same code does not repeat it. Start, approve and open print the later message lines, such as the values of an [identity refusal](workflow-herdr-layout.prompt.md#identity-refusal), on the lines after that report. Do not retry the request automatically, restart an unavailable server, allocate again or fabricate a chat/session. A failure after the pane launch request may have dispatched: retain the prepared chat identity supplied by [area chats](workflow-chat.prompt.md), including its unconfirmed flag.
@@ -404,7 +501,7 @@ flowchart TD
 
 In easy mode accept any nonblank said text, including "looks good", "ship it" or question-looking text. The agent judges the person's intent and passes their verbatim words obtained after displaying the gate question. pdd never grades vocabulary or meaning, and does not infer display or consent from a chat timestamp. Without said, an agent environment (`PDD_AGENT_SESSION`, `CLAUDECODE`, `CODEX_THREAD_ID`), non-TTY input or the current run's own Herdr pane refuses with a plain instruction to ask the person, then use the quoted-heredoc template in the shared approval policy with `pdd workflow approve N --said -`. Do not read approval evidence, consume stdin, save an approval or advance the gate on this refusal, even when native history contains "I approve". The own-pane identity test remains `HERDR_PANE_ID` matching a run chat and `HERDR_SOCKET_PATH` in Herdr session `pdd`; a person's separate terminal pane retains y/N. Strict mode is opt-in and permits only an unmarked person terminal without said, even if native evidence exists.
 
-No incoming chat message, step completion, `done`, status or evidence recording can authorize or cross an approval gate by itself. `done` may establish/reopen the waiting gate and return the question; only an explicit authorized approve call crosses it. The one exception is the full-pass route of [Normal-run gates](#normal-run-gates): it crosses only the `approve-pr` gate of a normal run, only under a valid Story approval and a verified full check pass, and records route `automatic-check-pass` with no person words. Native history may remain available for recording, never as independent approval authority.
+No incoming chat message, step completion, `done`, status or evidence recording can authorize or cross an approval gate by itself. `done` may establish/reopen the waiting gate and return the question; only an explicit authorized approve call crosses it. The exceptions are the covered returned automatic route in [prompt recovery](#return-to-prompt-space-after-code-entry) and the full-pass route of [Normal-run gates](#normal-run-gates): it crosses only the `approve-pr` gate of a normal run, only under a valid Story approval and a verified full check pass, and records route `automatic-check-pass` with no person words. Native history may remain available for recording, never as independent approval authority.
 
 For said and ready-gate terminal batch approval, the existing gate must be open, all its steps complete, saved config folder present and run eligible; it cannot use terminal's approve-anyway exception. It requires no area chat/session and does not read native logs or ask terminal y/N; only the explicit stdin marker reads stdin. Select the current gate's changed Git-visible `*.prompt.md` paths against the saved base, including staged, unstaged and nonignored untracked worktree files; at ask-code include PR 1's changed prompt paths and inspect current worktree bytes. Deduplicate in lexical path order. Exclude unchanged unrelated repo drafts and deleted files; reject symlink/outside-root/unreadable selected files or unavailable comparison rather than silently skipping them. Approve every draft or stale-approved selected prompt with current prose hash; already approved/current prompts retain their bytes. Reuse prompt-approve's schema/hash and byte-preserving edit rules. Validate the complete set and journal before the first write; a malformed member cannot approve the gate or a different member. Print each newly approved path/hash. Prompts without a Runtime block retain existing non-Runtime handling; they do not acquire invented approval fields.
 
@@ -1111,7 +1208,7 @@ Call the production [PR evidence preparation](workflow-pr-evidence.prompt.md) bo
 
 ## Open a saved area or replace its session
 
-This is an additive extension; all other runner contracts remain unchanged. An explicit `area` must name an area at or before `run.area` with a recorded chat. Choose its latest saved chat. Unknown, future or unrecorded selectors refuse before persistence or native effects; an unknown-area message lists the workflow's valid area names. Without a selector choose the current area. A fresh `newSession` attempt for an earlier area refuses with advice to select the current area; recovery of an already saved attempt follows its recorded target below; a current area without a saved chat cannot replace one. Historical open delegates to `openChat`, persists only that selected chat's observations (including its same-identity startUnconfirmed flag after a failed resume), and reports its own error without setting/clearing current `chatFailure`, changing run state or invoking current-area recovery. AREA never changes `run.area`, even on failure. This navigation does not enforce read-only historical execution.
+Except for [returning to prompt space](#return-to-prompt-space-after-code-entry), this is a navigation extension; all other runner contracts remain unchanged. An explicit `area` must name an area at or before `run.area` with a recorded chat. Choose its latest saved chat. Unknown, future or unrecorded selectors refuse before persistence or native effects; an unknown-area message lists the workflow's valid area names. Without a selector choose the current area. A fresh `newSession` attempt for an earlier area refuses with advice to select the current area; recovery of an already saved attempt follows its recorded target below; a current area without a saved chat cannot replace one. Historical open delegates to `openChat`, persists only that selected chat's observations (including its same-identity startUnconfirmed flag after a failed resume), and reports its own error without setting/clearing current `chatFailure`, changing run state or invoking current-area recovery. AREA never changes `run.area`, even on failure. This navigation does not enforce read-only historical execution.
 
 For replacement call the module function `restartChat({run,chat,message,pending}, ports)` from [area chats](workflow-chat.prompt.md#explicit-fresh-session). That owner defines native checks and the checkpoint envelope. Build the continuation with `areaMessage` for the same current area plus its completed step names/summaries, remaining steps, open gate and pending question in human-readable words, including what the person must decide; never paste a raw gate object. Explain that already completed steps must not rerun and that prior approval does not approve new work. Preserve the same agent, run/worktree/branch, completed records, question, gate, approvalRecord, decisions and PR records on success and failure; configuration follows the launch-profile rule below; replacement never advances or publishes. An eligibility or ownership refusal before intent leaves the entire saved run unchanged, including state and chatFailure. A failure after durable intent retains the pending custody for recovery, without misreporting it as a preflight refusal. After effects begin, record replacement custody, its account commit below and a current-area chat failure when necessary; successful replacement clears that failure but restores running only without a waiting gate/question.
 
