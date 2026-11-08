@@ -4,6 +4,15 @@ Read the entire [Prompting guide](docs/prompting-guide.md) before authoring a St
 
 ## Work from a local checkout
 
+For a checkout with less history to download, make a shallow clone:
+
+```sh
+git clone --depth 1 https://github.com/promptdriven/pdd.git
+cd pdd
+```
+
+This checkout has limited history. If you need the full history, run `git fetch --unshallow` inside the checkout.
+
 Use Node.js 22.16.0 or newer. The CLI and tests have no dependency installation step:
 
 ```sh
@@ -23,6 +32,18 @@ Show what changed after feedback, including any unresolved point. A proposed con
 Prepare a PR with the reason for the change, the behavior affected, actual test commands/results and remaining limits. Publish or merge only through the authorized repository workflow. Review and a green public full suite are required before publication of public source. Keep operational reports, private logs and credentials outside the tree.
 
 ## Package checks
+
+The bundled `pdd-small-change`, `pdd-bug` and `pdd-feature` workflow skills have size limits enforced by [SKILLS4 in the skill tests](test/skills.test.mjs). Their `SKILL.md` limits are 3,072 bytes for small-change and 4,096 bytes each for bug and feature. Declared step briefs are limited to 15 lines and 1,228 bytes each, except `prompt-story` (1,638 bytes), `review` (2,304) and `change` (1,536). Each `steps/autopilot.md` is an Autopilot overlay with its own 3,072-byte limit, separate from ordinary step limits. SKILLS4 does not apply these workflow limits to `pdd-product`.
+
+Measure file bytes before editing and compare them with the applicable limits:
+
+```sh
+wc -c skills/pdd-{small-change,bug,feature}/SKILL.md skills/pdd-{small-change,bug,feature}/steps/*.md
+```
+
+Also count ordinary step lines as the test does: trim trailing whitespace, then split on newlines. A checkout snapshot measured the three `SKILL.md` files at 2,741, 4,091 and 4,088 bytes respectively, leaving 331, 5 and 8 bytes; remeasure for the current checkout. The test is the authoritative source for current limits.
+
+Put step-specific detail in the appropriate existing step brief and shared applicable guidance in [RUNBOOK.md](RUNBOOK.md), keeping its [skill copy](skills/pdd-prompting/RUNBOOK.md) in sync. Do not duplicate rules already in `SKILL.md` or use `steps/autopilot.md` as general overflow. The checks require the exact declared step files plus the Autopilot overlay and exact top-level contents; adding another file there requires a separate change to the checks and packaging.
 
 The CLI/package owner maintains the package allowlist. Documentation changes must preserve a complete skill bundle: canonical guide, skill entrypoint, references, recipes and example links must resolve from a clean extracted package. To inspect a package without installing globally:
 
