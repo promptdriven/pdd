@@ -15,7 +15,15 @@ Own `src/prompt-approve.mjs`. Export `runApprove({words, cwd, said}, ports)` (re
 
 Ports (tests inject them): `stdout`, `stderr`, `stdin`, `interactive` (default: stdin and stdout are TTYs), `env`, `now`, filesystem and Git execution ports for policy/journal/root resolution. Native filesystem/hash/TTY effects require native tests, not a surrogate Runtime operation.
 
+## Native-only and automatic approval
+
+Show a native-only declaration's kind and reason before approval. It is eligible for the existing person routes after kind/reason validation, without entry schemas or limits. Record the kind and reason with its path/hash. Validate before the already-approved fast path too.
+
+`pdd approve PROMPT --automatic --tests COMMAND` invokes the interface drafting owner's automatic-check-pass route. Never combine it with --said. Strict approval mode still requires a person and refuses this route. Only a complete unchanged draft from this command, with committed unchanged prose and existing code/tests, can qualify. This route does not approve new behavior or native-only blocks. Keep ordinary person routes unchanged.
+
 ## Dependencies
+
+- [Automatic draft approval](interface-draft.prompt.md): required generation and verification context for the delegated `runAutomaticApproval` operation. The caller consumes this public operation; ordinary person approval policy remains here.
 
 - [Shared authored-file reader](runtime-preflight.prompt.md#shared-authored-file-reader): required generation/verification/testing context for parsing, references, numeric tokens and schema refusals.
 

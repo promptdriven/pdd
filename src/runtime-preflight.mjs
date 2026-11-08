@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b965151fcc40dbebd6173cccc5f4689706bf8507dd82b96b83e9eb0880ec2979).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: cfeff196d91c40e5f08880ff88a28d52931712a27df00b37478cd9297003e52c).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -528,8 +528,18 @@ function limitProblems(iface) {
 }
 
 // Every schema problem of one interface: entry input and result schemas (any root) and resource operation schemas (object root).
+export function interfaceKindProblems(iface) {
+  if (!isObject(iface)) return [{code:'invalid-interface',pointer:'',rule:'must be an object.'}];
+  const kind = Object.hasOwn(iface, 'kind') ? iface.kind : 'full';
+  if (!['full', 'partial', 'native-only'].includes(kind)) return [{code:'interface-kind-invalid',pointer:'/kind',rule:'must be full, partial or native-only.'}];
+  if (kind === 'native-only' && (typeof iface.reason !== 'string' || !iface.reason.trim())) return [{code:'native-reason-missing',pointer:'/reason',rule:'must name the native effect that bound ports cannot fake (RUNBOOK §21).'}];
+  return [];
+}
 export function interfaceSchemaProblems(iface) {
+  const kindProblems = interfaceKindProblems(iface);
+  if (kindProblems.length || iface?.kind === 'native-only') return kindProblems;
   const out = limitProblems(iface);
+  if (Array.isArray(iface?.draft_gaps) && iface.draft_gaps.length) out.push({code:'interface-draft-incomplete',pointer:'/draft_gaps',rule:iface.draft_gaps.join('; ')});
   for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries()) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
   }
@@ -578,7 +588,7 @@ export const STALE_HINT = 'the text changed after approval: set status to draft,
 export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
   'entry-missing': path => `${path} is not a Git-visible *.prompt.md file.`,
-  'interface-missing': path => `${path} has no Runtime interface block.`,
+  'interface-missing': path => `${path} has no Runtime interface block. Run pdd interface draft ${/^[A-Za-z0-9_./-]+$/.test(path) ? path : "'" + path.replaceAll("'", "'\\''") + "'"}.`,
   'pdd-two-interfaces': path => `${path} has more than one Runtime interface block. Keep one.`,
   'invalid-json': path => `The Runtime interface of ${path} is not valid JSON.`,
 };
@@ -586,6 +596,8 @@ const PROMPT_MESSAGES = {
 // Rule P7 for one prompt. Returns null or a refusal (without the step).
 export function promptRefusal(prompt, section) {
   if (prompt.error) return refusal(prompt.error, section, PROMPT_MESSAGES[prompt.error](prompt.path));
+  const kindProblems = interfaceKindProblems(prompt.interface);
+  if (kindProblems.length) return refusal(kindProblems[0].code, section, `${prompt.path} ${kindProblems[0].rule}`);
   const status = prompt.interface.status;
   if (status !== 'approved' && status !== 'draft') {
     return refusal('interface-unapproved', section, `${prompt.path} has status ${show(status)}. Use "draft" or "approved".`);
@@ -878,9 +890,10 @@ function checkTest(root, found, test, prompts) {
     const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts);
     if (schemaIssues.length) return schemaIssues;
     const entry = (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
-    if (!entry) return refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at);
+    const native = [...prompts.values()].some(item => item.interface?.kind === 'native-only');
+    if (!entry && !native) return refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at);
     const errorStep = Object.hasOwn(step, 'expected_error');
-    if (errorStep && !(Array.isArray(entry.errors) && entry.errors.includes(step.expected_error))) {
+    if (!native && errorStep && !(Array.isArray(entry.errors) && entry.errors.includes(step.expected_error))) {
       return refusal('pdd-unknown-error', `${section}.expected_error`, `"${step.expected_error}" is not in the errors of ${step.operation} in ${step.entry_path}.`, at);
     }
     if (!Array.isArray(step.checks)) return refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at);
@@ -896,7 +909,7 @@ function checkTest(root, found, test, prompts) {
     if (errorStep && errorChecks === 0) {
       return refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at);
     }
-    inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
+    if (!native) inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
   }
   if (inputIssues.length) return inputIssues;
   for (const step of doc.steps) for (const check of step.checks) {
@@ -911,12 +924,25 @@ function checkTest(root, found, test, prompts) {
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
 export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}) }) {
   found={...found,workspace};for(const test of selected)requireRuntimePath(workspace,{path:test.path,from:'Selected test'});
-  const prompts = new Map(), warnings = [];
+  const warnings = [];
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
+    const prompts = new Map();
+    // Discover identity independently of validation: an early criterion error or
+    // stale caller must not make a reachable native-only declaration executable.
+    const visit = path => {
+      if (typeof path !== 'string' || prompts.has(path)) return;
+      const prompt = readPrompt(root, found.visible, path, workspace);
+      prompts.set(path, prompt);
+      for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
+    };
     let refused, plan, testSha = null;
     try {
+      for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
       refused = checkTest(root, found, test, prompts);
+      const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')
+        .map(prompt => promptRefusal(prompt,'interface')).filter(Boolean);
+      if (nativeProblems.length) refused = [...(refused ? [refused].flat() : []),...nativeProblems];
       if (!refused || refused.code === 'unchecked-criteria') {
         plan = criterionPlan(test.doc, storyCriteria(readText(root, test.doc.story_path)));
       }
@@ -930,6 +956,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
       criteria_total: plan?.criteria.length ?? (Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0),
       ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}), draft: false };
+    row.native_only = [...prompts.values()].filter(item => item.interface?.kind === 'native-only').map(item => ({path:item.path,reason:item.interface.reason}));
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
     for (const [index, step] of row.steps.entries()) {
       const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);

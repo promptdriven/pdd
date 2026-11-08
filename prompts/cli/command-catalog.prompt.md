@@ -272,13 +272,17 @@ In PDD, prompts are the source. Code follows the prompts.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
 4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.
-5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves.
+5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check.
 ```
 
 
 ## Finished chat maintenance
 
 Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands, optional flag `--dry-run`, and help form `pdd workflow tidy [--dry-run]`. It closes safely finished chats or reports eligible tabs without changes.
+
+## Interface draft commands
+
+Catalog `interface draft` with local `interface-draft`, repeat optional prompt operands, flags --all and --json. Form: `pdd interface draft [PROMPT...] [--all] [--json]`. Draft missing blocks and lint locally without AI/network calls. Catalog approve flags --automatic and text --tests, with additional form `pdd approve PROMPT --automatic --tests COMMAND`. The automatic route requires existing tests and a complete current prompt check; strict mode still requires a person. Help must explain native-only not-run and the separate automatic route, without claiming that an agent can approve new behavior.
 
 ## Dependencies
 

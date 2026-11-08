@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 249b4577e77097450e54fe2c27a2bba445c33e41a84101bec3cd7128dfae16a7).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: b446d02e320db400d0529b6cac337dbafd232c743611e9ca59ec41ad8975b500).
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';
@@ -68,6 +68,12 @@ function identity(rows) {
 // A prove result that is not current is shown, but it is never pdd's proof.
 export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
+function runtimeEvidence(batch, summary) {
+  const coverage = batch.coverage ?? summary?.coverage;
+  const nativeOnly = batch.rows.filter(row => Array.isArray(row?.native_only) && row.native_only.length).map(row => ({test:row.test,state:row.state,prompts:row.native_only.filter(item => item && typeof item.path === 'string' && typeof item.reason === 'string').map(item => ({path:item.path,reason:item.reason}))}));
+  return {...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
+}
+
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
 // runtime state folder, for this worktree, made at or after the run started) and the run's `pdd workflow prove` record.
 // It reads files only. It never runs a test, calls the interpreter or changes a file.
@@ -103,8 +109,17 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     let source = 'unknown';
     const tests = [...new Set(batch.rows.map(row => row?.test).filter(test => typeof test === 'string'))].sort();
     const sha256 = /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') ? batch.source_sha256 : null;
-    try { if (sha256 && tests.length) source = capture(check.association?.sourceAnchor?.root ?? root, { tests, appMap: null }).sha256 === sha256 ? 'current' : 'changed'; }
-    catch { source = 'unknown'; }
+    const sourceTests = batch.source_selection?.tests ?? tests;
+    const selection = {tests:sourceTests,appMap:null,...(batch.source_selection ? {excludeFixtureProjects:batch.source_selection.exclude_fixture_projects === true} : {})};
+    const sourceRoot = check.association?.sourceAnchor?.root ?? root;
+    const freshness = [];
+    try { freshness.push(sha256 && (sourceTests.length || batch.source_selection) ? capture(sourceRoot, selection).sha256 === sha256 ? 'current' : 'changed' : 'unknown'); }
+    catch { freshness.push('unknown'); }
+    if (batch.native_source) {
+      try { freshness.push(batch.native_source.sha256 ? capture(sourceRoot,{...selection,tests:batch.native_source.tests}).sha256 === batch.native_source.sha256 ? 'current' : 'changed' : 'unknown'); }
+      catch { freshness.push('unknown'); }
+    }
+    source = freshness.includes('changed') ? 'changed' : freshness.includes('unknown') ? 'unknown' : 'current';
     const states = batch.rows.map(row => ({ test: row.test, ...resultOutcome(row) }));
     const stateEvidence = batch.rows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
     const incomplete = states.some(row => row.state !== 'passed');
@@ -120,7 +135,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       const owners=batch.rows.filter(saved=>story && storyName(saved.story)===story && (!row?.test || saved.test===row.test));
       return owners.length>0 && owners.every(saved=>resultOutcome(saved).state==='passed'&&!saved.not_checked?.length);
     }).map(row=>text(row.summary_line)))];
-    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
+    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, ...(batch.source_selection ? {sourceTests,excludeFixtureProjects:selection.excludeFixtureProjects} : {}), ...(batch.native_source ? {nativeSource:batch.native_source} : {}), ...runtimeEvidence(batch,summary), requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
         stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
@@ -130,7 +145,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   if (lint) {
     const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
     const passing = rows.filter(row => row.state === 'passed').length;
-    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(row => ({ test: row.test, ...resultOutcome(row) })), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => text(`${row.test}: ${outcomeText(row)}`))].join(' ') });
+    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...runtimeEvidence(lint.batch,readJson(join(directory,lint.name,'summary.json'))), ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(row => ({ test: row.test, ...resultOutcome(row) })), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => text(`${row.test}: ${outcomeText(row)}`))].join(' ') });
   }
   if (runDir) {
     const proof = proveResult(join(runDir, 'old-code-proof.json'), { runId, since, root, baseBranch }, git);
@@ -228,6 +243,8 @@ export function resultLines(results, { kinds = null } = {}) {
       result.requests?.length && `request${result.requests.length > 1 ? 's' : ''} ${result.requests.slice(0, SHOWN).join(' ')}`,
       result.headSha && `head ${result.headSha.slice(0, 7)}`].filter(Boolean).join(', ');
     return `${PDD_RESULT}: ${result.kind} (${facts}): ${[result.summary, ...(result.stories ?? []).filter(line => line !== result.summary),
+      ...(result.coverage?.runtime ? [`Runtime coverage: ${result.coverage.runtime.checkable} of ${result.coverage.runtime.total} prompts checkable, ${result.coverage.runtime.native_only} native-only`] : []),
+      ...(result.nativeOnly ?? []).flatMap(row => row.prompts.map(prompt => text(`${row.test} ${row.state}: ${prompt.path}: ${prompt.reason}`,2000))),
       ...(result.reports ?? []).slice(0, SHOWN).map(url => `Report: ${url} (report links expire after 7 days)`), ...more(result)].join('; ')}`;
   });
 }
