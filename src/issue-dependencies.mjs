@@ -1,3 +1,4 @@
+import { projectSortGraph } from './issue-sort.mjs';
 // Implements prompts/cli/issue-dependencies.prompt.md.
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const unique = xs => [...new Set(xs)];
@@ -296,7 +297,7 @@ export function projectIssueGraph({ snapshot }) {
         && executionState === 'idle' && !holds.length && unassigned && !ownFacts.get(key).length && covered,
       reasons: unique(reasons), blockers, review, nativeState: issue.state, facts };
   });
-  return { repository: snapshot.repository, capturedAt: snapshot.capturedAt, complete: snapshot.complete, nodes, edges: graphEdges };
+  return projectSortGraph(snapshot, { repository: snapshot.repository, capturedAt: snapshot.capturedAt, complete: snapshot.complete, nodes, edges: graphEdges });
 }
 
 // The link facts that a dependency review records and respects. `row` is the

@@ -1,6 +1,7 @@
 # PDD issue handoff
 
 Required step for pdd-autopilot. After readiness and claim, check `pdd workflow status N`.
+For a root-cause umbrella, carry all current members and their requirements in the same handoff. Never start a member separately. The umbrella code PR closes its current members.
 Reuse an active run with `pdd workflow open N`; otherwise start
 `pdd workflow run bug|feature|small-change N --agent AGENT` with the matching workflow
 and the packet's agent, or the current agent without a packet. Use the normal PDD

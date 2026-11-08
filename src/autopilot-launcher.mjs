@@ -1405,7 +1405,7 @@ async function runTick(stateFile, ports, completion) {
     catch (error) { if (error.code === 'herdr_pane_budget') paneHold = error.message.split('\n')[0]; }
     let intake;
     if (deferIntake) {
-      intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, queued: [], skipped: [] };
+      intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, groups: savedIntake.groups ?? [], queued: [], skipped: [] };
       p.warn(`GitHub budget low: Autopilot on this machine used ${budget.used} of ${budget.allowed} calls (${budget.share}%) in the last hour; the dependency re-sync waits until ${new Date(savedIntake.at + LOW_BUDGET_INTAKE_EVERY).toISOString()}.`);
     } else {
       // The saved dependency snapshot of this repository and the floor guard go to the intake with the ETag cache.
@@ -1413,7 +1413,7 @@ async function runTick(stateFile, ports, completion) {
       try {
         intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
           { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-          { ...ports, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, admitMutation: action => p.scanAction(action) });
+          { ...ports, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, sortBudget: async () => githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(config.github) }).state === 'normal', admitMutation: action => p.scanAction(action) });
       } finally { etags.save(); }
       try { p.dependencySnapshot = snapshotStore.load(); } catch { p.dependencySnapshot = null; }
       if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {
@@ -1421,7 +1421,7 @@ async function runTick(stateFile, ports, completion) {
         await sendHeartbeats(claims, true);
         return outcome('unknown', 'GitHub limit is below the floor; dependency progress is saved until reset.');
       }
-      if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [] };
+      if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [], groups: Array.isArray(intake.groups) ? intake.groups : [] };
       else delete state.githubIntake;
     }
     if (paneHold) { intake.eligible = []; state.githubIntake = {...state.githubIntake,eligible:[]}; p.warn(`Autopilot waits: panes. ${paneHold}`); }
@@ -1944,12 +1944,13 @@ export async function runAutopilotLauncher(input, ports = {}) {
           }
         }
       } catch { /* The GitHub line never changes status. */ }
+      const groups = (state.githubIntake?.groups ?? []).map(g => `Group: ${g.members.length} issues; ${g.rootCause}; umbrella ${g.umbrella || 'pending'}`).join('\n');
       let costs = '';
       try { costs = '\n' + costStatusLines(await localCosts(input, ports, state)); } catch {}
       const readiness = await workflowReadiness(state, p);
       const capacityLine = checkCapacityWords(state, p);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}`);
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }

@@ -712,7 +712,7 @@ test('AUTOPILOT1: the Autopilot skills fit their byte limits and carry the packa
   for (const name of AUTOPILOT_SKILLS) {
     assert.ok(statSync(join(skills, name, 'SKILL.md')).size <= SKILL_LIMIT, name);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), name === 'pdd-autopilot' ? ['SKILL.md', 'steps'] : ['SKILL.md'], name);
-    if (name === 'pdd-autopilot') assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), ['dependencies.md', 'handoff.md']);
+    if (name === 'pdd-autopilot') assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), ['dependencies.md', 'handoff.md', 'sort.md']);
     assert.match(read(`${name}/SKILL.md`), new RegExp(`\\nmetadata:\\n  pdd-skills: ${version.replaceAll('.', '\\.')}\\n`), name);
   }
 });

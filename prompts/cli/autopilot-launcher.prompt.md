@@ -1164,6 +1164,8 @@ observation. Preserve queue path and concurrency settings in launcher environmen
 
 - [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
 
+- [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake and display size, cause and umbrella in status without a GitHub read.
+
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
 - [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock and stopped-chat recovery boundary.
