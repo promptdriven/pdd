@@ -8,6 +8,9 @@ import { isRetryRequest, parkAutomaticRun, changeRun } from '../src/workflow-run
 import { writeRun } from '../src/workflow-runs.mjs';
 
 const diagnostics = [
+  ['release retrying denial', 'Please retry verify. No retrying.'],
+  ['release retrying forbidden', 'Please retry verify. Retrying is forbidden.'],
+  ['release retries disabled', 'Please retry verify. Retries are disabled.'],
   ['review counterexample', 'The last attempt failed; retry is still blocked by disk pressure. Do not resume.'],
   ['status after punctuation', 'The host is unhealthy; retry is blocked by disk pressure.'],
   ['leading retry status', 'Retry is still blocked by disk pressure.'],

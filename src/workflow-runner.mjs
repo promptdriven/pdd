@@ -3152,9 +3152,9 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
 export function isRetryRequest(text) {
   const value = String(text ?? '').trim().replace(/\s+/g, ' ');
   // Negative continuation instructions win, even after an otherwise direct request.
-  if (/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|cannot|can['’]t|not|no)\b[^.;!?]*\b(?:retry|resum(?:e|ing|ption)|try\s+again|continu(?:e|ing|ation)|proceed|restart)\b/i.test(value)) return false;
+  if (/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|cannot|can['’]t|not|no)\b[^.;!?]*\b(?:retr(?:y(?:ing)?|ies)|resum(?:e|ing|ption)|try\s+again|continu(?:e|ing|ation)|proceed|restart)\b/i.test(value)) return false;
   if (/\b(?:stop|hold|wait)\b/i.test(value)
-    || /\b(?:retry|resum(?:e|ing|ption)|try\s+again|continu(?:e|ing|ation)|proceed|restart)\b[^.;!?]*\b(?:blocked|disabled|unsafe|forbidden|prohibited|not)\b/i.test(value)) return false;
+    || /\b(?:retr(?:y(?:ing)?|ies)|resum(?:e|ing|ption)|try\s+again|continu(?:e|ing|ation)|proceed|restart)\b[^.;!?]*\b(?:blocked|disabled|unsafe|forbidden|prohibited|not)\b/i.test(value)) return false;
   // A repaired-machine preface may precede the command. Arbitrary diagnostic or log
   // prefixes cannot turn a quoted/reported command into the person's instruction.
   // Whitespace also admits the saved one-line form of a multiline repair request.
@@ -3162,7 +3162,7 @@ export function isRetryRequest(text) {
   const command = request.split(/[.;!]/, 1)[0].trim();
   // Admit commands with known continuation targets, not noun phrases such as
   // "retry budget" or status reports such as "resume remains unsafe".
-  return /^(?:please\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:retry|resume|try\s+again)(?:\s+(?:(?:(?:the|this|that)\s+)?(?:(?:failed|original|retained|stuck|paused)\s+)?(?:validation(?:\s+step)?|step|run|work|check|tests?|build|verify|formal)|it))?(?:\s+(?:again|now|please))?(?:\s+(?:from\s+(?:the\s+)?retained\s+evidence|using\s+(?:the|its)\s+original\s+command|after\s+(?:the\s+)?(?:machine|host|environment)\s+repair))?\s*\??$/i.test(command);
+  return /^(?:please\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:retr(?:y(?:ing)?|ies)|resume|try\s+again)(?:\s+(?:(?:(?:the|this|that)\s+)?(?:(?:failed|original|retained|stuck|paused)\s+)?(?:validation(?:\s+step)?|step|run|work|check|tests?|build|verify|formal)|it))?(?:\s+(?:again|now|please))?(?:\s+(?:from\s+(?:the\s+)?retained\s+evidence|using\s+(?:the|its)\s+original\s+command|after\s+(?:the\s+)?(?:machine|host|environment)\s+repair))?\s*\??$/i.test(command);
 }
 const isPersonRetry = (run, text) => run.state === 'stuck' && isRetryRequest(text);
 async function personRetryRefusal(run, text, p, savedRetry = false) {

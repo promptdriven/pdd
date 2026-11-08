@@ -556,7 +556,8 @@ command or after the machine repair. A retry word followed by a status or policy
 description is a diagnostic, not an imperative. Reported or quoted commands and
 commands embedded in other diagnostic text do not authorize continuation. An
 explicit negative continuation instruction anywhere in the text wins over a
-positive command. This includes a forbidden or disabled continuation status and
+positive command. Retry denials include retrying and retries, before or after the
+negative term. This includes a forbidden or disabled continuation status and
 an instruction to stop, hold or wait, including before resuming. Unrecognized
 wording keeps ordinary change delivery behavior;
 it grants no person retry override. This is a conservative lexical decision,
