@@ -113,6 +113,69 @@ test('unlabeled PRs share one repository area and later PR pages count', async t
   assert.equal(w.state().reviewQueue?.repository, 1);
 });
 
+for (const kind of ['source lookup', 'later PR page']) for (const remaining of [1000, 5000]) {
+  test(`queue ${kind} respects the reserve with ${remaining} GraphQL points`, async t => {
+    const count = kind === 'source lookup' ? 1 : 26;
+    const w = await world(t, count + 1, 1);
+    w.github.graphqlRemaining = remaining;
+    for (let n = 11; n < 11 + count; n++) pull(w, n, kind === 'source lookup' ? [] : ['area:cli'], {
+      body: '<!-- pdd:autopilot-pr -->\n<!-- pdd:autopilot-issue:1 -->',
+    });
+    assert.equal((await w.invoke('start')).exitCode, 0);
+    const calls = w.github.calls.filter(call => call.endpoint === 'graphql');
+    assert.equal(calls.length, remaining === 1000 ? 1 : 2, 'each queue request checks the reserve');
+    assert.ok(calls[0].query.includes('pullRequests('));
+    if (remaining === 5000) {
+      assert.equal(calls[1].query.includes('sourceIssue:'), kind === 'source lookup');
+      assert.equal(w.github.graphqlRemaining, 4998);
+      assert.deepEqual(w.state().reviewQueue, { 'area:cli': count });
+      assert.equal(w.state().reviewQueueUnknown, undefined);
+      assert.deepEqual(offered(w), [1]);
+      return;
+    }
+    assert.equal(w.github.graphqlRemaining, 999);
+    assert.equal(w.state().reviewQueueUnknown, true);
+    assert.equal(w.state().reviewQueue, undefined, 'partial counts cannot become a complete observation');
+    assert.deepEqual(offered(w), []);
+    assert.equal(w.state().seen?.[1], undefined, 'an interrupted observation cannot acknowledge fresh work');
+
+    w.time = w.github.resetAt * 1000 + 1;
+    const mark = w.github.mark();
+    await w.tick();
+    assert.equal(w.github.since(mark).graphql, 2);
+    assert.deepEqual(w.state().reviewQueue, { 'area:cli': count });
+    assert.equal(w.state().reviewQueueUnknown, undefined);
+    assert.deepEqual(offered(w), [1]);
+  });
+}
+
+test('a REST reserve crossing before the queue holds fresh work until reset', async t => {
+  const w = await world(t, 2, 1);
+  pull(w, 11);
+  w.github.issues.get(1).user = 'outsider';
+  w.github.comment(1, 'Please handle this issue.', 'acme');
+  const gh = w.github.gh;
+  w.github.gh = async (args, options) => {
+    // This safety read stays live. Its reply must stop the following non-safety GraphQL read.
+    if (args.includes(`repos/${w.repository}/collaborators/outsider/permission`)) w.github.remaining = 1000;
+    return gh(args, options);
+  };
+  assert.equal((await w.invoke('start')).exitCode, 0);
+  assert.ok(w.github.calls.some(call => call.endpoint.endsWith('/collaborators/outsider/permission')));
+  assert.equal(w.github.remaining, 999);
+  assert.equal(w.github.calls.filter(call => call.endpoint === 'graphql').length, 0);
+  assert.equal(w.state().reviewQueueUnknown, true);
+  assert.equal(w.state().reviewQueue, undefined);
+  assert.deepEqual(offered(w), []);
+
+  w.github.gh = gh;
+  w.time = w.github.resetAt * 1000 + 1;
+  await w.tick();
+  assert.deepEqual(w.state().reviewQueue, { 'area:cli': 1 });
+  assert.equal(w.state().reviewQueueUnknown, undefined);
+  assert.deepEqual(offered(w), [1]);
+});
+
 function admission(counts) {
   const repository = 'acme/widgets', issue = `https://github.com/${repository}/issues/1`, revision = 'a'.repeat(64);
   const coordinator = { repository, coordinatorId: 'local', machine: 'machine', activation: 'start', claim: { commentId: 'c', labelEventId: 'e' } };

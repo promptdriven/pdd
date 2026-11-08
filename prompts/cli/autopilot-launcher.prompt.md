@@ -16,7 +16,10 @@ are injectable ports; native defaults implement these on macOS and Linux.
 
 On each reconciliation with fresh work or a prior review queue observation, use the shared [PR review limit](autopilot-pr-limit.prompt.md)
 reader on the current open-issue rows and current settings. Its rule owns PR identity,
-areas and which reviews count. Fetch through the existing counted process port.
+areas and which reviews count. Fetch through the existing counted process port,
+with each queue page and source-issue lookup subject to the
+[GitHub budget floor guard](#github-budget). A floor-stopped read is unavailable
+and follows the read-failure path below; never save partial counts as complete.
 Persist the latest complete counts as `reviewQueue`, and the effective limit as
 `reviewQueueLimit`. Hold fresh work at the limit with selection state `waiting`
 and reason `pr-review-limit`; do not mark it seen. Keep claimed/held work, reviews,

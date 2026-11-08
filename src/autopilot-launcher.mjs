@@ -1428,6 +1428,7 @@ async function runTick(stateFile, ports, completion) {
       try {
         state.reviewQueue = await readReviewQueue({ repository: state.repo, rows: state.cachedIssues }, {
           request: async (query, variables) => {
+            if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) throw Error('GitHub limit is below the floor; retry after reset.');
             const result = await p.execute('gh', ['api', '--include', '--method', 'POST', 'graphql', '--input', '-'], {
               input: JSON.stringify({ query, variables }), purpose: 'pr-review', repository: state.repo,
             });
