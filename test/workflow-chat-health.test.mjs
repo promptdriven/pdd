@@ -447,11 +447,14 @@ test('codex: a healthy chat that quotes an error line in its reply keeps its sta
 for (const [words, now, expected] of [
   ['Nov 1, 2026 at 2:30am', '2026-11-01T10:00:00Z', '2026-11-01T10:30:00Z'],
   ['Mar 8, 2026 at 3:30am', '2026-03-08T10:45:00Z', '2026-03-08T10:30:00Z'],
-  ['Nov 2, 2026 at 2:30am', '2026-11-02T10:00:00Z', '2026-11-02T10:30:00Z'],
   ['Nov 1, 2026 at 1:30am', '2026-11-01T10:00:00Z', null],
   ['Mar 8, 2026 at 2:30am', '2026-03-08T10:45:00Z', null],
 ]) test(`reset local time round trip: ${words}`, async t => {
   const { f, run, chat, pane } = await claudeChat(t);
+  f.clock = Date.parse('2026-11-02T10:00:00Z');
+  pane.screen = `> Continue\n  ⎿  You've hit your weekly limit · resets Nov 2, 2026 at 2:30am (America/Los_Angeles)\n\n> \n`;
+  const control = await chatHealth({ run, chat, live: { alive: true, status: 'idle' } }, f.ports);
+  assert.equal(control?.resetsAt, Date.parse('2026-11-02T10:30:00Z'));
   f.clock = Date.parse(now);
   pane.screen = `> Continue\n  ⎿  You've hit your weekly limit · resets ${words} (America/Los_Angeles)\n\n> \n`;
   const health = await chatHealth({ run, chat, live: { alive: true, status: 'idle' } }, f.ports);
