@@ -9,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 399c3805e8122ce406e04c3749436ddf651c9b8f32ef5ec58aaf282b28e9746c).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fb916d352309c7a687407da0ef732bd33d9993aae99b5e30eafa4d784c178391).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2569,7 +2569,15 @@ async function codeBranch(run, area, p, acceptSource) {
   const contract = await storyContract(run,p,source);
   const expected = run.promptReturn ? approvedStoryContract(run) : run.storyApproval ? approvedStoryContract(run) ?? p.codeEntryContract : p.codeEntryContract ?? await storyContract(run,p);
   const localHead = await git(p,run.root,'rev-parse','--verify','HEAD^{commit}');
-  const sourceEdits = (await rawGit(p,run.root,'diff','--name-only','-z',localHead,source)).split('\0').filter(Boolean);
+  let sourceEdits = (await rawGit(p,run.root,'diff','--name-only','-z',localHead,source)).split('\0').filter(Boolean);
+  if (state.state === 'merged') {
+    // The saved base also carries other runs. Compare byte changes only for
+    // PR 1's paths and anchored scenarios; the contract check below still
+    // covers all saved approved Story paths, including deletions.
+    const publishedPaths = new Set((await rawGit(p,run.root,'diff','--name-only','-z',run.baseSha,localHead)).split('\0').filter(Boolean));
+    for (const vector of run.replayBaseline?.vectors ?? []) publishedPaths.add(vector.path);
+    sourceEdits = sourceEdits.filter(path=>publishedPaths.has(path));
+  }
   const scenarioEdits = [];
   for (const path of sourceEdits.filter(path=>path.endsWith('.json'))) {
     const saved = run.replayBaseline?.vectors?.some(vector=>vector.path===path);
