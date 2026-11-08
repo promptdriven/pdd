@@ -531,10 +531,10 @@ test('READABLE-CODE: the code PR proof table reads the old-code proof and review
   assert.equal(out.exitCode, 0, out.message);
   const pr = f.data().prs[0], [visible] = pr.body.split(DETAILS_OPEN), proof = visible.slice(visible.indexOf('## Proof'));
   assert.equal(pr.title, 'fix(small-change): Repair value (#17 · part 2: fix)');
-  assert.match(visible, /- \*\*Cause:\*\* an old constant\.\n- \*\*Fix\u200b:\*\* set it to two\.\n- \*\*Result:\*\* CI green; checker PASS; formal Proved \(bounded\)\./);
+  assert.match(visible, /- \*\*Cause:\*\* an old constant\.\n- \*\*Fix\u200b:\*\* set it to two\.\n- \*\*Result:\*\* Formal check: missing[^\n]+Regression tests/);
   assert.match(visible, /\| value \| 1 \| 2 \| 2 ✓ \|/);
   assert.match(proof, /\| Regression tests \(old-code proof\) \| ✓ pass \| ✗ fail \(as expected\) \|/);
-  assert.match(proof, /\| Formal check \| Not recorded: pdd has no formal result for this run \(see Details\) \| — \|/);
+  assert.match(proof, /\| Formal check \| missing[^\n]+replay-evidence\.json[^\n]+Repair:/);
   assert.match(proof, /\| Full test suite \(CI\) on this commit \| ⏳ pending \| — \|/); assert.match(proof, /\| Fresh review \| no must-fix \| — \|/);
   assert.doesNotMatch(proof, /green|PASS|Proved/, 'Agent claims never fill a proof row.');
   assert.match(visible, /\*\*Merge:\*\* waiting for a person to merge\. Closes #17\./); assert.doesNotMatch(visible, JARGON);
@@ -1242,4 +1242,163 @@ test('CALLS: a status refresh reads each PR once (with its description, head and
   assert.match(prStatus(facts), /^✅/);
   facts.mode = 'auto'; facts.records.checker = { verdict: 'PASS' };
   assert.match(prStatus(facts), /^✅/);
+});
+
+// #3088: use the real publication boundary, local bare origin and this file's fake gh.
+function evidence3088(t, { production = false, fixtureOnly = false, formal, stale = false, malformed = false, extraFiles = 0, unavailableDiff = false } = {}) {
+  const f = fixture(t);
+  f.run.areas = [{ name: 'code', steps: ['scope', 'verify', 'formal'], optional: [], gate: 'pr' }];
+  f.run.area = 0; f.run.pr = [];
+  writeFileSync(join(f.root, 'value'), production ? 'head' : 'base');
+  mkdirSync(join(f.root, 'test/helpers'), { recursive: true });
+  writeFileSync(join(f.root, fixtureOnly ? 'test/helpers/value.mjs' : 'test/value.test.mjs'), 'import assert from "node:assert/strict"; assert.equal(2, 2);\n');
+  for (let i = 0; i < extraFiles; i++) writeFileSync(join(f.root, `test/helpers/extra-${i}.mjs`), 'export const value = 2;\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'coverage scope');
+  f.machine(f.git('rev-parse', 'HEAD'));
+  const path = join(f.runDir, 'old-code-proof.json'), record = JSON.parse(readFileSync(path));
+  record.base = phase(0); record.outcome = 'old-passes'; writeFileSync(path, JSON.stringify(record));
+  if (formal) writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify({ schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
+    source: { kind: 'git-content-v1', sha256: stale ? '0'.repeat(64) : sourceFingerprint(f.root) }, formal: malformed ? { ...formal, scope: '' } : formal }));
+  if (unavailableDiff) {
+    const wrapper = join(f.base, 'bin/git');
+    writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n', '#!/usr/bin/env node\nif (process.argv.includes("--numstat")) process.exit(1);\n'));
+  }
+  f.save();
+  const out = f.invoke('Result: Formal check: Proved (solver); CI green; checker PASS.\nFormal check: Proved (solver)');
+  assert.equal(out.exitCode, 0, out.message);
+  const pr = f.data().prs[0], saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'))).pr[0];
+  return { f, body: pr.body, visible: pr.body.split(DETAILS_OPEN)[0], facts: saved.readable.facts, details: detailsOf(pr.body).details };
+}
+
+test('3088 publication records tests-only old-passes as coverage with no defect-proof blocker', t => {
+  const pr = evidence3088(t);
+  assert.equal(pr.facts.records.proof.kind, 'coverage');
+  assert.equal(pr.facts.records.proof.status, 'old-passes');
+  assert.doesNotMatch(pr.visible.split('\n')[0], /⛔/);
+  assert.match(pr.visible, /\| Coverage validation[^\n]+✓ pass[^\n]+✓ pass/);
+  assert.doesNotMatch(pr.visible, /Proved \(solver\)|CI green|checker PASS|should fail/);
+  assert.match(pr.details, /Proved \(solver\)/, 'The original agent report stays attributed in Details.');
+});
+
+test('3088 repair 1: scenario-only publication recognizes executable coverage and keeps scope guards', t => {
+  const scenario = { schema_version: 'prompt-runtime.program-scenario.v1', steps: [{ step_id: 'value',
+    entry_path: 'prompts/value.prompt.md', operation: 'value', checks: [
+      { criterion_id: 'AC1', target: 'result', path: '', op: 'equals', value: 2 },
+    ] }] };
+  for (const options of [
+    { path: 'test/runtime/coverage.json', coverage: true },
+    { path: 'tests/runtime/coverage.json', coverage: true },
+    { path: 'test/runtime/fixture.json', document: { steps: scenario.steps }, coverage: false },
+    { path: 'test/runtime/empty.json', document: { ...scenario, steps: [] }, coverage: false },
+    { path: 'test/runtime/coverage.json', scenarioRead: 'malformed', coverage: false },
+    { path: 'test/runtime/coverage.json', scenarioRead: 'unavailable', coverage: false },
+    { path: 'test/runtime/coverage.json', production: true, coverage: false },
+    { path: 'test/runtime/coverage.json', unavailableDiff: true, coverage: false },
+  ]) {
+    const f = fixture(t);
+    f.run.areas = [{ name: 'code', steps: ['scope', 'verify', 'formal'], optional: [], gate: 'pr' }];
+    f.run.area = 0; f.run.pr = [];
+    writeFileSync(join(f.root, 'value'), 'base');
+    mkdirSync(join(f.root, 'src'));
+    mkdirSync(join(f.root, 'test'), { recursive: true });
+    mkdirSync(dirname(join(f.root, options.path)), { recursive: true });
+    writeFileSync(join(f.root, 'src/value.mjs'), 'export function value() { return 2; }\n');
+    // This runner and production source already exist on the base. Only the scenario is overlaid.
+    const relativeScenario = options.path.startsWith('tests/') ? `../${options.path}` : `./${options.path.slice(5)}`;
+    writeFileSync(join(f.root, 'test/value.vectors.test.mjs'), `import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {value} from '../src/value.mjs';
+const scenario = JSON.parse(readFileSync(new URL(${JSON.stringify(relativeScenario)}, import.meta.url)));
+test('scenario coverage', () => {
+  for (const step of scenario.steps) for (const check of step.checks)
+    assert.equal(value(), check.value, 'ASSERT_3088_SCENARIO');
+});
+`);
+    f.git('add', '.'); f.git('commit', '-qm', 'existing production and vector runner');
+    f.git('push', '-q', 'origin', 'HEAD:refs/heads/main');
+    f.run.baseSha = f.git('rev-parse', 'HEAD');
+    writeFileSync(join(f.root, options.path), JSON.stringify(options.document ?? scenario));
+    if (options.production) writeFileSync(join(f.root, 'src/value.mjs'), 'export function value() { return 1 + 1; }\n');
+    f.git('add', '.'); f.git('commit', '-qm', 'scenario coverage'); f.save();
+    const script = `import {proveRun} from ${JSON.stringify(join(packageRoot, 'src/workflow-prove.mjs'))};
+const result = await proveRun({ref:'17', cwd:${JSON.stringify(f.root)}, test:'node --test test/value.vectors.test.mjs', expect:'ASSERT_3088_SCENARIO'});
+process.stdout.write(JSON.stringify(result));`;
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: f.root, encoding: 'utf8',
+      env: { ...process.env, PATH: `${join(f.base, 'bin')}:${process.env.PATH}`, GIT_ALLOW_PROTOCOL: 'file' } });
+    const proof = JSON.parse(readFileSync(join(f.runDir, 'old-code-proof.json')));
+    assert.equal(proof.outcome, 'old-passes');
+    assert.deepEqual(proof.paths, [options.path]);
+    for (const snapshot of [proof.base, proof.head]) {
+      assert.equal(snapshot.exitCode, 0);
+      assert.ok(snapshot.stdoutTail.includes('# pass 1'));
+      assert.ok(snapshot.stdoutTail.includes('# fail 0'));
+      assert.ok(snapshot.stdoutTail.includes('# skipped 0'));
+    }
+    if (options.unavailableDiff) {
+      const wrapper = join(f.base, 'bin/git');
+      writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n', '#!/usr/bin/env node\nif (process.argv.includes("--numstat")) process.exit(1);\n'));
+    }
+    if (options.scenarioRead) {
+      const wrapper = join(f.base, 'bin/git');
+      const failure = options.scenarioRead === 'malformed' ? 'process.stdout.write("{"); process.exit(0);' : 'process.exit(1);';
+      writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n',
+        `#!/usr/bin/env node\nif (process.argv[2] === 'show' && process.argv[3]?.endsWith(${JSON.stringify(`:${options.path}`)})) { ${failure} }\n`));
+    }
+    const out = f.invoke('Result: scenario coverage; both snapshots pass.');
+    assert.equal(out.exitCode, 0, out.message);
+    const pr = f.data().prs[0], saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'))).pr[0];
+    assert.equal(saved.readable.facts.records.proof.kind, options.coverage ? 'coverage' : 'defect', JSON.stringify(options));
+    assert.equal(saved.readable.facts.records.proof.status, 'old-passes');
+    if (options.coverage) {
+      assert.doesNotMatch(pr.body.split('\n')[0], /^⛔/);
+      assert.match(pr.body, /\| Coverage validation[^\n]+✓ pass[^\n]+✓ pass/);
+    } else assert.match(pr.body.split('\n')[0], /^⛔/);
+  }
+});
+
+for (const options of [{ production: true }, { fixtureOnly: true }]) test(`3088 non-coverage scope stays blocked ${JSON.stringify(options)}`, t => {
+  const pr = evidence3088(t, options);
+  assert.equal(pr.facts.records.proof.kind, 'defect');
+  assert.match(pr.visible, /^⛔/);
+});
+
+const FORMAL3088 = { result: 'not_run', scope: 'bounded values', reason: 'CONTROL_UNAVAILABLE', control_outcome: 'not_run' };
+for (const [name, formal, expected] of [
+  ['not-run', FORMAL3088, 'not_run'],
+  ['proved', PROVED_532, 'proved_bounded'],
+  ['failed', { ...FORMAL3088, result: 'failed', counterexample: 3088 }, 'failed'],
+]) test(`3088 standalone formal publication uses its recorded ${name} result`, t => {
+  const pr = evidence3088(t, { formal });
+  assert.equal(pr.facts.records.replay, null);
+  assert.ok(pr.facts.records.formal, 'The publication must read the standalone formal block.');
+  assert.equal(pr.facts.records.formal.status, 'recorded');
+  assert.equal(pr.facts.records.formal.result, expected);
+  assert.doesNotMatch(pr.visible, /Proved \(solver\)/);
+  const row = pr.visible.split('\n').find(line => line.startsWith('| Formal check'));
+  const header = pr.details.split('\n').find(line => line.startsWith('Formal check'));
+  assert.ok(row && header);
+  if (expected === 'not_run') { assert.match(row, /Not run: CONTROL_UNAVAILABLE/); assert.match(header, /Not run/); }
+  if (expected === 'proved_bounded') { assert.match(row, /Proved \(bounded\)/); assert.match(header, /Proved \(bounded\)/); }
+  if (expected === 'failed') { assert.match(row, /3088/); assert.match(header, /Failed/); assert.match(pr.visible, /^⛔/); }
+  assert.doesNotMatch(pr.details, /^Code replay:/m, 'Reading the formal block does not add a replay requirement.');
+});
+
+for (const [option, expected] of [['stale', 'stale'], ['malformed', 'malformed']]) test(`3088 ${option} formal evidence cannot accept the narrative proof claim`, t => {
+  const pr = evidence3088(t, { formal: PROVED_532, [option]: true });
+  assert.ok(pr.facts.records.formal, 'The publication must read the supplied formal block.');
+  assert.equal(pr.facts.records.formal.status, expected);
+  assert.match(pr.visible, /^⛔/);
+  assert.doesNotMatch(pr.visible, /Proved \(solver\)/);
+  assert.match(pr.visible, new RegExp(`\\| Formal check \\| ${expected}`));
+  assert.match(pr.details, new RegExp(`^Formal check[^\\n]+${expected}`, 'm'));
+});
+
+for (const options of [{ extraFiles: 45 }, { extraFiles: 45, production: true }, { unavailableDiff: true }]) test(`3088 full diff controls coverage, not the bounded display ${JSON.stringify(options)}`, t => {
+  const pr = evidence3088(t, options);
+  const coverage = !options.production && !options.unavailableDiff;
+  assert.equal(pr.facts.records.proof.kind, coverage ? 'coverage' : 'defect');
+  if (options.extraFiles) { assert.equal(pr.facts.diff.files.length, 40); assert.ok(pr.facts.diff.count > 40); }
+  if (coverage) assert.doesNotMatch(pr.visible, /^⛔/);
+  else assert.match(pr.visible, /^⛔/);
 });

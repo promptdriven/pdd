@@ -156,6 +156,8 @@ of this run, so the formal check counts as needed. When the Story has no Rules t
 
 ## Reading the PR status
 
+A code area with a formal step reads this formal block even when it has no scenario replay policy, including small-change. The readable Result, Proof row and formal header use the same validated status. Agent summaries remain attributed in Details and do not supply a formal or gate result. This read does not require scenario vectors from small-change. A missing formal block alone keeps that area's step-completion policy unless a known Story has Rules to check; malformed or stale supplied evidence blocks readiness.
+
 The canonical section appears above free-form summaries and prompt Runtime-check results. It reports
 replay PASS/FAIL/BLOCKED/NOT REPLAYED, derived counts, executed operations, control result, formal scope/reason,
 source hash, manifest hash and current vector hashes. Full JSON remains in the run folder.
