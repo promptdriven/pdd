@@ -6,6 +6,13 @@ personal gh login when `autopilot.github.app` is absent. An explicitly present
 but invalid App setting must fail closed, before a claim, timer or chat starts.
 No prompt approval or human review authority changes.
 
+Before obtaining credentials or injecting them into a subprocess environment,
+refuse App transport when the spawning Node process has child_process diagnostics
+enabled, including wildcard NODE_DEBUG. Check the parent's active diagnostic mode;
+clearing only the child's environment cannot protect the parent stderr. Apply this
+boundary to native transport and both bundled wrappers. Refuse with the existing
+github_app_invalid error and no credential disclosure. Personal mode is unchanged.
+
 ## Settings and ports
 
 `githubAppSettings({cwd,env,fs})` returns null when no App is selected, otherwise

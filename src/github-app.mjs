@@ -2,7 +2,7 @@
 import * as nativeFs from 'node:fs';
 import { createHash, createPrivateKey, randomUUID, sign } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { promisify, debuglog } from 'node:util';
 import { devNull, homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +108,7 @@ export function createGithubApp(settings, { fs = nativeFs, fetch = globalThis.fe
     return entry;
   }
   const credentials = async () => {
+    if (debuglog('child_process').enabled) fail('disable Node child_process diagnostics before using App authentication.');
     if (fresh(saved)) return saved;
     pending ??= load().then(entry => { saved = entry; return entry; }).finally(() => { pending = null; });
     return pending;
