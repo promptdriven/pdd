@@ -71,14 +71,25 @@ export function observeGithubWriteClaims({ root, env = process.env, fs = nativeF
 
 export function githubWriteRunner(exec, { root, env = process.env, fs = nativeFs, now = Date.now, identity, machine, ledger } = {}) {
   root ??= env.PDD_GITHUB_ROOT || githubStateRoot(env);
-  const identities = new Map();
+  const identities = new Map(), appOwners = new Map();
+  const authStatus = async (host, options) => {
+    const remember = result => {
+      if (/^app:\d+:installation:\d+$/i.test(result?.githubIdentity ?? '') && /^[a-z0-9_.-]+\[bot\]$/i.test(result?.githubBot ?? ''))
+        appOwners.set(host, { identity: result.githubIdentity.toLowerCase(), login: result.githubBot.toLowerCase() });
+    };
+    try {
+      const result = await exec('gh', ['auth', 'status', '--active', '--json', 'hosts'], { ...options, env: { ...(options?.env ?? env), GH_HOST: host, PDD_GITHUB_COUNTED: '1' } });
+      remember(result);
+      return result;
+    } catch (error) { remember(error); throw error; }
+  };
   const resolveBudget = async (args, options) => {
     const host = targetHost(args,options,env).toLowerCase();
     if (!identities.has(host)) identities.set(host, (async () => {
       let login = typeof identity === 'function' ? await identity() : identity;
       if (!login) {
         try {
-          const result = await exec('gh', ['auth', 'status', '--active', '--json', 'hosts'], { ...options, env: { ...(options?.env ?? env), PDD_GITHUB_COUNTED: '1' } });
+          const result = await authStatus(host, options);
           login = result.githubIdentity || valueOf(result).hosts?.[host]?.find(x => x.active === true)?.login;
         } catch (error) { login = error.githubIdentity; }
         if (!login) try { login = valueOf(await exec('gh', ['api', '--hostname', host, 'user'], { ...options, env: { ...(options?.env ?? env), PDD_GITHUB_COUNTED: '1' } })).login; } catch { /* Unknown identities share a conservative bucket. */ }
@@ -101,10 +112,17 @@ export function githubWriteRunner(exec, { root, env = process.env, fs = nativeFs
     try { body = JSON.parse(options.input ?? '{}').body; } catch { /* Not a JSON comment. */ }
     for (let i = 0; i < args.length; i++) if (args[i].startsWith('body=')) body = args[i].slice(5);
     if (call.method === 'POST' && args.includes('--include') && !args.some(x => ['--jq','-q','--template','-t'].includes(x) || /^--(?:jq|template)=/.test(x)) && /^repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/.test(call.endpoint) && typeof body === 'string' && body.includes(STATUS)) {
-      const budget = await resolveBudget(args, options), login = budget.usage().identity;
+      const budget = await resolveBudget(args, options), budgetIdentity = budget.usage().identity;
+      let login = budgetIdentity;
+      if (budgetIdentity.startsWith('app:')) {
+        const key = host.toLowerCase();
+        if (!appOwners.has(key)) try { await authStatus(key, transportOptions); } catch { /* Metadata may survive a personal auth-status failure. */ }
+        const owner = appOwners.get(key);
+        login = owner?.identity === budgetIdentity ? owner.login : 'unknown';
+      }
       if (login === 'unknown') throw Object.assign(Error('GitHub status comment needs a known identity'), { code: 'github_identity_unknown' });
       const statusPath = call.endpoint.toLowerCase().replace(/\/0*(\d+)\/comments$/, '/$1/comments');
-      const directory = join(root, 'github-writes', `status-${hash(`${host.toLowerCase()}/${login}/${statusPath}`)}.lock`);
+      const directory = join(root, 'github-writes', `status-${hash(`${host.toLowerCase()}/${budgetIdentity}/${statusPath}`)}.lock`);
       const deadline = Date.now() + 1000;
       let release;
       while (!release) {

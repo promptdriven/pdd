@@ -91,7 +91,10 @@ Keep the parent environment, stored Git config and personal-mode tracing intact.
 
 Redact the token and its Basic encoding from stdout, stderr and thrown errors;
 discard raw exception details. Reject gh auth token and credential-changing auth
-commands. Annotate outcomes with non-secret githubIdentity. Never retry a write
+commands. Annotate outcomes and transport errors with non-secret `githubIdentity`
+(the canonical installation key) and `githubBot` (the verified installation's bot
+login). These are separate values: budgets use the key; comment ownership uses
+the login. Never retry a write
 after a refusal.
 
 `githubAppEnvironment({root,env})` returns only non-secret PATH and

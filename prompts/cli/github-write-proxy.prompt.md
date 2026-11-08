@@ -37,7 +37,13 @@ calls. Manual shells are unchanged. Exports:
 
 App transport authenticates the raw process before write admission resolves identity.
 Use the non-secret githubIdentity on its result or error as the canonical App
-budget identity. Worker routing preserves both the App binding and the private
+budget identity. Keep its verified `githubBot` separately as the comment owner.
+When an injected canonical App key skips identity discovery, resolve the bot
+through App transport's `gh auth status` metadata before reconciling a marked
+comment. Require metadata for the same installation key and a valid bot login;
+otherwise stop before listing or writing. Never use a personal login or the
+installation key as the App comment owner. Budget and lock keys stay canonical.
+Worker routing preserves both the App binding and the private
 write route without recursive wrappers or duplicate reservations.
 
 ## Cancellation
@@ -92,6 +98,8 @@ the native counter itself.
 
 ## Dependencies
 
+[App transport](github-app.prompt.md) supplies verified installation and bot
+metadata for budget identity and safe comment ownership.
 [Shared write budget](github-writes.prompt.md) supplies reservation and cooldown
 rules. [GitHub call primitives](github-calls.prompt.md#call-primitives) supplies only
 classification, ledger, countGithubCalls and reply parsing. This required selection

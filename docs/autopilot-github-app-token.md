@@ -154,6 +154,10 @@ when the repository already has an Autopilot ledger. Other machines share the
 GitHub installation allowance, but their local call ledgers are separate. The
 local budget is not a global quota broker. GitHub's secondary limits still
 apply. Conditional response caches are separated by authentication identity.
+Marked progress updates reuse the verified App bot's comment. Unchanged text
+does not use another write. Changed text updates that comment. A retry lists
+comments again before writing. The installation key still owns the write budget
+and local reconciliation lock. Comments by other people or Apps stay unchanged.
 
 The reserve guard uses the selected installation's saved limit before the first
 non-safety dependency read. Safety reads and writes can still use the reserve.

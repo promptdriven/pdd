@@ -143,7 +143,7 @@ export function githubAppRunner(exec, ports = {}) {
     if (file === 'gh' && args[0] === 'auth' && args[1] !== 'status') fail('credential commands are unavailable in App mode.');
     const key = JSON.stringify(settings);
     if (!instances.has(key)) instances.set(key, createGithubApp(settings, { ...ports, env, exec }));
-    const { token, identity } = await instances.get(key).credentials();
+    const { token, identity, bot } = await instances.get(key).credentials();
     const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
     const redact = value => typeof value === 'string' ? [token, basic].reduce((text, secret) => text.split(secret).join('[redacted]'), value) : value;
     const privateEnv = gitPrivateEnvironment(plainEnv);
@@ -221,8 +221,8 @@ export function githubAppRunner(exec, ports = {}) {
     try { result = await exec(file, childArgs, { ...options, env: childEnv }); }
     catch (error) {
       throw Object.assign(Error('GitHub App command failed.'), { code: Number.isInteger(error.code) ? error.code : 'github_app_command_failed',
-        stdout: redact(error.stdout ?? ''), stderr: redact(error.stderr ?? ''), githubIdentity: identity });
+        stdout: redact(error.stdout ?? ''), stderr: redact(error.stderr ?? ''), githubIdentity: identity, githubBot: bot });
     }
-    return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr), githubIdentity: identity };
+    return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr), githubIdentity: identity, githubBot: bot };
   };
 }
