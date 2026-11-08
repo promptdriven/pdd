@@ -9,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ec000fab02b903cdec7f95ba48dd66b1b9b4fa350f3010ae789b75cf8abd2e47).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c5415bbbf47211e0df1fbb1e755f2f1f91df2f9e47e2c4f019d6490e1b9e366c).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -3049,6 +3049,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
   if (area.gate === 'pr' && !askCode && !beforePr) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
   const approvalRecorded=protectProgress(run,p,{approval:true});
+  const invocationAt=p.now();
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
   const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
@@ -3101,7 +3102,16 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
       }
       edits = await approveGatePrompts(run, p);
       if (approvalWords === undefined) { p.say(snapshotLines(current).join('\n')); commitRun(run,p,latest=>{latest.gate.promptSnapshot=current;}); }
-    } else readPromptApprovals(await promptApprovalContext(run, p), p);
+    } else {
+      readPromptApprovals(await promptApprovalContext(run, p), p);
+      // A terminal may confirm an incomplete legacy gate. Bind its current
+      // contract before that confirmation; --said still requires a shown gate.
+      if (approvalWords === undefined && area.gate === 'approve' && run.gate) {
+        const contract = await storyContract(run,p), paths = await storyContractPaths(run,p);
+        p.say(`Story contract: ${contract}`);
+        commitRun(run,p,latest=>{latest.gate.storyContract=contract;latest.gate.storyPaths=paths;});
+      }
+    }
   } catch (error) { return fail(error.message); }
   let carried = [], synchronized = false;
   if (askCode && run.gate?.kind === 'ask-code' && approvalWords === undefined && !edits.length) {
@@ -3138,7 +3148,6 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   try {
   const admissionFailure = await admitApproval();
   if (admissionFailure) return fail(admissionFailure);
-  const invocationAt=p.now();
   p.inspectProgress();
   let approvalSnapshot = run.gate?.promptSnapshot;
   try {
