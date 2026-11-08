@@ -16,19 +16,30 @@ const shared = path => /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|
 // import. Template interpolation with import/require is handled as opaque below.
 function codeMask(text) {
   const mask = new Uint8Array(text.length).fill(1);
+  const source = text.split('');
+  let uncertainTemplate = false;
   for (let i = 0; i < text.length; i++) {
     const start = i, char = text[i];
-    if (char === '/' && text[i+1] === '/') { while (i < text.length && text[i] !== '\n') i++; }
-    else if (char === '/' && text[i+1] === '*') { i += 2; while (i < text.length && !(text[i] === '*' && text[i+1] === '/')) i++; i++; }
+    let comment = false;
+    if (char === '/' && text[i+1] === '/') { comment = true; while (i < text.length && !/[\r\n\u2028\u2029]/.test(text[i])) i++; }
+    else if (char === '/' && text[i+1] === '*') { comment = true; i += 2; while (i < text.length && !(text[i] === '*' && text[i+1] === '/')) i++; i++; }
     else if (["'", '"', '`'].includes(char)) {
       i++;
       while (i < text.length) { if (text[i] === '\\') i += 2; else if (text[i] === char) break; else i++; }
     } else continue;
     const span = text.slice(start, i+1);
-    const interpolationImport = char === '`' && span.includes('${') && /\b(?:import|require)\s*\(/.test(span);
+    const interpolationImport = char === '`' && span.includes('${') && /\b(?:import|require)\b/.test(span);
+    // Interpolation bodies are not parsed here. Comment-bearing dependency
+    // syntax in them must not evade external-import fallback.
+    uncertainTemplate ||= interpolationImport && /\b(?:import|require)\s*(?:\(\s*)?\/[/*]/.test(span);
     mask.fill(interpolationImport ? 2 : 0, start, Math.min(i+1, text.length));
+    // Keep offsets and newlines, and leave literal contents intact. Dependency
+    // matching then treats real comments exactly like whitespace.
+    if (comment) for (let j = start; j <= i && j < text.length; j++) {
+      if (!/[\r\n\u2028\u2029]/.test(source[j])) source[j] = ' ';
+    }
   }
-  return mask;
+  return { mask, source: source.join(''), uncertainTemplate };
 }
 
 export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
@@ -58,14 +69,17 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
   const errors = [];
   for (const path of paths) {
     const text = inventory[path], edges = deps.get(path);
-    const mask = code(path) ? codeMask(text) : null;
     if (code(path)) {
+      const { mask, source, uncertainTemplate } = codeMask(text);
+      if (uncertainTemplate) errors.push(`unsupported-template-dependency:${path}`);
+      const computedImport = [...source.matchAll(/\b(?:import|require)\s*\(/g)].some(match =>
+        mask[match.index] && !/^\s*(?:'[^'\\\r\n]*'|"[^"\\\r\n]*")\s*(?:\)|,)/.test(source.slice(match.index + match[0].length)));
       // Computed access is an explicit overapproximation, including reads made by
       // a helper or a spawned CLI. Its reverse consumers inherit the dependency.
       if (mask.includes(2) || /\b(?:getBuiltinModule|createRequire|eval|Function|binding)\b/.test(text) || /['"](?:node:)?(?:fs(?:\/promises)?|child_process)['"]/.test(text) || /\b(?:readFile(?:Sync)?|readdir(?:Sync)?|opendir(?:Sync)?|spawn(?:Sync)?|execFile(?:Sync)?|execSync)\b/.test(text)
-        || /\b(?:import|require)\s*\(\s*(?!['"])/.test(text)) opaque.add(path);
+        || /\b(?:import|require)\s*\(\s*(?!['"])/.test(text) || computedImport) opaque.add(path);
       const imports = /\b(?:import\s+(?:[^;'"]*?\s+from\s*)?|export\s+[^;'"]*?\s+from\s*|(?:import|require)\s*\(\s*)['"]([^'"\n]+)['"]/g;
-      for (const match of text.matchAll(imports)) {
+      for (const match of source.matchAll(imports)) {
         if (!mask[match.index]) continue;
         const ref = match[1];
         if (ref.startsWith('.')) {
@@ -92,7 +106,7 @@ export function selectAffectedTests({ files, changed, smoke = SMOKE_TESTS }) {
     for (const dep of deps.get(path) ?? []) visit(dep);
   };
   tests.forEach(visit);
-  const relevantErrors = errors.filter(error => [...reachable].some(path => (!opaque.has(path) && error.startsWith(`unresolved:${path}:`)) || error.startsWith(`external:${path}:`)));
+  const relevantErrors = errors.filter(error => [...reachable].some(path => (!opaque.has(path) && error.startsWith(`unresolved:${path}:`)) || error.startsWith(`external:${path}:`) || error === `unsupported-template-dependency:${path}`));
   if (relevantErrors.length) return full(relevantErrors);
 
   const impacted = new Set(changed);

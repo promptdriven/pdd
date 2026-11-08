@@ -148,3 +148,97 @@ test('multiline import and reexport declarations preserve external fallback and 
   for (const declaration of ["import {\n value\n} from 'third-party';", "export {\n value\n} from 'third-party';"]) assert.equal(select(['src/leaf.mjs'],{'test/multiline.test.mjs':declaration}).mode,'full');
   assert.ok(select(['src/leaf.mjs'],{'test/multiline.test.mjs':"import {\n value\n} from '../src/leaf.mjs';"}).tests.includes('test/multiline.test.mjs'));
 });
+
+test('comments between dependency tokens preserve external import fallback', () => {
+  for (const declaration of [
+    "import /* explanation */ 'third-party';",
+    "import // explanation\n 'third-party';",
+    "import // explanation\r 'third-party';",
+    "import // explanation\u2028 'third-party';",
+    "import // explanation\u2029 'third-party';",
+    "import { value } from /* explanation */ 'third-party';",
+    "export { value } from // explanation\n 'third-party';",
+    "await import /* explanation */ (/* argument */ 'third-party');",
+    "require // explanation\n (/* argument */ 'third-party');",
+    "const value = `${await import /* explanation */ ('third-party')}`;",
+  ]) {
+    const result = select(['src/leaf.mjs'], {'test/commented.test.mjs': declaration});
+    assert.equal(result.mode, 'full', declaration);
+    assert.equal(result.tests.length, result.total, declaration);
+  }
+});
+
+test('commented computed imports and requires keep reverse consumers selected', () => {
+  for (const statement of [
+    "await import /* dependency */ ('./' + name + '.mjs');",
+    "await import // dependency\n (name);",
+    "require /* dependency */ (name);",
+    "require( /* argument */ name);",
+  ]) {
+    const result = select(['src/leaf.mjs'], {
+      'src/adapter.mjs': statement,
+      'test/indirect.test.mjs': "import '../src/adapter.mjs';",
+    });
+    assert.ok(result.tests.includes('test/indirect.test.mjs'), statement);
+  }
+});
+
+test('commented literal dependencies and comment markers in strings retain local edges', () => {
+  for (const statement of [
+    "import /* dependency */ './target';",
+    "import { value } from /* dependency */ './target';",
+    "export { value } from // dependency\n './target';",
+    "await import /* dependency */ (/* argument */ './target');",
+    "require // dependency\n (/* argument */ './target');",
+  ]) {
+    const result = select(['src/target.mjs'], {
+      'src/target.mjs': 'export const value = 1;',
+      'src/adapter.mjs': statement,
+      'test/indirect.test.mjs': "import '../src/adapter.mjs';",
+    });
+    assert.ok(result.tests.includes('test/indirect.test.mjs'), statement);
+  }
+  assert.equal(select(['src/leaf.mjs'], {
+    'test/external.test.mjs': "import 'third-party/*literal*/';",
+  }).mode, 'full');
+  for (const [specifier, target] of [
+    ['./nested/*literal*/target', 'src/nested/*literal*/target.mjs'],
+    ['./nested//target', 'src/nested/target.mjs'],
+  ]) {
+    const result = select([target], {
+      [target]: 'export const value = 1;',
+      'src/adapter.mjs': `import '${specifier}';`,
+      'test/indirect.test.mjs': "import '../src/adapter.mjs';",
+    });
+    assert.equal(result.mode, 'affected', specifier);
+    assert.ok(result.tests.includes('test/indirect.test.mjs'), specifier);
+  }
+});
+
+test('the native runner catches a broken consumer behind a commented computed import', t => {
+  const r = repo(t);
+  r.put('src/leaf.mjs', 'export const value = 1;');
+  r.put('test/consumer.test.mjs', [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "const name = ['l', 'eaf'].join('');",
+    "const { value } = await import /* dependency */ ('../src/' + name + '.mjs');",
+    "test('consumer value', () => assert.equal(value, 1));",
+  ].join('\n'));
+  r.git('add', '.'); r.git('commit', '-qm', 'commented consumer');
+  const execute = (command, args, options) => {
+    const env = { ...options.env }; delete env.NODE_TEST_CONTEXT;
+    return spawnSync(command, args, { ...options, env });
+  };
+  // Prove the real consumer passes before changing only its dependency.
+  const before = execute(process.execPath, ['--test', 'test/consumer.test.mjs'], { cwd: r.root, encoding: 'utf8', env: process.env });
+  assert.equal(before.status, 0, before.stdout + before.stderr);
+  r.put('src/leaf.mjs', 'export const value = 2;');
+  const direct = execute(process.execPath, ['--test', 'test/consumer.test.mjs'], { cwd: r.root, encoding: 'utf8', env: process.env });
+  assert.equal(direct.status, 1, direct.stdout + direct.stderr);
+  const result = runAffected({ root: r.root, base: 'HEAD', run: true }, { execute });
+  assert.equal(result.exitCode, 1, JSON.stringify(result));
+  assert.ok(result.plan.tests.includes('test/consumer.test.mjs'));
+  assert.equal(result.evidence.counts.fail, 1);
+  assert.equal(result.evidence.stale, false);
+});

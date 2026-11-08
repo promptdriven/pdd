@@ -35,6 +35,11 @@ depend on any repository file. Treat such a consumer as depending on every chang
 path, then follow its reverse consumers too. Literal matching may overselect;
 source text or a comment can add tests but cannot remove them. A graph alone cannot
 prove semantic equivalence; keep the full gate. No test result is used as an oracle.
+JavaScript block and line comments between dependency tokens, arguments and
+specifiers must preserve local dependencies, computed-consumer selection and
+external-import full fallback. Ignore comment markers inside string literals.
+When dependency syntax inside a template interpolation cannot be classified
+safely, require full fallback for its reachable consumer.
 
 The adapter accepts `--base REF`, optional `--run`, and optional `--report PATH`.
 With no run, print the JSON plan only and execute no test. Resolve base to a commit
