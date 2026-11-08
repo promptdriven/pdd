@@ -231,12 +231,15 @@ timer definition, leaving the current step to
 finish. Stop checks and removes the owned timer even if saved installation state
 is absent or false, including after a failed start. Repeated stop is harmless. Status reads local state and timer activity;
 show enabled/disabled, timer activity, Herdr availability, coordinator state,
-repo, the folder Autopilot works in, agent, and next tick (or none), without waking AI or querying GitHub.
+repo, the folder Autopilot works in, agent, and next tick (or none), without waking AI.
+The repository fleet observation uses the live reads defined above.
 When the [GitHub call ledgers](#github-budget) on this machine have a call in the
 last hour, status adds one line, after any alert line: `githubStatusLine` of
 [GitHub calls](github-calls.prompt.md#status-line) with this repository's usage,
 the machine usage and the budget with the settings' `github` value. It reads the
-local ledgers only; an error adds nothing.
+local ledgers only; an error adds nothing. Capture this usage and remaining
+allowance before the live fleet reads of this status call. Those reads enter the
+ledger for later observations.
 Whenever Herdr is available, inspect the saved coordinator with the existing
 `agent get` operation, including when the timer is inactive. Confirm that its pane,
 workspace, repository path, provider and any saved terminal identity match saved local state. Report a missing,

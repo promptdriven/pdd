@@ -108,12 +108,14 @@ test('measure: the tick records each GitHub call with its purpose and the remain
   assert.equal(graphql.resource, 'graphql');
   const newest = entries.filter(entry => entry.resource === 'core').at(-1);
   assert.deepEqual([newest.remaining, newest.limit, newest.resetAt], [w.remaining, 5000, reset() * 1000]);
+  // Status captures local usage before its live repository fleet observations.
+  const remainingBeforeStatus = w.remaining;
   const status = (await w.invoke('status')).message.split('\n');
   const line = status.find(text => text.startsWith('GitHub calls in the last hour:'));
   assert.ok(line, status.join('\n'));
   const total = entries.filter(entry => entry.at > w.time - hour).length;
   assert.match(line, new RegExp(`^GitHub calls in the last hour: ${total} \\(dependencies 2, claims 4, issues \\d+, setup 1\\);`));
-  assert.match(line, new RegExp(`REST limit ${w.remaining} of 5000 left until 13:00Z`));
+  assert.match(line, new RegExp(`REST limit ${remainingBeforeStatus} of 5000 left until 13:00Z`));
   assert.match(line, /budget normal: Autopilot on this machine used \d+ of 1500 \(30%\)/);
 });
 

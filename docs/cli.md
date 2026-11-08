@@ -224,6 +224,8 @@ The lease is a small `.pdd-reviewer.json` file on branch
 resolve races. It needs write access to that branch. It renews after 30 minutes
 and expires after 90 minutes without renewal. A stopped or Off coordinator stops
 renewing. Another machine can then take over. Keep machine clocks synchronized.
+If renewal waits past expiry, it stops. A later acquisition gets a new generation.
+Review and dependency writes recheck authority after any admission wait.
 An unreadable or refused lease stops review work until it can be read again.
 Acquisition and renewal stop at the GitHub reserve floor, including when an earlier
 read crosses it. The existing claim heartbeat exception still applies.
@@ -271,6 +273,8 @@ GitHub calls in the last hour: 212 (dependencies 120, claims 14, issues 60, pull
 
 "Autopilot on this machine used 61" is the counted calls of this machine: the
 tick and the counted `pdd` commands, not the chats.
+The line shows usage before this status call reads the live repository view.
+Those reads are counted in later observations.
 
 A conditional read sends the ETag of the last reply. A `304` reply means that
 nothing changed, and GitHub does not count it against the limit. The tick, the

@@ -6,7 +6,7 @@ import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { autopilotGithubWorld, analysisFor } from './helpers/autopilot-github-world.mjs';
 import { createGithubRepoFake } from './helpers/github-repo-fake.mjs';
 import { createDependencyReadPorts } from '../src/issue-dependencies-github.mjs';
-import { checkDependencyStart, completeDependencyIntake } from '../src/issue-dependencies-intake.mjs';
+import { checkDependencyStart, completeDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 
 const repo = 'acme/widgets', minute = 60000;
 const key = n => `https://github.com/${repo}/issues/${n}`;
@@ -100,6 +100,57 @@ async function seedReserve(w, remaining = 1000, calls = 1) {
 }
 const leaseWrites = calls => calls.filter(c => c.method === 'PUT' && c.endpoint.includes('/contents/'));
 const branchWrites = calls => calls.filter(c => c.method === 'POST' && c.endpoint.endsWith('/git/refs'));
+
+for (const boundary of ['review', 'impact', 'dependency', 'recovery']) test(`reviewer authority is rechecked after admission waits (${boundary})`, async t => {
+  const { reviewerLease } = await import('../src/autopilot-reviewer.mjs');
+  const w = await autopilotGithubWorld({ issues: 2, machine: 'reviewer-a' }); t.after(() => w.cleanup());
+  assert.equal((await w.invoke('start')).exitCode, 0);
+  const request = w.requests[0], first = JSON.parse(request.contextJson).reviewer;
+  const analysis = analysisFor(request);
+  if (boundary === 'impact') analysis.impactJson = JSON.stringify({
+    inputs: analysis.reviews.flatMap(r => r.inputs).filter((row, i, rows) => rows.findIndex(x => x.key === row.key) === i),
+    reviews: [], affected: [], complete: true,
+  });
+  if (boundary === 'dependency' || boundary === 'recovery') Object.assign(analysis.reviews.find(r => r.issue === key(1)), {
+    outcome: 'pending', effects: 'pending', dependencies: [{ key: key(2), reason: 'Part 1 uses part 2.', evidence: [key(2)] }],
+  });
+  if (boundary === 'recovery') {
+    const seeded = await completeDependencyIntake({ cwd: w.cwd, request, analysis }, w.commandPorts({
+      reviews: { apply: async () => ({ state: 'pending' }) },
+      // Leave only the GitHub intent, so reconciliation exercises effect recovery
+      // rather than resuming the completion through its separate mutation guard.
+      completions: { read: async () => null, save: async () => {}, clear: async () => {} },
+    }));
+    assert.equal(seeded.state, 'pending');
+    assert.equal(w.github.reviewComments(1).length, 1);
+    assert.deepEqual(w.github.issues.get(1).blockedBy, []);
+  }
+  let waited = false, mark;
+  const ports = w.commandPorts({ admitMutation: async action => {
+    if (!waited && (boundary !== 'dependency' || w.github.reviewComments(1).length > 0)) {
+      waited = true;
+      w.time = Date.parse(first.expiresAt) + 1000;
+      const next = await reviewerLease({ repository: repo, acquire: true, identity: {
+        machine: 'reviewer-b', coordinatorId: 'successor', login: 'acme',
+      } }, { now: () => w.time, execFile: (_file, args, options) => w.github.gh(args, options) });
+      assert.equal(next.held, true);
+      assert.notEqual(next.lease.generation, first.generation);
+      mark = w.github.mark();
+    }
+    return action();
+  } });
+  const result = boundary === 'recovery'
+    ? await reconcileDependencyIntake({ cwd: w.cwd, repository: repo, trigger: 'tick', mode: 'auto' }, ports)
+    : await completeDependencyIntake({ cwd: w.cwd, request, analysis }, ports);
+  assert.equal(waited, true, 'the intended native mutation reaches admission');
+  assert.deepEqual(w.github.since(mark).calls.filter(c => c.api === 'rest' && c.method !== 'GET'), [], 'no mutation starts under the expired generation');
+  assert.deepEqual(w.github.issues.get(1).blockedBy, []);
+  if (boundary === 'review' || boundary === 'impact') {
+    assert.equal(w.github.reviewComments(1).length, 0);
+    assert.equal(w.github.reviewComments(2).length, 0);
+  }
+  if (boundary !== 'recovery') assert.equal(result.state, 'pending');
+});
 
 for (const deferred of [false, true]) test(`reserve guard stops reviewer renewal after GET crosses floor (${deferred ? 'deferred' : 'ordinary'} intake)`, async t => {
   const w = await autopilotGithubWorld({ issues: 1 }); t.after(() => w.cleanup());

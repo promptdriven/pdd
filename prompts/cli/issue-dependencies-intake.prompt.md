@@ -27,7 +27,10 @@ Manual prepare stays read-only. In a repository with saved launcher identity,
 prepare requires its live reviewer lease. Without it return an empty queued
 request. A request made by the reviewer includes `reviewer` in contextJson, with
 the exact lease record. Complete validates that generation and the current local
-identity before each review, impact or dependency write. A request delivery may use the
+identity before each review, impact or dependency write. In both completion and
+reconciliation, put this check inside the action passed to mutation admission:
+after admission waits, revalidate the exact live generation before transport
+starts. Loss of authority must leave that mutation unstarted. A request delivery may use the
 lease just acquired or renewed in that reconciliation while it remains unexpired;
 this avoids a redundant read of a lease that no contender may take yet. Missing authority returns
 pending with reason `reviewer-lease`; a lost or unreadable lease never falls back

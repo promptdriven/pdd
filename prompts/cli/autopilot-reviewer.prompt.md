@@ -27,7 +27,10 @@ saved snapshot or ETag. The JSON lease has `repository` (lowercase owner/name),
 Only the exact machine and coordinator pair may renew a live lease. Renew only
 when lastSeen is at least 30 minutes old; preserve generation. An expired lease
 cannot be renewed: any contender, including its old owner, must acquire a fresh
-generation. Equality at expiresAt means expired. Recheck the injected clock after each
+generation. Equality at expiresAt means expired. Recheck the old generation's
+expiry inside lease-write admission, after any wait. If it expired during
+admission, refuse renewal without a PUT; a later acquisition needs a new generation.
+Recheck the injected clock after each
 lease response; a slow read or write must not return expired authority. A future lastSeen, malformed
 record, unavailable clock, permission failure or unknown read grants no authority.
 

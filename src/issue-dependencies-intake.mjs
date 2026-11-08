@@ -213,9 +213,12 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   if (prepared.repository.toLowerCase() !== request.repository.toLowerCase()) throw invalidAnalysis();
   if (!await currentReviewer(cwd, request.repository, context.reviewer, ports)) return pendingResult('reviewer-lease');
   const priorMutation = ports.admitMutation;
-  ports.admitMutation = async action => {
-    if (!await currentReviewer(cwd, request.repository, context.reviewer, ports)) throw Error('reviewer-lease');
-    return priorMutation ? priorMutation(action) : action();
+  ports.admitMutation = action => {
+    const guarded = async () => {
+      if (!await currentReviewer(cwd, request.repository, context.reviewer, ports)) throw Error('reviewer-lease');
+      return action();
+    };
+    return priorMutation ? priorMutation(guarded) : guarded();
   };
   const original = analysis;
   // Code owns each subject's link row: drop a carried copy and add the current one before saving.
@@ -354,9 +357,12 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   ports.reviewAccess = reviewer;
   if (reviewer.managed) {
     const priorMutation = ports.admitMutation;
-    ports.admitMutation = async action => {
-      if (!reviewer.held || !await currentReviewer(cwd, repository, reviewer.lease, ports)) throw Error('reviewer-lease');
-      return priorMutation ? priorMutation(action) : action();
+    ports.admitMutation = action => {
+      const guarded = async () => {
+        if (!reviewer.held || !await currentReviewer(cwd, repository, reviewer.lease, ports)) throw Error('reviewer-lease');
+        return action();
+      };
+      return priorMutation ? priorMutation(guarded) : guarded();
     };
   }
   const reads = ports.dependencyReads;

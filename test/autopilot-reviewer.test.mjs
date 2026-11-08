@@ -99,3 +99,20 @@ for (const renew of [false, true]) test(`reserve is rechecked inside mutation ad
   assert.equal(f.github.since(mark).calls.filter(c => c.method !== 'GET').length, 0, 'admission wait cannot bypass reserve');
   assert.equal(result.state, 'unknown');
 });
+
+for (const delay of [1000, 2000]) test(`renewal refuses an expired generation after admission waits ${delay}ms`, async () => {
+  const f = fixture(), first = await f.acquire(0);
+  assert.equal(first.held, true);
+  f.time = Date.parse(first.lease.expiresAt) - 1000;
+  const mark = f.github.mark();
+  let admissions = 0;
+  const result = await reviewerLease({ repository, identity: f.identity(0), acquire: true }, {
+    ...f.ports, admitMutation: async action => { admissions++; f.time += delay; return action(); },
+  });
+  assert.equal(admissions, 1);
+  assert.equal(result.held, false, 'expired renewal grants no authority');
+  assert.equal(f.github.since(mark).calls.filter(c => c.method === 'PUT').length, 0, 'expired renewal sends no PUT');
+  const next = await f.acquire(0);
+  assert.equal(next.held, true);
+  assert.notEqual(next.lease.generation, first.lease.generation, 'a later acquisition changes generation');
+});

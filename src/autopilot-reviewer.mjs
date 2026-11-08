@@ -98,8 +98,13 @@ export async function reviewerLease({ repository, identity, acquire = false }, p
     const lease = { repository, machine: identity.machine, coordinatorId: identity.coordinatorId, login,
       generation: observed.held ? observed.lease.generation : (ports.uuid ?? randomUUID)(),
       lastSeen: new Date(now).toISOString(), expiresAt: new Date(now + LIFE).toISOString() };
-    const writeLease = () => api(endpoint, 'PUT', { branch: BRANCH, message: 'Renew Autopilot reviewer lease',
-      content: Buffer.from(JSON.stringify(lease)).toString('base64'), ...(observed.sha ? { sha: observed.sha } : {}) }, ports);
+    const writeLease = () => {
+      const admittedAt = (ports.now ?? Date.now)();
+      if (!Number.isFinite(admittedAt) || observed.held && Date.parse(observed.lease.expiresAt) <= admittedAt)
+        throw Error('Reviewer renewal expired');
+      return api(endpoint, 'PUT', { branch: BRANCH, message: 'Renew Autopilot reviewer lease',
+        content: Buffer.from(JSON.stringify(lease)).toString('base64'), ...(observed.sha ? { sha: observed.sha } : {}) }, ports);
+    };
     const written = await mutate(writeLease);
     if (written.status === 409 || written.status === 422) return clean(await observe());
     if (![200, 201].includes(written.status) || typeof written.value?.content?.sha !== 'string') return unknown();
