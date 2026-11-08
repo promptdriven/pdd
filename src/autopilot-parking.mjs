@@ -14,7 +14,7 @@ export function blockerFor(run) {
 const label = blocker => blocker?.kind === 'dependency' ? `needs #${blocker.until}`
   : blocker?.kind === 'pdd' ? `needs ${blocker.until}` : blocker?.kind ?? 'unknown';
 export function parkingSummary(runs, limit) {
-  const live = runs.filter(run => !ended(run)), parked = live.filter(run => run.parking?.phase === 'parked');
+  const live = runs.filter(run => !ended(run)), parked = live.filter(run => run.parking?.phase === 'parked' && !run.parking.checkHeld);
   const blockers = {};
   for (const run of parked) {const name = label(run.parking.blocker); blockers[name] = (blockers[name] ?? 0) + 1;}
   return {working: live.length - parked.length, parked: parked.length, blockers, wakePending: [], limit};
@@ -36,14 +36,14 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     const blocker = blockerFor(run) ?? await ports.observeBlocker?.(run);
     if (!blocker && !run.parking) continue;
     const progress = await ports.checkProgress(run);
-    if (progress) continue;
+    if (progress && !run.parking) continue;
     await ports.park(run, blocker ?? run.parking.blocker);
   }
   runs = await list();
   const oldest = runs.filter(run => run.parking).sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
   const ready = [];
   if (wake) for (const run of oldest) {
-    if (!['parked', 'waking'].includes(run.parking.phase)) continue;
+    if (!['parked', 'waking'].includes(run.parking.phase) || run.parking.checkHeld || await ports.checkProgress(run)) continue;
     const rule = wakeRules.find(rule => rule.number === run.number && ['runtime-ready', 'environment-ready'].includes(rule.kind));
     if (run.parking.phase === 'waking' || await ports.blockerCleared(run, rule)) ready.push({run, rule});
   }
@@ -60,9 +60,10 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
   if (wake && release) {
     const hours = Number.isFinite(policy.hours) && policy.hours > 0 ? policy.hours : 48;
     const maxParked = Number.isSafeInteger(policy.maxParked) && policy.maxParked > 0 ? policy.maxParked : 2 * limit;
-    const parked = (await list()).filter(run => ['parked', 'releasing'].includes(run.parking?.phase)).sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
+    const parked = (await list()).filter(run => ['parked', 'releasing'].includes(run.parking?.phase) && !run.parking.checkHeld).sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
     let excess = Math.max(0, parked.length - maxParked);
     for (const run of parked) if (run.parking.phase === 'releasing' || ports.now() - run.parking.at >= hours * 3600000 || excess > 0) {
+      if (await ports.checkProgress(run)) continue;
       const released = await ports.release(run);
       if (released) excess = Math.max(0, excess - 1);
     }

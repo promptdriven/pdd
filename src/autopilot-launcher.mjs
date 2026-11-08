@@ -8,7 +8,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4c0012837183a180e7eca79040caa6fb00546e403172b55147e78fe2de6c9045).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: e06bfb7bb97a80338c89deb37033226fab35f6c1d8ed4d2efde52f918f3f8fa1).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -379,7 +379,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
   })};
   const args = run => ({ref: String(run.number), cwd: state.cwd, packageRoot: state.packageRoot,
     coordinatorId: state.coordinatorId, machine: state.machine});
-  return {
+  const parking = {
     now: p.now,
     list: () => listRuns({cwd: state.cwd}, worker),
     checkProgress: async run => {
@@ -399,7 +399,8 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     },
     park: (run, blocker) => p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run}, worker)),
     wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
-      text: rule?.text}, worker)),
+      text: rule?.text, expectedBlocker: run.parking.blocker},
+      {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
@@ -453,6 +454,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return result.recovery === 'released';
     }),
   };
+  return parking;
 }
 async function parkingTick(state, p, config, options = {}) {
   try {
@@ -689,7 +691,9 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   if (verdictAt === null && pattern.testMode && saved.outage?.probe
     && await (p.readRuntimeProbe ?? readRuntimeProbe)(state, p, saved.outage.probe) === 'verdict') verdictAt = now;
   if (verdictAt !== null && verdictAt > (pattern.verdictAt ?? -Infinity)) {
-    pattern.verdictAt = verdictAt; pattern.streak = 0; pattern.testMode = false;
+    pattern.verdictAt = verdictAt;
+    pattern.streak = Object.keys(pattern.seen).filter(key => Number(key.slice(key.lastIndexOf(':') + 1)) > verdictAt).length;
+    pattern.testMode = pattern.streak >= 3;
   }
   for (const wait of waits) {
     const key = `${wait.number}:${wait.at}`;

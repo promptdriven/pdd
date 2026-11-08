@@ -500,3 +500,123 @@ for (const changed of ['runId', 'at', 'phase']) test(`3091 repair release revali
   assert.notEqual(f.record().state, 'cancelled', 'changed run custody must stop local release and cancellation');
   assert.ok(existsSync(join(run.commonDir, 'pdd/worktree-assignments/issues/17.json')), 'local allocation must retain changed custody');
 });
+
+// Repair 2: AC2/AC6. Check admission can occur after chat shutdown.
+for (const custody of ['native-running', 'suite-waiting', 'interpreter-unavailable']) test(`3091 repair2 post-park ${custody} retains occupancy through timeout`, async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  await tick(); assert.equal(f.record().parking?.phase, 'parked');
+  fullTicks(f, stateFile, ports);
+  let settle;
+  if (custody === 'native-running') {
+    const {acquireInterpreterSlot, observeInterpreterRequest} = await import('../src/interpreter-queue.mjs');
+    const request = {cwd: run.root, origin: 'https://controlled.invalid', requestId: 'post-park', kind: 'check', env: f.ports.env};
+    await acquireInterpreterSlot(request, {now: () => f.clock});
+    settle = () => observeInterpreterRequest({...request, outcome: 'not_sent', terminal: true}, {now: () => f.clock});
+    t.after(settle);
+  } else {
+    const key = custody === 'suite-waiting' ? 'readSuiteProgress' : 'readInterpreterProgress';
+    ports[key] = () => ({state: custody === 'suite-waiting' ? 'waiting' : 'unavailable'});
+    settle = () => {delete ports[key];};
+  }
+  // Read admission before the next tick can save a check reservation.
+  const owners = JSON.parse((await createDependencyReadPorts({cwd: f.source}, {...f.ports,
+    readSuiteProgress: ports.readSuiteProgress, readInterpreterProgress: ports.readInterpreterProgress}).owners.read({repository: run.repo, issues: []})).json);
+  assert.equal(owners.runs.find(row => row.runId === run.runId)?.occupied, true, 'post-park check must block native admission');
+  await tick();
+  assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 1, 'post-park check consumes working capacity');
+  assert.equal(JSON.parse(readFileSync(stateFile)).parking.parked, 0);
+  let releases = 0; ports.releaseParkedClaim = async () => {releases++; return {state: 'released'};};
+  f.tick(48 * 3600000); await tick();
+  assert.equal(releases, 0, 'active or uncertain checks cannot lose their claim at timeout');
+  assert.notEqual(f.record().state, 'cancelled'); assert.equal(launches(f).length, 0);
+  await settle(); await tick();
+  assert.equal(releases, 1, 'positive idle evidence permits the overdue release');
+  assert.equal(f.record().state, 'cancelled');
+});
+
+// The release boundary must protect itself even without a prior reconciliation.
+test('3091 repair2 release rechecks native check custody under the run lock', async t => {
+  const {f, tick} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  await tick();
+  const {acquireInterpreterSlot, observeInterpreterRequest} = await import('../src/interpreter-queue.mjs');
+  const request = {cwd: run.root, origin: 'https://controlled.invalid', requestId: 'release-check', kind: 'check', env: f.ports.env};
+  await acquireInterpreterSlot(request, {now: () => f.clock});
+  t.after(() => observeInterpreterRequest({...request, outcome: 'not_sent', terminal: true}, {now: () => f.clock}));
+  const {releaseParkedRun} = await import('../src/workflow-runner.mjs');
+  let releases = 0;
+  const result = await releaseParkedRun({ref: '17', cwd: f.source, runId: run.runId, at: f.record().parking.at,
+    coordinatorId: 'park-owner', machine: 'park-machine'}, {...f.ports,
+    releaseParkedClaim: async () => {releases++; return {state: 'released'};}});
+  assert.equal(releases, 0, 'release must read current check custody before claim effects');
+  assert.equal(result.recovery, 'skipped'); assert.notEqual(f.record().state, 'cancelled');
+});
+
+const parkCommandPorts = f => ({...f.ports, owners: {read: async () => ({json: JSON.stringify({
+  localOwner: 'park-owner', runsKnown: true, runs: [], claims: [{issue: f.record().issue.url, active: true,
+    owner: 'park-owner', coordinatorId: 'park-owner', machine: 'park-machine', commentId: '11', labelEventId: '12'}],
+})})}});
+
+// AC1/AC3. Replacing the wait must replace its clearing condition.
+test('3091 repair2 park command replaces the blocker without losing session or age', async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: '99.0.0'}; save(f, run);
+  await tick(); const parked = f.record();
+  const result = await parkAutomaticRun({cwd: run.root, reason: 'Wait for the dependency', blocker: 'dependency', until: '2897'}, parkCommandPorts(f));
+  assert.equal(result.exitCode, 0);
+  ports.packageVersion = '99.0.0'; await tick();
+  assert.equal(f.record().parking?.phase, 'parked', 'the old installed release cannot clear a replacement dependency');
+  assert.deepEqual(f.record().parking.blocker, {kind: 'dependency', until: '2897'});
+  assert.equal(f.record().parking.at, parked.parking.at);
+  assert.equal(f.record().chats.at(-1).session.id, parked.chats.at(-1).session.id);
+  assert.equal(launches(f).length, 0);
+  fullTicks(f, stateFile, ports); ports.blockerCleared = async () => true; await tick();
+  assert.equal(f.record().parking, undefined); assert.equal(launches(f).length, 1);
+  assert.equal(f.record().chats.at(-1).session.id, parked.chats.at(-1).session.id);
+});
+
+test('3091 repair2 automatic wake rejects a blocker replaced during readiness observation', async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'dependency', until: '2897'}; save(f, run);
+  await tick(); fullTicks(f, stateFile, ports);
+  let observations = 0;
+  ports.blockerCleared = async () => {
+    if (++observations === 1) {
+      assert.equal((await parkAutomaticRun({cwd: run.root, reason: 'Wait for another dependency', blocker: 'dependency', until: '2898'}, parkCommandPorts(f))).exitCode, 0);
+    }
+    return true;
+  };
+  await tick();
+  assert.equal(f.record().parking?.phase, 'parked', 'stale readiness cannot clear the replacement blocker');
+  assert.deepEqual(f.record().blockedOn, {kind: 'dependency', until: '2898'});
+  assert.equal(launches(f).length, 0);
+});
+
+// AC4. Late saved verdicts reorder events already observed on a previous tick.
+for (const laterFailures of [2, 3]) test(`3091 repair2 late native verdict preserves ${laterFailures} already counted newer failures`, async t => {
+  const {f, tick, stateFile, ports} = await setup(t);
+  const at = f.clock, run = f.record();
+  run.state = 'paused'; run.runtimeWait = {at: at + 10, reason: 'no verdict', cause: 'service'}; save(f, run);
+  for (let i = 1; i < laterFailures; i++) {
+    const row = (await anotherRun(f, 17 + i))(); delete row.blockedOn;
+    row.runtimeWait = {at: at + 10 + i, reason: 'no verdict', cause: 'service'}; save(f, row);
+  }
+  fullTicks(f, stateFile, ports);
+  ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+  const {mkdirSync} = await import('node:fs');
+  const batch = '20261108-120000-abcd', folder = join(f.ports.env.HOME, '.pdd/runtime/batches', batch);
+  mkdirSync(folder, {recursive: true});
+  const saved = {batch, root: run.root, intent: 'check', rows: [{state: 'passed', ended_at: at + 1}]};
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify(saved));
+  f.tick(100); await tick();
+  assert.equal(JSON.parse(readFileSync(stateFile)).interpreterPattern.streak, laterFailures);
+  // This verdict ended before those failures, but its result becomes visible now.
+  saved.rows.push({state: 'failed', ended_at: at + 5}); writeFileSync(join(folder, 'batch.json'), JSON.stringify(saved));
+  f.tick(); await tick();
+  let pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+  assert.equal(pattern.streak, laterFailures, 'a late verdict must preserve already seen post-verdict failures');
+  assert.equal(Boolean(pattern.testMode), laterFailures >= 3); assert.equal(pattern.verdictAt, at + 5);
+  f.tick(); await tick(); pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+  assert.equal(pattern.streak, laterFailures, 'a later tick must not count these failures twice');
+});

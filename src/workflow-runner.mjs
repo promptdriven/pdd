@@ -1,3 +1,4 @@
+import {blockerFor} from './autopilot-parking.mjs';
 import { selectAutopilotBase } from './autopilot-base.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
 
@@ -9,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f274ecc46bb030b6ef467d3cfdf1a9ba78c1da7fd2fe2688e97bf5fcba4d14b0).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7dd56ede11a3dd90fd67581a04e06ae080487bf637374a33c5119899e2e8a556).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -3364,6 +3365,7 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
     if (blockedOn) { latest.state='paused'; latest.blockedOn=blockedOn; latest.parkReason=text; delete latest.runtimeWait; }
     else if (wait) { latest.state='paused'; latest.runtimeWait=wait; }
     else { latest.state='stuck'; latest.parkReason=text; delete latest.runtimeWait; }
+    if (latest.parking) replaceParkingBlocker(latest, blockerFor(latest));
   });
   return done(wait ? waitLine : 'Automatic run parked: '+text);
 }
@@ -4641,16 +4643,33 @@ export const nudgeIdleRun = saveGuard((args, ports) => lockedMutation(args, port
   return {...result, recovery: result.exitCode === 0 ? 'nudged' : 'skipped'};
 }));
 
+// A replacement wait owns its clearing condition, while disk and slot custody survive.
+function replaceParkingBlocker(run, blocker) {
+  if (!blocker || sameFact(run.parking.blocker, blocker)) return;
+  run.parking.blocker = structuredClone(blocker);
+  delete run.parking.text;
+  delete run.parking.personWait;
+  if (blocker.kind === 'person' && (run.gate || openQuestion(run)))
+    run.parking.personWait = {gate: run.gate ?? null, question: run.question ?? null};
+}
+
 export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
   const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
   const skipped = () => ({...done(''), recovery: 'skipped'});
   if (!run || ended(run) || !validSavedAutomaticOrigin(run)
     || run.automaticOrigin.coordinatorId !== input.coordinatorId || run.automaticOrigin.machine !== input.machine
     || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || ['waking', 'releasing'].includes(run.parking?.phase)) return skipped();
-  if (run.parking?.phase === 'parked') return {...done(''), recovery: 'parked'};
-  if (continuationCheckHeld(run, p)) return skipped();
   if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'environmentRetry', 'automaticOrigin']
     .some(key => !sameFact(run[key], input.expected[key]))) return skipped();
+  if (run.parking?.phase === 'parked') {
+    commitRun(run, p, fresh => {
+      replaceParkingBlocker(fresh, input.blocker);
+      if (continuationCheckHeld(fresh, p)) fresh.parking.checkHeld = true;
+      else delete fresh.parking.checkHeld;
+    });
+    return {...done(''), recovery: 'parked'};
+  }
+  if (continuationCheckHeld(run, p)) return skipped();
   if (!input.blocker || !(run.chats ?? []).every(chat => validSessionId(chat.session?.id))) return skipped();
   const snapshot = {state: run.state, area: run.area, gate: run.gate, question: run.question, done: run.done,
     blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin};
@@ -4688,7 +4707,8 @@ export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, 
     && fresh.parking?.at === input.at && ['parked', 'releasing'].includes(fresh.parking.phase)
     && validSavedAutomaticOrigin(fresh) && fresh.automaticOrigin.coordinatorId === input.coordinatorId
     && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd)
-    && sameFact(fresh.automaticOrigin, run?.automaticOrigin) && fresh.root === run?.root;
+    && sameFact(fresh.automaticOrigin, run?.automaticOrigin) && fresh.root === run?.root
+    && !continuationCheckHeld(fresh, p);
   if (!current(run) || typeof p.releaseParkedClaim !== 'function') return skipped();
   if (!conditionalCommit(run, p, current, fresh => {fresh.parking.phase = 'releasing';})) return skipped();
   if (!current(readRun(run.runDir))) return skipped();
@@ -4706,6 +4726,18 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
   if (!run || ended(run) || !validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== input.coordinatorId
     || run.automaticOrigin.machine !== input.machine || !samePath(run.sourceRoot, input.cwd)
     || run.parking?.at !== input.at || !['parked', 'waking'].includes(run.parking.phase) || explicitlyStopped(run, p)) return skipped();
+  if (input.expectedBlocker) {
+    if (!sameFact(run.parking.blocker, input.expectedBlocker)
+      || run.parking.phase === 'parked' && !sameFact(blockerFor(run) ?? run.parking.blocker, input.expectedBlocker)
+      || continuationCheckHeld(run, p) || run.parking.phase === 'parked' && !await p.parkingBlockerCleared?.(run)) return skipped();
+    const latest = readRun(run.runDir);
+    if (!latest || latest.runId !== run.runId || latest.parking?.at !== input.at
+      || !sameFact(latest.parking.blocker, input.expectedBlocker)
+      || !['parked', 'waking'].includes(latest.parking.phase)
+      || !sameFact(latest.automaticOrigin, run.automaticOrigin)
+      || latest.parking.phase === 'parked' && !sameFact(blockerFor(latest) ?? latest.parking.blocker, input.expectedBlocker)
+      || continuationCheckHeld(latest, p)) return skipped();
+  }
   const text = run.parking.text ?? input.text;
   if (text && (RUNTIME_WAKE_TAG.test(text) || isEnvironmentWake(text)) && (run.gate || openQuestion(run))) return skipped();
   commitRun(run, p, fresh => {
