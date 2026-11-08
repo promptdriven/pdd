@@ -563,8 +563,21 @@ Auto closes fixed, duplicate and old-code issues with evidence and a reopen hint
 Observe labels them `pdd:close-proposed` and proposes the close. Another login gets
 one assignment note. An unknown owner gets `pdd:needs-owner` and one question.
 Person assignees and live claims prevent close and assignment effects. Writes are
-serial and wait at least one second between effects.
+serial and wait at least one second between effects. Each invocation routes at
+most 10 unfinished issues. Record saves, group effects and routing share a limit
+of 20 write attempts. A low or reserve GitHub budget stops further effects. The
+next tick resumes the remaining work. Existing route notes and labels prevent
+repeat effects from holding later issues.
 
-Issues in the same area with the same cause wait for one umbrella. Its owner
-carries every member's requirements into one global fix. The code PR closes its
-current members. Existing dependencies, claims, trust and merge rules still apply.
+Grouping is continuous. New and changed sorts are compared with all open saved
+sorts and groups. Equal causes join or form a group. A changed cause leaves it.
+At three members, or across locally owned areas, auto creates one
+`Global fix: <cause>` issue with the member links, cause and one fix statement.
+Observe keeps the group proposal. Claimed issues and open-PR work finish before
+they can join. A running umbrella gets one note when membership changes.
+
+The global fix PR references its members. After that PR merges, every member
+needs a fresh sort against the fix. Only members confirmed fixed close with
+evidence; the others stay open. `pdd autopilot status` and the graph issue list
+show group size, cause and umbrella. Local group state is kept in the checkout's
+Git common directory. Existing dependencies, claims, trust and merge rules apply.

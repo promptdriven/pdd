@@ -34,6 +34,7 @@ export function selectedSort(snapshot, issue) {
   const heads = all.filter(x => !superseded.has(x.id));
   if (heads.length !== 1) return null;
   const head = heads[0], r = head.record;
+  if ((snapshot.sortContext?.groups ?? []).some(g => g.merged && g.recheck?.some(x => x.issue === issue.key && x.heads.includes(head.id)))) return null;
   if (!head.intact || head.authority !== 'trusted' || !validSort(r) || r.issue !== issue.key || r.status.release !== snapshot.sortContext?.release) return null;
   const current = new Map([...snapshot.issues, ...snapshot.inputs].map(x => [x.key, x.revision]));
   if (r.paths.some(path => !r.inputs.some(x => x.key === sortSourceKey(snapshot.repository, path))) || r.inputs.some(x => current.get(x.key) !== x.revision) || sortInputs(snapshot, issue).some(x => !r.inputs.some(y => y.key === x.key && y.revision === x.revision))) return null;
@@ -46,7 +47,7 @@ export function sortPlan({ snapshot }) {
   for (const issue of snapshot.issues.filter(x => x.key.startsWith(prefix) && x.state === 'open' && x.authority === 'trusted')) {
     const record = selectedSort(snapshot, issue), route = { issue: issue.key, action: 'hold', area: '', owner: '', reason: '', record, umbrella: '', members: [], evidence: record?.status.evidence ?? [] };
     routes.push(route);
-    const live = issue.execution === 'running' || issue.holds.some(x => /claim/i.test(x) && !/^Expired claim\b/.test(x));
+    const live = issue.execution !== 'idle' || issue.sortOpenPr === true || issue.holds.some(x => /claim/i.test(x) && !/^Expired claim\b/.test(x));
     if (!Array.isArray(issue.assignees) || issue.assignees.length) { route.reason = 'owned'; continue; }
     if (!record) { if (!live) queued.push(issue.key); route.reason = 'sort-required'; continue; }
     if (live) route.reason = 'owned';
@@ -61,32 +62,61 @@ export function sortPlan({ snapshot }) {
     if (record.question || record.status.state === 'unclear' || record.genuine.kind === 'unclear') { route.action = live ? 'hold' : 'question'; route.reason = 'needs-answer'; continue; }
     route.action = live ? 'hold' : 'work'; route.reason = live ? 'owned' : 'local';
   }
+  const saved = snapshot.sortContext.groups ?? [];
+  const umbrellaKeys = new Set(saved.filter(x => !x.merged && !x.members.includes(x.umbrella)).map(x => x.umbrella).filter(Boolean));
+  const synthetic = issue => /<!-- pdd-issue-group:v1 ([a-z\d]+(?:-[a-z\d]+)*) -->/.test(issue.sortText ?? '');
   const byCause = new Map();
-  for (const route of routes.filter(x => (x.action === 'work' || x.action === 'hold' && x.reason === 'owned' && x.owner === 'autopilot') && x.record?.rootCause)) {
-    const key = `${route.area}\0${route.record.rootCause}`;
+  for (const route of routes.filter(x => x.action === 'work' && x.record?.rootCause && !umbrellaKeys.has(x.issue) && !synthetic(snapshot.issues.find(i => i.key === x.issue)))) {
+    const key = route.record.rootCause;
     if (!byCause.has(key)) byCause.set(key, []);
     byCause.get(key).push(route);
   }
-  for (const members of byCause.values()) {
-    if (members.length < 2) continue;
-    members.sort((a,b) => Number(a.issue.split('/').pop()) - Number(b.issue.split('/').pop()));
-    const live = members.filter(x => x.action === 'hold' || snapshot.issues.find(i => i.key === x.issue)?.executionClaim);
-    if (live.length > 1) { for (const member of members) { member.action = 'hold'; member.reason = 'multiple-runs'; } continue; }
-    const umbrella = (live[0] ?? members[0]).issue, keys = members.map(x => x.issue);
-    groups.push({ area: members[0].area, rootCause: members[0].record.rootCause, umbrella, members: keys });
-    for (const member of members) Object.assign(member, { umbrella, members: keys });
+  // Saved groups are compared with the same current records. A stale member
+  // holds its previous group, but cannot authorize a new join or an effect.
+  for (const old of saved.filter(x => !x.merged)) {
+    const members = byCause.get(old.rootCause) ?? [];
+    for (const key of old.members) {
+      const route = routes.find(x => x.issue === key);
+      const retainedWork = key === old.umbrella && route?.reason === 'owned' && route.record?.rootCause === old.rootCause;
+      if (route && (!route.record || retainedWork) && !members.includes(route)) members.push(route);
+    }
+    if (members.length || old.umbrella && !old.members.includes(old.umbrella)) byCause.set(old.rootCause, members);
   }
+  for (const [rootCause, members] of byCause) {
+    members.sort((a,b) => Number(a.issue.split('/').pop()) - Number(b.issue.split('/').pop()));
+    const old = saved.find(x => !x.merged && x.rootCause === rootCause);
+    if (members.length < 2 && !old?.umbrella) continue;
+    const keys = members.map(x => x.issue), area = [...new Set(members.map(x => x.area).filter(Boolean))].sort().join(',');
+    const dedicated = members.length >= 3 || area.includes(',') || old?.umbrella && !old.members.includes(old.umbrella);
+    const recovered = snapshot.issues.filter(x => x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(`<!-- pdd-issue-group:v1 ${rootCause} -->`));
+    if (dedicated && recovered.length > 1) {
+      for (const match of recovered) { const route = routes.find(x => x.issue === match.key); if (route) { route.action = 'hold'; route.reason = 'group-umbrella-conflict'; } }
+    }
+    const occupiedWork = old?.umbrella && routes.find(x => x.issue === old.umbrella)?.reason === 'owned';
+    const umbrella = occupiedWork ? old.umbrella : dedicated ? (old?.umbrella && !old.members.includes(old.umbrella) ? old.umbrella : recovered.length === 1 ? recovered[0].key : '') : old?.umbrella && snapshot.issues.find(x => x.key === old.umbrella)?.state !== 'open' ? old.umbrella : keys[0];
+    groups.push({ area, rootCause, umbrella, members: keys, notified: old?.notified ?? old?.members ?? keys });
+    for (const member of members) Object.assign(member, { umbrella, members: keys });
+    const umbrellaRoute = routes.find(x => x.issue === umbrella);
+    if (umbrellaRoute) Object.assign(umbrellaRoute, { umbrella, members: keys });
+    if (!umbrella) for (const member of members) { member.action = 'hold'; member.reason = 'group-umbrella-pending'; }
+  }
+  for (const route of routes) if (route.action === 'work' && synthetic(snapshot.issues.find(x => x.key === route.issue)) && !groups.some(g => g.umbrella === route.issue)) { route.action = 'hold'; route.reason = 'orphan-group-umbrella'; }
+  // Keep the merge boundary until all previous heads have been superseded.
+  for (const group of saved.filter(x => x.merged)) groups.push(group);
   return { queued, routes, groups };
 }
 export function projectSortGraph(snapshot, graph) {
   if (!snapshot.sortContext) return graph;
   const plan = sortPlan({ snapshot }), unsafeGroups = new Set();
+  graph.groups = plan.groups;
   const uncertainSibling = (area, cause) => snapshot.issues.some(issue => issue.key.startsWith(`https://github.com/${snapshot.repository.toLowerCase()}/issues/`) && issue.state === 'open' && issue.authority === 'trusted' && !selectedSort(snapshot, issue)
     && (issue.sorts ?? []).some(saved => saved.authority === 'trusted' && saved.intact && validSort(saved.record) && saved.record.rootCause === cause
-      && resolveArea({ ...snapshot.sortContext, evidence: { paths: saved.record.paths, keywords: [issue.title, issue.sortText ?? ''], labels: issue.labels ?? [], area: saved.record.belongs.area } }).area === area));
-  for (const group of plan.groups) {
+      && resolveArea({ ...snapshot.sortContext, evidence: { paths: saved.record.paths, keywords: [issue.title, issue.sortText ?? ''], labels: issue.labels ?? [], area: saved.record.belongs.area } }).area.split(',').some(x => area.split(',').includes(x))));
+  for (const group of plan.groups.filter(x => !x.merged)) {
     const umbrella = graph.nodes.find(x => x.key === group.umbrella);
     const members = graph.nodes.filter(x => group.members.includes(x.key));
+    if (!umbrella) { for (const member of members) { unsafeGroups.add(member.key); member.eligible = false; member.reasons.push('Group umbrella pending'); } continue; }
+    if (!members.length) { unsafeGroups.add(group.umbrella); umbrella.eligible = false; umbrella.reasons.push('Group has no open members'); }
     if (uncertainSibling(group.area, group.rootCause)) { unsafeGroups.add(group.umbrella); umbrella.eligible = false; umbrella.reasons.push('Group sort pending'); }
     if (members.some(x => x.key === group.umbrella ? !['idle','running'].includes(x.executionState) : x.executionState !== 'idle')) unsafeGroups.add(group.umbrella);
     if (unsafeGroups.has(group.umbrella)) umbrella.eligible = false;
@@ -116,7 +146,7 @@ export function projectSortGraph(snapshot, graph) {
     const route = plan.routes.find(x => x.issue === node.key);
     if (!route) continue;
     if (!route.umbrella && route.record?.rootCause && uncertainSibling(route.area, route.record.rootCause)) { unsafeGroups.add(node.key); node.eligible = false; node.reasons.push('Group sort pending'); }
-    node.sort = { action: route.action, area: route.area, owner: route.owner, umbrella: route.umbrella, members: route.members, ready: !unsafeGroups.has(route.umbrella || node.key) };
+    node.sort = { action: route.action, area: route.area, owner: route.owner, umbrella: route.umbrella, members: route.members, rootCause: route.record?.rootCause ?? plan.groups.find(g => g.umbrella === node.key)?.rootCause ?? '', ready: !unsafeGroups.has(route.umbrella || node.key) };
     if (route.action !== 'work' || route.umbrella && route.umbrella !== node.key) {
       node.eligible = false;
       node.reasons.push(route.umbrella && route.umbrella !== node.key ? 'Waiting for root-cause umbrella' : `Sort: ${route.reason}`);
@@ -129,5 +159,5 @@ export function projectSortGraph(snapshot, graph) {
 export function sortClosingReferences({ snapshot, issue, code, graph }) {
   const group = sortPlan({ snapshot }).groups.find(x => x.umbrella === issue);
   if (!group || graph?.nodes.find(x => x.key === issue)?.sort?.ready !== true) return [];
-  return (group?.members ?? []).filter(x => x !== issue).map(key => `${code ? 'Closes' : 'Refs'} ${key}`);
+  return (group?.members ?? []).filter(x => x !== issue).map(key => `Refs ${key}`);
 }

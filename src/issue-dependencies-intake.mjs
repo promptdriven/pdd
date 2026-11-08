@@ -1,4 +1,5 @@
-import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, pacedSortWrites } from './issue-sort-github.mjs';
+import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
+import { sortPlan } from './issue-sort.mjs';
 import { randomUUID } from 'node:crypto';
 import { execFile as nodeExecFile } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -270,6 +271,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
       const write = pacedSortWrites(ports, { cwd, repository: request.repository });
       await saveSortBatch({ repository: request.repository, snapshot, sorts }, ports, write);
       const settings = await ports.settings.read({ cwd, repository: request.repository });
+      await syncSortGroups({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
       await routeSortIssues({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
     } catch { return finish(pendingResult('write-unconfirmed', { stage: 'sort', reviewIds: ids, questions })); }
   }
@@ -283,7 +285,11 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   if (mode === 'off') return { queued: [], eligible: [], skipped: [], pending: false };
   // #3053: current records can finish a route without another semantic call.
   if (snapshot.sortContext) {
-    try { await routeSortIssues({ cwd, repository, snapshot, mode }, ports); }
+    try {
+      const write = pacedSortWrites(ports, { cwd, repository });
+      await syncSortGroups({ cwd, repository, snapshot, mode }, ports, write);
+      await routeSortIssues({ cwd, repository, snapshot, mode }, ports, write);
+    }
     catch { /* Unconfirmed effects wait; graph holds routed issues. */ }
   }
   let graph = projectIssueGraph({ snapshot });
@@ -304,7 +310,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   const eligible = graph.nodes.filter(n => subjects.includes(n.key) && !skipped.includes(n.key) && n.eligible).map(n => n.key);
   // The observed winning claims, with heartbeat and expiry facts, for the tick.
   const claims = Array.isArray(owners.claims) ? owners.claims : [];
-  if (!queued.length || !ports.pending) return { queued, eligible, skipped, pending: Boolean(queued.length || incomplete.length), claims };
+  if (!queued.length || !ports.pending) return { queued, eligible, skipped, pending: Boolean(queued.length || incomplete.length), claims, groups: snapshot.sortContext ? sortPlan({ snapshot }).groups : [] };
   const prepared = await prepareDependencyIntake({ cwd, repository }, { ...ports, snapshots: { read: async () => ({ snapshot }) }, owners: { read: async () => ({ json: JSON.stringify(owners) }) } });
   const order = a => a.slice().sort((x,y) => x.key.localeCompare(y.key) || x.revision.localeCompare(y.revision));
   const selectedSnapshot = JSON.parse(prepared.request.snapshotJson);
@@ -331,7 +337,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
     return true;
   };
   if (fingerprint !== pending.delivered || trigger === 'refresh') {
-    if (!await send(null)) return { queued, eligible, skipped, pending: true, claims };
+    if (!await send(null)) return { queued, eligible, skipped, pending: true, claims, groups: snapshot.sortContext ? sortPlan({ snapshot }).groups : [] };
   } else if (pending.subjects !== subjectSet || !Number.isFinite(pending.deliveredAt)) {
     // A delivery saved without its time or subjects: the wait starts now.
     Object.assign(pending, { subjects: subjectSet, deliveredAt: now, redelivered: 0 });
@@ -347,7 +353,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
       await save();
     }
   }
-  return { queued, eligible, skipped, pending: Boolean(incomplete.length || pending.requested !== pending.delivered), claims };
+  return { queued, eligible, skipped, pending: Boolean(incomplete.length || pending.requested !== pending.delivered), claims, groups: snapshot.sortContext ? sortPlan({ snapshot }).groups : [] };
 }
 
 // The reason of the last completion of the delivered request, from the note that

@@ -127,11 +127,12 @@ for (const owned of ['person','claim','unknown-assignees']) for (const action of
   assert.equal(w.writes.length, 0);
 });
 
-test('three issues with one cause have one umbrella; different areas stay separate', async () => {
+test('three issues with one cause wait for a dedicated umbrella', async () => {
   const w = fixture([3,2,1]); for (const n of [1,2,3]) { w.save(w.record(n)); w.review(n); }
   const result = await graph(w);
-  assert.deepEqual(result.nodes.filter(x => x.eligible).map(x => x.key), [key(1)]);
-  assert.deepEqual(result.nodes.find(x => x.key === key(2)).blockers, [key(1)]);
+  assert.deepEqual(result.nodes.filter(x => x.eligible).map(x => x.key), []);
+  assert.equal(result.groups.length, 1);
+  assert.equal(result.groups[0].umbrella, '');
   assert.deepEqual(result.nodes.find(x => x.key === key(1)).sort?.members, [key(1),key(2),key(3)]);
   assert.equal((await prepareDependencyIntake({ repository }, w.ports)).queued.length, 0);
 });
@@ -144,24 +145,25 @@ test('routing writes are serial and paced across issues', async () => {
   for (let i = 1; i < effects.length; i++) assert.ok(effects[i].at - effects[i - 1].at >= 1000);
 });
 
-test('same cause in different areas keeps separate umbrellas', async () => {
+test('same cause in different areas waits for one global umbrella', async () => {
   const w = fixture([1,2,3], { context: { areas: [
     { name: 'cli', owner: 'autopilot', match: { paths: ['src/cli.mjs'] } },
     { name: 'docs', owner: 'autopilot', match: { paths: ['docs/**'] } },
   ] } });
   for (const n of [1,2,3]) { w.save(w.record(n, n === 3 ? { belongs: { kind: 'area', area: 'docs', repository: '' }, paths: ['docs/guide.md'] } : {})); w.review(n); }
   const g = await graph(w);
-  assert.deepEqual(g.nodes.filter(x => x.eligible).map(x => x.key), [key(1),key(3)]);
-  assert.deepEqual(g.nodes.find(x => x.key === key(1)).sort?.members, [key(1),key(2)]);
+  assert.deepEqual(g.nodes.filter(x => x.eligible).map(x => x.key), []);
+  assert.deepEqual(g.groups[0].members, [key(1),key(2),key(3)]);
 });
 
-test('an active umbrella keeps its group when a lower-numbered member is sorted', async () => {
+test('claimed member work is not pulled into a new group', async () => {
   const w = fixture([1,2,3]);
   for (const n of [1,2,3]) { w.save(w.record(n)); w.review(n); }
   w.issues[1].labels.push('pdd:working');
-  assert.equal((await node(w, 1)).sort?.umbrella, key(2));
+  assert.equal((await node(w, 1)).sort?.umbrella, key(1));
+  assert.deepEqual((await node(w, 1)).sort?.members, [key(1),key(3)]);
   assert.equal((await node(w, 3)).eligible, false);
-  assert.equal((await graph(w)).nodes.filter(x => x.eligible).length, 0);
+  assert.equal((await graph(w)).nodes.filter(x => x.eligible).length, 1);
 });
 
 test('another-owner handoff is the same in observe mode', async () => {

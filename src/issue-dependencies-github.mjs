@@ -1,4 +1,4 @@
-import { sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
+import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
 // Implements prompts/cli/issue-dependencies-github.prompt.md.
 import { execFile as execCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -88,8 +88,8 @@ function service(cwd, ports) {
     }
     const executeRequest = () => run('gh', ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json',
       ...(saved ? ['-H', `If-None-Match: ${saved.etag}`] : []), ...(input === undefined ? [] : ['--input', '-'])], input, purpose, !!saved, repository);
-    const mutation = method === 'POST' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9][0-9]*\/(?:comments|dependencies\/blocked_by)$/.test(endpoint)
-      || method === 'PATCH' && /^repos\/[^/]+\/[^/]+\/issues\/comments\/[1-9][0-9]*$/.test(endpoint);
+    const mutation = endpoint !== 'graphql' && method !== 'GET';
+    if (mutation && ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
     const raw = mutation && ports.admitMutation ? await ports.admitMutation(executeRequest) : await executeRequest();
     const boundary = raw.search(/\r?\n\r?\n/), header = boundary >= 0 ? raw.slice(0, boundary) : '';
     const body = boundary >= 0 ? raw.slice(boundary).trim() : raw;
@@ -218,11 +218,29 @@ function rawGithub(cwd, ports) {
     },
     sortUpdate: async ({ repository, issue, label, assignee, close }) => {
       const endpoint = `repos/${repository}/issues/${issue}`;
+      const before = label ? (await s.api(endpoint)).value : null;
+      if (label && before.labels?.some(x => (typeof x === 'string' ? x : x.name) === label)) return { ok: true };
       if (label) await s.api(`${endpoint}/labels`, 'POST', JSON.stringify({ labels: [label] }));
       else await s.api(endpoint, 'PATCH', JSON.stringify(assignee ? { assignees: [assignee] } : { state: 'closed' }));
       const observed = (await s.api(endpoint)).value;
       if (label ? !observed.labels?.some(x => x.name === label) : assignee ? !observed.assignees?.some(x => x.login === assignee) : observed.state !== 'closed') throw Error('sort-write-pending');
       return { ok: true };
+    },
+    createSortUmbrella: async ({ repository, title, body }) => {
+      const created = (await s.api(`repos/${repository}/issues`, 'POST', JSON.stringify({ title, body }))).value;
+      if (!Number.isSafeInteger(created.number) || created.number < 1) throw Error('sort-write-pending');
+      const observed = (await s.api(`repos/${repository}/issues/${created.number}`)).value;
+      if (observed.html_url !== created.html_url || observed.title !== title || observed.body !== body) throw Error('sort-write-pending');
+      return { json: JSON.stringify(observed) };
+    },
+    sortMergedFix: async ({ repository, issue }) => {
+      const [owner, name] = repository.split('/');
+      const query = `query($owner:String!,$name:String!,$issue:Int!) { repository(owner:$owner,name:$name) { issue(number:$issue) { state timelineItems(last:1,itemTypes:[CLOSED_EVENT]) { nodes { ... on ClosedEvent { closer { __typename ... on PullRequest { url merged } } } } } } } }`;
+      const result = (await s.api('graphql', 'POST', JSON.stringify({ query, variables: { owner, name, issue } }), undefined, repository)).value;
+      const row = result.data?.repository?.issue, closer = row?.timelineItems?.nodes?.[0]?.closer;
+      if (result.errors?.length || row?.state !== 'CLOSED' || closer?.__typename !== 'PullRequest' || closer.merged !== true
+        || !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*$/.test(closer.url ?? '')) return { url: '' };
+      return { url: closer.url };
     },
     addBlocker: async ({ repository, issue, blockerId }) => {
       if (!/^[1-9][0-9]*$/.test(blockerId)) throw Error('Invalid REST issue identity');
@@ -661,7 +679,9 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     rootIndex.set(key, raw);
   }
   if (invalidIndex) warn('Open issue index is incomplete');
-  const queue = [...rootIndex.keys()];
+  const sorting = supplied.sortContext || !supplied.github || supplied.github[NATIVE_GITHUB];
+  const sortGroups = sorting ? await readSortGroups({ cwd, repository }, ports) : [];
+  const queue = [...rootIndex.keys(), ...sortGroups.map(x => x.umbrella).filter(Boolean)];
   // Supplied GitHub ports retain the exact existing contract and call behavior.
   if (ports.github[NATIVE_GITHUB] && roots.length) {
     const bulk = await bulkRoots(cwd, repository, roots, ports), github = ports.github;
@@ -693,7 +713,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     if (labels.includes('pdd:working')) holds.push('Claimed');
     if (labels.includes('pdd:stuck')) holds.push('Stuck');
     if (labels.includes('pdd:code-pending')) holds.push('Code pending');
-    const issue = { key, sorts: [], labels, sortText: authority.authority === 'trusted' ? raw.body ?? '' : '', nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
+    const issue = { key, sorts: [], sortRouteNotes: [], labels, sortText: authority.authority === 'trusted' ? raw.body ?? '' : '', nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
       state: !detailKnown ? 'unknown' : raw.state === 'open' ? 'open' : raw.state === 'closed' ? raw.state_reason === 'not_planned' ? 'not_planned' : 'completed' : 'unknown',
       authority: authority.authority === 'trusted' ? 'trusted' : authority.authority === 'outsider' ? 'untrusted' : 'unknown',
       conditions: conditionRows.map(c => c.text ?? c.condition).filter(Boolean), execution: execution?.execution ?? execution?.state ?? (labels.includes('pdd:working') ? 'running' : context.nativeExecution ? 'unknown' : 'idle'), holds: [...new Set(holds)],
@@ -704,13 +724,15 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
     for (const kind of ['comments', 'blockedBy', 'blocking', 'timeline']) {
       let items;
       try { items = await allPages(ports.github, i.repository, kind, i.issue); } catch (e) { items = e.partialItems ?? []; missing(kind, `Incomplete ${kind}: ${key}`); }
-      if (kind === 'timeline') issue.pastAssignees = sortPastAssignees(items); // #3053: draft evidence only.
+      if (kind === 'timeline') { issue.pastAssignees = sortPastAssignees(items); issue.sortOpenPr = items.some(x => x.event === 'cross-referenced' && x.source?.issue?.pull_request && x.source.issue.state === 'open'); } // #3053: draft evidence only.
       if (kind === 'comments') for (const comment of items) {
         const current = await authorityFor(i.repository, comment.user?.login ?? '');
         if (!['trusted','outsider'].includes(current.authority)) missing('comments', `Comment authority unavailable: ${key}`);
         // #3053: reuse the comments already observed for dependencies.
         const sort = readSortComment(comment, current.authority);
         if (sort) { issue.sorts.push(sort); continue; }
+        const routeNote = /<!-- pdd-issue-route:v1 -->\s*<!-- ([a-f\d]{64}) -->/.exec(comment.body ?? '');
+        if (routeNote && current.authority === 'trusted' && comment.created_at && comment.created_at === comment.updated_at) issue.sortRouteNotes.push(routeNote[1]);
         const record = normalizedRecord(comment, key, current.authority);
         if (record) {
           if (record.type === 'review') { reviews.push(record.value); for (const d of record.value.dependencies) if (info(d.key)) queue.push(info(d.key).key); }
@@ -772,7 +794,7 @@ export async function readDependencySnapshot({ cwd = '', repository, inputs = []
   const capturedAt = (await ports.clock.now({})).iso;
   // #3053: local sort configuration is read once with this snapshot.
   const snapshot = { repository, capturedAt, complete, issues, edges: dedupEdges, reviews, impacts, inputs: uniqueRows(context.inputs ?? []), coverage, warnings };
-  if (supplied.sortContext || !supplied.github || supplied.github[NATIVE_GITHUB]) await addSortContext(snapshot, await selectedCheckout(cwd, repository, ports) || '', ports);
+  if (sorting) await addSortContext(snapshot, await selectedCheckout(cwd, repository, ports) || '', ports, sortGroups);
   return { snapshot, warnings };
 }
 

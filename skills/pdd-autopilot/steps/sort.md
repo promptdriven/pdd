@@ -39,9 +39,14 @@ PDD routes closed proposals, external owners and questions. Do not start them.
 In auto, a close comment gives evidence and a reopen hint before closure. Observe
 keeps it open with pdd:close-proposed. Person assignees and live claims win.
 
-Read the graph again after completion. Same-area root-cause members wait for one
-umbrella. Give its owner every member and the common cause. Build one global fix,
-with one PR pair. The code PR closes all current group members. Keep each member's
-requirements and required prerequisites in the umbrella's scope. Never make a
-separate member run while the umbrella is active. Claims and merge rules still
-apply. A conflicting group or dependency cycle needs a question, not a guess.
+Read the graph again after completion. Compare each new or changed issue with all
+open saved sorts and groups in contextJson.sort. Equal causes join or form groups;
+a changed cause leaves. PDD creates one Global fix umbrella at three members or
+across locally owned areas. Keep each member's requirements and prerequisites.
+Claimed or open-PR work finishes before it can join. A running umbrella gets a
+membership note. Give its owner every member, shared cause and one fix statement.
+Both PRs reference members. After the global fix merges, sort every member again
+against the fixing PR and current release. Close only fresh fixed decisions with
+evidence; leave remaining problems open. Read status or the graph for group size,
+cause and umbrella. Claims, trust and merge rules still apply. A conflicting group
+or dependency cycle needs a question, not a guess.

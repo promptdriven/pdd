@@ -1533,3 +1533,18 @@ test('relaunch: a second relaunch for the same fingerprint is held; the current 
   assert.equal(f.state().coordinatorId, original.coordinatorId);
   assert.doesNotMatch((await f.invoke('status')).message, /relaunch (pending|held)/);
 });
+
+test('status shows saved group size, cause and umbrella without GitHub reads', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const group = { area: 'cli', rootCause: 'shared-context', umbrella: 'https://github.com/owner/repo/issues/100', members: ['https://github.com/owner/repo/issues/1','https://github.com/owner/repo/issues/2','https://github.com/owner/repo/issues/3'] };
+  f.ports.reconcileDependencyIntake = async () => ({ eligible: [], queued: [], skipped: [], groups: [group] });
+  await f.tick();
+  const before = f.runs.filter(([file]) => file === 'gh').length;
+  const result = await f.invoke('status');
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.message.includes('3 issues'));
+  assert.ok(result.message.includes(group.rootCause));
+  assert.ok(result.message.includes(group.umbrella));
+  assert.equal(f.runs.filter(([file]) => file === 'gh').length, before);
+});

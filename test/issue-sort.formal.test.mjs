@@ -33,7 +33,7 @@ test('bounded group rule: sizes 1..3, cause counts 1..3, one eligible run per ca
     for (const n of numbers) { w.save(w.record(n, { rootCause: `cause-${n % causes}` })); w.review(n); }
     const snapshot = (await readDependencySnapshot({ repository }, w.ports)).snapshot;
     const graph = projectIssueGraph({ snapshot });
-    assert.equal(graph.nodes.filter(x => x.eligible).length, Math.min(size, causes));
-    assert.ok(graph.nodes.every(x => x.sort?.action === 'work'));
+    assert.equal(graph.nodes.filter(x => x.eligible).length, size === 3 && causes === 1 ? 0 : Math.min(size, causes));
+    assert.ok(graph.nodes.every(x => x.sort?.action === (size === 3 && causes === 1 ? 'hold' : 'work')));
   }
 });

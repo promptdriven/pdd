@@ -4,16 +4,19 @@ import { prepareDependencyIntake, completeDependencyIntake } from '../../src/iss
 export const repository = 'example/project';
 export const key = n => `https://github.com/${repository}/issues/${n}`;
 const hash = x => createHash('sha256').update(x).digest('hex');
+const routingLabels = (labels, areas) => labels.filter(x => !['pdd:working','pdd:stuck','pdd:code-pending','pdd:close-proposed','pdd:needs-owner'].includes(x) || (areas ?? []).some(a => a.match?.labels?.includes(x))).slice().sort();
 const reply = x => ({ json: JSON.stringify(x) });
 export const revision = issue => hash(JSON.stringify({ title: issue.title, body: issue.body }));
 export function fixture(numbers = [1], options = {}) {
   let now = Date.parse('2026-11-07T12:00:00Z'), next = 100;
   const context = { codeowners: '', release: '1.0.0', folders: ['src'], ...options.context };
   const issues = numbers.map(number => ({ id: number, number, html_url: key(number), title: `Synthetic issue ${number}`, body: 'A current product defect.', state: 'open', user: { login: 'owner' }, labels: [], assignees: [] }));
+  let groups = [];
   const comments = new Map(numbers.map(n => [n, []])), writes = [], waits = [], claims = [], files = new Map();
   const comment = (body, login = 'owner') => ({ id: String(next++), body, created_at: new Date(now).toISOString(), updated_at: new Date(now).toISOString(), user: { login } });
   const append = (n, body, login) => { const c = comment(body, login); comments.get(n).push(c); return c; };
   const ports = {
+    sortGroups: { read: async () => ({ groups: structuredClone(groups) }), save: async ({ groups: next }) => { groups = structuredClone(next); return { ok: true }; } },
     sortContext: { read: async () => ({ ...context }) },
     settings: { read: async () => ({ mode: options.mode ?? 'auto' }) },
     authority: { read: async ({ author }) => ({ authority: author === 'outsider' ? 'outsider' : 'trusted' }) },
@@ -39,6 +42,13 @@ export function fixture(numbers = [1], options = {}) {
         if (close) raw.state = 'closed';
         return { ok: true };
       },
+      createSortUmbrella: async ({ title, body }) => {
+        const number = Math.max(...issues.map(x => x.number)) + 100;
+        const raw = { id: number, number, html_url: key(number), title, body, state: 'open', user: { login: 'owner' }, labels: [], assignees: [] };
+        issues.push(raw); comments.set(number, []);
+        writes.push({ at: now, issue: number, kind: 'umbrella', body }); return reply(raw);
+      },
+      sortMergedFix: async () => ({ url: options.mergedFix ?? '' }),
       addBlocker: async () => { throw Error('Unexpected native dependency mutation'); },
     },
   };
@@ -46,7 +56,7 @@ export function fixture(numbers = [1], options = {}) {
   w.record = (number, changes = {}) => {
     const issue = issues.find(x => x.number === number), contextKey = `https://github.com/${repository}#autopilot-areas`;
     const record = { schema_version: 'pdd.issue-sort.v1', issue: key(number), base: [],
-      inputs: [{ key: key(number), revision: revision(issue) }, { key: `${key(number)}#sort-labels`, revision: hash(JSON.stringify(issue.labels.filter(x => !x.startsWith('pdd:')).slice().sort())) }, { key: contextKey, revision: hash(JSON.stringify({ areas: context.areas, codeowners: context.codeowners, release: context.release })) }],
+      inputs: [{ key: key(number), revision: revision(issue) }, { key: `${key(number)}#sort-labels`, revision: hash(JSON.stringify(routingLabels(issue.labels, context.areas))) }, { key: contextKey, revision: hash(JSON.stringify({ areas: context.areas, codeowners: context.codeowners, release: context.release })) }],
       belongs: { kind: 'area', area: 'cli', repository: '' }, status: { state: 'still-happens', release: context.release, fix: '', evidence: ['src/cli.mjs:12'] },
       genuine: { kind: 'bug', duplicateOf: '', reason: '' }, paths: ['src/cli.mjs'], rootCause: 'shared-context', severity: 'medium', question: '', ...changes };
     for (const path of record.paths) {
