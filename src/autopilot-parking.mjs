@@ -2,10 +2,42 @@
 import {environmentRecovery} from './autopilot-environment.mjs';
 
 const ended = run => ['completed', 'cancelled'].includes(run.state);
+const stopped = run => ['stuck', 'waiting', 'paused'].includes(run.state);
+const reasonFor = run => [run.parkReason, run.question && !run.question.answeredAt ? run.question.text : ''].filter(Boolean).join(' ');
+export function interpreterWaitFor(run) {
+  if (ended(run)) return null;
+  if (run.runtimeWait) return run.runtimeWait;
+  const cached = run.parking?.blocker?.kind === 'interpreter' ? run.parking.interpreterWait : null;
+  const reason = String(run.parkReason ?? '');
+  if (!stopped(run) || !(run.stuckCause === 'interpreter' || /pdd:no[- ]verdict|runner-stopped|unknown saved[- ]read/i.test(reason)
+    || /interpreter/i.test(reason) && /no[- ]verdict|unknown|runner-stopped|saved[- ](?:batch|read)|outage/i.test(reason)))
+    return cached && !reason && !run.stuckCause && JSON.stringify(run.gate ?? null) === JSON.stringify(run.parking.interpreterGate ?? null) ? cached : null;
+  const inferred = {at: run.updatedAt ?? run.startedAt ?? 0, reason,
+    batch: /\b\d{8}-\d{6}-[a-z0-9]+\b/i.exec(reason)?.[0] ?? null,
+    cause: /unknown|runner-stopped/i.test(reason) ? 'unknown' : 'service'};
+  return cached && ['reason', 'batch', 'cause'].every(key => cached[key] === inferred[key]) ? cached : inferred;
+}
 export function blockerFor(run) {
   if (ended(run)) return null;
   if (run.blockedOn) return run.blockedOn;
   if (run.runtimeWait) return {kind: 'interpreter', until: null};
+  if (!stopped(run) && !run.parking) return null;
+  const question = run.question && !run.question.answeredAt;
+  const reason = question ? String(run.question.text ?? '') : reasonFor(run);
+  const dependency = /(?:waiting|blocked) (?:for|on|by) (?:issue )?#([1-9][0-9]*) (?:to )?merge/i.exec(reason);
+  if (dependency) return {kind: 'dependency', until: dependency[1]};
+  if (/(?:missing|wait(?:ing)?|needs?|no supported).*#2897/i.test(reason)
+    || /(?:no supported|missing|installed PDD has no).*PR\s*1.*(?:current[- ]main|integration|re-entry)/i.test(reason)
+    || /supported native recovery.*PR\s*1/i.test(reason)) return {kind: 'pdd', until: '#2897'};
+  const fix = /missing PDD (?:feature|bug|fix).*?#([1-9][0-9]*)/i.exec(reason);
+  if (fix) return {kind: 'pdd', until: `#${fix[1]}`};
+  if (question) return {kind: 'person', until: null};
+  if (interpreterWaitFor(run)) return {kind: 'interpreter', until: null};
+  if (/github.*(?:rate|limit)|(?:account|usage)[- ]limit/i.test(reason)) return {
+    kind: /github/i.test(reason) ? 'github' : 'account',
+    until: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/.exec(reason)?.[0] ?? null};
+  if (/review lease/i.test(reason)) return {kind: 'review', until: run.pr?.at(-1)?.url ?? null};
+  if (/waiting for CI|CI (?:pending|result)/i.test(reason)) return {kind: 'ci', until: run.pr?.at(-1)?.url ?? null};
   if (run.question && !run.question.answeredAt || run.gate) return {kind: 'person', until: null};
   if (environmentRecovery(run)) return {kind: 'environment', until: null};
   if (run.state === 'waiting' && run.pr?.length) return {kind: 'ci', until: run.pr.at(-1).url};
@@ -14,10 +46,12 @@ export function blockerFor(run) {
 const label = blocker => blocker?.kind === 'dependency' ? `needs #${blocker.until}`
   : blocker?.kind === 'pdd' ? `needs ${blocker.until}` : blocker?.kind ?? 'unknown';
 export function parkingSummary(runs, limit) {
-  const live = runs.filter(run => !ended(run)), parked = live.filter(run => run.parking?.phase === 'parked' && !run.parking.checkHeld);
+  const live = runs.filter(run => !ended(run)), parked = live.filter(run => run.parking?.phase === 'parked' && !run.parking.checkHeld && !run.checkHeld);
+  const reservations = run => run.parking && run.parking.phase !== 'parked' || run.parking?.checkHeld;
+  const working = live.filter(run => !parked.includes(run) && (!stopped(run) || reservations(run) || run.checkHeld)).length;
   const blockers = {};
   for (const run of parked) {const name = label(run.parking.blocker); blockers[name] = (blockers[name] ?? 0) + 1;}
-  return {working: live.length - parked.length, parked: parked.length, blockers, wakePending: [], limit};
+  return {working, parked: parked.length, blockers, wakePending: [], limit};
 }
 export function parkingWords(summary, interpreter) {
   const s = summary ?? {working: 0, parked: 0, blockers: {}, limit: 0};
@@ -33,11 +67,21 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
   let runs = await list();
   for (const run of runs) {
     if (['waking', 'releasing'].includes(run.parking?.phase)) continue;
-    const blocker = blockerFor(run) ?? await ports.observeBlocker?.(run);
+    const chat = [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
+    if (!run.parking && ['area-end', 'run-end', 'budget', 'cancel'].includes(chat?.closed?.reason)) continue;
+    const saved = blockerFor(run);
+    // Native check/limit evidence can refine a generic gate; explicit named waits win.
+    const observed = !saved || saved.kind === 'person' ? await ports.observeBlocker?.(run) : null;
+    const blocker = observed ?? saved ?? run.parking?.blocker ?? (stopped(run) ? {kind: 'unknown', until: null} : null);
     if (!blocker && !run.parking) continue;
     const progress = await ports.checkProgress(run);
     if (progress && !run.parking) continue;
     await ports.park(run, blocker ?? run.parking.blocker);
+    if (blocker?.kind === 'unknown') {
+      const key = JSON.stringify([run.runId, run.parkReason ?? null, run.question ?? null]);
+      state.parkingAlerts ??= {};
+      if (!state.parkingAlerts[key] && await ports.alertUnknown?.(run) === true) state.parkingAlerts[key] = true;
+    }
   }
   runs = await list();
   const oldest = runs.filter(run => run.parking).sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
@@ -47,14 +91,18 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     const rule = wakeRules.find(rule => rule.number === run.number && ['runtime-ready', 'environment-ready'].includes(rule.kind));
     if (run.parking.phase === 'waking' || await ports.blockerCleared(run, rule)) ready.push({run, rule});
   }
-  let summary = parkingSummary(runs, limit);
+  const occupied = rows => rows.filter(run => !ended(run) && !(run.parking?.phase === 'parked' && !run.parking.checkHeld)).length;
+  const summarize = async rows => parkingSummary(await Promise.all(rows.map(async run =>
+    stopped(run) && !run.parking && await ports.checkProgress(run) ? {...run, checkHeld: true} : run)), limit);
+  let summary = await summarize(runs);
+  let occupancy = occupied(runs);
   for (const {run, rule} of ready) {
-    if (run.parking.phase !== 'waking' && summary.working >= limit) {summary.wakePending.push(run.number); continue;}
+    if (run.parking.phase !== 'waking' && occupancy >= limit) {summary.wakePending.push(run.number); continue;}
     const result = await ports.wake(run, rule);
     if (result?.recovery === 'resumed') {
       const index = wakeRules.indexOf(rule); if (index >= 0) wakeRules.splice(index, 1);
     } else summary.wakePending.push(run.number);
-    summary.working = parkingSummary(await list(), limit).working;
+    occupancy = occupied(await list());
   }
   // Wake-up wins at the timeout boundary. Failed cleanup/resume retains its slot.
   if (wake && release) {
@@ -68,7 +116,7 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
       if (released) excess = Math.max(0, excess - 1);
     }
   }
-  const final = parkingSummary(await list(), limit);
+  const final = await summarize(await list());
   final.wakePending = summary.wakePending.filter(number => !ended((runs.find(run => run.number === number) ?? {})));
   return final;
 }
