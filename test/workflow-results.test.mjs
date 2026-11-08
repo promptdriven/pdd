@@ -137,3 +137,16 @@ test('2904: a cached row shows the build and model from its cache identity, mark
   const [mixed] = readRunResults({ root: f.root, since }, { env: f.env, capture: () => { throw Error('no capture'); } });
   assert.deepEqual([mixed.engine, mixed.engineCached, mixed.model, mixed.modelCached], ['0123456789ab', undefined, 'live-model', undefined]);
 });
+
+test('2822 integration rows: malformed newer batches preserve earlier check and lint evidence', t=>{
+  const f=folders(t);
+  f.batch('20261103-110000-aaaa',{intent:'check',created_at:'2026-11-03T11:00:00Z'},{summary_line:'valid check'});
+  f.batch('20261103-110000-bbbb',{intent:'lint-only',created_at:'2026-11-03T11:00:00Z'});
+  for(const [suffix,row] of [['cccc',null],['dddd',4],['eeee',[]]])
+    f.batch(`20261103-120000-${suffix}`,{intent:'check',created_at:'2026-11-03T12:00:00Z',rows:[row]});
+  let results;
+  assert.doesNotThrow(()=>{results=readRunResults({root:f.root},{env:f.env});});
+  assert.equal(results.length,2);
+  assert.equal(results.find(r=>r.kind==='pdd test').batch,'20261103-110000-aaaa');
+  assert.equal(results.find(r=>r.kind==='pdd lint').batch,'20261103-110000-bbbb');
+});

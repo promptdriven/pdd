@@ -78,7 +78,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   let check = null, lint = null;
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
-    if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows) || batch.rows.some(row=>!row || typeof row!=='object' || Array.isArray(row))) continue;
     let at;
     try { at = Date.parse(batch.created_at); } catch { continue; }
     if (!Number.isFinite(at) || at < since || (batch.intent !== 'check' && batch.intent !== 'lint-only')) continue;

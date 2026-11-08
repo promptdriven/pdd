@@ -420,6 +420,8 @@ and relevant physical effects.
 
 The [workspace evidence owner](workflow-runner.prompt.md#read-evidence-eligibility) owns the read binding supplied below. This is navigation; the supplied interface closes this reader without loading its caller.
 
+Validate saved row records before selecting the newest batch. A null, scalar or array row makes that batch malformed; skip it and retain other valid check, lint and proof evidence.
+
 ## Dependencies
 
 - Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
