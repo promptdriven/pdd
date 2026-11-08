@@ -22,7 +22,9 @@ for (const recovery of ['ended agent', 'closed workspace']) test(`2820 ${recover
     const reply = await native(args);
     if (args[0] === 'pane' && args[1] === 'run' && !originalFile) {
       const pane = f.herdr.panes.find(row => row.pane_id === args[2]);
-      originalFile = join(account, 'sessions', `rollout-synthetic-${pane.agent.agent_session.value}.jsonl`);
+      // The reader admits both native UUID filenames and rollout names without the UUID.
+      const name = recovery === 'ended agent' ? 'synthetic' : `synthetic-${pane.agent.agent_session.value}`;
+      originalFile = join(account, 'sessions', `rollout-${name}.jsonl`);
       writeFileSync(originalFile, metadata(pane.agent.agent_session.value, pane.cwd, f.clock));
       utimesSync(originalFile, f.clock / 1000, f.clock / 1000);
     }
@@ -72,7 +74,7 @@ for (const recovery of ['ended agent', 'closed workspace']) test(`2820 ${recover
     assert.equal(f.herdr.calls.filter(args => args[0] === 'agent' && args[1] === 'rename').length, 0);
     assert.equal(occupant.name, 'unnamed-again');
   }
-  // Even an injected reader that disregards the exact-ID request cannot authorize another session.
+  // A reader result for another UUID cannot authorize naming this saved session.
   const unrelated = await chatSession(resumed, {...f.ports, run:f.record(), findNativeSessions:async () => [{id:otherId}]});
   assert.equal(unrelated.namingError?.code, 'chat_name_unverified');
   assert.equal(occupant.name, 'unnamed-again');

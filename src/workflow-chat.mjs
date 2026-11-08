@@ -84,10 +84,13 @@ export async function ownSession({ run, chat, since, sessionId, ports = {} }) {
   const saved = sessionId ?? (kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null);
   let sessions;
   try {
-    sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: (ports.now ?? Date.now)(), ...(saved ? { sessionId: saved } : {}) },
+    sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: (ports.now ?? Date.now)(), ...(saved && kind === 'claude' ? { sessionId: saved } : {}) },
       { env, ...(folder ? (kind === 'claude' ? { claudeConfigDir: folder } : { codexHome: folder }) : {}) });
   } catch { return { kind: 'unknown' }; }
   if (!Array.isArray(sessions)) return { kind: 'unknown' };
+  // Codex discovery admits rollout filenames without a UUID. Select its parsed identity,
+  // rather than using the reader's optional filename filter for a known resumed session.
+  if (kind === 'codex' && saved) sessions = sessions.filter(session => session?.id === saved);
   if (!sessions.length) return { kind: 'none' };
   if (sessions.length !== 1 || !validSessionId(sessions[0]?.id) || (kind === 'claude' || saved) && sessions[0].id !== saved) return { kind: 'unknown' };
   return { kind: 'match', id: sessions[0].id };

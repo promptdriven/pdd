@@ -246,6 +246,7 @@ the session's original time. Other sessions started later must not make this
 known session ambiguous. The latest launch/resume time still owns startup grace
 and fresh-attempt discovery. `ownSession` accepts optional `sessionId` for this
 exact lookup; invalid IDs or results for another ID are unknown evidence.
+Match the Codex UUID in parsed native metadata; do not require it in the filename.
 This proof is required even after another observation saved a UUID, so
 an unrelated occupant never gains naming authority from observation alone.
 Claude's preallocated or resumed UUID proves identity. Gemini and agy have no
