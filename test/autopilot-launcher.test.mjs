@@ -1,3 +1,4 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
@@ -20,7 +21,7 @@ async function fixture(t, options = {}) {
   writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: options.mode ?? 'auto', trust: ['helper'] } }));
   const f = { dir, cwd, home, time: Date.parse('2026-11-04T00:00:00Z'), polls: [], prompts: [], runs: [], timers: [], comments: [], ack: [], issues: [], etag: '"one"', active: false };
   f.ports = {
-    stateRoot: join(home, 'state'), now: () => f.time,
+    checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time,
     // These fakes stand for a checkout where pdd workflows can start (#3050).
     allocationCheck: async () => ({ state: 'ready', message: '' }),
     readRunProgress: async () => f.runProgress ?? [],
@@ -1749,4 +1750,40 @@ test('native timer definitions retain both exported shared suite selectors', asy
       assert.ok(definition.includes(value),`${platform} timer records the selected path`);
     }
   }
+});
+
+// #3067: capacity reads use the same fake machine on start, tick and status.
+test('machine capacity follows resize on an empty tick without an AI wake', async t => {
+  const f=await fixture(t), {checkMachine}=await import('./helpers/check-machine.mjs');
+  const fake=checkMachine({count:64});
+  f.ports.checkCapacityPorts={...fake.ports,queueRoot:join(f.dir,'machine-checks')};
+  assert.equal((await f.invoke('start')).exitCode,0);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[5,10]);
+  const owner=f.state().ownerLaunch, prompts=f.prompts.length;
+  fake.machine.count=8;f.status=304;
+  assert.equal((await f.tick()).exitCode,0);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[1,2]);
+  assert.deepEqual(f.state().ownerLaunch,owner,'capacity does not change coordinator custody');
+  assert.equal(f.prompts.length,prompts,'an empty resize tick makes no AI call');
+  const status=await f.invoke('status');
+  assert.match(status.message,/check slots:\s*0 busy of 1, 0 waiting, cores per check 8/);
+  assert.match(status.message,/checks:\s*calculated 1, chosen 1; runs:\s*calculated 2, chosen 2/);
+});
+
+test('start saves check and run overrides and CLI forwards checks', async t => {
+  const f=await fixture(t);
+  for(const value of ['0','-1','1.2','9007199254740992','Infinity']) assert.equal((await f.invoke('start',{checks:value})).exitCode,2);
+  assert.equal((await f.invoke('start',{checks:'2',runs:'9'})).exitCode,0);
+  assert.deepEqual([f.state().checks,f.state().runs,f.state().checkCapacity.checks,f.state().checkCapacity.runs],[2,9,2,9]);
+  f.status=304;await f.tick();
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[2,9]);
+  const status=await f.invoke('status');assert.match(status.message,/checks:\s*calculated 3, chosen 2; runs:\s*calculated 4, chosen 9/);
+  let received;
+  const code=await runPdd(['autopilot','start','--checks','4','--runs','11'],{cwd:f.cwd,stdout:capture(),stderr:capture(),
+    autopilotLauncher:{runAutopilotLauncher:async input=>{received=input;return {exitCode:0,message:'started'};}},
+    autopilotGithub:{checkAutopilotSettings:async()=>({warning:''})}});
+  assert.equal(code,0);assert.deepEqual([received.checks,received.runs],['4','11']);
+  assert.equal((await f.invoke('start')).exitCode,0);
+  assert.equal(f.state().checks,undefined);assert.equal(f.state().runs,undefined);
+  assert.deepEqual([f.state().checkCapacity.checks,f.state().checkCapacity.runs],[3,6]);
 });

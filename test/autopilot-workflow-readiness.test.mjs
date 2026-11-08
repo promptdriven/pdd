@@ -1,3 +1,4 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
@@ -42,7 +43,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
   if (layout === 'separate-git-dir') separateGitDir(cwd);
   const f = { dir, home, cwd, time: Date.parse('2026-11-04T00:00:00Z'), calls: [], timers: [], prompts: [], herdrCalls: [], issues: [], warnings: [] };
   f.ports = {
-    stateRoot: join(home, 'state'), now: () => f.time, warn: text => f.warnings.push(text),
+    checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => f.time, warn: text => f.warnings.push(text),
     readRunProgress: async () => [], pathDiagnostic: () => [],
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
     run: async (command, args, options = {}) => {

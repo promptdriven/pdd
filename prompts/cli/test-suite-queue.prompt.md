@@ -13,7 +13,7 @@ path selected below, or throwing for a relative path. Export
 waiting with position, running, failure with reason, successful completion, or
 queue unavailable with its cause.
 
-Export native port adapter `executeSuite(command, {cwd, env, timeoutMs, onChild})`,
+Export native port adapter `executeSuite(command, {cwd, env, timeoutMs, onChild, cpuIds, taskset}, ports = {})`,
 which resolves `{exitCode, reason}` after child cleanup.
 
 Export `runTestSuite({cwd, command, timeout = 30, env}, ports = {})`, returning
@@ -42,7 +42,54 @@ log lines and history file at `PDD_VM_SUITE_LOCK.history`, else
 `HOME/.local/state/pdd/vm-suite/fullsuite.lock.history`. An explicit legacy lock
 path still needs an existing writable parent; the default log parent is created. No GitHub writes, private paths or live agent calls.
 
-Admit at most three running suites. Serialize ticket creation and admission with
+## Machine capacity
+
+Own the capacity rule for full suites and full builds. Preserve queue ordering,
+ownership, cleanup and paused intervals. Inject `cores()` (ordered usable CPU ID
+array), `memory()` (free bytes), `load()` (one-minute load), `platform` (OS name),
+`battery()` (Boolean) and `taskset()` (absolute executable path or null).
+Native Linux cores come from the current affinity list, with available parallelism
+as fallback. Native battery detection reads power-supply types; taskset discovery
+searches PATH for an executable. These adapters do not start a process or call AI.
+
+`calculateCheckCapacity({checks, runs}, ports)` returns `{cores, usableCores,
+cpuIds, freeMemory, load, personal, affinity, taskset, calculatedChecks, checks,
+calculatedRuns, runs, coresPerCheck, busy}`. Counts are positive integers; memory
+is bytes, load is a nonnegative number, CPU IDs are unique nonnegative integers,
+personal/affinity/busy are Booleans, taskset is a path or null. Invalid observations
+fail closed before admission. Overrides are positive safe integers when supplied.
+
+Personal means macOS or Linux with a battery. Use the first max(1, floor(cores/2))
+CPU IDs on a personal machine, else all IDs. Let U be this usable count and M be
+free bytes. Calculated slots are max(1, min(floor(U/12), floor(M/4294967296))).
+Without Linux taskset, cap calculated slots at one, since an env hint cannot
+constrain tools which ignore it. Explicit checks replaces calculated slots.
+Calculated open runs are twice the chosen slots, capped at the largest safe integer; explicit runs replaces this.
+Each check gets max(1, floor(U/chosen slots)) CPUs. Busy means load > U; equality
+admits. A busy machine admits no new heavy work. Running checks are not killed
+when capacity falls. The next tick refreshes observations and shared capacity.
+
+`configureCheckCapacity({env, checks, runs}, ports)` computes and atomically saves
+this snapshot as `capacity.json` under the shared queue admission lock and returns
+it. `readCheckStatus({env, checks, runs}, ports)` computes current values without
+writing and adds machine-wide `busyChecks` and `waitingChecks` ticket counts.
+An unavailable observation or record read throws for the caller to report.
+Queue admission uses the saved snapshot when present, otherwise computes from
+ports. A malformed snapshot fails closed. This machine-wide snapshot is shared
+across repositories; the most recent active tick supplies its selected override.
+
+On Linux with taskset, allocate a free, disjoint list from the current usable CPU
+IDs for each slot; store it as `cpuIds` on the running ticket. Existing tickets
+without this field keep their slot; new affinity admissions wait until those
+unknown CPU allocations finish. Capacity shrink waits for disjoint IDs without
+changing existing checks. If an override exceeds usable cores, extra slots wait
+for CPUs rather than share a CPU list. Always replace child `PDD_CHECK_CPUS` with
+the share. Native execution uses taskset `--cpu-list LIST /bin/bash -c COMMAND`
+when available, else bash with the hint only. Inject the process `spawn` port into
+native execution; the timeout and signal cleanup still own its process group.
+Tests provide every machine port and never inspect the host.
+
+Serialize ticket creation and admission with
 the existing PID/token lock semantics. Preserve submission order among waiting
 tickets, including equal clock times; every waiter ahead contributes to position.
 Do not hold admission ownership during a suite or a wait. All test commands,
@@ -57,9 +104,11 @@ an unrelated process or reclaim a live or uncertain owner. Unknown or unreadable
 queue ownership fails closed; it cannot admit extra suites.
 
 Persist waiting, running and completed records atomically outside the checkout.
-Record only ticket, owner PID, child PID when known, cwd, state, timestamps and
-failure reason, never the command, environment or output. Report changed queue
-positions as `waiting for a test slot (position N)`. Retain completed intervals
+Record only ticket, owner PID, child PID when known, cwd, state, timestamps,
+failure reason, assigned CPU IDs (`cpuIds`), share (`coresPerCheck`) and taskset path, never the command, environment or output. Report changed queue
+positions as `waiting for a check slot (position N)`, including full builds
+and waits on a busy machine. Autopilot reports the shared
+work as check slots. Retain completed intervals
 so the stuck clock excludes queue wait and suite execution after restart. Status
 is read-only and must not mutate workflow state or touch a live chat. A successful
 suite resumes the prior stuck clock, rather than consuming it. A suite failure,

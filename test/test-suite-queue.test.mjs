@@ -1,3 +1,5 @@
+import { checkMachine } from './helpers/check-machine.mjs';
+import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,7 +19,9 @@ function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'pdd-suite-queue-'));
   const f = { root, queue:join(root,'queue'), clock:100_000, started:[], finished:false, promises:[], outputs:[] };
   f.env = { ...process.env, PDD_SUITE_QUEUE:f.queue, HOME:join(root,'home') };
-  f.ports = { now:() => f.clock, alive:pid => f.isAlive ? f.isAlive(pid) : true, sleep:() => new Promise(done => setTimeout(done, 1)),
+  mkdirSync(f.queue,{recursive:true});
+  writeFileSync(join(f.queue,'capacity.json'),JSON.stringify(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports)));
+  f.ports = { ...checkMachine({taskset:null}).ports, now:() => f.clock, alive:pid => f.isAlive ? f.isAlive(pid) : true, sleep:() => new Promise(done => setTimeout(done, 1)),
     execute:async (command, options) => {
       options.onChild(process.pid);
       const call = {command, options}; f.started.push(call);
@@ -97,7 +101,7 @@ test('suite failure retains its own reason and status, then releases a slot', as
 
 test('dead waiter is removed from position while an orphan with a live child retains capacity', async t => {
   const f = fixture(t);
-  mkdirSync(f.queue);
+  mkdirSync(f.queue,{recursive:true});
   const row = (ticket, state, pid, childPid) => ({ticket,state,pid,childPid,cwd:join(f.root,`seed-${ticket}`),queuedAt:1,startedAt:state === 'running' ? 2 : null,finishedAt:null,reason:null});
   for (const value of [row(1,'running',10,20), row(2,'running',11,21), row(3,'running',12,22), row(4,'waiting',13,null)])
     writeFileSync(join(f.queue,`ticket-${value.ticket}.json`), JSON.stringify(value));
@@ -166,7 +170,7 @@ test('native timeout stops a suite process group before its descendant can act',
 });
 
 test('corrupt queue ownership cannot admit a suite command', async t => {
-  const f = fixture(t); mkdirSync(f.queue); writeFileSync(join(f.queue,'ticket-1.json'), '{');
+  const f = fixture(t); mkdirSync(f.queue,{recursive:true}); writeFileSync(join(f.queue,'ticket-1.json'), '{');
   assert.equal(await f.run(1), 1); assert.equal(f.started.length, 0);
 });
 
@@ -176,6 +180,8 @@ test('separate CLI processes and the compatibility script share the same three n
     for (const item of children) if (!item.ended) item.child.kill('SIGTERM');
     await Promise.all(children.map(item => item.done)); rmSync(root,{recursive:true,force:true});
   });
+  mkdirSync(queue);
+  writeFileSync(join(queue,'capacity.json'),JSON.stringify(calculateCheckCapacity({checks:3},checkMachine({taskset:null}).ports)));
   const program = join(root,'controlled-suite.cjs');
   writeFileSync(program, `const fs=require('node:fs'),path=require('node:path'); fs.writeFileSync(path.join(process.cwd(),'started'),''); const timer=setInterval(()=>{if(fs.existsSync(path.join(process.cwd(),'release'))){clearInterval(timer); process.exitCode=0;}},10);`);
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;

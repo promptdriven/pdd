@@ -1,3 +1,4 @@
+import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,7 +33,7 @@ async function tickWorld(t, { github } = {}) {
   const w = { time: NOW, remaining: 4000, issues: [], since: [], gh: [], patches: [], intakes: 0, prompts: [], claim: null, warnings: [] };
   w.ports = {
     allocationCheck: async () => ({ state: 'ready', message: '' }),
-    stateRoot: join(home, 'state'), now: () => w.time, readRunProgress: async () => [], warn: text => w.warnings.push(text),
+    checkCapacityPorts: isolatedCheckCapacity(dir), stateRoot: join(home, 'state'), now: () => w.time, readRunProgress: async () => [], warn: text => w.warnings.push(text),
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [], timer: async () => true,
     run: async (command, args, options = {}) => {
       if (command === 'git') return { code: 0, stdout: `${cwd}\n`, stderr: '' };
