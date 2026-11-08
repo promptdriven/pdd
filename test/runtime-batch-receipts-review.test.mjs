@@ -31,12 +31,12 @@ for (const [status, code, exit, state] of [[422, 'invalid-input', 4, 'refused'],
       : { status: 404, json: { error: { code: 'not-found' } } });
     assert.equal(r.first.code, exit);
     // Legacy evidence has no receipt and no new classification field. Retain only existing fields.
-    r.edit(row => { for (const key of Object.keys(row)) if (!['story', 'title', 'test', 'state', 'phase', 'request_ids', 'refusals', 'note', 'why', 'next_step', 'max_calls', 'seconds', 'eligible', 'can_retry', 'busy', 'retry_at', 'draft'].includes(key)) delete row[key]; });
+    r.edit(row => { row.state = row.recovery_state; for (const key of Object.keys(row)) if (!['story', 'title', 'test', 'state', 'phase', 'request_ids', 'refusals', 'note', 'why', 'next_step', 'max_calls', 'seconds', 'eligible', 'can_retry', 'busy', 'retry_at', 'draft'].includes(key)) delete row[key]; });
     const posts = r.fake.posts.length, gets = r.fake.gets.length;
     for (const options of [{ '--read': r.batch }, { '--read': r.batch }, { '--retry': r.batch, '--timeout': '0.01' }]) {
       const result = await r.run(options);
       assert.equal(result.code, exit, 'final POST outcome keeps exact exit code');
-      assert.equal(result.json.rows[0].state, state);
+      assert.equal(result.json.rows[0].state, state === 'not_run' ? 'not run' : state);
       assert.equal(r.fake.gets.length, gets, 'request ID allocation is not accepted-job evidence');
       assert.equal(r.fake.posts.length, posts, 'final POST outcome never resubmits');
       assert.equal(result.clock.uuids, 0);

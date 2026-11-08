@@ -29,7 +29,7 @@ pdd setup
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
-3. `pdd --version` must print `0.1.22`. When your skills are older than pdd, it also prints the command that updates them.
+3. `pdd --version` must print `0.1.24`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. A second run changes nothing.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
@@ -164,7 +164,7 @@ Code space is the PDD compiler: your agent writes the code from the approved pro
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Prompt tests` lines and the report links.
 2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
+In manual workflows, ask your agent to merge under [RUNBOOK §2](RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge submits eligible merges through `pdd autopilot merge` after repository review and test rules pass; required human approvals still apply.
 
 ## Commands
 
@@ -228,7 +228,7 @@ The skills and the other commands run on your computer.
 | `This Try session is busy.` | A simulation runs one command at a time. Wait for the first command to finish. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
 | `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
-| `pdd --version` does not print `0.1.22` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.24` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 

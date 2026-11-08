@@ -1,3 +1,4 @@
+import { readAutopilotState, saveAutopilotState, autopilotStateFiles } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
@@ -13,6 +14,7 @@ import { runIssueGraph } from '../src/issue-dependency-graph.mjs';
 import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { fixture as runnerFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
+import { githubLedger } from '../src/github-calls.mjs';
 
 // Issue #3032: claims carry a heartbeat, expire, and a lost claim stops work.
 const repo = 'owner/repo', hour = 60 * 60 * 1000, minute = 60 * 1000;
@@ -36,7 +38,7 @@ function checkout(t) {
     if (file === 'gh' && args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: repo, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repo}` }) };
     throw Error(`unexpected process ${file} ${args.join(' ')}`);
   };
-  const localOwner = coordinatorId => writeFileSync(join(stateRoot, `${sha(realpathSync(cwd)).slice(0, 20)}.json`), JSON.stringify({ repo, cwd: realpathSync(cwd), coordinatorId, enabled: true, activatedAt: 'activation' }));
+  const localOwner = coordinatorId => saveAutopilotState(join(stateRoot, `${sha(realpathSync(cwd)).slice(0, 20)}.json`), { repo, cwd: realpathSync(cwd), coordinatorId, enabled: true, activatedAt: 'activation' });
   return { cwd, stateRoot, execFile, localOwner };
 }
 
@@ -381,8 +383,8 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
   };
   const launcher = await import('../src/autopilot-launcher.mjs');
   f.cwd = cwd;
-  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
-  f.state = () => { try { return JSON.parse(readFileSync(f.stateFile(), 'utf8')); } catch { return {}; } };
+  f.stateFile = () => join(f.ports.stateRoot, autopilotStateFiles(f.ports.stateRoot)[0]);
+  f.state = () => { try { return readAutopilotState(f.stateFile()); } catch { return {}; } };
   f.start = () => launcher.runAutopilotLauncher({ command: 'start', cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: resolve('.'), issues: [] }, f.ports);
   f.tick = () => launcher.tickAutopilot(f.stateFile(), f.ports);
   f.packet = () => JSON.parse(f.prompts.at(-1).trim().split('\n').at(-1));
@@ -400,24 +402,62 @@ const timeRules = (f, kind) => f.prompts.flatMap(text => JSON.parse(text.trim().
 async function heartbeatTick(t) {
   const f = await tickFixture(t);
   f.issues = [tickIssue(7, { comments: 1, updated_at: at(NOW) })];
-  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine })];
+  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine,
+    lastSeen: f.claimComments.get('901')?.updated_at ?? at(NOW) })];
   assert.equal((await f.start()).exitCode, 0);
-  // The new claim comment is new trusted work once; the first heartbeat edit makes the tick read it.
-  f.issueComments = { 7: [f.ownComment(at(NOW))] }; f.status = 200; f.time += minute; await f.tick();
+  // The new claim comment is new trusted work once. Later heartbeats use its
+  // server edit time, as a dependency snapshot would report it.
+  f.time += minute;
+  f.issueComments = { 7: [f.ownComment(at(f.time))] }; f.issues[0].updated_at = at(f.time); f.status = 200; await f.tick();
   assert.ok(f.prompts.some(text => /"number":7,/.test(text)), 'the claim comment was seen');
   f.prompts.length = 0; f.patches.length = 0;
   return f;
 }
 
-test('tick: the owner refreshes its live claim at each tick with no AI call, and a heartbeat edit is not new work', async t => {
+test('tick: a fresh server-timed claim skips early heartbeats without an AI call', async t => {
   const f = await heartbeatTick(t);
   for (const i of [1, 2]) {
     f.time += 29 * minute; await f.tick();
-    assert.equal(f.patches.length, i, 'one heartbeat for the one own claim');
-    assert.equal(JSON.parse(/```json\n([\s\S]*?)\n```/.exec(f.patches.at(-1).body)[1]).lastSeen, at(f.time));
-    assert.equal(f.issues[0].updated_at, at(f.time), 'like GitHub, the edit moved the issue update time');
+    assert.equal(f.patches.length, 0);
+    assert.equal(f.claimComments.get('901').updated_at, at(NOW + minute));
   }
   assert.equal(f.prompts.length, 0, 'a heartbeat is neither an AI call nor new work');
+});
+
+for (const age of [hour, 23 * hour]) test(`tick: a live legacy claim at ${age / hour} hours gets its first heartbeat`, async t => {
+  const f = await tickFixture(t);
+  assert.equal((await f.start()).exitCode, 0);
+  const comment = f.ownComment(at(NOW - age));
+  f.issues = [tickIssue(7, { comments: 1, updated_at: comment.updated_at })];
+  f.issueComments = { 7: [comment] };
+  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId,
+    machine: state.machine, legacy: true, lastSeen: comment.updated_at })];
+  await f.tick();
+  assert.equal(f.patches.length, 1);
+  assert.equal(recordOf(f.claimComments.get('901').body).lastSeen, at(NOW));
+  assert.equal(f.state().githubIntake.claims[0].legacy, undefined);
+});
+
+test('tick: cached legacy claims use the 24-hour cutoff below the read floor', async t => {
+  for (const age of [23 * hour, 25 * hour]) {
+    const f = await tickFixture(t);
+    assert.equal((await f.start()).exitCode, 0);
+    f.ownComment(at(NOW - age));
+    const state = f.state();
+    state.githubIntake = { claims: [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId,
+      machine: state.machine, legacy: true, lastSeen: at(NOW - age) })] };
+    saveAutopilotState(f.stateFile(), state);
+    githubLedger({ root: f.ports.stateRoot, repository: repo }).record({ at: NOW, api: 'rest', purpose: 'claims',
+      status: 200, resource: 'core', remaining: 500, limit: 5000, resetAt: NOW + 3 * hour });
+    await f.tick();
+    assert.equal(f.patches.length, age < 24 * hour ? 1 : 0);
+    if (age < 24 * hour) {
+      assert.equal(f.state().githubIntake.claims[0].legacy, undefined);
+      f.time += hour;
+      await f.tick();
+      assert.equal(f.patches.length, 1);
+    }
+  }
 });
 
 // GitHub moves the issue updated_at to the edit time of a comment (measured on
@@ -430,7 +470,7 @@ test('tick: with only heartbeats for 60 minutes the idle-claim rule fires once',
   assert.deepEqual(timeRules(f, 'idle-claim').map(row => row.number), [7], 'heartbeats alone are not activity');
   for (let i = 0; i < 4; i++) { f.time += 30 * minute; await f.tick(); }
   assert.equal(timeRules(f, 'idle-claim').length, 1, 'the rule is sent once');
-  assert.equal(f.patches.length, 6, 'the claim was refreshed at each tick');
+  assert.equal(f.patches.length, 1, 'one heartbeat became due after two hours');
 });
 
 test('tick: real progress on a heartbeat claim keeps the idle-claim rule quiet', async t => {
@@ -444,7 +484,7 @@ test('tick: real progress on a heartbeat claim keeps the idle-claim rule quiet',
   assert.equal(timeRules(f, 'idle-claim').length, 0, 'a worker comment 45 minutes after the claim is activity');
   f.time += 30 * minute; await f.tick();
   assert.deepEqual(timeRules(f, 'idle-claim').map(row => row.number), [7], 'it fires 60 minutes after the last real progress');
-  assert.equal(f.patches.length, 4, 'the claim was refreshed at each tick');
+  assert.equal(f.patches.length, 1, 'one heartbeat became due after two hours');
 });
 
 test('tick: in off mode this machine sends no heartbeat, so its claims expire like a stopped machine', async t => {
@@ -676,8 +716,8 @@ function eraHistory(eras, extra = []) {
 // Three takeovers between different coordinators: era n starts at T0 + 6n hours, its last
 // heartbeat is 1 hour later, and the next coordinator removes and adds the label at once.
 const pingPong = (count, who = n => n) => Array.from({ length: count + 1 }, (_, n) => ({ from: T0 + 6 * n * hour, seen: T0 + (6 * n + 1) * hour, who: who(n), ...(n < count ? { to: T0 + 6 * (n + 1) * hour } : {}) }));
-const localCoordinator = (world, coordinatorId, machine) => writeFileSync(join(world.stateRoot, `${sha(realpathSync(world.cwd)).slice(0, 20)}.json`),
-  JSON.stringify({ repo, cwd: realpathSync(world.cwd), coordinatorId, machine, enabled: true, activatedAt: 'activation' }));
+const localCoordinator = (world, coordinatorId, machine) => saveAutopilotState(join(world.stateRoot, `${sha(realpathSync(world.cwd)).slice(0, 20)}.json`),
+  { repo, cwd: realpathSync(world.cwd), coordinatorId, machine, enabled: true, activatedAt: 'activation' });
 const LIMIT_HOLD = /^Taken over \d+ times/;
 
 test('takeover count: a coordinator that takes back its own expired claim makes no takeover', async t => {

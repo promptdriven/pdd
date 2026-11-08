@@ -1,8 +1,13 @@
 // Implements prompts/cli/github-calls.prompt.md.
 import * as nativeFs from 'node:fs';
+import { githubAppRunner } from './github-app.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { githubWriteCost, githubWriteThrottle } from './github-writes.mjs';
+import { githubWriteRunner, githubOriginalExecutable } from './github-write-proxy.mjs';
+
+import { machineJson, withAutopilotStore } from './autopilot-store.mjs';
 
 export const GITHUB_PURPOSES = ['dependencies', 'claims', 'issues', 'pulls', 'writes', 'setup', 'other'];
 export const GITHUB_SHARE = 30, GITHUB_FLOOR = 1000;
@@ -91,9 +96,9 @@ export function githubEntry(args, outcome, purpose, at) {
 export const githubStateRoot = (env = process.env, stateRoot) => stateRoot ?? join(env?.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
 const ledgerFolder = root => join(root, 'github');
 
-function readLines(fs, file) {
+function readLines(fs, file, strict = false) {
   let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  try { text = fs.readFileSync(file, 'utf8'); } catch (error) { if (strict) throw error; return []; }
   const entries = [];
   for (const line of text.split('\n')) {
     if (!line) continue;
@@ -102,52 +107,81 @@ function readLines(fs, file) {
   return entries;
 }
 
-// The local ledger of one repository on this machine: one JSON line for each call.
-export function githubLedger({ root, repository, fs = nativeFs }) {
-  const repo = String(repository).toLowerCase(), file = join(ledgerFolder(root), `${hash(repo)}.jsonl`);
+// Call rows stay separate so append and compaction cannot replace another writer.
+export function githubLedger({ root, repository, fs = nativeFs, store }) {
+  const repo = String(repository).toLowerCase(), scope = hash(repo), file = join(ledgerFolder(root), `${scope}.jsonl`);
+  const run = action => withAutopilotStore(root, { fs, store }, tx => {
+    tx.migrate(`github:${scope}`, () => {
+      if (!fs.existsSync(file)) return undefined;
+      return readLines(fs, file, true);
+    }, entries => {
+      for (const entry of entries) tx.append('events', scope, entry);
+      tx.put('budgets', scope, { repository: repo });
+    });
+    return action(tx);
+  });
   return {
     file, repository: repo,
-    record(entry) {
-      // Measurement never changes the call: a failed write is lost, the call result stays.
-      try {
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        fs.appendFileSync(file, `${JSON.stringify({ ...entry, repo })}\n`, { mode: 0o600 });
-      } catch { /* best effort */ }
+    exists() {
+      if (!store && !fs.existsSync(join(root, 'machine.sqlite')) && !fs.existsSync(join(root, 'machine-state.json'))) return fs.existsSync(file);
+      return run(tx => tx.get('budgets', scope) !== undefined);
     },
-    read: () => readLines(fs, file),
-    // Keep the last 2 hours. A call that another process appends during the rewrite can be lost.
+    record(entry) {
+      try { run(tx => { tx.migrate(`github:${scope}`, () => [], () => {}); tx.append('events', scope, { ...entry, repo }); tx.put('budgets', scope, { repository: repo }); }); }
+      catch { /* Measurement never changes the call result. */ }
+    },
+    read() { try { return run(tx => tx.entries('events', scope).map(row => row.value)); } catch { return []; } },
     compact(now) {
-      try {
-        const entries = readLines(fs, file);
-        if (!entries.some(entry => entry.at <= now - KEEP)) return;
-        const temp = `${file}.${randomUUID()}.tmp`;
-        fs.writeFileSync(temp, entries.filter(entry => entry.at > now - KEEP).map(entry => `${JSON.stringify(entry)}\n`).join(''), { mode: 0o600 });
-        fs.renameSync(temp, file);
-      } catch { /* best effort */ }
+      try { run(tx => { for (const row of tx.entries('events', scope)) if (row.value.at <= now - KEEP) tx.removeEntry('events', scope, row.sequence); }); }
+      catch { /* best effort */ }
     },
   };
 }
 
-// Every ledger on this machine, for the budget and the newest observed limit.
-export function githubMachineEntries({ root, fs = nativeFs }) {
+export function githubMachineEntries({ root, fs = nativeFs, store, identity = null }) {
   let names = [];
-  try { names = fs.readdirSync(ledgerFolder(root)).filter(name => /^[0-9a-f]{20}\.jsonl$/.test(name)); } catch { return []; }
-  return names.flatMap(name => readLines(fs, join(ledgerFolder(root), name)));
+  try { names = fs.readdirSync(ledgerFolder(root)).filter(name => /^[0-9a-f]{20}\.jsonl$/.test(name)); } catch { /* No legacy ledgers. */ }
+  if (!store && !names.length && !fs.existsSync(join(root, 'machine.sqlite')) && !fs.existsSync(join(root, 'machine-state.json'))) return [];
+  try { return withAutopilotStore(root, { fs, store }, tx => {
+    for (const name of names) {
+      const scope = name.slice(0, -6);
+      tx.migrate(`github:${scope}`, () => {
+        try { return readLines(fs, join(ledgerFolder(root), name), true); }
+        catch { return undefined; } // Retry this source later; keep healthy machine evidence.
+      }, entries => {
+        for (const entry of entries) tx.append('events', scope, entry);
+        tx.put('budgets', scope, { repository: entries[0]?.repo ?? null });
+      });
+    }
+    return tx.entries('events').map(row => row.value).filter(entry => (entry.identity ?? null) === identity);
+  }); } catch { return []; }
 }
 
 // A gh runner that records each gh call in a ledger. options.purpose names the purpose of one call and
 // options.repository its repository when the arguments do not name one; both are removed before the call runs.
 // Other programs run unchanged.
-export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {}) {
+export function countGithubCalls(exec, { ledger, purpose, now = Date.now, writes, env = process.env } = {}) {
   return async (file, args, options = {}) => {
     const { purpose: named, repository, ...rest } = options ?? {};
     if (file !== 'gh' || !Array.isArray(args)) return exec(file, args, rest);
+    const cost = githubWriteCost(args, rest);
+    let budget = writes && cost ? await writes(args, rest) : null;
+    if (cost) budget?.reserve(cost);
+    if (writes) rest.env = { ...(rest.env ?? env), PDD_GITHUB_COUNTED: '1' };
     let result, failure, failed = false;
     try { result = await exec(file, args, rest); } catch (error) { failure = error; failed = true; }
     try {
       const target = typeof ledger === 'function' ? ledger(args, repository) : ledger;
-      target?.record(githubEntry(args, failed ? failure : result, named ?? purpose, now()));
+      const outcome = failed ? failure : result;
+      target?.record({ ...githubEntry(args, outcome, named ?? purpose, now()), ...(outcome?.githubIdentity ? { identity: outcome.githubIdentity } : {}) });
     } catch { /* best effort */ }
+    if (writes) {
+      try {
+        const outcome = failed ? failure : result;
+        if (!budget && githubWriteThrottle(outcome)) budget = await writes(args, rest);
+        budget?.observe(outcome);
+      } catch { /* Preserve the original outcome when observation fails. */ }
+    }
     if (failed) throw failure;
     return result;
   };
@@ -156,17 +190,27 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
 // A counter for a pdd command outside the tick: the ledger of the repository that each call names, only when
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
-export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now } = {}) {
-  return countGithubCalls(exec, { purpose, now, ledger: (args, named) => {
-    const repository = githubRepository(args) ?? (typeof named === 'string' && REPOSITORY.test(named) ? named.toLowerCase() : null);
-    if (!repository) return null;
-    const ledger = githubLedger({ root: githubStateRoot(env, stateRoot), repository, fs });
-    try { return fs.existsSync(ledger.file) ? ledger : null; } catch { return null; }
-  } });
+export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, appPorts = {}, store } = {}) {
+  const runners = new Map();
+  return async (file, args, options = {}) => {
+    const repository = githubRepository(args) ?? (typeof options.repository === 'string' && REPOSITORY.test(options.repository) ? options.repository.toLowerCase() : null);
+    const root = env.PDD_GITHUB_ROOT || githubStateRoot(env, stateRoot);
+    const ledger = repository ? githubLedger({ root, repository, fs, store }) : null;
+    if (!ledger || !ledger.exists()) return countGithubCalls(githubAppRunner(exec, { env, fs, now, ...appPorts }), { purpose, now })(file, args, options);
+    const key = `${root}/${repository}`;
+    if (!runners.has(key)) {
+      const original = env.PDD_GITHUB_ROOT && (env.PATH??'').includes('/github-bin/') ? githubOriginalExecutable({env,fs}) : null;
+      const dispatch = original ? (file,args,options) => exec(file==='gh'?original:file,args,options) : exec;
+      runners.set(key, githubWriteRunner(githubAppRunner(dispatch, { env, fs, now, ...appPorts }), { root, env, fs, now, ledger }));
+    }
+    const runner = runners.get(key);
+    return runner(file, args, { ...options, purpose: options.purpose ?? purpose });
+  };
 }
 
 // Calls in the last hour, by purpose, and the newest limit that GitHub reported for each resource.
-export function githubUsage(entries, now) {
+export function githubUsage(entries, now, identity = null) {
+  entries = entries.filter(entry => (entry.identity ?? null) === identity);
   const recent = entries.filter(entry => entry.at > now - HOUR && entry.at <= now);
   const byPurpose = {}; let rest = 0, graphql = 0, counted = 0, conditional = 0, notModified = 0;
   for (const entry of recent) {
@@ -176,12 +220,16 @@ export function githubUsage(entries, now) {
     // A 304 reply does not count against the REST limit.
     if (entry.api !== 'graphql' && entry.status !== 304) counted++;
   }
+  return { calls: recent.length, rest, graphql, counted, conditional, notModified, byPurpose, rate: githubRates(entries, now) };
+}
+
+function githubRates(entries, now) {
   const rate = {};
   for (const entry of entries) {
     if (typeof entry.resource !== 'string' || !finite(entry.remaining) || !finite(entry.resetAt) || entry.resetAt <= now || entry.at > now) continue;
     if (!rate[entry.resource] || entry.at >= rate[entry.resource].at) rate[entry.resource] = { remaining: entry.remaining, ...(finite(entry.limit) ? { limit: entry.limit } : {}), resetAt: entry.resetAt, at: entry.at };
   }
-  return { calls: recent.length, rest, graphql, counted, conditional, notModified, byPurpose, rate };
+  return rate;
 }
 
 // The share and the floor from the repository's Autopilot settings, else the defaults.
@@ -217,11 +265,12 @@ export function githubStatusLine({ usage, machine = usage, budget }) {
 // Saved ETags and bodies of GET replies, for conditional requests on the next read. A save merges with the file as
 // it is then, so the tick and the pdd commands keep each other's entries: an entry stays while it was used in the
 // last day, and the newest used entries stay within the count and size bounds.
-export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now }) {
-  const file = join(ledgerFolder(root), `${hash(String(repository).toLowerCase())}.etags.json`);
+export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now, identity = null, store }) {
+  const file = join(ledgerFolder(root), `${hash(String(repository).toLowerCase() + (identity ? `:${identity}` : ''))}.etags.json`);
+  const storage = machineJson({ root, bucket: 'cache', key: `etags:${hash(String(repository).toLowerCase() + (identity ? `:${identity}` : ''))}`, file, invalidLegacy: null }, { fs, store });
   let saved, used = new Map();
   const readFile = () => {
-    try { const value = JSON.parse(fs.readFileSync(file, 'utf8')); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
+    try { const value = storage.read(); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
   };
   const load = () => saved ??= readFile();
   const valid = entry => entry && typeof entry.etag === 'string' && typeof entry.body === 'string';
@@ -237,7 +286,8 @@ export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.no
     save() {
       // A read that used no entry (it failed early) keeps the saved cache.
       if (!used.size) return;
-      const at = now(), merged = Object.entries({ ...readFile(), ...Object.fromEntries(used) })
+      try { storage.update(current => {
+      const at = now(), merged = Object.entries({ ...(current ?? {}), ...Object.fromEntries(used) })
         .filter(([, entry]) => valid(entry) && finite(entry.at) && entry.at > at - ETAG_KEEP).sort((a, b) => b[1].at - a[1].at);
       const kept = {}; let size = 2;
       for (const [endpoint, entry] of merged.slice(0, ETAG_ENTRIES)) {
@@ -245,13 +295,10 @@ export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.no
         if (size > ETAG_BYTES) break;
         kept[endpoint] = entry;
       }
-      try {
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        const temp = `${file}.${randomUUID()}.tmp`;
-        fs.writeFileSync(temp, JSON.stringify(kept), { mode: 0o600 });
-        fs.renameSync(temp, file);
-      } catch { /* A lost cache only costs counted reads. */ }
-      saved = kept; used = new Map();
+      saved = kept;
+      return kept;
+      }); } catch { /* A lost cache only costs counted reads. */ }
+      used = new Map();
     },
   };
 }
@@ -261,7 +308,8 @@ export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.no
 // ledgers of this machine and follows the rate-limit headers of each later reply.
 export function githubFloorGuard({ floor = GITHUB_FLOOR, entries = [], now = Date.now } = {}) {
   const rate = {}; let stopped = false;
-  for (const [resource, value] of Object.entries(githubUsage(entries, now()).rate)) rate[resource] = { remaining: value.remaining, resetAt: value.resetAt };
+  // Callers have already selected the active identity's machine entries.
+  for (const [resource, value] of Object.entries(githubRates(entries, now()))) rate[resource] = { remaining: value.remaining, resetAt: value.resetAt };
   return {
     floor,
     // One reply of `gh api --include`, as githubReply reads it; a reply without rate-limit headers changes nothing.

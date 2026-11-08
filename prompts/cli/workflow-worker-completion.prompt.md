@@ -8,6 +8,8 @@ The outside-program port starts the listener using the current Node executable, 
 
 ## Dependencies
 
+- [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context. Read coordinator activation through `readAutopilotState`, so completion observes current control after migration.
+
 - [Workflow runner](workflow-runner.prompt.md): runtime ownership, yield policy and captured-identity admission; the runner supplies the launch hook and rechecks identity inside yield.
 - Herdr's `agent wait` command supplies the native completion event; [workflow chat](workflow-chat.prompt.md) owns the startup grace and launch anchor.
 

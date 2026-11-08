@@ -14,7 +14,15 @@ For any settings write, acquire the existing admission boundary only after all h
 
 Future workflow skills own run actions: in auto they record the checker’s PASS as approval words using `--said`, marked as decided by the checker; in off and observe the person approves as today. When GitHub supplies neither owner nor writers, only explicitly trusted names qualify for full auto; no other author's issue gets full auto. This does not change runtime approval enforcement or bypass strict approvals. See the [approval policy](approval-policy.prompt.md) for its independent policy.
 
+Read optional `autopilot.maxOpenPrs` as a positive safe integer, defaulting to 5
+when present but invalid; preserve the saved value. Include effective `maxOpenPrs`
+in results only when that key is configured, leaving absent-key result shapes
+unchanged. Consumers apply the default for an absent key. This is a review backlog
+limit per owner area, separate from concurrent worker capacity.
+
 ## Dependencies
+
+- [PR review limit](autopilot-pr-limit.prompt.md): required context for the `maxOpenPrs` default and validation.
 
 - [GitHub calls](github-calls.prompt.md#budget): required generation and verification context for reading `autopilot.github` with `githubBudgetSettings`.
 
@@ -71,6 +79,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
               "type": "string"
             }
           },
+          "maxOpenPrs": { "type": "integer", "minimum": 1 },
           "github": {
             "type": "object",
             "properties": {
@@ -308,7 +317,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256": "7a7f741dfd92652f680481b77c3ca2949eaa036e08fad2cc8c03b880d5fc3391"
+  "prose_sha256": "4f13159b3892b2fcba83afd18c96e7c4d7de8286c451cd28591f6fa0a3c22d12"
 }
 ```
 </details>

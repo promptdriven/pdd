@@ -1,5 +1,7 @@
 # Local command catalog
 
+The `pdd test --files` usage form also accepts optional `--json` for its manifest and per-test local refusals, as owned by the runtime client.
+
 
 The public command catalog also includes `pdd autopilot off`, `pdd autopilot observe`, `pdd autopilot auto`, `pdd autopilot trust <name>...`, and `pdd autopilot untrust <name>`. Expose these forms in help and completion; reject missing or extra operands through the existing parser contract.
 
@@ -36,6 +38,17 @@ Help forms and completion name only the `NAMES` words.
 
 ## Autopilot routes
 
+Catalog `autopilot.merge` with prefix `autopilot merge`, local `autopilot-merge`,
+one required issue-type numeric PR operand, text option `--input` and flag
+`--observe`. Form: `pdd autopilot merge PR --input - [--observe]`.
+Execution requires the PR operand and stdin evidence marker `--input -`.
+Runnable documentation examples supply a positive numeric PR, for example
+`pdd autopilot merge 123 --input -`; bare `pdd autopilot merge` is not an
+execution form. Preserve rejection of missing operands.
+Description: Check merge rules and submit to the base branch queue or merge the
+exact head. Read evidence JSON from stdin. --observe reads the result and audit
+without a write. [Merge owner](autopilot-merge.prompt.md) owns validation.
+
 Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
 - `pdd autopilot start [--runs N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.
@@ -67,6 +80,8 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.approve `workflow approve [ISSUE] [--said WORDS] [--draft]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 `workflow.approve` also accepts Boolean flag `--draft` to strengthen publication policy at the current unpublished gate; the runner owns eligibility and persistence. Expose both draft flags in help and completion, including the quiet workflow-start alias. Preserve generic duplicate/unknown-option validation.
 
+For `workflow.run` and `workflow.approve`, also accept the value option `--through` with the choices `prompt-pr` and `code`. Keep both existing help forms unchanged and name the option in their help descriptions: it saves where a normal run goes after PR 1 (stop, or go on to the code PR). The runner owns where it applies and refuses it elsewhere.
+- workflow.card `workflow card [ISSUE]` (local `workflow-card`): one optional issue operand, no options. Help says it prints the run's Story card from its real files, read-only, with no GitHub, Herdr or interpreter call.
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
 - workflow.cancel `workflow cancel ISSUE`.
 - workflow.open `workflow open ISSUE [AREA] [--new]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.
@@ -227,7 +242,7 @@ The closing lines are exactly:
 ```text
 Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
 workflow run opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.
-The CLI has no merge command. Auto agents use pdd-merge after repository review and tests, with required human approvals.
+Auto agents use pdd-merge and pdd autopilot merge PR --input - after repository review and tests, with required human approvals.
 ```
 
 (`run` is the [NAMES](#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.)
@@ -257,6 +272,9 @@ In PDD, prompts are the source. Code follows the prompts.
 
 
 ## Dependencies
+
+- [Autopilot merge](autopilot-merge.prompt.md): required native generation,
+  verification and testing context for the guarded merge command form.
 
 [Workflow scope](workflow-scope.prompt.md) is required authoring, generation, runtime, verification and testing context for the scope route meanings.
 

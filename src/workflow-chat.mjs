@@ -1,5 +1,8 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 734f28fdf2a21cf1703b2c2ccb66c032ff7f2021fee24f03b6203f48b33c05ec).
+// Implements prompts/cli/workflow-chat.prompt.md.
+import { githubWriteEnvironment } from './github-write-proxy.mjs';
+import { githubStateRoot } from './github-calls.mjs';
 import { execFile as execFileCallback, spawn } from 'node:child_process';
+import { githubAppSettings, githubAppEnvironment } from './github-app.mjs';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
 import * as nodeFs from 'node:fs';
@@ -117,13 +120,13 @@ export function herdrCommand(ports = {}) {
 }
 
 // `unset`, `loginFile` and `program` come from chatLaunch: the caller's login and the run's agents.json command.
-export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null }) {
+export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null, githubEnv = {} }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (typeof cwd !== 'string' || !cwd) throw problem('invalid_worktree', 'The chat has no worktree folder, so pdd will not start it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
   if (unset.some(name => !ENV_NAME.test(name))) throw problem('invalid_login_variable', 'A login variable name is not a plain name, so pdd will not start the chat.');
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
-  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
+  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), ...Object.entries(githubEnv).map(([name, value]) => `${name}=${quote(value)}`), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
   // A child sh opens the private login file, deletes it, then reads the values and becomes the agent: no login value is
   // in this line, and no value from the file can keep the file. Any failed step stops the sh before the agent starts.
@@ -138,6 +141,7 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
   return [...env, ...start, ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
+    ...Object.entries(githubEnv).flatMap(([name, value]) => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(value)}`)]),
     '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`), ...message].join(' ');
 }
 
@@ -181,12 +185,25 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
   for (const name of names) if (typeof env[name] === 'string' && env[name] !== '') values[name] = env[name];
   for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
   const unset = [...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
+  const automatic = env.PDD_AUTOPILOT_CONTEXT || env.PDD_GITHUB_ROOT || run.metricsOrigin?.origin === 'autopilot' || run.automaticOrigin;
+  let appRoot;
+  try { appRoot = githubAppSettings({ cwd: run.sourceRoot ?? run.root, env })?.root; }
+  catch (error) {
+    if (automatic || env.PDD_GITHUB_APP_ROOT || error.code !== 'github_app_invalid' || !error.configurationRoot) throw error;
+    // A manual repair chat may start, but its bound transport still refuses malformed configuration.
+    appRoot = error.configurationRoot;
+  }
+  const transportEnv = { ...env, PATH: env.PATH ?? process.env.PATH, ...entry?.env };
+  const appEnv = appRoot ? githubAppEnvironment({ root: appRoot, env: transportEnv }) : null;
+  const githubEnv = automatic ? githubWriteEnvironment({ root: env.PDD_GITHUB_ROOT || githubStateRoot(env), env: { ...transportEnv, ...appEnv } }) : appEnv;
+  if (automatic && appEnv) Object.assign(githubEnv, { PDD_GITHUB_APP_ROOT: appEnv.PDD_GITHUB_APP_ROOT });
+  if (githubEnv && Object.hasOwn(values, 'PATH')) values.PATH = githubEnv.PATH;
   let loginFile = null;
   if (Object.keys(values).length) {
     loginFile = join(run.runDir, `login-${randomUUID()}.env`);
     writeFileSync(loginFile, Object.entries(values).map(([name, value]) => `export ${name}=${quote(value)}\n`).join(''), { mode: 0o600, flag: 'wx' });
   }
-  return { unset, loginFile, program: entry?.command ?? null };
+  return { unset, loginFile, program: entry?.command ?? null, ...(automatic || githubEnv ? { githubEnv } : {}) };
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env }) {

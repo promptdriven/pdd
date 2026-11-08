@@ -118,7 +118,7 @@ test('TEST-CACHE-R2 one additional check uses a singular send notice', async t =
   const ctx = await setup(t); assert.equal((await successful(ctx)).sent, 3); changeIndependent(ctx);
   ctx.state.identity.engine_sha = 'b'.repeat(40);
   const result = await successful(ctx, ['independent', 'place-order']);
-  assert.equal(result.sent, 2); assert.match(result.stderr, /Sending 1 more check: interpreter build or model changed/);
+  assert.equal(result.sent, 2); assert.equal(result.stderr.split('\n').filter(line => /^Sent 1 check at /.test(line)).length, 2);
   assert.doesNotMatch(result.stderr, /Sending 1 more checks:/);
 });
 test('TEST-CACHE-R2 unavailable footprint explains this run and permits later reuse', async t => {

@@ -59,7 +59,7 @@ Validate request first (`refused`); then load and validate state and required id
 ```json
 {
   "status":"draft",
-  "prose_sha256":"",
+  "prose_sha256":"e27c4da23e29bb2a205c720e811d36b25c616ceeb089fdc7558a31839f36d70f",
   "entries": [
     {
       "operation": "manageScope",

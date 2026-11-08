@@ -1,3 +1,4 @@
+import { reviewWait, maxOpenPrs } from './autopilot-pr-limit.mjs';
 import { randomUUID } from 'node:crypto';
 import { execFile as nodeExecFile } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -6,6 +7,23 @@ import { promisify } from 'node:util';
 import { gitContext } from './workflow-runs.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange, issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges, commandGithubFloor } from './issue-dependencies-github.mjs';
+
+import { reviewerIdentity, reviewerLease } from './autopilot-reviewer.mjs';
+
+async function reviewAccess(cwd, repository, ports, acquire = false) {
+  try {
+    const identity = ports.reviewerCoordinator ?? (cwd || ports.reviewerIdentity ? await reviewerIdentity({ cwd, repository }, ports) : null);
+    if (!identity) return { managed: false, held: true, lease: null };
+    const result = await reviewerLease({ repository, identity, acquire }, { ...ports, cwd });
+    return { ...result, held: result.held && identity.enabled !== false, managed: true, identity };
+  } catch { return { managed: true, held: false, lease: null }; }
+}
+async function currentReviewer(cwd, repository, expected, ports) {
+  const current = await reviewAccess(cwd, repository, ports);
+  return expected ? current.managed && current.held && current.lease?.generation === expected.generation
+    && current.lease.machine === expected.machine && current.lease.coordinatorId === expected.coordinatorId
+    : !current.managed;
+}
 
 const snapshotRead = (ports, args) => ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports);
 const root = (key, repository) => key.toLowerCase().startsWith(`https://github.com/${repository.toLowerCase()}/issues/`);
@@ -128,6 +146,13 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
       if (slots.size + ([...slots.values()].some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > settings.runs) return { allowed: false, reason: 'runs' };
     }
     if (occupied.some(run => selected && issueKey(run.issue) === selected)) return { allowed: false, reason: 'dependency' };
+    const counts = json((await ports.reviewQueue.read({ repository })).json);
+    if (!counts || typeof counts !== 'object' || Array.isArray(counts) || Object.values(counts).some(count => !Number.isSafeInteger(count) || count < 0)) return { allowed: false, reason: 'unknown' };
+    if (Object.values(counts).some(count => count >= maxOpenPrs(settings.maxOpenPrs))) {
+      const current = json((await ports.github.issue({ repository, issue: subjectNumber })).json);
+      if (!Array.isArray(current.labels)) return { allowed: false, reason: 'unknown' };
+      if (reviewWait(current.labels, counts, settings.maxOpenPrs)) return { allowed: false, reason: 'pr-review-limit' };
+    }
     const copy = structuredClone(snapshot); const subject = copy.issues.find(x => selected && issueKey(x.key) === selected);
     if (subject && subject.executionClaim?.coordinatorId === claim.coordinatorId && subject.executionClaim?.commentId === claim.commentId && subject.executionClaim?.labelEventId === claim.labelEventId) {
       subject.execution = 'idle'; subject.holds = subject.holds.filter(x => !/^(running|claim|claimed)$/i.test(x));
@@ -161,15 +186,17 @@ function selectSubjects(graph, snapshot, repository, issue) {
 
 export async function prepareDependencyIntake({ cwd = '', repository, issue }, ports = {}) {
   ports = createDependencyReadPorts({ cwd }, ports);
+  const reviewer = ports.reviewAccess ?? await reviewAccess(cwd, repository, ports);
   const observed = await snapshotRead(ports, { cwd, repository });
   const snapshot = observed.snapshot;
   const graph = projectIssueGraph({ snapshot });
   const selected = selectSubjects(graph, snapshot, repository, issue);
   let owners = { claims: [] }; if (selected.length) owners = json((await ownersFor(ports, repository, selected.map(node => node.key))).json);
-  const skipped = selected.filter(x => x.reasons.includes('Incomplete relevant observations') || ownedElsewhere(owners, x.key)).map(x => x.key);
+  const skipped = selected.filter(x => x.reasons.includes('Incomplete relevant observations') || (!reviewer.managed && ownedElsewhere(owners, x.key))).map(x => x.key);
   // Small batches: one new issue never waits for a large review.
-  const queued = selected.filter(x => !skipped.includes(x.key)).map(x => x.key).slice(0, REVIEW_BATCH);
-  const contextJson = queued.length ? (await ports.evidence.read({ cwd, repository, issues: queued })).json : JSON.stringify({ source: [], requirements: [] });
+  const queued = reviewer.held ? selected.filter(x => !skipped.includes(x.key)).map(x => x.key).slice(0, REVIEW_BATCH) : [];
+  let contextJson = queued.length ? (await ports.evidence.read({ cwd, repository, issues: queued })).json : JSON.stringify({ source: [], requirements: [] });
+  if (reviewer.managed && reviewer.held) contextJson = JSON.stringify({ ...json(contextJson), reviewer: reviewer.lease });
   const evidence = json(contextJson);
   if (!Array.isArray(evidence.source) || !Array.isArray(evidence.requirements) || evidence.requirements.some(x => x.authority !== 'trusted')) throw Error('invalid-input');
   const current = rows(snapshot);
@@ -192,6 +219,15 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   for (const r of analysis.reviews) if (!exact(r, ['analysis','base','continuation','issue','inputs','candidates','outcome','dependencies','questions','effects']) || typeof r.analysis !== 'string' || !r.analysis || !strings(r.base) || typeof r.continuation !== 'string' || typeof r.issue !== 'string' || !validRows(r.inputs) || !validRows(r.candidates) || !Array.isArray(r.dependencies) || !r.dependencies.every(d => exact(d, ['key','reason','evidence']) && typeof d.key === 'string' && typeof d.reason === 'string' && strings(d.evidence)) || !strings(r.questions)) throw invalidAnalysis();
   const prepared = json(request.snapshotJson); const context = json(request.contextJson);
   if (prepared.repository.toLowerCase() !== request.repository.toLowerCase()) throw invalidAnalysis();
+  if (!await currentReviewer(cwd, request.repository, context.reviewer, ports)) return pendingResult('reviewer-lease');
+  const priorMutation = ports.admitMutation;
+  ports.admitMutation = action => {
+    const guarded = async () => {
+      if (!await currentReviewer(cwd, request.repository, context.reviewer, ports)) throw Error('reviewer-lease');
+      return action();
+    };
+    return priorMutation ? priorMutation(guarded) : guarded();
+  };
   const original = analysis;
   // Code owns each subject's link row: drop a carried copy and add the current one before saving.
   const links = (snapshot, issue, dependencies) => { try { return dependencyLinks({ snapshot, issue, dependencies }); } catch { throw invalidAnalysis(); } };
@@ -256,7 +292,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   let owners;
   try { owners = subjects.length ? json((await ports.owners.read({ repository: request.repository, issues: subjects })).json) : { claims: [] }; }
   catch { return finish(pendingResult('observations-incomplete')); }
-  if (subjects.some(k => ownedElsewhere(owners, k))) return finish(pendingResult('owner-changed'));
+  if (!context.reviewer && subjects.some(k => ownedElsewhere(owners, k))) return finish(pendingResult('owner-changed'));
   const impact = analysis.impactJson ? json(analysis.impactJson) : null;
   if (impact && (!exact(impact, ['inputs','reviews','affected','complete']) || !validRows(impact.inputs) || !strings(impact.reviews) || !strings(impact.affected) || typeof impact.complete !== 'boolean' || !sameRows(impact.inputs, current))) throw invalidAnalysis();
   if (impact && !request.issues.length) throw invalidAnalysis();
@@ -285,11 +321,13 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   // Exact current local-host records make normal retries append-free.
   const impactIssue = request.issues[0];
   if (impact && !snapshot.impacts.some(saved => sameImpactRecord(saved, impactIssue, impact))) {
+    if (!await currentReviewer(cwd, request.repository, context.reviewer, ports)) return finish(pendingResult('reviewer-lease'));
     const saved = await (ports.reviews?.saveImpact ?? saveDependencyImpact)({ repository: request.repository, issue: impactIssue, impact }, ports);
     if (saved.state !== 'saved') return finish(pendingResult('write-unconfirmed', { stage: 'impact-save', issue: impactIssue }));
   }
   const ids = []; const questions = [];
   for (const review of analysis.reviews) {
+    if (!await currentReviewer(cwd, request.repository, context.reviewer, ports)) return finish(pendingResult('reviewer-lease'));
     let id = savedIds.get(review.issue);
     if (!id) {
       // The link row holds the subject's links after this request's validated additions.
@@ -306,6 +344,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
         if (head?.continuation === id && head.outcome === 'complete' && head.effects === 'confirmed') continue;
         if (head?.base.includes(id) && head.outcome === 'question') { ids.push(head.id); questions.push(...head.questions); continue; }
       }
+      if (!await currentReviewer(cwd, request.repository, context.reviewer, ports)) return finish(pendingResult('reviewer-lease'));
       const applied = await (ports.reviews?.apply ?? applyDependencyChanges)({ cwd, repository: request.repository, issue: review.issue, reviewId: id }, ports);
       // A refused write (a person removed the link, or it closes a cycle) ends as one saved question.
       if (applied.state === 'question') { if (applied.reviewId) ids.push(applied.reviewId); questions.push(...(applied.questions ?? [])); continue; }
@@ -321,6 +360,19 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
 
 export async function reconcileDependencyIntake({ cwd = '', repository, trigger, mode }, ports = {}) {
   ports = createDependencyReadPorts({ cwd }, ports);
+  if (mode === 'off') return { queued: [], eligible: [], skipped: [], pending: false };
+  const reviewer = await reviewAccess(cwd, repository, ports, true);
+  ports.reviewAccess = reviewer;
+  if (reviewer.managed) {
+    const priorMutation = ports.admitMutation;
+    ports.admitMutation = action => {
+      const guarded = async () => {
+        if (!reviewer.held || !await currentReviewer(cwd, repository, reviewer.lease, ports)) throw Error('reviewer-lease');
+        return action();
+      };
+      return priorMutation ? priorMutation(guarded) : guarded();
+    };
+  }
   const reads = ports.dependencyReads;
   // A completion, an idle wake or a worker yield soon after the last full observation reads no issue list: it
   // delivers the next request from the saved snapshot. Other triggers read what changed.
@@ -329,9 +381,8 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   if (saved) reads.savedList = true;
   try { ({ snapshot } = await snapshotRead(ports, { cwd, repository })); } finally { if (saved) reads.savedList = false; }
   const pending = (ports.pending ? json((await ports.pending.read({ repository })).json || '{}') : {}) || {};
-  if (mode === 'off') return { queued: [], eligible: [], skipped: [], pending: false };
   // A completion that stopped (a failed read, a lost write or the GitHub limit) is finished first, without a new analysis.
-  if (await resumeCompletion({ cwd, repository }, ports)) ({ snapshot } = await snapshotRead(ports, { cwd, repository }));
+  if (reviewer.held && await resumeCompletion({ cwd, repository }, ports)) ({ snapshot } = await snapshotRead(ports, { cwd, repository }));
   if (!ports.snapshots && reads?.owners?.repository === repository.toLowerCase() && reads.owners.json === null)
     return { queued: [], eligible: [], skipped: [], pending: true, claims: [] };
   let graph = projectIssueGraph({ snapshot });
@@ -342,17 +393,20 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   let recovered = false;
   for (const node of graph.nodes) {
     const review = snapshot.reviews.find(r => r.id === node.review);
-    if (!skipped.includes(node.key) && !node.reasons.includes('Incomplete relevant observations') && node.reviewState === 'pending' && review?.effects === 'pending') {
+    if (reviewer.held && (reviewer.managed || !skipped.includes(node.key)) && !node.reasons.includes('Incomplete relevant observations') && node.reviewState === 'pending' && review?.effects === 'pending') {
+      if (reviewer.managed && !await currentReviewer(cwd, repository, reviewer.lease, ports)) break;
       await (ports.reviews?.apply ?? applyDependencyChanges)({ cwd, repository, issue: node.key, reviewId: review.id }, ports); recovered = true;
     }
   }
   if (recovered) { ({ snapshot } = await snapshotRead(ports, { cwd, repository })); graph = projectIssueGraph({ snapshot }); }
   const candidates = selectSubjects(graph, snapshot, repository);
   const incomplete = candidates.filter(n => n.reasons.includes('Incomplete relevant observations'));
-  const queued = candidates.filter(n => !skipped.includes(n.key) && !n.reasons.includes('Incomplete relevant observations')).map(n => n.key);
+  const queued = candidates.filter(n => (reviewer.managed || !skipped.includes(n.key)) && !n.reasons.includes('Incomplete relevant observations')).map(n => n.key);
   const eligible = graph.nodes.filter(n => subjects.includes(n.key) && !skipped.includes(n.key) && n.eligible).map(n => n.key);
   // The observed winning claims, with heartbeat and expiry facts, for the tick.
   const claims = Array.isArray(owners.claims) ? owners.claims : [];
+  if (reviewer.managed) ports.onReviewer?.(reviewer);
+  if (!reviewer.held) return { queued: [], eligible, skipped, pending: Boolean(queued.length || incomplete.length), claims };
   if (!queued.length || !ports.pending) return { queued, eligible, skipped, pending: Boolean(queued.length || incomplete.length), claims };
   const prepared = await prepareDependencyIntake({ cwd, repository }, { ...ports, snapshots: { read: async () => ({ snapshot }) }, owners: { read: async () => ({ json: JSON.stringify(owners) }) } });
   const order = a => a.slice().sort((x,y) => x.key.localeCompare(y.key) || x.revision.localeCompare(y.revision));
@@ -369,6 +423,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
     pending.requested = fingerprint;
     if (again) pending.redelivery = again; else delete pending.redelivery;
     if (!await save()) return false;
+    if (reviewer.managed && !(Date.parse(reviewer.lease?.expiresAt) > (ports.now ?? Date.now)())) return false;
     const delivered = await ports.pending.deliver({ repository, requestJson: JSON.stringify(prepared.request) });
     delete pending.redelivery;
     if (delivered.state === 'delivered') {
@@ -444,6 +499,7 @@ async function askAfterCap({ repository, request, snapshot, context, last }, por
       base: headIds(snapshot).filter(id => snapshot.reviews.find(r => r.id === id)?.issue === issue), continuation: '', issue, inputs, candidates,
       outcome: 'question', dependencies: [], questions: [text], effects: 'none' };
     if (ports.admitEffect && !await ports.admitEffect()) return false;
+    if (ports.reviewAccess?.managed && !await currentReviewer(ports.cwd ?? '', repository, ports.reviewAccess.lease, ports)) return false;
     let saved;
     try { saved = await (ports.reviews?.save ?? saveDependencyReview)({ repository, issue, review }, ports); } catch { return false; }
     if (saved.state !== 'saved') return false;

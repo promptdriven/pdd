@@ -1,3 +1,4 @@
+import { readAutopilotState, autopilotStateFiles } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -75,7 +76,15 @@ async function replayStep(t, step, world, root) {
         execFileSync('/bin/sh', ['-c', args[3]], { cwd, env: { PATH: '/usr/bin:/bin', HOME: env.HOME, ...pane.env }, timeout: 10000 });
         const call = JSON.parse(readFileSync(record, 'utf8').trim().split('\n')[calls]);
         const { set, config } = codexConfigs(call.argv);
-        world.launches.push({ pane_id: args[2], argv: call.argv, process_environment: call.env, codex_config: config, command_environment_set: Object.fromEntries(Object.entries(set).map(([name, value]) => [name, fromHost(value)])) });
+        // The existing context vectors keep all non-routing keys, including any
+        // forbidden Herdr key. The authorised write route has separate native
+        // checks and does not change the Story's original expected context.
+        const routing = new Set(['PATH','PDD_GITHUB_ROOT']);
+        assert.equal(set.PDD_GITHUB_ROOT,stateRoot);
+        assert.ok(existsSync(join(set.PATH.split(':')[0],'gh')));
+        world.launches.push({ pane_id: args[2], argv: call.argv, process_environment: call.env, codex_config: config,
+          write_environment_set: Object.fromEntries(Object.entries(set).filter(([name])=>routing.has(name))),
+          command_environment_set: Object.fromEntries(Object.entries(set).filter(([name])=>!routing.has(name)).map(([name, value]) => [name, fromHost(value)])) });
         return {};
       }
       if (args[0] === 'pane' && args[1] === 'read') return '';
@@ -88,7 +97,7 @@ async function replayStep(t, step, world, root) {
   for (const path of new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (before[path] !== after[path]) world.config_writes.push({ path: `/${relative(root, path)}`, before: before[path] ?? null, after: after[path] ?? null });
   }
-  const state = JSON.parse(readFileSync(join(stateRoot, readdirSync(stateRoot).find(name => name.endsWith('.json'))), 'utf8'));
+  const state = readAutopilotState(join(stateRoot, autopilotStateFiles(stateRoot)[0]));
   assert.deepEqual(state.agent, saved.agent, 'binding: the saved agent matches the world');
   for (const [key, value] of Object.entries(saved.environment)) assert.equal(state.environment[key], host(value), `binding: saved ${key} matches the world`);
 }

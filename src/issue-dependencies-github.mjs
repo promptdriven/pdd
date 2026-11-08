@@ -1,4 +1,5 @@
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: f2e9a8a186354966d16db8a0fe155a27f18dc1b457282b44b6a03441d04d97bc).
+// Implements prompts/cli/issue-dependencies-github.prompt.md.
+import { readReviewQueue } from './autopilot-pr-limit.mjs';
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -10,7 +11,10 @@ import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
+import { githubAppSettings, createGithubApp } from './github-app.mjs';
 import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, nativeGithubCounter } from './github-calls.mjs';
+
+import { machineJson, readAutopilotState } from './autopilot-store.mjs';
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners'), LIVE_GITHUB = Symbol('live github');
@@ -323,40 +327,31 @@ async function nativeLinkVersions(repository, rows, api) {
 // One private, versioned, bounded file for each repository: the issue rows of the last list read and the full reads of
 // each issue, keyed by the change facts of its row. A save merges with the file as it is then: the newer list read
 // wins with its watermark, each issue keeps its newer observation, and an issue that a process wrote stays invalid.
-export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
+export function dependencySnapshotStore({ root, repository, fs = nativeFs, store }) {
   const repo = String(repository).toLowerCase(), file = join(root, 'github', `${short(repo)}.snapshot.json`);
   const valid = data => object(data) && data.v === STORE_VERSION && data.repository === repo && Number.isFinite(data.refreshedAt)
     && object(data.list) && object(data.list.rows) && typeof data.list.since === 'string' && Number.isFinite(data.list.readAt) && object(data.issues);
-  const load = () => { try { const data = JSON.parse(fs.readFileSync(file, 'utf8')); return valid(data) ? data : null; } catch { return null; } };
+  const storage = machineJson({ root, bucket: 'cache', key: `snapshot:${short(repo)}`, file, invalidLegacy: null }, { fs, store });
+  const load = () => { try { const data = storage.read(); return valid(data) ? data : null; } catch { return null; } };
   const completionFile = join(root, 'github', `${short(repo)}.completion.json`);
+  const pending = machineJson({ root, bucket: 'queue', key: `completion:${short(repo)}`, file: completionFile, invalidLegacy: null }, { fs, store });
   const completion = {
     file: completionFile,
-    read: () => { try { const value = JSON.parse(fs.readFileSync(completionFile, 'utf8')); return object(value) && value.v === STORE_VERSION ? value : null; } catch { return null; } },
+    read: () => { try { const value = pending.read(); return object(value) && value.v === STORE_VERSION ? value : null; } catch { return null; } },
     save: value => {
       const text = JSON.stringify({ v: STORE_VERSION, ...value });
       if (Buffer.byteLength(text) > STORE_BYTES) return false;
-      fs.mkdirSync(dirname(completionFile), { recursive: true, mode: 0o700 });
-      const temp = `${completionFile}.${randomUUID()}.tmp`;
-      fs.writeFileSync(temp, text, { mode: 0o600 }); fs.renameSync(temp, completionFile);
+      pending.write(JSON.parse(text));
       return true;
     },
-    clear: () => { try { fs.unlinkSync(completionFile); } catch (error) { if (error.code !== 'ENOENT') throw error; } },
+    clear: () => pending.clear(),
   };
   return {
     file, repository: repo, load, completion,
     save(data) {
-      const lock = `${file}.lock`;
-      let held = false;
       try {
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        for (let attempt = 0; !held; attempt++) {
-          try { fs.mkdirSync(lock, { mode: 0o700 }); held = true; }
-          catch (error) {
-            if (error.code !== 'EEXIST' || attempt >= 200) return null;
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-          }
-        }
-        const current = load(), epoch = Math.max(data.refreshedAt, current?.refreshedAt ?? -Infinity);
+        return storage.update(saved => {
+        const current = valid(saved) ? saved : null, epoch = Math.max(data.refreshedAt, current?.refreshedAt ?? -Infinity);
         const sides = [current, data].filter(side => side && side.refreshedAt === epoch);
         // On a tie the list of this save wins: it was read after the saved one.
         const list = sides.length === 2 && current.list.readAt > data.list.readAt ? current.list : sides.at(-1).list;
@@ -380,14 +375,10 @@ export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
           for (const [n] of drop) delete issues[n];
           text = JSON.stringify(next);
         }
-        if (Buffer.byteLength(text) > STORE_BYTES) return null;
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        const temp = `${file}.${randomUUID()}.tmp`;
-        fs.writeFileSync(temp, text, { mode: 0o600 });
-        fs.renameSync(temp, file);
+        if (Buffer.byteLength(text) > STORE_BYTES) throw Error('Snapshot exceeds storage limit');
         return next;
+        });
       } catch { return null; /* A lost save only costs reads. */ }
-      finally { if (held) try { fs.rmdirSync(lock); } catch { /* A leftover lock refuses future saves. */ } }
     },
   };
 }
@@ -395,19 +386,21 @@ export function dependencySnapshotStore({ root, repository, fs = nativeFs }) {
 // The pdd command default: the saved snapshot and the ETag cache of a repository where Autopilot runs on this machine,
 // that is, where its call ledger exists in the state root.
 const autopilotRoot = ports => ports.autopilotStateRoot ?? join(stateDirFor(ports), 'autopilot');
-const autopilotRepository = (root, repository, fs = nativeFs) => { try { return fs.existsSync(githubLedger({ root, repository }).file); } catch { return false; } };
+const autopilotRepository = (root, repository, fs = nativeFs) => { try { return githubLedger({ root, repository, fs }).exists(); } catch { return false; } };
 function defaultStores(ports) {
   if (ports.snapshotStore === null) return () => null;
   if (ports.snapshotStore) return repository => sameRepo(ports.snapshotStore.repository, repository) ? ports.snapshotStore : null;
   const root = autopilotRoot(ports);
   return repository => autopilotRepository(root, repository) ? dependencySnapshotStore({ root, repository }) : null;
 }
-function defaultEtagCache(ports) {
+function defaultEtagCache(ports, cwd) {
+  const app = githubAppSettings({ cwd, env: ports.env ?? process.env });
+  const identity = app ? `app:${app.id}:${app.privateKeyFile}` : null;
   const root = autopilotRoot(ports), caches = new Map();
   const cacheFor = endpoint => {
     const repo = /^repos\/([^/?#]+\/[^/?#]+)/.exec(String(endpoint))?.[1]?.toLowerCase();
     if (!repo || !repositoryName(repo)) return null;
-    if (!caches.has(repo)) caches.set(repo, autopilotRepository(root, repo) ? githubEtagCache({ root, repository: repo }) : null);
+    if (!caches.has(repo)) caches.set(repo, autopilotRepository(root, repo) ? githubEtagCache({ root, repository: repo, identity }) : null);
     return caches.get(repo);
   };
   const cache = { get: endpoint => cacheFor(endpoint)?.get(endpoint), set: (endpoint, entry) => cacheFor(endpoint)?.set(endpoint, entry),
@@ -426,7 +419,9 @@ export async function commandGithubFloor({ cwd = '', repository }, ports = {}) {
   let setting;
   try { const top = cwd ? (await gitContext(cwd, ports.execFile ? { execFile: ports.execFile } : {}))?.toplevel : null; if (top) setting = readJson(join(top, 'pdd.json'), {})?.autopilot?.github; } catch { /* The default floor applies. */ }
   const now = typeof ports.now === 'function' ? ports.now : Date.now;
-  return githubFloorGuard({ floor: githubBudgetSettings(setting).floor, entries: githubMachineEntries({ root }), now });
+  const env = ports.env ?? process.env, app = githubAppSettings({ cwd, env });
+  const identity = app ? (await createGithubApp(app, { env, now, ...(ports.execFile ? { exec: ports.execFile } : {}), ...ports.githubApp }).credentials()).identity : null;
+  return githubFloorGuard({ floor: githubBudgetSettings(setting).floor, entries: githubMachineEntries({ root, identity }), now });
 }
 
 // The reads of one pdd process (one tick, one command): the issue list and the issue reads of this process, the saved
@@ -801,7 +796,7 @@ async function launcherState(cwd, repository, ports) {
   const root = await selectedCheckout(cwd, repository, ports);
   if (!root) return null;
   const folder = ports.autopilotStateRoot ?? join(stateDirFor(ports), 'autopilot');
-  const state = readJson(join(folder, `${hash(root).slice(0, 20)}.json`));
+  const state = readAutopilotState(join(folder, `${hash(root).slice(0, 20)}.json`), null, ports);
   return state && sameRepo(state.repo, repository) && state.cwd === root ? state : null;
 }
 
@@ -956,7 +951,8 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
       ...timeline.map(e => time(e.created_at))].filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
     const expired = Number.isFinite(now) && Number.isFinite(seen) && now - seen >= (heartbeat ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER);
     const stuckSince = labels.includes('pdd:stuck') ? time(stuck?.created_at) : NaN;
-    return { ...claim, active: !expired, ...(Number.isFinite(seen) ? { lastSeen: iso(seen) } : {}), ...(expired ? { expired: true } : {}),
+    return { ...claim, active: !expired, ...(!heartbeat ? { legacy: true } : {}),
+      ...(Number.isFinite(seen) ? { lastSeen: iso(seen) } : {}), ...(expired ? { expired: true } : {}),
       ...(Number.isFinite(stuckSince) ? { stuckSince: iso(stuckSince) } : {}), ...(Number.isFinite(claimedAt) ? { claimedAt: iso(claimedAt) } : {}),
       ...(takeovers ? { takeovers } : {}),
       ...(takeovers && previous ? { previousOwner: { coordinatorId: previous.record.metadata.coordinatorId, machine: previous.record.metadata.machine } } : {}),
@@ -973,7 +969,7 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
   const server = heartbeatTime(match);
   const lastSeen = Number.isFinite(server) && Number.isFinite(now) ? Math.min(server, now) : server;
   return facts({ issue: key, owner: metadata.coordinatorId, coordinatorId: metadata.coordinatorId, machine: metadata.machine,
-    commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);
+    login: comment.user?.login ?? winner.actor.login, commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);
 }
 
 // The owning coordinator sets one top-level tick member (a time) of its own winning
@@ -996,6 +992,9 @@ async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorI
 // Heartbeat: the owning coordinator writes the current time as the top-level lastSeen
 // of its own winning claim comment.
 export async function refreshClaimHeartbeat(args, ports = {}) {
+  const seen = time(args.claim?.lastSeen), at = time(args.at);
+  if (Number.isFinite(seen) && (args.claim?.legacy === true ? at - seen >= LEGACY_CLAIM_EXPIRES_AFTER
+    : at - seen < 2 * 60 * 60 * 1000 || at - seen >= CLAIM_EXPIRES_AFTER)) return { state: 'skipped' };
   const lastSeen = await setOwnClaimTime('lastSeen', args, ports);
   return lastSeen === null ? { state: 'skipped' } : { state: 'refreshed', lastSeen };
 }
@@ -1102,7 +1101,7 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
   if (!supplied.github) {
     // The native reader of one process: its reads, the saved snapshot of an Autopilot repository, and the ETag cache.
     ports.dependencyReads ??= readSession(defaultStores(ports), typeof supplied.now === 'function' ? supplied.now : Date.now);
-    if (ports.githubCache === undefined) ports.githubCache = defaultEtagCache(ports);
+    if (ports.githubCache === undefined) ports.githubCache = defaultEtagCache(ports, cwd);
   }
   ports.github ??= ports.dependencyReads ? sessionGithub(rawGithub(cwd, ports), ports.dependencyReads) : rawGithub(cwd, ports);
   ports.authority = supplied.authority?.[NATIVE_AUTHORITY] ? nativeAuthority(cwd, ports) : supplied.authority ?? nativeAuthority(cwd, ports);
@@ -1116,10 +1115,13 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
     if (!root) throw Error('Current repository settings unavailable');
     const result = await runAutopilot({ action: 'setup', interactive: false, inRepo: true }, { cwd: root, execFile: ports.execFile });
     if (result.exitCode !== 0 || !state || typeof state.enabled !== 'boolean') throw Error('Current activation unavailable');
-    return { mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }) };
+    return { mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }), ...(result.maxOpenPrs === undefined ? {} : { maxOpenPrs: result.maxOpenPrs }) };
   } };
   Object.defineProperty(settings, NATIVE_SETTINGS, { value: true });
   ports.settings = supplied.settings?.[NATIVE_SETTINGS] ? settings : supplied.settings ?? settings;
+  ports.reviewQueue ??= { read: async ({ repository }) => ({ json: JSON.stringify(await readReviewQueue({ repository,
+    rows: await allPages(ports.github, repository, 'issues', 0),
+  }, { request: async (query, variables) => (await service(cwd, ports).api('graphql', 'POST', JSON.stringify({ query, variables }), 'pr-review', repository)).value })) }) };
   return ports;
 }
 

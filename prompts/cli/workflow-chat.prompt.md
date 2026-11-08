@@ -24,6 +24,31 @@ Herdr transport reads complete stdout/stderr before interpreting JSON or a nonze
 Full-access flags stay. Do not pin tool versions. No workflow or native-session lifetime timeouts; the message-readiness deadline below is the local exception. Shell-quote every path and the resume id in the shell line. A native session id (from Herdr, a session file or the run record) is stored or used only when it is a UUID; `chatCommand` refuses any other resume id.
 
 <a id="explicit-fresh-session"></a>
+## App shell identity
+
+When a run's sourceRoot has App settings, or its caller is App-bound, route the
+worker chat's Git network and gh commands through [GitHub App identity](github-app.prompt.md).
+`chatLaunch` returns an additional non-secret `githubEnv` only in this mode;
+`chatCommand` accepts it (default empty), places its PATH and
+PDD_GITHUB_APP_ROOT in the process environment and, for Codex, in
+shell_environment_policy.set. Read the source checkout settings even for a
+later area opened by another terminal. Preserve provider login file handling.
+Never pass an installation token to the chat or its launch file. If an
+agents.json entry supplies PATH, its private login file retains the combined
+wrapper PATH in App mode as well as automatic mode; sourcing provider login
+values cannot remove the GitHub transport.
+
+An unbound manual run may start a repair chat when source configuration has a
+JSON syntax error, including an oversized broken base configuration whose replay
+owner must block publication. Bind that chat to the configurationRoot supplied by
+the settings refusal and install the App wrappers. Until configuration is repaired,
+its GitHub transport refuses every network call; never fall back to personal gh.
+If repair leaves no App settings, the person starts a fresh chat from an unbound
+terminal to select personal mode; a running bound chat cannot switch identities.
+An automatic run, an already App-bound caller, an explicit invalid App setting or
+a file-access error still refuses startup. This exception changes no replay or
+publication gate.
+
 ## Closed workspace recovery
 
 Export `rebuildClosedChat({run, chat, message}, ports)`, returning false when the saved workspace is present and true after rebuilding a closed workspace. The runner calls it before ordinary open or `--new`. This recovery restores the saved conversation for either command; a later `--new` on the live workspace keeps the normal fresh-session behavior. A pending replacement keeps its existing recovery protocol.
@@ -211,6 +236,10 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 
 ## Dependencies
 
+- [GitHub App identity](github-app.prompt.md): required native generation and verification context for the non-secret shell environment.
+
+- [Private gh transport](github-write-proxy.prompt.md): required native generation and verification context for Autopilot write routing.
+
 - [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
 - [Workflow agents](workflow-agents.prompt.md#login-variables): required context for `LOGIN_VARIABLES`, the one per-kind list of login variables.
@@ -220,10 +249,19 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"1ee6e379d9a9787f5f8e93f554975c26267bd45138c41678b0a8186f3ed65d2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"55f1684fc65184ec33b41cc9db440698aa76178311b37158b4af30d06c79aa1f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
 For workflow chats, set `PDD_BIN` to this running package’s executable so the short `"$PDD_BIN"` invocation works despite PATH shadowing. For every Gemini launch and resume, including replacement and recovery, pass exactly two separately shell-quoted `--include-directories` arguments: the two folders of `agentDirs(run)`. When a caller gives no `addDirs`, they are `commonDir/pdd/runs` and `sourceRoot + ".pdd-worktrees"`. agy chats get the same `PDD_BIN` and use the same short `"$PDD_BIN"` hints, never a long absolute path. Preserve all other agent behavior.
 
 The commands that a Codex chat runs must receive `PDD_BIN` and `PDD_AGENT_SESSION` under any Codex `shell_environment_policy`. Codex builds each command environment from that policy, and `inherit = "core"` or `"none"` removes the process values. So every Codex launch and resume, including replacement and recovery, keeps `PDD_AGENT_SESSION=1 PDD_BIN=…` in its `env` prefix and also passes two invocation-only overrides directly after the `projects` override: `-c shell_environment_policy.set.PDD_BIN=<the same path>` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"`. Each value, and the worktree path in the `projects` key, is one TOML basic string from the shared encoder `tomlString` (`src/toml-string.mjs`, also used by the Autopilot launcher), so a control character such as DEL stays valid, and each argument is shell-quoted like the others. `codex resume <id>` accepts `-c` after the id, so both forms use the same place. Codex applies `set` after `inherit`; the profile's other policy keys and `set` entries stay in effect. Do not change the profile. Limit: a profile `include_only` list that omits a name still removes it, because Codex applies `include_only` last. Claude, Gemini and agy launches do not change.
+
+For a workflow launched from an Autopilot context or an Autopilot-origin run,
+prepare the [private gh transport](github-write-proxy.prompt.md) in the caller's
+PDD_GITHUB_ROOT, else its normal Autopilot state root. Pass its PATH and
+PDD_GITHUB_ROOT in the child environment and in Codex's invocation-only
+shell_environment_policy.set. When the injected caller environment omits PATH,
+use the spawning process PATH before adding transport directories, so the login
+shell and ordinary commands remain available. An explicit caller PATH is kept;
+an agents.json entry PATH takes precedence. Manual runs retain their launch environment.

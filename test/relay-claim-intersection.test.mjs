@@ -57,7 +57,7 @@ for (const [shape, server] of cases) for (const mode of ['read', 'retry']) test(
   assert.ok(!paid.some(p => p.request.scenario === row.test), 'claimed row is not POSTed again');
   assert.ok(!readdirSync(folder).includes(`${key}.1.dispatch.json`), 'no second claim');
   if (server === 'incomplete') {
-    assert.equal(out.state, 'unknown'); assert.equal(out.calls, 'unknown'); assert.equal(out.request_id, null);
+    assert.equal(out.state, 'partial'); assert.equal(out.calls, 'unknown'); assert.equal(out.request_id, null);
     assert.match(out.why ?? '', /interrupted dispatch claim/);
     assert.notEqual(code, 0);
     return;
@@ -70,7 +70,7 @@ for (const [shape, server] of cases) for (const mode of ['read', 'retry']) test(
     assert.equal(JSON.parse(readFileSync(path)).rows[0].next_step, NEXT);
   } else {
     assert.equal(code, 3);
-    assert.equal(out.state, server === 'running' ? 'running' : 'unknown');
+    assert.equal(out.state, server === 'running' ? 'sent' : 'partial');
     if (server === 'running') assert.notEqual(out.calls, 0, 'server usage, never a local zero'); else assert.equal(out.calls, 'unknown', 'possibly sent: usage stays unknown');
     assert.notEqual(out.why, 'Checks failed.');
     assert.notEqual(out.why, 'The local check was never sent.', 'claim adoption clears specific stale local why');

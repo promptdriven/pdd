@@ -40,7 +40,9 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.deepEqual(checks.map(post => post.request.max_calls), [18, 18]);
   assert.equal(new Set(fake.posts.map(post => post.request.requestId)).size, 3);
   assert.deepEqual([...fake.authorization], [`Bearer ${TOKEN}`]);
-  assert.match(result.err, /^Lint passed\. Sent 2 checks at \d\d:\d\d:\d\d: 6 files, \d+ KB \(1 is not prompt, story or test files; run `pdd test --files` to see them\)\.$/m);
+  assert.equal(result.err.split('\n').filter(line => /^Sent 1 check at \d\d:\d\d:\d\d: tests\//.test(line)).length, 2);
+  assert.match(result.err, /Checking 6 files/);
+  assert.match(result.err, /1 is not prompt, story or test files/);
   assert.equal((result.out + result.err).split('not prompt, story or test files').length, 2);
   const json = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
   assert.deepEqual(json.json.warnings, []);
@@ -236,7 +238,7 @@ test('RUNTIME-XFIX1: failed checks show the step, short criterion, diagnosis and
   assert.equal(row.next_step, 'Declare compute.hash_json in the Runtime interface.');
 });
 
-test('RUNTIME-XFIX3: diagnosis sources stay distinct, missing-error wording is conservative, and failed JSON reason stays null', async t => {
+test('RUNTIME-XFIX3: diagnosis sources stay distinct, missing-error wording is conservative, and failed JSON keeps its named reason', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
     if (entry.method !== 'GET') return f.normal(entry);
     const answer = f.check(entry.url.split('/').at(-1), 'failed', [
@@ -254,7 +256,7 @@ test('RUNTIME-XFIX3: diagnosis sources stay distinct, missing-error wording is c
   assert.match(text.out, /Why: check why 2/); assert.match(text.out, /Next: check next 2/);
   assert.doesNotMatch(text.out, /run why|run next|\/srv\/private/);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
-  assert.equal(json.json.rows[0].reason, null); assert.equal(json.json.rows[0].why, 'run why'); assert.equal(json.json.rows[0].next_step, 'run next');
+  assert.equal(json.json.rows[0].reason.code, 'check-failed'); assert.equal(json.json.rows[0].why, 'run why'); assert.equal(json.json.rows[0].next_step, 'run next');
   const passed = await check(setup, await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order'], { '--json': true });
   assert.equal(passed.json.rows[0].reason, null);
 
@@ -356,12 +358,12 @@ test('RUNTIME-RERUN-REFUSED: an admission refusal has no rerun verdict or share 
       assert.equal(row.rerun, null);
       assert.deepEqual(row.failed_checks, []);
       assert.equal(row.refusals[0].code, 'run-admission-failed');
-      assert.match(row.summary_line, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused · 0 AI calls$/);
+      assert.match(row.summary_line, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused \(run-admission-failed\) · 0 AI calls$/);
       assert.doesNotMatch(result.json.summary_line, /\(\d+ for reruns\)|\((?:un)?stable\)|✗/);
     } else {
       assert.match(result.out, /REFUSED/);
       assert.match(result.out, /run-admission-failed/);
-      assert.match(result.out, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused · 0 AI calls$/m);
+      assert.match(result.out, /^Prompt tests \(place-order\): no verdict · [^\n]*1 refused \(run-admission-failed\) · 0 AI calls$/m);
       assert.doesNotMatch(result.out, /Rerun:|\(\d+ for reruns\)|\((?:un)?stable\)|✗|FAILED/);
     }
   }
@@ -394,7 +396,7 @@ test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis so
   assert.match(runLevel.out, /Why: run-level why/); assert.match(runLevel.out, /Next: run-level next/);
   const runLevelJson = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }], why: 'run-level why', who: 'runtime', next_step: 'run-level next' })), ['place-order'], { '--json': true });
   const row = runLevelJson.json.rows[0];
-  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
+  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason.code, 'check-failed');
 });
 
 test('RUNTIME-XFIX6A: a multiline actual with a short expected value stays in block form', async t => {
@@ -440,7 +442,7 @@ test('RUNTIME-XFIX6D: text and JSON use run-level diagnosis fields when no check
   assert.match(text.out, /Why: run-level why/); assert.match(text.out, /Next: run-level next/);
   const json = await check(setup, await fakeRuntime(t, answer), ['place-order'], { '--json': true });
   const row = json.json.rows[0];
-  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
+  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason.code, 'check-failed');
 });
 
 
@@ -450,9 +452,9 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry));
   const result = await check(setup, fake, ['place-order'], { '--timeout': '1' });
   assert.equal(result.code, 3);
-  assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
+  assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +sent \(timeout-flag\) +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /^Prompt tests \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.match(result.out, /^Prompt tests \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 sent \(timeout-flag\) · 0 AI calls \+ 1 unknown$/m);
   assert.doesNotMatch(result.out, /✗|failed/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
@@ -464,7 +466,7 @@ test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row e
     const observed = { sentAt: null, lines: [] }, write = made.ports.stderr.write.bind(made.ports.stderr);
     made.ports.stderr.write = value => {
       for (const text of String(value).split('\n')) {
-        if (/^Lint passed\. Sent \d+ checks? at /.test(text)) observed.sentAt = made.clock.now;
+        if (text === 'Lint passed.') observed.sentAt ??= made.clock.now;
         if (text.startsWith('Still running:')) observed.lines.push({ at: made.clock.now, text });
       }
       return write(value);
@@ -547,7 +549,7 @@ test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row e
   const oneBatch = /pdd test --read (\d{8}-\d{6}-[a-z0-9]{4})/.exec(oneMade.ports.stderr.text)?.[1];
   assert.ok(oneBatch);
   assert.ok(oneMade.ports.stderr.text.includes(`Still running. Read the results later with: pdd test --read ${oneBatch}`));
-  assert.match(oneMade.ports.stdout.text, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
+  assert.match(oneMade.ports.stdout.text, /^Place a coffee order +tests\/place-order\.json +sent \(timeout-flag\) +- +-$/m);
   assert.equal(oneFake.posts.filter(post => post.command === 'check').length, 1);
   assert.equal(oneFake.posts.length, 2);
   const oneId = oneFake.posts.find(post => post.command === 'check').request.requestId;
@@ -610,8 +612,8 @@ test('RUNTIME-WAIT4: agent default waits to completion; explicit timeout preserv
   assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', unlimited.batch, 'batch.json'), 'utf8')).timeout_min, null);
   const agent = await run({ '--timeout': 1 }, { interactive: false });
   assert.equal(agent.code, 3, agent.err + agent.out);
-  assert.match(agent.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
-  assert.match(agent.out, /^STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\.$/m);
+  assert.match(agent.out, /^Place a coffee order +tests\/place-order\.json +sent \(timeout-flag\) +- +-$/m);
+  assert.match(agent.out, /^STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\. Stopped waiting at --timeout 1 min\.$/m);
   const err = agent.err.trimEnd().split('\n');
   assert.deepEqual(err.filter(text => text.startsWith('Still running:')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s']);
   assert.equal(err.at(-1), `Still running. Read the results later with: pdd test --read ${agent.batch}`);
@@ -680,7 +682,7 @@ test('RUNTIME-SERVER12: --read adopts posted claims and keeps genuinely unsent r
   writeFileSync(join(unsentFolder, 'batch.json'), JSON.stringify(unsentSaved));
   const never = await check(unsent, fake, [], { '--read': true });
   assert.equal(fake.posts.length, posts);
-  assert.equal(never.code, 5); assert.match(never.out, /NOT RUN {2}Place a coffee order \(tests\/place-order\.json\): pdd stopped before sending this check\./);
+  assert.equal(never.code, 5); assert.match(never.out, /NOT RUN {2}Place a coffee order \(tests\/place-order\.json\): Stopped before sending\. \(interrupted\)/);
   assert.equal(exitCodeFor([{ state: 'ready' }]), 3); assert.equal(exitCodeFor([{ state: 'sending' }, { state: 'failed' }]), 3);
 });
 
@@ -744,16 +746,16 @@ test('RUNTIME-SERVER16: one pasteable summary line with the appropriate verdict 
   });
   const text = await check(setup, fake, []);
   assert.equal(text.code, 1);
-  assert.deepEqual(text.out.split('\n').slice(3, 6), ['Prompt tests (place-order): ✗ 1 of 2 criteria · 1/2 checks · 1 AI call',
-    'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls']);
+  assert.deepEqual(text.out.split('\n').slice(3, 6), ['Prompt tests (place-order): ✗ 1 of 2 criteria · 1/2 checks · 1 failed (check-failed) · 1 AI call',
+    'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✗ 2 of 3 criteria · 2/3 checks · 1 failed (check-failed) · 2 AI calls']);
   const json = await check(setup, fake, [], { '--json': true });
-  assert.equal(json.json.summary_line, 'Prompt tests: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls');
+  assert.equal(json.json.summary_line, 'Prompt tests: ✗ 2 of 3 criteria · 2/3 checks · 1 failed (check-failed) · 2 AI calls');
   const refused = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));
     doc.steps[0].input.items[0].quantity = 0; writeFileSync(file, JSON.stringify(doc));
   });
   const mixed = await check(refused, await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
-  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Prompt tests: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
+  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Prompt tests: no verdict · 1 of 4 criteria · 1/1 checks · 1 tests could not run · 1 not run (broken-test) · 1 AI call');
 });
 
 // Wrong: the runtime address is written in more than one place, so a move needs many edits.
@@ -787,7 +789,7 @@ test('RUNTIME-SERVER17: --read of a still-running row names no wait time', async
   const first = await check(setup, fake, ['place-order'], { '--timeout': '1' });
   assert.equal(first.code, 3);
   const read = await check(setup, fake, [], { '--read': true, '--timeout': 1 });
-  assert.equal(read.code, 3); assert.match(read.out, /^STILL RUNNING: Place a coffee order\. Do not send it again\.$/m);
+  assert.equal(read.code, 3); assert.match(read.out, /^STILL RUNNING: Place a coffee order\. Do not send it again\. Stopped waiting at --timeout 1 min\.$/m);
 });
 
 const NOT_STARTED = { requestId: null, command: 'check', state: 'refused', job_created: false, dispatch: 'not_started', error: { code: 'not-found', message: 'The requested run or session was not found.' } };
@@ -820,7 +822,7 @@ test('RUNTIME-SERVER18: after a POST timeout pdd reads the same ID for at least 
   const lost = await run(never, {});
   assert.equal(lost.code, 3);
   assert.ok(never.gets.length >= 149, String(never.gets.length));
-  assert.match(lost.out, /^Place a coffee order +tests\/place-order\.json +unknown/m);
+  assert.match(lost.out, /^Place a coffee order +tests\/place-order\.json +partial \(no-server-verdict\)/m);
   assert.doesNotMatch(lost.out, /refused/);
 });
 

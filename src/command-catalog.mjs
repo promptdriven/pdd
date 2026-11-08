@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9a560895a7a549c2804467b25aea7747bf1801a66ac09a63eb9d7e46b2d6b282).
+// Generated from prompts/cli/command-catalog.prompt.md.
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -6,7 +6,7 @@ const { test, lint, simulate, run, requestUptake } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 export const PUBLIC_HELP_TEXT = Object.freeze({
   heading: "PDD: prompt-driven development for your coding agent.",
-  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.`, "The CLI has no merge command. Auto agents use pdd-merge after repository review and tests, with required human approvals."]),
+  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.`, "Auto agents use pdd-merge and pdd autopilot merge PR --input - after repository review and tests, with required human approvals."]),
   learnLines: Object.freeze(["Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.", "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md", "RUNBOOK: PACKAGE_ROOT/RUNBOOK.md"]),
   promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.", `4. Check: run pdd ${test} --fill-hash, then pdd ${lint} (0 AI calls), then pdd ${test} STORY on the PDD interpreter.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves."])
 });
@@ -16,6 +16,8 @@ ${command} --said - <<'PDD_SAID'
 PDD_SAID
 Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
+  { id: 'autopilot.merge', prefix: ['autopilot', 'merge'], local: 'autopilot-merge', operands: [{name:'pr',type:'issue'}], options: [{name:'--input',kind:'text'},{name:'--observe',kind:'flag'}],
+    forms: [form('pdd autopilot merge PR --input - [--observe]', 'Check merge rules and submit to the base branch queue or merge the exact head. Read evidence JSON from stdin. --observe reads the result and audit without a write.')] },
   { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--json',kind:'flag'},{name:'--date',kind:'text'},{name:'--snapshot',kind:'text'},{name:'--timezone',kind:'text'},{name:'--at',kind:'text'},{name:'--expected-source',kind:'text-list'}],
     forms: [form('pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]', 'Show metrics for this repository.')] },
   { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },
@@ -52,8 +54,8 @@ const routes = [
   // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
   { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'},{name:'--draft',kind:'flag'},{name:'--origin',kind:'value',choices:['manual','autopilot','unknown']},{name:'--decision-id',kind:'text'},{name:'--outcome',kind:'value',choices:['code','prompt-only']}],
-    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft]`, 'Start the first area chat for a GitHub issue in Herdr and exit; ENTRY is a name from ~/.config/pdd/agents.json; --base selects an existing origin branch (default: repository default); --draft requests draft PRs for this run; --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; --origin, --decision-id and --outcome record optional metrics metadata; pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'},{name:'--draft',kind:'flag'},{name:'--through',kind:'value',choices:['prompt-pr','code']},{name:'--origin',kind:'value',choices:['manual','autopilot','unknown']},{name:'--decision-id',kind:'text'},{name:'--outcome',kind:'value',choices:['code','prompt-only']}],
+    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft]`, 'Start the first area chat for a GitHub issue in Herdr and exit; ENTRY is a name from ~/.config/pdd/agents.json; --base selects an existing origin branch (default: repository default); --draft requests draft PRs for this run; --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; --origin, --decision-id and --outcome record optional metrics metadata; --through prompt-pr|code saves where a normal run goes after PR 1 (stop, or go on to the code PR); pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'},{name:'--timeout',kind:'integer',min:1,max:120}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]', 'Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd\'s own result.')] },
@@ -73,8 +75,11 @@ const routes = [
     operands: [{name:'request-id',type:'text'}], options: [{name:'--summary',kind:'text'}],
     forms: [form(`pdd workflow ${requestUptake} REQUEST_ID --summary TEXT`, 'For the agent in a run worktree: acknowledge a delivered change request with a short note.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'},{name:'--draft',kind:'flag'}],
-    forms: [form('pdd workflow approve [ISSUE] [--said WORDS] [--draft]', 'Approve the gate and all its selected draft prompts in one step; --draft requests draft PRs at the current unpublished gate. ' + approvalHelp('pdd workflow approve N'))] },
+    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'},{name:'--draft',kind:'flag'},{name:'--through',kind:'value',choices:['prompt-pr','code']}],
+    forms: [form('pdd workflow approve [ISSUE] [--said WORDS] [--draft]', 'Approve the gate and all its selected draft prompts in one step; --draft requests draft PRs at the current unpublished gate; --through prompt-pr|code records the person\'s code-or-stop choice from the Story card of a normal run. ' + approvalHelp('pdd workflow approve N'))] },
+  { id: 'workflow.card', prefix: ['workflow', 'card'], local: 'workflow-card',
+    operands: [{name:'issue',type:'issue',optional:true}], options: [],
+    forms: [form('pdd workflow card [ISSUE]', "Print the run's Story card from its real files: the request, the Story, the test cases, the prompts that change and the next step. Read-only; no GitHub, Herdr or interpreter call.")] },
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
     operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
@@ -111,7 +116,7 @@ const routes = [
       form(`pdd ${test} --retry BATCH [--json] [--details] [--timeout MIN]`, 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form(`pdd ${test} --fill-hash`, 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form(`pdd ${test} --fill-hash --compact`, 'Fill draft hashes and remove interface JSON formatting whitespace; preserve values and prose, no network.'),
-      form(`pdd ${test} --files [STORY...] [--app-map PATH]`, 'List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator\'s app map.'),
+      form(`pdd ${test} --files [STORY...] [--app-map PATH] [--json]`, 'List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator\'s app map.'),
       form(`pdd ${test} --screen URL --drawing PATH [--json]`, 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.')] },
   // A lint plan always has --lint, so the runtime client runs the same code as for `pdd test --lint`.
   { id: 'lint', prefix: [lint], local: 'runtime-check', removed: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],

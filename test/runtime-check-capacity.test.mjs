@@ -133,11 +133,11 @@ test('CAPACITY direct 429: unknown usage never allocates another ID, claim or Ch
   const observed = { posts: fake.checkPosts.length, ids: new Set(fake.checkPosts.map(item => item.requestId)).size,
     claims: dispatchClaims(setup, result.json.batch).length, allocated_check_uuids: dispatchClaimIds(setup, result.json.batch).length, state: result.json.rows[0].state,
     calls: result.json.rows[0].calls, busy: result.json.rows[0].busy, can_retry: result.json.rows[0].can_retry };
-  assert.deepEqual(observed, { posts: 1, ids: 1, claims: 1, allocated_check_uuids: 1, state: 'unknown', calls: 'unknown', busy: false, can_retry: false });
+  assert.deepEqual(observed, { posts: 1, ids: 1, claims: 1, allocated_check_uuids: 1, state: 'partial', calls: 'unknown', busy: false, can_retry: false });
   assert.match(result.json.rows[0].next_step ?? '', /--read/);
   const read = await invokeMemory(setup, fake, made.ports.fetch, [result.json.batch], { '--read': true, '--json': true });
   assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, result.json.batch).length, 1);
-  assert.ok(fake.gets.includes(result.json.rows[0].request_id)); assert.equal(read.json.rows[0].state, 'unknown');
+  assert.ok(fake.gets.includes(result.json.rows[0].request_id)); assert.equal(read.json.rows[0].state, 'partial');
 });
 
 test('CAPACITY duplicate report surfaces conflict on a direct 429', async t => {
@@ -153,7 +153,7 @@ test('CAPACITY duplicate report surfaces conflict on a direct 429', async t => {
   assert.deepEqual({ posts: fake.checkPosts.length, ids: new Set(fake.checkPosts.map(item => item.requestId)).size,
     claims: dispatchClaimIds(setup, result.json.batch).length, state: row.state, calls: row.calls,
     unknown_calls: row.unknown_calls, busy: row.busy, can_retry: row.can_retry },
-  { posts: 1, ids: 1, claims: 1, state: 'unknown', calls: 'unknown', unknown_calls: 1, busy: false, can_retry: false });
+  { posts: 1, ids: 1, claims: 1, state: 'partial', calls: 'unknown', unknown_calls: 1, busy: false, can_retry: false });
   assert.match(row.next_step ?? '', /--read/);
 });
 
@@ -169,7 +169,7 @@ test('CAPACITY terminal contradiction stays unknown through saved read and expli
   } });
   const initial = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1 });
   const row = initial.json.rows[0], batch = initial.json.batch;
-  assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+  assert.equal(row.state, 'partial'); assert.equal(row.calls, 'unknown');
   assert.equal(row.known_calls, 0); assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
   assert.equal(row.busy, false); assert.equal(row.can_retry, false);
   assert.match(row.next_step ?? '', /--read/);
@@ -178,7 +178,7 @@ test('CAPACITY terminal contradiction stays unknown through saved read and expli
   const read = await invokeMemory(setup, fake, made.ports.fetch, [batch], { '--read': true, '--json': true, '--timeout': '0.01' });
   assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, batch).length, 1);
   assert.ok(fake.gets.includes(row.request_id));
-  assert.equal(read.json.rows[0].state, 'unknown'); assert.equal(read.json.rows[0].busy, false);
+  assert.equal(read.json.rows[0].state, 'partial'); assert.equal(read.json.rows[0].busy, false);
   setup.clockNow += 90_100;
   const retry = await invokeMemory(setup, fake, made.ports.fetch, [], { '--retry': batch, '--json': true, '--timeout': 1 });
   assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, batch).length, 1);
@@ -204,7 +204,7 @@ test('CAPACITY saved GET contradiction does not create a fresh ID or POST', asyn
   });
   const initial = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1 });
   const batch = initial.json.batch, row = initial.json.rows[0], id = row.request_id;
-  assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+  assert.equal(row.state, 'partial'); assert.equal(row.calls, 'unknown');
   assert.equal(row.known_calls, 0); assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
   assert.equal(row.busy, false); assert.equal(row.can_retry, false);
   assert.equal(fake.checkPosts.length, 1); assert.equal(dispatchClaimIds(setup, batch).length, 1);
@@ -257,7 +257,7 @@ test('CAPACITY maintenance 503 without consistent zero proof stays unknown and c
     } });
     const initial = await runMemory(setup, fake, made, ['place-order'], { '--json': true, '--timeout': 1 });
     const row = initial.json.rows[0], batch = initial.json.batch, id = row.request_id;
-    assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+    assert.equal(row.state, 'partial'); assert.equal(row.calls, 'unknown');
     assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
     assert.equal(row.busy, false); assert.equal(row.can_retry, false); assert.match(row.next_step ?? '', /--read/);
     assert.doesNotMatch(initial.err, /maintenance.*deploy/i, 'uncertain proof must not be described as a safe maintenance wait');
@@ -296,7 +296,7 @@ test('CAPACITY missing, malformed or conflicting accounting surfaces fail closed
     assert.deepEqual({ posts: fake.checkPosts.length, ids: new Set(fake.checkPosts.map(item => item.requestId)).size,
       claims: dispatchClaimIds(setup, result.json.batch).length, state: row.state, calls: row.calls,
       unknown_calls: row.unknown_calls, busy: row.busy, can_retry: row.can_retry },
-    { posts: 1, ids: 1, claims: 1, state: 'unknown', calls: 'unknown', unknown_calls: 1, busy: false, can_retry: false });
+    { posts: 1, ids: 1, claims: 1, state: 'partial', calls: 'unknown', unknown_calls: 1, busy: false, can_retry: false });
   });
 });
 
@@ -353,7 +353,7 @@ test('CAPACITY revalidates saved proof after admission wait and releases its uns
   const row = result.json.rows[0], batch = result.json.batch;
   assert.equal(mutationCount, 1); assert.equal(fake.checkPosts.length, 1);
   assert.equal(dispatchClaimIds(setup, batch).length, 1);
-  assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+  assert.equal(row.state, 'partial'); assert.equal(row.calls, 'unknown');
   assert.equal(row.unknown_calls, 1); assert.equal(saved(setup, batch).rows[0].capacity_uncertain, true);
   assert.equal(row.busy, false); assert.equal(row.can_retry, false);
   assert.deepEqual(await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin }), { jobs: [] });
@@ -579,7 +579,7 @@ test('ACCOUNTING wrong-ID saved pass cannot add usage to a fresh progress receip
   writeFileSync(batchPath, JSON.stringify(record));
   const read = await invokeMemory(setup, fake, made.ports.fetch, [batch], { '--read': true, '--json': true });
   const row = read.json.rows[0];
-  assert.equal(row.request_id, secondId); assert.equal(row.state, 'unknown');
+  assert.equal(row.request_id, secondId); assert.equal(row.state, 'partial');
   assert.equal(row.calls, 'unknown'); assert.equal(row.known_calls, 1);
   assert.equal(row.unknown_calls, 1); assert.equal(row.accounting_complete, false);
   assert.equal(JSON.parse(readFileSync(firstPath, 'utf8')).requestId, wrong.requestId, 'mismatched raw evidence remains available');
@@ -643,7 +643,7 @@ test('CAPACITY1: confirmed zero-execution capacity is retried until the wait end
   assert.equal(result.code, 5, result.err + result.out);
   assert.ok(checkPosts(fake).length > 3);
   assert.equal(new Set(checkPosts(fake).map(p => p.request.requestId)).size, checkPosts(fake).length);
-  assert.equal(result.json.rows[0].state, 'not_run');
+  assert.equal(result.json.rows[0].state, 'not run');
   assert.equal(result.json.rows[0].busy, true); assert.equal(result.json.rows[0].can_retry, true);
   assert.equal(result.json.rows[0].calls, 0); assert.equal(result.json.rows[0].checks, null);
   assert.match(result.json.summary_line, /: busy/); assert.doesNotMatch(result.out + result.err, /Fix what|fix the test|✗/);
@@ -673,7 +673,7 @@ for (const [count, words, message] of [
   assert.equal(fake.gets.length, 0);
   assert.equal(result.json.rows.length, count);
   for (const row of result.json.rows) {
-    assert.equal(row.state, 'not_run');
+    assert.equal(row.state, 'not run');
     assert.equal(row.calls, 0);
     assert.equal(row.busy, true);
     assert.equal(row.can_retry, true);
@@ -836,8 +836,8 @@ test('CAPACITY10: unknown dispatched jobs still occupy four configured slots; he
     env: { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '4' }
   });
   assert.equal(result.code, 3); assert.equal(checkPosts(fake).length, 4);
-  assert.equal(result.json.rows.filter(r => r.state === 'unknown').length, 4);
-  assert.equal(result.json.rows.filter(r => r.state === 'not_run' && r.calls === 0 && !r.request_id).length, 6);
+  assert.equal(result.json.rows.filter(r => r.state === 'partial').length, 4);
+  assert.equal(result.json.rows.filter(r => r.state === 'not run' && r.calls === 0 && !r.request_id).length, 6);
 });
 
 test('CAPACITY11: explicit recovery honors saved admission Retry-After across invocations', async t => {

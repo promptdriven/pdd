@@ -1,3 +1,4 @@
+import { readAutopilotState } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
@@ -87,7 +88,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
   };
   f.invoke = (command, extra = {}) => runAutopilotLauncher({ command, cwd: f.cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot, issues: [], ...extra }, f.ports);
   f.stateFile = () => join(f.ports.stateRoot, `${createHash('sha256').update(f.cwd).digest('hex').slice(0, 20)}.json`);
-  f.state = () => existsSync(f.stateFile()) ? JSON.parse(readFileSync(f.stateFile(), 'utf8')) : null;
+  f.state = () => readAutopilotState(f.stateFile());
   f.tick = () => tickAutopilot(f.stateFile(), f.ports);
   f.commonDir = () => realpathSync(git(f.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir').trim());
   // The allocator keeps its records in the common Git folder and makes worktrees beside the checkout.
@@ -244,7 +245,7 @@ test('while workflows cannot start, an own live claim still gets its heartbeat a
   assert.equal(f.allocated(), false);
 });
 
-test('status names the folder and says why workflows cannot start there, without GitHub', async t => {
+test('status names the folder, readiness and current fleet without GitHub writes', async t => {
   const f = fixture(t);
   assert.equal((await f.invoke('start')).exitCode, 0);
 
@@ -262,7 +263,7 @@ test('status names the folder and says why workflows cannot start there, without
   git(f.cwd, 'remote', 'set-url', 'origin', join(f.dir, 'somewhere-local.git'));
   const local = await f.invoke('status');
   assert.equal(local.message.split('\n')[1], 'Workflows cannot start in this folder: Its origin remote is not a GitHub repository address. Run Autopilot from a normal clone of owner/repo.');
-  assert.ok(!f.calls.some(([command]) => command === 'gh'), 'status makes no GitHub call');
+  assert.ok(f.calls.filter(([command]) => command === 'gh').every(([,args]) => !args.includes('POST') && !args.includes('PATCH') && !args.includes('DELETE')));
 });
 
 test('status accepts every origin form that the allocator accepts, and names a Git read failure as one', async t => {
@@ -386,7 +387,8 @@ test('status --all lists every repository with Autopilot on this machine from an
   assert.equal(stderr.text, '');
   const lines = stdout.text.trimEnd().split('\n');
   assert.equal(lines[0], 'Autopilot on this machine (2):');
-  const row = repo => lines.find(text => text.startsWith(`${repo} in `));
+  const row = repo => lines.find(text => text.startsWith(`${repo} in `))?.split(' · GitHub writes')[0];
+  assert.equal(lines.filter(text => /0\/60.*0\/350/.test(text)).length, 2);
   assert.equal(row('owner/one'), `owner/one in ${one} · mode auto · Autopilot enabled · timer active · coordinator idle`);
   assert.equal(row('owner/two'), `owner/two in ${two} · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`);
   assert.equal(lines.length, 3);
@@ -455,7 +457,7 @@ test('status --all keeps each line independent when a saved folder is gone or a 
     ['e'.repeat(20)]: `${'e'.repeat(20)}.json: saved state unreadable`,
     ['f'.repeat(20)]: `${'f'.repeat(20)}.json: saved state unreadable`,
   };
-  const lines = stdout.text.trimEnd().split('\n');
+  const lines = stdout.text.trimEnd().split('\n').map(text => text.split(' · GitHub writes')[0]);
   assert.equal(lines[0], 'Autopilot on this machine (6):');
   assert.equal(lines[1], expected[goneId], 'the missing folder sorts first');
   assert.deepEqual(lines.slice(1), Object.keys(expected).sort().map(name => expected[name]));

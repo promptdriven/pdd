@@ -36,3 +36,42 @@ Use a fresh temporary directory if that destination already contains prior artif
 ## Scope and license
 
 Contributions are under the repository's [MIT license](LICENSE). Retain applicable notices. Keep the package self-contained, with no hosted services, private dependencies, operational fixtures or credentials in source or package artifacts. An optional proposal for a future capability is not an implemented public command.
+
+## Native tests during Autopilot work
+
+Run `node scripts/affected-tests.mjs --base BASE` to inspect the affected-test
+plan. Use the run's base commit. Add `--run --report /external/run/working-tests.json`
+to execute it and retain results outside the checkout. The plan includes changed
+tests, reverse module consumers, prompt scenarios and replay consumers, and the
+fixed CLI version and command catalog smoke tests. Computed file or process
+access selects conservative consumers. Shared helpers, package files, runner
+changes and unavailable inventories select the full suite. Full fallbacks use
+`scripts/vm-suite-lock.sh`, the shared suite queue adapter. Do not omit a selected
+test to make a run pass.
+
+The selector can omit a test only after proving its whole import graph. All
+dependencies must be static ESM imports or reexports with literal relative
+specifiers resolved to existing JavaScript files. Dynamic imports, CommonJS
+loaders in any form, computed loader access, non-JavaScript loaders, unresolved
+specifiers and parse errors always select their test consumers. Node builtin
+imports also keep a test selected. The proof supports declarations with scalar
+values in explicit `.mjs` modules. The package loader scope of `.js` files and
+arbitrary executable syntax stay unproved. Unsupported syntax cannot
+establish omission. Conservative file references can add tests. They cannot
+prove a graph. Check the plan's actual selected and total counts before claiming
+a reduction in test work.
+
+Record the working files, command, mode, fallback cause, counts and `suiteMinutes`
+in the PR. Keep these results separate from the merge result. The merge owner
+runs the full suite once through the shared queue on the exact clean PR head,
+reuses an existing green result on that head, and reports the head and result in
+the PR. A new head requires a new result. Missing, stale or failed full results
+block merge. An affected pass is not the full-suite gate.
+
+When the cost ledger from #3061 is installed, record each measured execution
+once with `pdd workflow cost ISSUE --input -`: use a unique measurement `id` and
+the report's non-null `suiteMinutes`. For queued full runs, use the queue's
+execution-only measurement; the adapter leaves `suiteMinutes` null because its
+wall time includes queue wait. Include working executions and the final full suite.
+Compare suite minutes per merged issue with the same work scope. Do not count
+selection time, queue wait or a file-count estimate as executed suite minutes.

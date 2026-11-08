@@ -1,99 +1,181 @@
-# A GitHub App token for Autopilot
+# A GitHub App for Autopilot
 
-This is a design note. pdd does not implement it. It tells how a team can give
-Autopilot its own GitHub limit, and what must change in pdd to support it.
+Autopilot uses the current `gh` login by default. An organization can create one
+GitHub App, **PDD Autopilot**, and install it on its repositories. With App
+settings, pdd and the coordinator and worker chats use installation tokens for
+`gh` calls. Claim labels, claim comments, discussion comments and PRs then show
+`APP-SLUG[bot]`. An installation has its own API allowance. pdd reads that limit
+from GitHub. It does not use the person's limit for the App budget.
 
-## The problem
+The organization owner must create the App. pdd does not register an App or
+install one on GitHub. No webhook or hosted coordinator is needed.
 
-Autopilot uses the `gh` sign-in of the person who runs `pdd autopilot start`.
-GitHub gives one person 5,000 REST calls each hour, for all of their work. When
-several coordinators run on one login, they can use the whole limit. Then every
-`gh` call of that person fails with HTTP 403 until the reset, also their own
-work, CI log reads and release steps. The [GitHub API budget](cli.md#github-api-budget)
-only makes the tick read less. The chats' own `gh` calls are not counted and do
-not wait, and the limit is still shared.
+## Create and install the App
 
-## The design
+1. Open the organization's **Settings → Developer settings → GitHub Apps → New
+   GitHub App**. Name it PDD Autopilot. Use an organization name in the App name
+   if GitHub requires a unique name. Select the organization as its owner.
+2. Set a homepage URL for your organization. Disable **Active** under Webhook.
+   The local tick polls GitHub. No OAuth callback or user authorization flow is
+   needed for installation authentication.
+3. Set these repository permissions. Leave organization and account permissions
+   unset.
 
-A team creates one GitHub App and installs it on its repositories. Autopilot
-then calls GitHub with a token of that installation. An installation has its own
-limit: at least 5,000 REST calls each hour, plus 50 for each repository and
-each user above 20, up to 12,500 (15,000 on GitHub Enterprise Cloud). GraphQL
-also has its own points limit for the installation. The person's limit then
-stays for the person.
+   | Permission | Access | Purpose |
+   |---|---|---|
+   | Metadata | Read | Repository identity and metadata |
+   | Contents | Read and write | Read source, update settings and merge PRs |
+   | Issues | Read and write | Read issues, claim labels and comments |
+   | Pull requests | Read and write | Create PRs, read and write reviews, merge |
+   | Checks | Read | Read required checks |
+   | Commit statuses | Read | Read commit status checks |
+   | Actions | Read | Read Actions runs and failure evidence |
 
-```mermaid
-flowchart LR
-    T[Autopilot tick] --> C[Token command]
-    C --> K[App private key, outside the repository]
-    C --> G[GitHub: installation token, 1 hour]
-    T -->|GH_TOKEN for each gh call| A[GitHub API, installation limit]
-    P[The person's own gh work] -->|own sign-in| L[GitHub API, the person's limit]
+   Add **Workflows: read and write** only if your approved work includes changes
+   to workflow files. Branch rules and required person reviews still apply. An
+   App review does not replace a required person review.
+4. Create the App. Record its numeric **App ID** and its URL slug. Generate a
+   private key. Move the PEM file to a private location outside every checkout.
+   Give only the local operator access, for example mode `0600`. Do not commit
+   the PEM file or copy its contents into settings, chat or an issue.
+5. Select **Install App** and install it on the organization. Choose **Only
+   select repositories** and select each repository where PDD will work. Accept
+   the requested permissions. Enable the organization's policy that permits the
+   App to create PRs if required. Use this same App across the organization.
+
+See GitHub's [registration instructions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app)
+and [installation instructions](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app).
+
+## Configure each checkout
+
+Edit `pdd.json` in the source checkout. Preserve the other settings:
+
+```json
+{
+  "autopilot": {
+    "mode": "auto",
+    "trust": ["your-app-slug[bot]"],
+    "github": {
+      "share": 30,
+      "floor": 1000,
+      "app": {
+        "id": "123456",
+        "privateKeyFile": "/secure/pdd-autopilot.pem"
+      }
+    }
+  }
+}
 ```
 
-### 1. The App
+Use your App ID and the absolute local key path. Each machine needs access to
+that key path. The setting contains a path, never the key bytes. Add the actual
+App bot name to `autopilot.trust` so its claim comments and saved dependency
+reviews pass the existing trust checks. Keep all other required trusted names.
+pdd does not grant the App extra trust or merge authority.
 
-- Owner: the organization (or the person, for a personal repository).
-- Repository permissions: Issues read and write, Pull requests read and write,
-  Contents read, Metadata read, Checks read, Commit statuses read. Add Contents
-  write only if the coordinator also pushes with the App.
-- No webhook is needed: the tick polls.
-- Install the App on the repositories that run Autopilot. Note the App ID and the
-  installation ID. Keep the private key in a secret store, never in the
-  repository.
+Run `pdd autopilot start` from the checkout. No personal `gh` login is needed
+for App repository API calls. Hosted prompt checks keep their separate personal
+GitHub sign-in and interpreter access. Interpreter sign-in selects the personal
+`gh` behind the App and write wrappers, including in automatic workers. The App
+does not replace that sign-in. pdd validates the key, resolves the repository installation,
+checks the grants and verifies repository access before starting a timer or
+chat. It reads the installation API limit before admitting work. A failure
+names the failed stage or HTTP status and starts no work. It does not try the
+person's login. A failed refresh also stops the tick before work.
 
-### 2. The token
+Use `pdd autopilot status` to see the saved bot and installation identity. Status
+makes no authentication request. An identity change causes the coordinator to
+use a fresh chat when it is idle. Stop Autopilot before switching identities on
+an active repository; let existing work reach a safe stopping point first.
 
-An installation token lives 1 hour. A token command makes a new one: it signs a
-JSON Web Token (RS256, `iss` is the App ID or client ID, at most 10 minutes) with
-the private key and calls `POST /app/installations/ID/access_tokens`. It prints
-the token on stdout. A team can use a small script or a secret-store tool for
-this. pdd never saves the token, never prints it and never puts it in a run
-file, a log or a packet.
+App mode also authenticates Git push, fetch, pull, clone and remote branch reads.
+The child process uses HTTPS with an installation credential. GitHub SSH remote
+addresses are rewritten to HTTPS for that process. pdd does not edit stored Git
+remotes or credential helpers. An App-only checkout can publish its branches
+without a person's Git credential.
+Repository-specific GitHub authorization headers, including headers from included
+files, inherited Git environment settings, or clone's `-c` and `--config` options,
+use the App credential in the child.
+Non-authorization headers and settings for other hosts stay in place. pdd stops
+the command if it cannot read the effective Git configuration.
+Clone keeps source checkout headers out of its requests, including headers in
+global includes that apply only inside that source checkout.
 
-### 3. What pdd needs to add
+To check this transport locally, use Node.js 22.16 or newer, Git and OpenSSL:
 
-- A setting for this machine and repository, like the alert token command:
-  `pdd autopilot github set --token-command CMD` saves the command outside the
-  repository; `pdd autopilot github clear` removes it.
-- The tick runs the command at the start of each tick, and again when less than
-  5 minutes of the token are left. It gives the token to each of its `gh` calls
-  as `GH_TOKEN`; gh then uses it in place of the stored login. The timer
-  environment does not hold the token.
-- The ledger keeps the App calls apart, and the budget applies to the
-  installation limit, not to the person's limit. `pdd autopilot status` names
-  the App, never the token.
-- When the command fails, the tick warns and waits for the next tick. It does
-  not fall back to the person's login without a setting that says so.
+```sh
+node --test test/github-app-git-auth.test.mjs
+```
 
-Start with the no-AI tick: it makes most of the calls, all day. The coordinator
-and worker chats run `gh` and `pdd` in their own shells, and a token that ends
-after 1 hour does not fit a long chat. A later step can give those shells a
-fresh token through a small `gh` wrapper on their PATH.
+The test creates temporary checkouts, a fake token endpoint, and a loopback HTTPS
+server and proxy. It observes the headers sent by real Git and returns HTTP 403
+before Git transfers data. It checks native calls, worker wrappers, nested gh
+calls and personal mode. It removes its temporary files and servers. It needs
+no App, personal credential, GitHub access or Herdr session.
 
-### 4. What changes on GitHub
+## Token handling and API budget
 
-Writes with the App token show the bot `APP-NAME[bot]` as their author, not the
-person. This matters for the rules of pdd:
+pdd signs an RS256 JWT with the private key and exchanges it for an installation
+token scoped to the repository. GitHub issues installation tokens with a
+one-hour lifetime. pdd refreshes when five minutes remain. Coordinator and
+worker shells use bundled `gh` and `git` wrappers. Each call reads the current settings
+and obtains a fresh or cached credential, so a long chat does not retain an
+expired token. pdd also applies this authentication to its native `gh` calls.
+Codex launches pass the non-secret routing values through its invocation-only
+shell policy. A profile `include_only` filter must permit `PATH` and
+`PDD_GITHUB_APP_ROOT`; Codex applies that filter after the overrides.
 
-- Trust: the bot is not the repository owner or a collaborator. Add
-  `APP-NAME[bot]` to `autopilot.trust`, or the tick does not trust the claim
-  comments, dependency reviews and replies that the bot writes.
-- Claims: a claim is the `pdd:working` label event and one comment by the same
-  actor. One identity must add both. If the coordinator chat claims with the
-  person's login and the tick writes the heartbeat with the App, the heartbeat
-  edits the person's comment, which keeps the claim; but a claim that mixes the
-  two identities for the label and the comment does not win.
-- Reviews and merges: a review or approval by the bot is not a person's review.
-  Repository rules that need a human review still need one. Merges stay under
-  the [pdd-merge](../skills/pdd-merge/SKILL.md) rules.
-- Audit: the GitHub history shows the bot for these actions. The person's own
-  actions still show the person.
+The credential cache is `~/.cache/pdd/github-app/`. Its directory is private
+(mode `0700`), and each credential file is private (mode `0600`). It is separate
+from Autopilot state. Key rotation uses a separate cache entry. Cached tokens
+expire in at most one hour. To revoke access at once, suspend the installation
+or revoke its tokens on GitHub; deleting a signing key alone does not revoke an
+issued installation token. Keep the cache out of shared backups and logs.
 
-### 5. Open questions
+Chat transport wrappers keep the caller PATH. When a launch port omits PATH,
+they use the spawning process PATH. An agents.json entry can still override it.
 
-- Should the token command be one per machine or one per repository?
-- Should the coordinator chat use the App for its reads too, and how does it get
-  a fresh token in a long chat?
-- Should pdd trust its own App bot without a trust entry, from the installation
-  identity?
+Tokens reach only the child transport environment. Git receives its authorization
+header through environment config; gh receives GH_TOKEN. pdd does not print them, put them
+in arguments, save them in workflow records or send them to chats. Transport
+output and errors redact the active token. Credential-printing and login-changing
+`gh auth` commands are refused in App mode. Removing App settings from a bound
+chat stops its `gh` route rather than silently switching to a person.
+
+A manual workflow can open a repair chat when `pdd.json` has broken JSON. That
+chat gets a bound transport that refuses GitHub calls while the JSON is broken.
+If the repaired file has no App settings, start a fresh chat from an unbound
+terminal to select personal mode.
+An agents.json PATH cannot remove that transport when the login file is read.
+Automatic starts and already bound callers still stop at this error. Invalid
+App settings and unreadable files stop all starts. Replay checks still block
+publication when the selected base configuration cannot be read.
+
+App transport disables inherited Git tracing and curl verbosity. It also disables
+trace2 targets set in Git configuration and forces HTTP trace redaction. This
+applies to native commands, worker wrappers and Git started by gh. Git trace files
+must not receive installation credentials. Personal-mode tracing is unchanged.
+The local transport tests inspect trace files and check that only the private
+credential cache contains a synthetic token.
+
+The local ledger marks App calls with the App ID and installation ID. The
+budget and reserve floor select that installation's entries. Personal calls
+and other installations stay separate. Repositories in one installation share
+its measured allowance on this machine. The wrapper counts its shell calls
+when the repository already has an Autopilot ledger. Other machines share the
+GitHub installation allowance, but their local call ledgers are separate. The
+local budget is not a global quota broker. GitHub's secondary limits still
+apply. Conditional response caches are separated by authentication identity.
+Marked progress updates reuse the verified App bot's comment. Unchanged text
+does not use another write. Changed text updates that comment. A retry lists
+comments again before writing. The installation key still owns the write budget
+and local reconciliation lock. Comments by other people or Apps stay unchanged.
+
+The reserve guard uses the selected installation's saved limit before the first
+non-safety dependency read. Safety reads and writes can still use the reserve.
+The guard stops using an observation when its reset time arrives. To check these
+boundaries with local fakes, run `node --test test/github-app-floor.test.mjs`.
+
+See GitHub's [JWT rules](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app),
+[installation token rules](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
+and [rate limit reference](https://docs.github.com/en/rest/rate-limit/rate-limit).

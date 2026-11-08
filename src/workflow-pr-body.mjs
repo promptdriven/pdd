@@ -1,7 +1,9 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 441cd742e14f1b94eedc21555cf9426cd8eb4c01eb86d7dc2c72e8c1183ce893).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 2544e1a9a8bfad496013e9d3acf1cdcb447c7c9e4d867850229d645ccd79ff09).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
+
+import { formalStatusText } from './workflow-replay.mjs';
 
 export const DETAILS_OPEN = '<details><summary>Details for tools and audits</summary>';
 const MAX_FIELD = 300, MAX_CELL = 120, MAX_CASES = 12, MAX_FILES = 40, MAX_NOTE = 160, MAX_STORIES = 3, MAX_WORDS = 3;
@@ -202,18 +204,30 @@ function proofRows(facts) {
       else if (counts.fail) blocked.push(`${plural(counts.fail, 'approved case')} fail${counts.fail === 1 ? 's' : ''} on the new code`);
       else if (!(mutation?.outcome === 'assertion_failure' && mutation.failures > 0)) blocked.push(`the ${facts.workflow === 'feature' ? 'planted mistake' : 'old code'} fails no case`);
     }
-    if (replay?.formal) {
+    // #3029: the formal status that pdd read on its own; a Story with `## Rules to check` (rulesToCheck not false) needs a
+    // recorded Proved or Not applicable result. With scenario vectors the code replay needs a typed block, so the row is
+    // never "not needed" there. Otherwise, without such a Story, only a recorded failure holds the PR.
+    const status = replay ? formalStatusText(replay.formal, r.rulesToCheck) : null, needed = r.rulesToCheck !== false;
+    if (status?.status === 'recorded') {
       const formal = replay.formal, scope = inertText(formal.scope, 80);
       const result = FORMAL[formal.result] ?? (formal.result === 'failed' ? `Failed at ${replay.counterexample ? codeSpan(clip(oneLine(replay.counterexample), 80)) : 'the counterexample in Details'}`
         : formal.result === 'not_applicable' ? `Not applicable: ${inertText(formal.reason, 120)}` : `Not run: ${inertText(formal.reason, 120)}`);
       const control = formal.control_outcome === 'assertion_failure' ? '✗ fails (as expected)' : formal.control_outcome === 'not_run' ? '—' : inertText(formal.control_outcome, 40);
       rows.push([`Formal check${scope ? ` (${scope})` : ''}`, result, control]);
       if (formal.result === 'failed') blocked.push(`formal check failed${replay.counterexample ? ` at ${codeSpan(clip(oneLine(replay.counterexample), 80))}` : ''}`);
+      else if (needed && r.formalStep && formal.result === 'not_run') blocked.push('formal check not run');
+    } else if (replay && r.formalStep) {
+      // The same words, reason and repair step as the replay header; never a bare "not recorded".
+      if (status.notNeeded) rows.push(['Formal check', 'not needed (no Rules to check in the Story)', '—']);
+      else {
+        rows.push(['Formal check', cell(`${status.words} — ${status.detail}. Repair: ${status.repair}.${status.note ? ` ${status.note}` : ''}`, 500), '—']);
+        if (status.status === 'missing' && r.formalDone !== true) waiting.push('the formal result');
+        else blocked.push(`formal check ${inertText(status.words, 80)}`);
+      }
     } else if (r.formalStep) {
-      rows.push(['Formal check', `Not recorded: ${replay ? 'the replay evidence has no formal result' : 'pdd has no formal result for this run'} (see Details)`, '—']);
-      // With replay evidence pdd records the formal result there; without it, pdd records only that the formal step ran.
-      if (replay) waiting.push('the formal result');
-      else if (r.formalDone !== true) waiting.push('the formal step');
+      // Without replay evidence (a small change) pdd records only that the formal step ran.
+      rows.push(['Formal check', 'Not recorded: pdd has no formal result for this run (see Details)', '—']);
+      if (r.formalDone !== true) waiting.push('the formal step');
     }
     const proof = r.proof;
     if (proof) {
@@ -414,4 +428,14 @@ export function detailsOf(body) {
   while (close > open && rows[close] !== '</details>') close--;
   const details = rows.slice(open + 1, close).join('\n').trim();
   return close > open ? { details: details.startsWith(TOP_NOTE) ? details.slice(TOP_NOTE.length).trim() : details, after: rows.slice(close + 1).join('\n').trim() } : null;
+}
+
+// Typed interpreter boundaries retain the native helpers' arbitrary map keys as JSON text.
+export const readPrFieldsJson = texts => JSON.stringify(readPrFields(texts));
+export function readablePrTopJson({ factsJson, fileLimit } = {}) {
+  let facts;
+  try { facts = JSON.parse(factsJson); } catch { /* Report the typed adapter error below. */ }
+  if (!facts || typeof facts !== 'object' || Array.isArray(facts))
+    throw Object.assign(new Error('The renderer needs a JSON facts object.'), { code: 'invalid-facts' });
+  return readablePrTop(facts, { fileLimit });
 }

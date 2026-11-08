@@ -12,6 +12,83 @@ issues (argv issue references), and optional runs text. Return `{exitCode,messag
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
 
+## Several machines on one repository
+
+The [reviewer lease](autopilot-reviewer.prompt.md) owns repository review authority.
+Pass the saved machine/coordinator identity to intake. Cache an authenticated
+login only after this coordinator holds the lease; a foreign reviewer login is
+never this coordinator's login. The native `machine` port may supply the hostname
+for controlled verification; the default is the actual hostname. Include its observed lease
+as `reviewer` in coordinator packets; a null or foreign reviewer allows issue work
+under existing claims, but no sorting, grouping or dependency analysis. Renew the
+lease on ordinary ticks, including ticks that defer intake for a low budget. At
+the reserve floor, preserve claim heartbeats and let the reviewer lease expire;
+pass the current reserve guard to the lease on both intake routes. The lease's
+mutation guard applies to acquisition and renewal. Stopped or Off launchers do not renew.
+
+Dependency delivery carries the request's exact reviewer generation, machine and
+coordinator to the final prompt transport. After readiness and admission waits,
+revalidate the request against the exact shared lease acquired or renewed by
+this reconciliation. A different generation cannot be taken over before expiry,
+so this boundary needs no redundant lease read. Submit only if that exact
+authority matches and both its request expiry and observed expiry
+are strictly later than the current time. An unavailable or changed lease leaves
+the request pending under the existing delivery custody rules. A request without
+reviewer authority may use the unmanaged manual route only when a fresh local
+identity read beside the active state file confirms the checkout is unmanaged,
+including direct ticks where no separate stateRoot option is supplied; absence
+from the request alone
+never grants that route.
+
+Repository status reads current GitHub claims and the lease and shows all live
+machine/coordinator pairs, their held issues, last seen times and the reviewer.
+Without a saved repository identity, resolve the current checkout's GitHub origin
+for this read, without starting or saving a launcher. Select open `pdd:working`
+issues before reading their claim details; unclaimed issues need no detail read.
+A failed observation shows an unavailable repository view, never an empty fleet.
+`status --all` remains the local machine-only view. From live claims plus the
+lease, warn once per saved launcher when multiple coordinators share a GitHub
+login. This warning does not grant ownership and uses the existing state save
+boundary. Status is read-only and may show the warning without persisting it;
+the tick records the once-only warning. The GitHub usage ledger remains local. Alert delivery controls only the optional
+`Alerts:` line. Successful delivery removes that line when no other alert needs
+attention; repository fleet, workflow readiness and GitHub budget lines remain.
+
+## Review backlog admission
+
+On each reconciliation with fresh work or a prior review queue observation, use the shared [PR review limit](autopilot-pr-limit.prompt.md)
+reader on the current open-issue rows and current settings. Its rule owns PR identity,
+areas and which reviews count. Fetch through the existing counted process port,
+with each queue page and source-issue lookup subject to the
+[GitHub budget floor guard](#github-budget). A floor-stopped read is unavailable
+and follows the read-failure path below; never save partial counts as complete.
+Persist the latest complete counts as `reviewQueue`, and the effective limit as
+`reviewQueueLimit`. Hold fresh work at the limit with selection state `waiting`
+and reason `pr-review-limit`; do not mark it seen. Keep claimed/held work, reviews,
+dependency analysis, time rules and heartbeats running. A read failure holds fresh
+work with `pr-review-unknown`, clears old queue counts and persists
+`reviewQueueUnknown: true`. A later complete read clears that flag. Retry on the
+next reconciliation even if the issue content is unchanged.
+
+Status and status --all read these saved observations only. Show each full area as
+`AREA: waiting: N PRs wait for review`, or say review queue observations are
+unavailable. No status GitHub call is added. State how many PRs wait, not CI jobs.
+
+## Installation identity
+
+Use [GitHub App identity](github-app.prompt.md) for optional App authentication.
+Before start makes any gh call or opens any chat or timer, validate selected
+settings and run preflight. Skip the personal `gh auth status` requirement in
+App mode. Each active tick preflights before work; errors claim no work and
+never fall back. Status reads the saved non-secret `githubIdentity` and
+`githubBot` without authentication calls. Record the installation rate reply as
+setup with its identity. Count each tick gh call through the App runner. Budget,
+status usage and floor guards select only entries for the active identity;
+personal mode selects entries with no identity. ETags are scoped by identity.
+Include githubIdentity (null for personal login) in the launch fingerprint so an identity change refreshes an idle coordinator. Persist only githubIdentity and githubBot from authentication. Pass the shared non-secret App environment to coordinator launches, overriding
+custom launcher PATH for Git and gh routing, and to Codex shell_environment_policy.set.
+Never put credentials in launch lines, timer state, packets or saved environment.
+
 ## Native Codex startup
 
 For a selected Codex launcher, apply invocation-only config overrides that trust
@@ -205,12 +282,15 @@ timer definition, leaving the current step to
 finish. Stop checks and removes the owned timer even if saved installation state
 is absent or false, including after a failed start. Repeated stop is harmless. Status reads local state and timer activity;
 show enabled/disabled, timer activity, Herdr availability, coordinator state,
-repo, the folder Autopilot works in, agent, and next tick (or none), without waking AI or querying GitHub.
+repo, the folder Autopilot works in, agent, and next tick (or none), without waking AI.
+The repository fleet observation uses the live reads defined above.
 When the [GitHub call ledgers](#github-budget) on this machine have a call in the
 last hour, status adds one line, after any alert line: `githubStatusLine` of
 [GitHub calls](github-calls.prompt.md#status-line) with this repository's usage,
 the machine usage and the budget with the settings' `github` value. It reads the
-local ledgers only; an error adds nothing.
+local ledgers only; an error adds nothing. Capture this usage and remaining
+allowance before the live fleet reads of this status call. Those reads enter the
+ledger for later observations.
 Whenever Herdr is available, inspect the saved coordinator with the existing
 `agent get` operation, including when the timer is inactive. Confirm that its pane,
 workspace, repository path, provider and any saved terminal identity match saved local state. Report a missing,
@@ -379,6 +459,19 @@ the launched chat may still be starting.
 <a id="github-budget"></a>
 ## GitHub budget
 
+Use the [shared write guard](github-writes.prompt.md) for each launcher write.
+Observe active machines from each intake's claims before heartbeats. The same
+host/identity bucket covers all local repositories. Status, including --all, shows all local identity write use
+from local state, without a GitHub call. A write budget refusal retains progress
+and reports its retry time. It does not authorize an approval or merge.
+
+For coordinator chat launches, prepare the package's private gh wrapper from
+[the proxy](github-write-proxy.prompt.md). Put its directory first in PATH and
+pass PDD_GITHUB_ROOT to that same local state root. Codex command environments
+also get these two invocation-only shell_environment_policy.set values. Keep
+all other launch and profile rules. Worker launches preserve that routing.
+
+
 Autopilot uses the person's own `gh` sign-in, so its GitHub calls use the
 person's limit. Each `gh` call of the launcher goes through `countGithubCalls` of
 [GitHub calls](github-calls.prompt.md) into this repository's ledger on this
@@ -414,8 +507,8 @@ machine and the settings' `github` value:
   Autopilot waits until ISO, except the heartbeats of this machine's claims.`
   (`GraphQL points` for the GraphQL resource). It makes no other GitHub call: no
   intake, no issue list, no wake. It does not save a rate-limit wait (`retryAt`),
-  so each tick until `resetAt` computes the budget again and sends the
-  heartbeats again. The claims are the saved `claims` of the last intake, with
+  so each tick until `resetAt` computes the budget again and sends only due
+  heartbeats (two hours since the last server-confirmed edit). The claims are the saved `claims` of the last intake, with
   the filters of the `low` case below. A heartbeat is 2 REST calls (a read and an
   edit); when the newest `core` remaining is known and less than 2 for each of
   these claims, the tick sends none. Why: one reserve window ends at the reset,
@@ -567,7 +660,12 @@ Each tick keeps claims current without an AI call. Use the `claims` that the
 dependency intake returns; add no other GitHub read for them. For each active
 claim of this coordinator and machine, call the GitHub reader's
 [`refreshClaimHeartbeat`](issue-dependencies-github.prompt.md#claims-heartbeat-and-expiry)
-with the current clock time, under the scan's admission guard. The tick, not the
+with the current clock time, under the scan's admission guard. Follow that
+reader's distinction between legacy activity and heartbeat time,
+including for cached claims below the read floor. A saved legacy observation
+expires under the reader's 24-hour rule. After its first successful heartbeat,
+remove its legacy marker from the saved observation so later ticks use heartbeat
+timing and do not renew it early. The tick, not the
 AI, writes the `lastSeen` time: the first heartbeat sets the existing value (the
 `"lastSeen": ""` marker of a new claim record), or adds the member when it is
 missing. A failed
@@ -960,6 +1058,16 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 ## Dependencies
 
+- [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
+- [Shared reviewer](autopilot-reviewer.prompt.md): required native generation and verification context for the lease and repository machine view.
+
+- [PR review limit](autopilot-pr-limit.prompt.md): required context for review backlog admission and status.
+
+
+- [GitHub App identity](github-app.prompt.md): required native generation and verification context for authentication, preflight and shell routing.
+
+- [Write guard](github-writes.prompt.md) and [private gh transport](github-write-proxy.prompt.md): required native generation and verification context for shared write admission, chat routing and status.
+
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
 - [Workflow runner](workflow-runner.prompt.md#current-autopilot-start-ownership): required native generation and verification context for the existing shared admission lock.
@@ -1008,3 +1116,14 @@ Each measurement callback is independently best effort outside the native delive
 Telemetry repository discovery uses the same injected native process port as the existing launcher; a separate real process must not escape a controlled caller. A metricsContext port may supply the same repository/common-directory observation for controlled verification.
 
 Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.
+
+## Machine storage
+
+Use [Autopilot machine storage](autopilot-store.prompt.md) for native machine
+state. Import each existing record once and retain its old file unchanged.
+SQL belongs only to that backend. Keep existing guards, limits, identity and
+failure policy. File paths exposed by adapters remain stable logical locators.
+Read and save launcher control through `readAutopilotState` and
+`saveAutopilotState`; list machine records with `autopilotStateFiles`. Local
+claim observations and budget decisions keep their existing fields. Shared
+claims and dependency reviews still require GitHub checks.

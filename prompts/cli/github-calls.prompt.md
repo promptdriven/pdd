@@ -1,13 +1,15 @@
 # GitHub calls: count, budget and conditional reads
 
-Own `src/github-calls.mjs`. Autopilot uses the person's own `gh` sign-in. Its
-REST limit (5,000 calls each hour for a person) is also the limit of the
-person's own work. Several coordinators on one login used the whole limit. This
-module counts each `gh` call that pdd makes, keeps a small local ledger for each
-repository on this machine, tells the tick when to read less, and keeps ETags
-and bodies for conditional reads. It makes no GitHub call itself and adds no
-credentials. It counts only the calls that pdd runs: the `gh` calls that the
-coordinator and worker chats make themselves are not counted.
+Own `src/github-calls.mjs`. Count pdd GitHub calls, budget from the active
+identity's observed limit, and keep conditional read caches. Personal gh login
+is the default. The [App adapter](github-app.prompt.md) authenticates native
+calls when configured; this module never records credentials.
+Autopilot chat calls pass through the same counter via its private gh wrapper.
+
+<a id="call-primitives"></a>
+The call-primitives context selection is this module's classification, reply,
+ledger and countGithubCalls contract. It excludes nativeGithubCounter and the
+native counter transport dependency. These primitives do not load the proxy.
 
 ## Exports
 
@@ -23,7 +25,7 @@ coordinator and worker chats make themselves are not counted.
 | `githubStateRoot(env, stateRoot)` | `stateRoot`, else `$HOME/.local/state/pdd/autopilot` |
 | `githubLedger({root, repository, fs})` | `{file, repository, record(entry), read(), compact(now)}` |
 | `githubMachineEntries({root, fs})` | The entries of every ledger under `root` |
-| `countGithubCalls(exec, {ledger, purpose, now})` | A runner like `exec` that records each `gh` call |
+| `countGithubCalls(exec, {ledger, purpose, now, writes, env})` | A runner like `exec` that records each `gh` call |
 | `nativeGithubCounter(exec, {env, stateRoot, purpose, fs, now})` | A counting runner that finds the ledger from the call |
 | `githubUsage(entries, now)` | The last hour: see [Usage](#usage) |
 | `githubBudgetSettings(value)` | `{share, floor}` from `autopilot.github` in `pdd.json` |
@@ -37,6 +39,15 @@ coordinator and worker chats make themselves are not counted.
 milliseconds (native `Date.now`).
 
 ## One call
+
+When a write-budget resolver is supplied, reserve content cost only for writes.
+Observe every gh outcome, including free REST reads and GraphQL queries, through
+the shared budget so a secondary-limit reply delays later writes from other
+runners. Resolve a free read's budget only after a throttle outcome; ordinary
+reads require no identity lookup or content reservation. Preserve the original
+read result or error if cooldown observation fails. Use the shared budget's
+`githubWriteThrottle` classification before resolving a free read's budget;
+successful payload text must not start a cooldown or an identity lookup.
 
 `githubCall` reads only the argument list. For `gh api`, the endpoint is the
 first word that is not an option and not the value of an option. These options
@@ -81,9 +92,10 @@ failed command too.
 
 ## Ledger
 
-The ledger of a repository is `ROOT/github/H.jsonl`, where `H` is the first 20
-hex characters of the SHA-256 of the lowercase `owner/name`. The folder has mode
-0700, the file 0600. Each line is one JSON entry:
+The ledger uses the logical locator `ROOT/github/H.jsonl`, where `H` is the first
+20 hex characters of the SHA-256 of the lowercase `owner/name`. Import that
+legacy file into the machine events journal. Native state is private (folder
+0700, database 0600). Each journal row is one JSON entry:
 
 | Field | Meaning |
 |---|---|
@@ -95,23 +107,26 @@ hex characters of the SHA-256 of the lowercase `owner/name`. The folder has mode
 | `conditional` | `true` only for a conditional request |
 | `resource`, `remaining`, `limit`, `resetAt` | Present when the reply had rate-limit headers |
 
-`record` appends one line. `read` returns the entries of the file; a torn or
-invalid line is skipped. `compact(now)` rewrites the file with only the entries
-of the last 2 hours, through a temporary file and a rename, when an older entry
-exists. Measurement is best effort: a failed write or compact is lost, and it
-never changes or fails the call. A line that another process appends during a
-compact can be lost.
+`record` appends one journal row. `read` returns the retained entries; import
+skips torn or invalid legacy lines. `compact(now)` deletes entries outside the
+last 2 hours in one transaction, when an older entry exists. Measurement is best effort: a failed write or compact is lost, and it
+never changes or fails the call. A concurrent append survives compaction unless it meets the expiry rule.
 
 `countGithubCalls` returns `(file, args, options)` that runs `exec`. For `gh`
 it removes `options.purpose` and `options.repository`, runs the call, then
-records one entry with the named purpose (else `purpose`, else `githubPurpose`)
-and returns the value or throws the error of `exec` unchanged. The ledger is an
+first reserves content writes through its optional `writes(args,options)` budget port,
+then records one entry with the named purpose (else `purpose`, else `githubPurpose`)
+and observes the write outcome for shared secondary-limit cooldowns. It returns
+the value or throws the error of `exec` unchanged. Budget refusal happens before
+dispatch and makes no call entry. Mark dispatched environments with
+`PDD_GITHUB_COUNTED=1`, preserving the explicit call environment (else injected
+`env`, native process.env), to prevent nested private gh wrappers from double counting. The ledger is an
 object, or a function of the arguments and `options.repository`; null records
 nothing. Other programs run unchanged, also without these two options.
 `nativeGithubCounter` uses the ledger of `githubRepository(args)`, else of a valid
 `options.repository` (a GraphQL call names none in its arguments), under
 `githubStateRoot`, so worktrees and the main checkout share it. It appends only
-to a ledger file that already exists: the launcher makes it with its first call,
+to a ledger that already exists in storage or in a legacy file: the launcher makes it with its first call,
 so a pdd command counts its calls for the repositories where Autopilot runs on
 this machine. A call without a repository, or for a repository without a
 ledger, is not recorded; so a test that puts a fake `gh` on PATH adds nothing
@@ -144,7 +159,7 @@ native dependency observations for Autopilot repositories:
   including `pdd dependencies prepare`, `complete`, direct snapshot reads and
   automatic start. Safety reads and writes go on. Other `pdd` operations are
   counted but do not wait for this floor. The coordinator and worker chats never
-  wait for the budget, and their own `gh` calls are not counted.
+  wait for the budget. The App shell wrapper counts their own `gh` calls; personal shell calls are not counted.
 
 `githubBudgetSettings(value)` reads `share` (an integer from 1 to
 100) and `floor` (an integer, 0 or more) from the object `autopilot.github` in
@@ -183,23 +198,24 @@ budget part is absent without `budget`. `X` is the rounded percentage.
 
 ## ETag cache
 
-`githubEtagCache` keeps `ROOT/github/H.etags.json` (the same `H`), an object
+`githubEtagCache` uses the logical locator `ROOT/github/H.etags.json` (the same
+`H`), imported once into a cache record. The value is an object
 from endpoint to `{etag, body, next, at}`: the ETag, the exact body text and the
 next page path of a 200 reply, and the time (`now`) when this cache last got or
 set it. `get` returns a saved entry with a string `etag` and `body`, else
 undefined. `set` keeps an entry with a nonempty `etag`. The tick and the `pdd`
-commands of one repository share this file. So `save` merges: it reads the file
-as it is then, puts the entries that this cache got or set over it, and keeps
+commands of one repository share this record. So `save` merges: it reads the record
+inside its transaction, puts the entries that this cache got or set over it, and keeps
 the entries used in the last 24 hours, newest first, at most 5,000 entries and
-32 MiB of bodies. It writes through a temporary file and a rename, mode 0600. A
-cache that got or set no entry (it failed early) keeps the saved file. A read or
+32 MiB of bodies. The merge and replacement commit in one transaction. A
+cache that got or set no entry (it failed early) keeps the saved record. A read or
 write failure gives an empty cache or a lost save; it only costs counted reads.
 
 <a id="floor-guard"></a>
 ### Floor guard
 
 `githubFloorGuard({floor, entries, now})` starts from the newest valid rate of
-each resource in `entries` (as `githubUsage` gives it) and follows each later
+each resource in `entries` and follows each later
 reply: `observe(reply)` takes the `rate` of a `githubReply` result, and a reply
 without rate headers changes nothing. `blocked(resource)` (default `core`) is
 true while the newest remaining of that resource is less than `floor` and its
@@ -211,6 +227,13 @@ checks, heartbeats, trust and permission reads, the reads that a write depends
 on and readbacks after writes) and writes never ask it. A rate-limit reply (403
 or 429 with no calls left) is a reply with remaining 0, so the reads after it
 stop at once instead of failing one by one.
+
+The caller selects `entries` for the active identity before constructing the
+guard. Consume that selection without filtering it back to personal identity.
+Use the same rate validity rules as `githubUsage`, including reset expiry and
+future observation rejection. This preserves a known installation reserve
+breach before the first non-safety read. Personal and other installation limits
+must not override the caller's selected installation.
 
 <a id="full-last-page"></a>
 ### A full last page
@@ -231,9 +254,50 @@ a new entry changes its body, or GitHub serves the saved next page.
 
 ## Dependencies
 
-None: this module uses only the injected file port and clock. Its consumers, for
+- [GitHub App identity](github-app.prompt.md): required native generation and
+  verification context for authenticating native gh calls and Git network commands and the bundled wrappers.
+
+- [Native counter transport](github-write-proxy.prompt.md#native-counter-transport):
+  required generation and verification context for nativeGithubCounter's use of
+  githubWriteRunner and githubOriginalExecutable. Load that export selection;
+  the proxy uses the call-primitives selection defined above, not this counter.
+
+
+- [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
+
+The [shared write budget](github-writes.prompt.md) is required for native
+Autopilot write admission. Native counters use the private proxy process adapter
+when an Autopilot ledger exists. The file port and clock supply local state. Its consumers, for
 navigation only: the [Autopilot launcher](autopilot-launcher.prompt.md#github-budget)
 counts its calls, applies the budget, shows the status line and reads review
 pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)
 uses the ETag cache, the full-last-page rule and the floor guard.
+
+## Machine storage
+
+Use [Autopilot machine storage](autopilot-store.prompt.md) for native machine
+state. Import each existing record once and retain its old file unchanged.
+SQL belongs only to that backend. Keep existing guards, limits, identity and
+failure policy. File paths exposed by adapters remain stable logical locators.
+Store call rows in the events journal, scoped by the lowercase repository
+hash. Preserve every call, including identical calls. `githubLedger` also
+exposes `exists()` for participation checks. Import JSONL once, then compact
+inside a transaction. ETag merge and replacement use one cache transaction.
+Machine-wide reads isolate each legacy source read failure: keep readable and
+already committed observations from other repositories available for budget
+decisions. Leave a failed source unmarked so a later read can retry it; a failed
+read must not commit any rows from that source. Storage transaction failures
+retain the existing empty-result policy.
+An injected `store` port replaces the backend alongside the existing `fs` port.
+
+## App accounting
+
+`countGithubCalls` records a non-secret `identity` from outcome.githubIdentity
+when present. Personal entries omit it. `githubMachineEntries({root,fs,identity})`
+and `githubUsage(entries,now,identity)` select only that identity; omitted
+identity means personal entries. App installations therefore share their local
+quota across repositories but do not borrow a personal or another installation's
+limit. `githubEtagCache` accepts identity and uses a different cache filename for
+each identity. Native counters use `githubAppRunner` before execution, accept
+`appPorts` for its injected ports, and retain existing counting policy.

@@ -196,6 +196,8 @@ try {
       machine: oldClaim.machine,
       commentId: 'comment-51',
       labelEventId: 'event-51',
+      legacy: true,
+      login: 'worker-51',
     }], 'native owner read must retain the old issue claim');
     assert.equal(local.runs.length, 1);
     assert.equal(local.runs[0].issue, runIssue);
@@ -205,6 +207,7 @@ try {
 
     const startPorts = {
       ...supplied,
+      reviewQueue: { read: async () => ({ json: '{}' }) },
       settings: { read: async () => ({ mode: 'auto', activation: 'activation-a', runs: 1 }) },
       snapshots: { read: async () => ({ snapshot: structuredClone(graphSnapshot) }) },
       owners: { read: async () => {

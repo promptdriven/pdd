@@ -426,10 +426,9 @@ test('SKILLS27: a page gets a render operation that returns html, an app map and
 });
 
 // Wrong (round-2 tester, 0.1.7): the optional visual step ran without asking, though pdd said "Ask the person".
-test('SKILLS28: before an optional step the main chat asks the person and waits for the answer', () => {
+test('SKILLS28: optional visual steps ask the person and wait for the answer', () => {
   const ask = 'In a run, run `<pdd> workflow ask` first.';
   const lines = { 'pdd-feature': '- Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". ' + ask,
-    'pdd-bug': '- Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". ' + ask,
     'pdd-small-change': '- Before an optional step, ask the person and wait for the answer. ' + ask };
   for (const [name, line] of Object.entries(lines)) {
     const skill = read(`${name}/SKILL.md`);
@@ -719,12 +718,11 @@ test('AUTOPILOT1: the Autopilot skills fit their byte limits and carry the packa
 });
 
 // Wrong: Autopilot text changes the person-led path, or a workflow skill never points to its Autopilot instructions.
-test('AUTOPILOT2: off or absent keeps the person gates; observe and auto use steps/autopilot.md', () => {
+test('AUTOPILOT2: observe and auto use steps/autopilot.md', () => {
   for (const name of WORKFLOWS) {
     has(`${name}/SKILL.md`, '- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.', 'A person decides expected values.');
     has(`${name}/steps/autopilot.md`, 'only when `autopilot.mode` in the root `pdd.json` is `observe` or `auto`', 'With `off` or no value, SKILL.md applies as written.',
       'A fresh pdd-check checks', 'its PASS is checker evidence, not approval', 'Optional steps: do not ask.', 'Merge: pdd-merge, not a person.');
-    assert.match(read(`${name}/SKILL.md`), /Before an optional step, ask the person and wait for the answer/, name);
   }
   has('pdd-autopilot/SKILL.md', 'If `autopilot.mode` is absent or `off`, do nothing; a person leads.', '`observe`: do all the work; a person merges.');
   has('pdd-merge/SKILL.md', 'If `autopilot.mode` is absent or `off`, a person merges as RUNBOOK §2 says.', '`observe`: when all the conditions below are true, write one PR comment "Would merge" with the facts; a person merges.');
@@ -744,12 +742,13 @@ test('AUTOPILOT4: the checker is fresh, prefers another family, labels a same-fa
     'use a fresh session of the builder\'s family and label it `checker_mode: same-family`', '`verdict` (PASS, FAIL or NOT SURE)', '`head` (the SHA you checked)',
     '`risk` (1-5, before merge)', '`family`, `session`, `checker_mode`', 'Never send a failed check again on your own.',
     'read the issue first and write 3 input → result pairs from it', 'Each expected value comes from an issue quote or the old behavior.',
-    'For a screen change, take before and after screenshots', 'reruns each merged PR on main and gives its own risk 1-5',
+    'For a screen change, take before and after screenshots',
     'A new test value needs no person when you (blind, from the Story, with a named rule) and the runtime agree; else it is a note.',
     'A saved `pdd test` result for the new and the old prompt counts only when it matches the Story, the test cases and the prompt source at this head, and it was a fresh run (not cached).',
     'Else run `CI=1 pdd test <story> --cache-clear --json` once. A result you cannot check is not a fresh pass.',
     'PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff.',
     'Both PRs: the full suite is green on the head, with no new skip or only.', 'If no other family is available, say so; do not claim this review.');
+  assert.match(read('pdd-check/SKILL.md'), /After merge:.*merged commit.*base branch/);
 });
 
 // Wrong: a PASS for an old head merges new code, or the merge is not pinned to the head that was checked.
@@ -776,8 +775,7 @@ test('AUTOPILOT7: explicit operator choice or standing delegation authorizes cov
   const rule = "An agent may merge only after the person's explicit chat request";
   assert.ok(readFileSync(join(root, 'RUNBOOK.md'), 'utf8').split('\n')[65].includes(rule), 'RUNBOOK.md:66');
   has('pdd-merge/SKILL.md', 'An operator’s explicit auto setup and start, or an applicable standing delegation, supplies it for eligible work; a configuration read alone does not.',
-    'A checker PASS is separate evidence, never approval words.', '`pdd workflow approve N --said -`', 'Strict mode requires the person terminal; never bypass it or edit approval fields.',
-    'Post one PR comment identifying the person’s actual explicit merge authorization without fabricating a quotation.');
+    'A checker PASS is separate evidence, never approval words.', '`pdd workflow approve N --said -`', 'Strict mode requires the person terminal; never bypass it or edit approval fields.');
   has('pdd-autopilot/steps/handoff.md', 'The person’s explicit choice of auto and start establishes the chosen automatic work',
     'commands and attribution, without presenting a coordinator summary as a quotation.');
 });

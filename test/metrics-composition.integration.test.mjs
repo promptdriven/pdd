@@ -1,3 +1,4 @@
+import { readAutopilotState } from '../src/autopilot-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -27,14 +28,14 @@ test('composed launcher sends successfully despite capture, gap and warning fail
  const f=selector(t);const dir=join(f.root,'.git','pdd','metrics');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(join(dir,'transactions'),'unavailable');
  f.ports.warn=()=>{throw Error('warning unavailable');};f.ports.metricsGap=()=>{throw Error('gap unavailable');};
  const result=await f.tick();assert.equal(result.exitCode,0);assert.equal(f.sent.length,1);
- const saved=JSON.parse(fs.readFileSync(f.stateFile,'utf8'));assert.ok(saved.seen['1']);
+ const saved=readAutopilotState(f.stateFile);assert.ok(saved.seen['1']);
  const decisions=fs.readdirSync(join(dir,'decisions')).filter(n=>n.endsWith('.json')).map(n=>JSON.parse(fs.readFileSync(join(dir,'decisions',n),'utf8')));
  assert.deepEqual(decisions[0].events.filter(e=>e.type==='launch').map(e=>e.data.status),['attempted','confirmed']);
 });
 test('composed launcher preserves original delivery error under failed telemetry',async t=>{
  const f=selector(t),error=Object.assign(Error('native send failed'),{code:'agent_blocked'}),herdr=f.ports.herdr;
  f.ports.herdr=async args=>{if(args[1]==='prompt')throw error;return herdr(args);};f.ports.metricsAppendEvents=async()=>{throw Error('metrics unavailable');};f.ports.warn=()=>{throw Error('warning unavailable');};
- await assert.rejects(f.tick(),e=>e===error);assert.equal(f.sent.length,0);assert.equal(JSON.parse(fs.readFileSync(f.stateFile,'utf8')).seen['1'],undefined);
+ await assert.rejects(f.tick(),e=>e===error);assert.equal(f.sent.length,0);assert.equal(readAutopilotState(f.stateFile).seen['1'],undefined);
 });
 test('composed launcher does not record busy pane as delivery attempt',async t=>{
  const f=selector(t);f.ports.herdr=async()=>({result:{agent:{agent_status:'working'}}});await f.tick();
@@ -43,7 +44,7 @@ test('composed launcher does not record busy pane as delivery attempt',async t=>
 test('composed launcher preserves a time-only wake and its successful acknowledgement',async t=>{
  const f=selector(t,{issues:false});f.ports.readRunProgress=async()=>[{number:9,changedAt:at-3600001}];await f.tick();
  assert.equal(f.sent.length,1);const packet=JSON.parse(f.sent[0].trim().split('\n').at(-1));assert.deepEqual(packet.issues,[]);assert.equal(packet.timeRules[0].kind,'stuck-run');
- assert.equal(JSON.parse(fs.readFileSync(f.stateFile,'utf8')).timeSeen['run:9'],at-3600001);await f.tick();assert.equal(f.sent.length,1);
+ assert.equal(readAutopilotState(f.stateFile).timeSeen['run:9'],at-3600001);await f.tick();assert.equal(f.sent.length,1);
 });
 test('composed storage retains pending capture and ordinary success under throwing warning',t=>{
  const f=storage(t);f.run.metricsObservations=[{type:'coverage',at:new Date(at).toISOString(),data:{complete:false}}];

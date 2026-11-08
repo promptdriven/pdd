@@ -1,4 +1,5 @@
-// Generated from prompts/cli/workflow-worker-completion.prompt.md.
+import { readAutopilotState } from './autopilot-store.mjs';
+// Implements prompts/cli/workflow-worker-completion.prompt.md.
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFileSync, realpathSync } from 'node:fs';
@@ -31,7 +32,7 @@ export function armSavedWorkerCompletion(run, coordinatorPaneId, ports = {}) {
 function coordinatorState(identity, env) {
   const root = realpathSync(identity.sourceRoot);
   const id = createHash('sha256').update(root).digest('hex').slice(0, 20);
-  return JSON.parse(readFileSync(join(env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot', `${id}.json`), 'utf8'));
+  return readAutopilotState(join(env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot', `${id}.json`));
 }
 
 export async function waitForWorkerCompletion(identity, ports = {}) {

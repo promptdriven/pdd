@@ -262,6 +262,8 @@ again.
 
 ## Dependencies
 
+- [Autopilot machine storage](autopilot-store.prompt.md): required native generation and verification context for local state and atomic migration.
+
 - [Prompting guide](../../docs/prompting-guide.md): authoring.
 - [CLI](pdd-cli.prompt.md): generation and testing of dispatch, stdin and streams.
 - [Autopilot launcher](autopilot-launcher.prompt.md): status calls
@@ -278,3 +280,12 @@ again.
   `repository({cwd})` returns `{nameWithOwner}`; `now()`; `hostname()`;
   `userInfo()` returns `{homedir}` or throws (default `os.userInfo`);
   `stateRoot`. Tests inject `http`; no test sends a real webhook request.
+
+## Machine storage
+
+Use [Autopilot machine storage](autopilot-store.prompt.md) for native machine
+state. Import each existing record once and retain its old file unchanged.
+SQL belongs only to that backend. Keep existing guards, limits, identity and
+failure policy. File paths exposed by adapters remain stable logical locators.
+Resolve the saved launcher machine name through the control adapter, while
+keeping alert destinations and incident files under their current owners.
