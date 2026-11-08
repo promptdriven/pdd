@@ -2758,7 +2758,9 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
 export function isRetryRequest(text) {
   const value = String(text ?? '').trim().replace(/\s+/g, ' ');
   // Negative continuation instructions win, even after an otherwise direct request.
-  if (/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|cannot|can['’]t|not|no)\b[^.;!?]*\b(?:retry|resume|try\s+again|continue|proceed|restart)\b/i.test(value)) return false;
+  if (/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|cannot|can['’]t|not|no)\b[^.;!?]*\b(?:retry|resum(?:e|ing|ption)|try\s+again|continu(?:e|ing|ation)|proceed|restart)\b/i.test(value)) return false;
+  if (/\b(?:stop|hold|wait)\b/i.test(value)
+    || /\b(?:retry|resum(?:e|ing|ption)|try\s+again|continu(?:e|ing|ation)|proceed|restart)\b[^.;!?]*\b(?:blocked|disabled|unsafe|forbidden|prohibited|not)\b/i.test(value)) return false;
   // A repaired-machine preface may precede the command. Arbitrary diagnostic or log
   // prefixes cannot turn a quoted/reported command into the person's instruction.
   // Whitespace also admits the saved one-line form of a multiline repair request.

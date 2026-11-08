@@ -23,6 +23,9 @@ const diagnostics = [
   ['contracted negative', "Please retry verify. Don't resume."],
   ['negative continuation', 'Please retry verify. Do not continue until the disk is repaired.'],
   ['quoted command', '```text\nRetry verify now.\n```'],
+  ['continuation denied', 'Please retry verify. Resume is not allowed.'],
+  ['negative resuming', 'Please retry verify. No resuming.'],
+  ['wait before resuming', 'Retry verify now. Wait for my approval before resuming.'],
 ];
 const requests = [
   'Retry.', 'Resume the failed step.', 'Try again!',
