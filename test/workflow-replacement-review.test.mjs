@@ -63,6 +63,9 @@ test('alive replacement with unknown process stays pending despite exact session
  await open(f,{newSession:true});const pending=attempt(f);
  f.tick(30_000); // Approved startup grace expires before exact-session recovery.
  f.ports.findNativeSessions=async()=>[{id:pending.replacement.session.id}]; f.ports.herdr=healthy;
+ // This case needs unknown process evidence; the shared fake defaults to a safe shell.
+ f.herdr.paneOf(pending.replacement).processInfo = {pane_id:pending.replacement.paneId, shell_pid:100,
+   foreground_process_group_id:101, foreground_processes:[{pid:101,name:'unidentified'}]};
  const count=f.herdr.calls.filter(args=>args[0]==='pane'&&args[1]==='run').length;
  const out=await open(f,{newSession:true});assert.notEqual(out.exitCode,0,out.message);
  const after=f.record();assert.equal(after.chatReplacement.id,pending.id);assert.equal(after.chats.at(-1).session.id,pending.replacement.session.id);
