@@ -302,7 +302,7 @@ scenario expected contract reopens the existing Story approval gate before promp
 publication; do not invent a new gate format or reuse the old decision. Keep prompt
 work on PR 1 even while that gate is open. Finishing the prompt area updates its
 existing PR 1 through ordinary publication, then uses the normal code-choice gate. Preserve the normal Story card and its
-saved code-or-stop choice. For a returned automatic run with unchanged Story
+saved code-or-stop choice. Returned ask-code prompt snapshots use the current base merge-base and the approved prompt scope; inherited upstream prompts must not become new Story approval inputs. Genuine run-owned prompt additions, edits and deletions still change that snapshot. For a returned automatic run with unchanged Story
 coverage, a full current prompt check pass updates PR 1 and resumes code without
 a new person decision, using the existing scoped operator delegation. Record code continuation with route
 `prompt-reentry`, null words and `basis {storyEvidenceId, priorCodeApprovalId}`.

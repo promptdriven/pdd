@@ -2903,7 +2903,11 @@ async function gatePromptSnapshot(run, p) {
   const paths = new Set((await changedFiles(run, p, true)).filter(path => path.endsWith('.prompt.md')));
   if (run.gate?.kind === 'ask-code') {
     const pr1 = prOf(run, run.gate.area);
-    if (pr1) for (const path of (await rawGit(p, run.root, 'diff', '--name-only', '-z', `${run.baseSha}...${pr1.branch}`)).split('\0')) if (path.endsWith('.prompt.md')) paths.add(path);
+    if (pr1) {
+      const base = run.promptReturn ? await git(p,run.root,'merge-base',pr1.branch,`refs/remotes/origin/${run.baseBranch}`) : run.baseSha;
+      for (const path of (await rawGit(p, run.root, 'diff', '--name-only', '-z', `${base}...${pr1.branch}`)).split('\0')) if (path.endsWith('.prompt.md')) paths.add(path);
+      if (run.promptReturn) for (const path of run.storyApproval?.prompts ?? []) paths.add(path);
+    }
   }
   const rows = [];
   for (const path of [...paths].sort()) {

@@ -1,0 +1,31 @@
+import './helpers/test-home.mjs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {openRun} from '../src/workflow-runner.mjs';
+import {fillHashes} from '../src/runtime-preflight.mjs';
+import {preparedCard,PROMPT,TEST,STORY} from './helpers/workflow-prompt-reentry-card-fixture.mjs';
+
+test('2897 fix 1: inherited main prompt preserves the normal Story card code choice', async t => {
+  const f=await preparedCard(t),before=f.record(),peer=join(f.base,'main-peer');
+  f.git(f.base,'clone','-q',f.remote,peer);
+  f.git(peer,'config','user.name','Peer'); f.git(peer,'config','user.email','peer@example.invalid');
+  f.git(peer,'switch','-q','main');
+  writeFileSync(join(peer,'upstream.prompt.md'),'# Independent prompt\nReturn an upstream value.\n');
+  f.git(peer,'add','.'); f.git(peer,'commit','-qm','Independent prompt'); f.git(peer,'push','-q','origin','main');
+  const upstream=f.git(peer,'rev-parse','HEAD');
+  const opened=await openRun({ref:'17',area:'prompt-pr',cwd:f.source},f.ports);
+  assert.equal(opened.exitCode,0,opened.message);
+  assert.equal(f.git(before.root,'merge-base','HEAD',upstream),upstream);
+  const prompt=join(before.root,PROMPT),owned=[STORY,TEST];
+  const bytes=owned.map(path=>readFileSync(join(before.root,path),'utf8'));
+  writeFileSync(prompt,readFileSync(prompt,'utf8').replace('Return the order:','Return the priced order:').replace(/"status":\s*"approved"/g,'"status":"draft"'));
+  fillHashes({root:before.root,files:[PROMPT]});
+  await f.check(); const out=await f.done('check'),after=f.record();
+  assert.equal(after.area,2,`owned-prompt-scope: ${out.message}`);
+  assert.equal(after.gate,null);
+  assert.deepEqual(after.storyApproval,before.storyApproval);
+  assert.deepEqual(owned.map(path=>readFileSync(join(before.root,path),'utf8')),bytes);
+  assert.equal(after.pr[1].url,before.pr[1].url); assert.equal(f.prs.length,2);
+});
