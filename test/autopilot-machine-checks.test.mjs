@@ -176,3 +176,81 @@ test('stop releases only its own snapshot and retains running queue records',asy
   assert.equal(await queue.releaseCheckCapacity({env:f.env,owner:'owner-b'},f.ports),true);
   assert.equal(f.records()[0].state,'running');assert.equal(await queue.releaseCheckCapacity({env:f.env,owner:'owner-b'},f.ports),false);
 });
+
+// Repair 1: personal desktops and status must use the shared admission policy.
+test('repair 1: Linux desktop without a battery reserves half the CPUs while a VM keeps its budget',async t=>{
+  for(const [virtualized,usable,slots,share] of [[false,32,2,16],[true,64,5,12]]) {
+    const f=fixture(t,{count:64,battery:false,virtualized});
+    const capacity=await queue.configureCheckCapacity({env:f.env},f.ports);
+    assert.deepEqual([capacity.personal,capacity.usableCores,capacity.checks],[!virtualized,usable,slots]);
+    f.run();await until(()=>f.calls.length===1);
+    assert.equal(f.calls[0].options.cpuIds.length,share);
+    assert.ok(f.calls[0].options.cpuIds.every(id=>id<usable));
+    const status=queue.readCheckStatus({env:f.env},f.ports);
+    assert.deepEqual([status.cores,status.personal,status.usableCores],[64,!virtualized,usable]);
+  }
+});
+
+test('repair 1: shared status follows the active owner across overrides, resize and expiry',async t=>{
+  const f=fixture(t,{count:64}), path=join(f.env.PDD_SUITE_QUEUE,'capacity.json');
+  let saved=await queue.configureCheckCapacity({env:f.env,checks:1,runs:7,owner:'repository-A'},f.ports);
+  const status=()=>queue.readCheckStatus({env:f.env,checks:3,runs:19},f.ports);
+  const limits=value=>[value.checks,value.runs,value.coresPerCheck,value.busyChecks,value.waitingChecks];
+  f.run();await until(()=>f.calls.length===1);f.run();await until(()=>f.records().length===2);
+  const before=readFileSync(path);
+  assert.deepEqual(limits(status()),[1,7,64,1,1],'repository B sees the policy that keeps its check waiting');
+  assert.equal(f.calls[0].options.env.PDD_CHECK_CPUS,'64');
+  f.machine.count=96;
+  assert.deepEqual(limits(status()),[1,7,64,1,1],'a resize takes effect only after refresh or expiry');
+  assert.deepEqual(readFileSync(path),before,'status never refreshes the snapshot');
+  saved=await queue.configureCheckCapacity({env:f.env,checks:2,runs:9,owner:'repository-B'},f.ports);
+  assert.deepEqual(limits(status()),[2,9,48,1,1]);
+  f.calls[0].finish();await until(()=>f.calls.length===2);
+  assert.equal(f.calls[1].options.env.PDD_CHECK_CPUS,'48');
+  f.time=saved.expiresAt;f.machine.count=8;
+  assert.deepEqual(limits(status()),[1,2,8,1,0],'expired overrides do not govern status');
+  assert.equal(JSON.parse(readFileSync(path)).expiresAt,saved.expiresAt,'status does not replace an expired snapshot');
+  assert.equal(await queue.releaseCheckCapacity({env:f.env,owner:'repository-B'},f.ports),true);
+  assert.deepEqual(limits(status()),[1,2,8,1,0],'missing snapshot uses defaults, not repository overrides');
+});
+
+test('repair 1: shared status rejects a malformed active snapshot',async t=>{
+  const f=fixture(t,{count:64}), {writeFileSync}=await import('node:fs');
+  await queue.configureCheckCapacity({env:f.env},f.ports);
+  writeFileSync(join(f.env.PDD_SUITE_QUEUE,'capacity.json'),'{');
+  assert.throws(()=>queue.readCheckStatus({env:f.env},f.ports));
+});
+
+test('repair 1: native Linux classification reserves desktop capacity when virtualization is absent or unknown',()=>{
+  for(const result of [{status:1},{status:0},{status:null,error:{code:'ENOENT'}},{status:null,error:{code:'ETIMEDOUT'}}]) {
+    const {ports}=checkMachine({count:64,battery:false});delete ports.virtualized;
+    const calls=[];ports.spawnSync=(command,args,options)=>{calls.push({command,args,options});return result;};
+    const got=queue.calculateCheckCapacity({},ports);
+    assert.equal(got.usableCores,result.status===0?64:32);
+    assert.equal(calls.length,1);assert.equal(calls[0].command,'systemd-detect-virt');
+    assert.deepEqual(calls[0].args,['--quiet']);assert.equal(calls[0].options.timeout,1000);
+  }
+});
+
+test('repair 1: real Linux desktop child sees its reserved affinity share', {skip:process.platform!=='linux'},async t=>{
+  const {spawnSync}=await import('node:child_process');
+  const allowed=/^Cpus_allowed_list:\s*(.+)$/m.exec(readFileSync('/proc/self/status','utf8'))[1].split(',').flatMap(part=>{
+    const [first,last=first]=part.split('-').map(Number);
+    return Array.from({length:last-first+1},(_,index)=>first+index);
+  });
+  const fake=checkMachine({count:4,battery:false,virtualized:false});
+  fake.ports.taskset=undefined;
+  const taskset=queue.calculateCheckCapacity({},fake.ports).taskset;
+  if(allowed.length<4||!taskset||spawnSync('nproc',[],{stdio:'ignore'}).status!==0) {t.skip('needs four allowed CPUs, taskset and nproc');return;}
+  const root=mkdtempSync(join(tmpdir(),'pdd-desktop-affinity-'));
+  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const output=join(root,'child.json'),env={...process.env,PDD_SUITE_QUEUE:join(root,'queue')};
+  const ports={...fake.ports,cores:()=>allowed.slice(0,4),say:()=>{}};
+  const script=`const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(output)},JSON.stringify({node:require("node:os").availableParallelism(),nproc:Number(require("node:child_process").execFileSync("nproc",[],{encoding:"utf8"})),hint:Number(process.env.PDD_CHECK_CPUS)}));`;
+  const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
+  const result=await queue.runTestSuite({cwd:root,env,command:`${quote(process.execPath)} -e ${quote(script)}`},ports);
+  assert.equal(result.exitCode,0);
+  assert.deepEqual(JSON.parse(readFileSync(output)),{node:2,nproc:2,hint:2});
+  const ticket=JSON.parse(readFileSync(join(env.PDD_SUITE_QUEUE,'ticket-1.json')));
+  assert.equal(ticket.state,'finished');assert.deepEqual(ticket.cpuIds,allowed.slice(0,2));
+});

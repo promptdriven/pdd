@@ -661,12 +661,15 @@ suite; timeout returns 124. The runner stops the suite process group before
 releasing its slot.
 
 Autopilot samples usable CPU IDs, free memory and one-minute load at each active
-tick. macOS and Linux machines with a battery use the first half of available
-cores (round down, minimum one). Other machines use all available cores.
+tick. macOS and personal Linux machines use the first half of available
+cores (round down, minimum one). Linux desktops without batteries are included.
+Linux uses all available cores only when virtualization is detected and no battery
+is present. Detection uses `systemd-detect-virt --quiet` with a one-second timeout.
+If detection is unavailable or uncertain, Linux uses the personal-machine budget.
 With U usable cores and M free bytes, calculated check slots are
 `max(1, min(floor(U / 12), floor(M / 4294967296)))`.
 Without Linux taskset, calculated slots are capped at one. With enough memory,
-Linux machines with taskset and 4, 8, 16, 32, 64 and 96 cores get 1, 1, 1, 2, 5
+Linux VMs with taskset and 4, 8, 16, 32, 64 and 96 cores get 1, 1, 1, 2, 5
 and 8 slots. A 96-core machine with 8 GiB free gets two slots.
 
 `--checks N` replaces the calculated slots. Default open runs are twice the chosen
@@ -696,8 +699,11 @@ machine capacity with default limits. Another active repository's snapshot is
 retained when a different repository stops.
 
 `pdd autopilot status` reports calculated and chosen checks and runs, and
-`check slots: B busy of S, W waiting, cores per check C`. It reads current machine
-values and shared tickets without changing queue or workflow state. An unavailable
+`check slots: B busy of S, W waiting, cores per check C`. These are the shared
+admission limits, including another repository's active override. Status uses
+current machine defaults only when the shared snapshot is absent or expired.
+It labels this repository's saved options separately as repository overrides.
+It reads shared tickets without changing queue or workflow state. An unavailable
 observation reports its cause. Machine-caused check retries are separate from
 capacity admission.
 

@@ -1799,3 +1799,19 @@ test('stopping a launcher removes its shared capacity while leaving check ticket
   assert.equal((await f.invoke('stop')).exitCode,0);
   assert.equal(existsSync(capacityFile),false);assert.deepEqual(JSON.parse(readFileSync(ticketFile)),ticket);
 });
+
+
+test('repair 1: repository status displays the latest shared owner limits',async t=>{
+  const a=await fixture(t), b=await fixture(t), {checkMachine}=await import('./helpers/check-machine.mjs');
+  const shared={...checkMachine({count:64}).ports,queueRoot:join(a.dir,'shared-checks')};
+  a.ports.checkCapacityPorts=shared;b.ports.checkCapacityPorts=shared;
+  assert.equal((await a.invoke('start',{checks:'1',runs:'7'})).exitCode,0);
+  assert.equal((await b.invoke('start',{checks:'3',runs:'19'})).exitCode,0);
+  const before=readFileSync(join(shared.queueRoot,'capacity.json'));
+  const status=await a.invoke('status');assert.equal(status.exitCode,0);
+  const numbers=/check slots:\s*(\d+) busy of (\d+), (\d+) waiting, cores per check (\d+)/.exec(status.message);
+  assert.ok(numbers);assert.deepEqual(numbers.slice(1).map(Number),[0,3,0,21]);
+  assert.match(status.message,/checks:\s*calculated 5, chosen 3; runs:\s*calculated 6, chosen 19/);
+  assert.match(status.message,/repository overrides: checks 1, runs 7/);
+  assert.deepEqual(readFileSync(join(shared.queueRoot,'capacity.json')),before);
+});

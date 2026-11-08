@@ -2,7 +2,7 @@
 import * as files from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { availableParallelism, freemem, loadavg } from 'node:os';
 
 function nativeCores() {
@@ -22,6 +22,11 @@ function nativeBattery() {
   try { names = files.readdirSync('/sys/class/power_supply'); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
   return names.some(name => files.readFileSync(join('/sys/class/power_supply', name, 'type'), 'utf8').trim() === 'Battery');
 }
+function nativeVirtualized(run = spawnSync) {
+  // Unknown detection reserves the person's CPU budget.
+  const result = run('systemd-detect-virt', ['--quiet'], {timeout:1000,stdio:'ignore'});
+  return result.status === 0;
+}
 function nativeTaskset(env) {
   if (process.platform !== 'linux') return null;
   for (const folder of (env.PATH ?? '').split(':').filter(isAbsolute)) {
@@ -34,9 +39,10 @@ export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
   const cpuIds = (ports.cores ?? nativeCores)(), freeMemory = (ports.memory ?? freemem)(),
     load = (ports.load ?? (() => loadavg()[0]))(), platform = ports.platform ?? process.platform;
   const battery = platform === 'linux' ? (ports.battery ?? nativeBattery)() : false;
-  const personal = platform === 'darwin' || platform === 'linux' && battery;
+  const virtualized = platform === 'linux' ? (ports.virtualized ?? (() => nativeVirtualized(ports.spawnSync ?? spawnSync)))() : false;
+  const personal = platform === 'darwin' || platform === 'linux' && (battery || !virtualized);
   const taskset = platform === 'linux' ? (ports.taskset ?? (() => nativeTaskset(ports.env ?? process.env)))() : null;
-  if (typeof platform !== 'string' || typeof battery !== 'boolean' || !Array.isArray(cpuIds) || !cpuIds.length || cpuIds.some(id => !Number.isSafeInteger(id) || id < 0)
+  if (typeof platform !== 'string' || typeof battery !== 'boolean' || typeof virtualized !== 'boolean' || !Array.isArray(cpuIds) || !cpuIds.length || cpuIds.some(id => !Number.isSafeInteger(id) || id < 0)
     || new Set(cpuIds).size !== cpuIds.length || !Number.isFinite(freeMemory) || freeMemory < 0
     || !Number.isFinite(load) || load < 0 || taskset !== null && (typeof taskset !== 'string' || !isAbsolute(taskset))
     || [checks,runs].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 1))) throw Error('Machine check capacity is unavailable or invalid.');
@@ -87,16 +93,16 @@ function admissionCapacity(p, env) {
   // Revalidate saved observations, including the derived values, before using them.
   const result = calculateCheckCapacity({checks:value.checks,runs:value.runs}, {
     cores:()=>value.cpuIds, memory:()=>value.freeMemory, load:()=>value.load, platform:value.affinity?'linux':'other',
-    battery:()=>false, taskset:()=>value.taskset,
+    battery:()=>false, virtualized:()=>true, taskset:()=>value.taskset,
   });
   if (result.usableCores !== value.usableCores || result.coresPerCheck !== value.coresPerCheck
     || result.busy !== value.busy || result.calculatedChecks !== value.calculatedChecks
     || result.calculatedRuns !== value.calculatedRuns) throw Error('Invalid saved machine check capacity.');
   if (p.now() >= value.expiresAt) return calculateCheckCapacity({}, {...p,env});
-  return {...result, affinity:value.affinity, taskset:value.taskset};
+  return {...result, cores:value.cores, personal:value.personal, affinity:value.affinity, taskset:value.taskset};
 }
 export function readCheckStatus({env = process.env, checks, runs}, ports = {}) {
-  const p = portsFor(env, ports), capacity = calculateCheckCapacity({checks,runs}, {...p,env}), all = records(p);
+  const p = portsFor(env, ports), capacity = admissionCapacity(p, env), all = records(p);
   return {...capacity, busyChecks:all.filter(row=>row.state==='running').length, waitingChecks:all.filter(row=>row.state==='waiting').length};
 }
 const delay = ms => new Promise(done => setTimeout(done, ms));

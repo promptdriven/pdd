@@ -77,8 +77,8 @@ function portsFor(state, ports) {
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 function checkCapacityWords(state, p) {
   try {
-    const c = readCheckStatus({env:p.env,checks:state.checks,runs:state.runs}, p.checkCapacityPorts ?? p);
-    return `check slots: ${c.busyChecks} busy of ${c.checks}, ${c.waitingChecks} waiting, cores per check ${c.coresPerCheck}\nchecks: calculated ${c.calculatedChecks}, chosen ${c.checks}; runs: calculated ${c.calculatedRuns}, chosen ${c.runs}`;
+    const c = readCheckStatus({env:p.env}, p.checkCapacityPorts ?? p);
+    return `check slots: ${c.busyChecks} busy of ${c.checks}, ${c.waitingChecks} waiting, cores per check ${c.coresPerCheck}\nchecks: calculated ${c.calculatedChecks}, chosen ${c.checks}; runs: calculated ${c.calculatedRuns}, chosen ${c.runs}\nrepository overrides: checks ${state.checks ?? 'automatic'}, runs ${state.runs ?? 'automatic'}`;
   } catch (error) { return `check capacity unavailable: ${line(error.message)}`; }
 }
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';

@@ -47,10 +47,14 @@ path still needs an existing writable parent; the default log parent is created.
 Own the capacity rule for full suites and full builds. Preserve queue ordering,
 ownership, cleanup and paused intervals. Inject `cores()` (ordered usable CPU ID
 array), `memory()` (free bytes), `load()` (one-minute load), `platform` (OS name),
-`battery()` (Boolean) and `taskset()` (absolute executable path or null).
+`battery()` and `virtualized()` (Booleans), and `taskset()` (absolute executable path or null).
 Native Linux cores come from the current affinity list, with available parallelism
 as fallback. Native battery detection reads power-supply types; taskset discovery
-searches PATH for an executable. These adapters do not start a process or call AI.
+searches PATH for an executable. Native Linux virtualization detection runs
+`systemd-detect-virt --quiet` with a one-second timeout through an injectable
+`spawnSync` port. Only exit zero establishes a VM or container. Missing detection,
+timeout or any other result conservatively reserves personal-machine capacity.
+These adapters make no AI calls.
 
 `calculateCheckCapacity({checks, runs}, ports)` returns `{cores, usableCores,
 cpuIds, freeMemory, load, personal, affinity, taskset, calculatedChecks, checks,
@@ -59,7 +63,9 @@ is bytes, load is a nonnegative number, CPU IDs are unique nonnegative integers,
 personal/affinity/busy are Booleans, taskset is a path or null. Invalid observations
 fail closed before admission. Overrides are positive safe integers when supplied.
 
-Personal means macOS or Linux with a battery. Use the first max(1, floor(cores/2))
+Personal means macOS, or Linux with a battery or without established virtualization.
+This includes Linux desktops without batteries; detected Linux VMs and containers
+without batteries retain the full machine budget. Use the first max(1, floor(cores/2))
 CPU IDs on a personal machine, else all IDs. Let U be this usable count and M be
 free bytes. Calculated slots are max(1, min(floor(U/12), floor(M/4294967296))).
 Without Linux taskset, cap calculated slots at one, since an env hint cannot
@@ -78,8 +84,13 @@ Admission ignores an expired snapshot and probes the machine with default limits
 `releaseCheckCapacity({env, owner}, ports)` removes only the matching owner's
 snapshot under the admission lock and returns whether it removed one. Missing
 snapshots are harmless; another active repository's snapshot remains. Running
-tickets are never removed. `readCheckStatus({env, checks, runs}, ports)` computes current values without
-writing and adds machine-wide `busyChecks` and `waitingChecks` ticket counts.
+tickets are never removed. `readCheckStatus({env, checks, runs}, ports)` reads the
+same capacity used by admission without writing and adds machine-wide
+`busyChecks` and `waitingChecks` ticket counts. The optional checks/runs arguments
+are accepted for compatibility but do not override the active shared limits.
+A valid unexpired snapshot wins even after a resize or from a different repository;
+absent or expired snapshots use current machine observations with default limits.
+Status retains the snapshot's original core count and personal classification.
 An unavailable observation or record read throws for the caller to report.
 Queue admission uses the saved snapshot when present, otherwise computes from
 ports. A malformed snapshot fails closed. This machine-wide snapshot is shared
@@ -94,7 +105,8 @@ for CPUs rather than share a CPU list. Always replace child `PDD_CHECK_CPUS` wit
 the share. Native execution uses taskset `--cpu-list LIST /bin/bash -c COMMAND`
 when available, else bash with the hint only. Inject the process `spawn` port into
 native execution; the timeout and signal cleanup still own its process group.
-Tests provide every machine port and never inspect the host.
+Deterministic tests provide every machine port. A platform-gated integration test
+may inspect allowed CPU IDs and run real taskset in an isolated queue.
 
 Serialize ticket creation and admission with
 the existing PID/token lock semantics. Preserve submission order among waiting

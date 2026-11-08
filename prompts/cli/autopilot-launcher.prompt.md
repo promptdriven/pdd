@@ -147,9 +147,11 @@ under the existing current-control guard. Default open-run admission uses its
 resize changes capacity without changing coordinator custody. Packet `runs` is
 the effective cap and `checkCapacity` is the snapshot. Instruct the coordinator
 to claim new issues only within that cap; the native start check enforces it.
-Status computes current capacity read-only and shows calculated and chosen check
-and run counts, plus `check slots: B busy of S, W waiting, cores per check C`.
-If capacity is unavailable, show its cause and do not admit work at that tick.
+Status reads the active shared admission capacity read-only and shows its
+calculated and chosen check and run counts, plus `check slots: B busy of S, W waiting, cores per check C`.
+Show this repository's saved check and run overrides separately, labelled as
+repository overrides (automatic when omitted). They do not replace the shared
+status limits. If capacity is unavailable, show its cause and do not admit work at that tick.
 Persist only the selected launcher identity/config-folder
 paths, including the HOME used to load local launcher definitions, not credentials or the whole environment. A named user timer runs the
 Node script with absolute paths and the launcher's PATH and agent config paths.
