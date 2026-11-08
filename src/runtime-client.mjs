@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 336a7dc8815d2acdc04a657a0bfe38a702bc128d4f386ef47a6f7decaed3a303).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 051e416a9b915e33ad429d4d61531cda73cbe1e39f4c9d5d93044b4961402585).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -3443,7 +3443,10 @@ function caseSafe(p,path,{directory=false,create=false}={}){
 function caseSyncDir(p,path){const fd=p.files.open(path,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{p.files.sync(fd);}finally{p.files.close(fd);}}
 function caseRead(p,path){caseSafe(p,path);const fd=p.files.open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);try{const st=p.files.stat(fd);if(!st.isFile()||st.size>32*1024*1024)throw Error('unsafe case record');return p.files.read(fd,'utf8');}finally{p.files.close(fd);}}
 function caseWrite(p,path,text,{exclusive=false}={}){
-  caseSafe(p,dirname(path),{directory:true,create:true});if(caseStat(p,path))caseSafe(p,path);
+  caseSafe(p,dirname(path),{directory:true,create:true});
+  // Exclusive link publication refuses every existing destination. A separate
+  // leaf probe races with normal owner release and cannot add write authority.
+  if(!exclusive&&caseStat(p,path))caseSafe(p,path);
   const temp=`${path}.${p.pid}.${p.nonce()}.tmp`;let fd,owned;
   try{fd=p.files.open(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);p.files.write(fd,text);p.files.sync(fd);owned=p.files.stat(fd);p.files.close(fd);fd=undefined;
     if(exclusive)p.files.link(temp,path);else p.files.rename(temp,path);
