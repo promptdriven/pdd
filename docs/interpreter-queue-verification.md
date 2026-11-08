@@ -7,7 +7,7 @@ repositories, profile folders and queue directories. Cleanup removes them.
 Run:
 
 ```sh
-node --test test/interpreter-queue.test.mjs test/interpreter-queue-runtime.test.mjs test/interpreter-queue-repair.test.mjs
+node --test test/interpreter-queue.test.mjs test/interpreter-queue-runtime.test.mjs test/interpreter-queue-repair.test.mjs test/interpreter-queue-storage.test.mjs
 node --test test/workflow-chat-queue.test.mjs
 node --test --test-name-pattern='interpreter queue|interpreter waiting' test/autopilot-launcher.test.mjs test/workflow-runner.test.mjs
 ```
@@ -30,6 +30,14 @@ and recovers the batch in a new process. Unsent IDs receive no GET or POST.
 A matching terminal `--request ID` read frees a retained slot; the next public
 check can proceed. Invalid locks fail closed. Live lock contention stops ledger
 mutations on interruption or within five seconds and keeps dispatch evidence.
+Storage tests use native child processes and real filesystem permission errors.
+Run them as a user without permission to bypass directory modes. A queue changed
+to mode `0500` must report `local-state-unavailable` promptly for admission,
+dispatch marking and terminal observation, including interrupted cleanup.
+Other cases remove the root during lock creation or repeat an absent-lock race.
+Every retry yields and honors interruption, an earlier caller deadline, and the
+five-second lock bound. A live holder that releases during the ownership read
+still permits the update. Failed updates retain uncertain dispatch evidence.
 Workflow tests execute generated start, resume and replacement shell commands
 with stand-in agents under a missing or stale daemon environment. Queue settings
 also reach Codex command environments, and workflow status reads the same queue.

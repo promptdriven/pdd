@@ -60,12 +60,20 @@ function capacity(p) {
 }
 async function locked(p, action, ended = () => false, settling = false) {
   const acquire = p.acquireLock ?? (await import('./workflow-runner.mjs')).acquireRunLock;
-  const stopAt = settling ? Math.min(p.now() + 5000, p.deadline ?? Infinity) : Infinity;
+  const stopAt = Math.min(p.now() + 5000, p.deadline ?? Infinity);
+  let retrying = false;
+  const stopped = () => {
+    if (!settling && ended()) return true;
+    if (ended() || p.now() >= stopAt) throw Error('Admission lock wait stopped.');
+    return false;
+  };
   while (settling || !ended()) {
+    if (retrying && stopped()) return null;
     let release;
     try { release = acquire(p.root, 'interpreter-admission.lock'); }
     catch (error) {
       if (error.code !== 'run_busy') throw error;
+      if (error.cause) throw error.cause;
       // acquireRunLock deliberately combines live contention with unverifiable
       // ownership. Only a verified live PID/token authorizes a queue wait.
       const path = join(p.root, 'interpreter-admission.lock');
@@ -79,11 +87,13 @@ async function locked(p, action, ended = () => false, settling = false) {
           || !p.alive(owner.pid)) throw Error('Unverifiable admission lock ownership.');
       } catch (error) {
         // A live holder can release between the failed acquire and this read.
-        if (error.code === 'ENOENT') continue;
-        throw error;
+        if (error.code !== 'ENOENT') throw error;
+        const root = p.fs.lstatSync(p.root);
+        if (!root.isDirectory() || root.isSymbolicLink()) throw Error('Queue root is not a directory.');
       }
-      if (settling && (ended() || p.now() >= stopAt)) throw Error('Admission lock wait stopped.');
-      await p.sleep(100); continue;
+      if (stopped()) return null;
+      retrying = true;
+      await p.sleep(Math.min(100, Math.max(0, stopAt - p.now()))); continue;
     }
     try { return !settling && ended() ? null : action(); } finally { release(); }
   }
@@ -93,7 +103,7 @@ const place = (all, row) => all.filter(other => other.state === 'waiting' && oth
 export async function acquireInterpreterSlot({ cwd, origin, requestId, kind, env = process.env, deadline = Infinity }, ports = {}) {
   let p, row;
   try {
-    p = portsFor(env, ports);
+    p = portsFor(env, { ...ports, deadline });
     if (!['lint', 'check'].includes(kind)) throw Error('Invalid interpreter request kind.');
     p.fs.mkdirSync(p.root, { recursive: true, mode: 0o700 });
     if (!p.fs.lstatSync(p.root).isDirectory() || p.fs.lstatSync(p.root).isSymbolicLink()) throw Error('Queue root is not a directory.');

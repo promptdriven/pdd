@@ -95,7 +95,7 @@ function deps(ports = {}) {
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
 // This run lock is independent of the shared Herdr layout lock. Never wait on a live owner.
-const lockProblem = () => Object.assign(Error('Another open operation holds this run, or its ownership cannot be verified. Wait for it to finish and retry.'), { code: 'run_busy' });
+const lockProblem = cause => Object.assign(new Error('Another open operation holds this run, or its ownership cannot be verified. Wait for it to finish and retry.', cause ? { cause } : undefined), { code: 'run_busy' });
 function readLock(path) {
   if (!lstatSync(path).isFile() || lstatSync(path).size > 4096) throw lockProblem();
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -116,7 +116,7 @@ export function acquireRunLock(runDir, filename = 'chat-replacement.lock') {
     try { writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd); } finally { closeSync(fd); }
   };
   try { create(); } catch (error) {
-    if (error.code !== 'EEXIST') throw lockProblem();
+    if (error.code !== 'EEXIST') throw lockProblem(error);
     let prior, claimFd;
     try {
       prior = readLock(path);

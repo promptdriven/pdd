@@ -13,6 +13,12 @@ integer, default 2. Invalid capacity uses 2 with a warning. A relative directory
 or unreadable queue fails closed before POST. An admission lock with malformed,
 non-regular, unreadable or unverifiable PID/token ownership fails immediately with
 `local-state-unavailable`; never steal it. Only verified live contention may wait.
+Lock creation or storage failure fails promptly with `local-state-unavailable`.
+An absent lock after contention can mean that its holder released it: retry only
+while the root is still a regular directory. Every lock retry yields and checks
+interruption and the caller deadline; each admission-lock wait is bounded by five
+seconds, including repeated release races. Capacity waiting keeps its own caller
+deadline and is not limited to five seconds.
 Dispatch marking and observation try an uncontended update even during cleanup,
 but stop waiting on interruption or deadline, and within five seconds otherwise.
 A cancelled dispatch mark forbids POST. A failed observation keeps the prior
