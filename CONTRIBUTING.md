@@ -4,6 +4,15 @@ Read the entire [Prompting guide](docs/prompting-guide.md) before authoring a St
 
 ## Work from a local checkout
 
+For a checkout with less history to download, make a shallow clone:
+
+```sh
+git clone --depth 1 https://github.com/promptdriven/pdd.git
+cd pdd
+```
+
+This checkout has limited history. If you need the full history, run `git fetch --unshallow` inside the checkout.
+
 Use Node.js 22.16.0 or newer. The CLI and tests have no dependency installation step:
 
 ```sh
