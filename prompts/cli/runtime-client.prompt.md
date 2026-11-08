@@ -827,7 +827,10 @@ read turns into a lost, unknown row drops its old `progress`.
 ## Machine interpreter admission
 
 Every lint and check POST also uses [machine admission](interpreter-queue.prompt.md),
-after ordinary profile admission and before immutable dispatch evidence. Waiting
+after ordinary profile admission and before immutable dispatch evidence, including
+the permanent Check claim and restart fuse. Expired or interrupted machine waits
+leave no Check claim or sent request ID, so a new process can retry that unsent
+work from the saved batch with zero charged calls. Waiting
 must not send a request or poll its unsent ID. Already dispatched checks keep
 being read while another check waits for the machine queue. Register the allocated ID, mark possible dispatch before
 POST and hold the machine ticket until a matching terminal receipt or confirmed
@@ -836,7 +839,9 @@ keeps capacity; same-ID reads can later release it. Use existing capacity proof
 rules for retry authority. Machine busy feedback never grants retry permission,
 including when a capacity reply has uncertain accounting. Feed successful verdicts,
 busy, unknown and refused outcomes from POST and subsequent same-ID reads into
-the request ledger. Incomplete accounting stays unknown. Never record a request
+the request ledger, including the documented `pdd test --request ID` read. A
+matching terminal request read releases retained machine capacity without sending
+a new POST or granting replay authority. Incomplete accounting stays unknown. Never record a request
 as not sent after its POST may have started. Private queue file identities do not allocate interpreter request IDs; saved reads
 keep the existing zero-new-request-ID promise. Ledger/queue failures stop new sends
 with a local-state-unavailable error; recovery advice remains read-only. Retain

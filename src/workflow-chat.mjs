@@ -14,6 +14,7 @@ import { tomlString } from './toml-string.mjs';
 import { lookupIssueWorktree } from './workflow-worktree.mjs';
 import { LOGIN_VARIABLES, reservedEnvMessage } from './workflow-agents.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
+import { interpreterQueueEnvironment } from './interpreter-queue.mjs';
 
 // The one shared startup grace: Herdr sees a new agent only after it starts.
 export const START_GRACE_MS = 30_000;
@@ -117,13 +118,13 @@ export function herdrCommand(ports = {}) {
 }
 
 // `unset`, `loginFile` and `program` come from chatLaunch: the caller's login and the run's agents.json command.
-export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null }) {
+export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null, queueEnv = {} }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (typeof cwd !== 'string' || !cwd) throw problem('invalid_worktree', 'The chat has no worktree folder, so pdd will not start it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
   if (unset.some(name => !ENV_NAME.test(name))) throw problem('invalid_login_variable', 'A login variable name is not a plain name, so pdd will not start the chat.');
   // Gemini asks a hidden "trust this folder?" question in a new worktree; trust the run worktree for this session.
-  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
+  const env = ['cd', quote(cwd), '&&', 'env', ...unset.flatMap(name => ['-u', name]), 'PDD_AGENT_SESSION=1', `PDD_BIN=${quote(PACKAGE_BIN)}`, ...Object.entries(queueEnv).map(([name, value]) => `${name}=${quote(value)}`), ...(configDir && homeVariable(agent) ? [`${homeVariable(agent)}=${quote(configDir)}`] : []), ...(agent === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true'] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
   // A child sh opens the private login file, deletes it, then reads the values and becomes the agent: no login value is
   // in this line, and no value from the file can keep the file. Any failed step stops the sh before the agent starts.
@@ -138,7 +139,8 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
   return [...env, ...start, ...(resumeId ? ['resume', resumeId] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
-    '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`), ...message].join(' ');
+    '-c', quote(`shell_environment_policy.set.PDD_BIN=${tomlString(PACKAGE_BIN)}`), '-c', quote(`shell_environment_policy.set.PDD_AGENT_SESSION=${tomlString('1')}`),
+    ...Object.entries(queueEnv).flatMap(([name, value]) => ['-c', quote(`shell_environment_policy.set.${name}=${tomlString(value)}`)]), ...message].join(' ');
 }
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -177,16 +179,17 @@ export function savedAgentEntry(run, agent, env = process.env) {
 // Each listed name that gets no value is unset, and so is the config-folder variable when the run saves none, so the
 // Herdr server's old environment never decides the login. Values go only in a new private file that the chat reads once.
 export function chatLaunch({ run, agent, configDir, env = process.env }) {
+  const queueEnv = interpreterQueueEnvironment(env);
   const entry = savedAgentEntry(run, agent, env), names = LOGIN_VARIABLES[agent] ?? [], home = homeVariable(agent), values = {};
   for (const name of names) if (typeof env[name] === 'string' && env[name] !== '') values[name] = env[name];
-  for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
+  for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && !Object.hasOwn(queueEnv, name) && ENV_NAME.test(name)) values[name] = value;
   const unset = [...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
   let loginFile = null;
   if (Object.keys(values).length) {
     loginFile = join(run.runDir, `login-${randomUUID()}.env`);
     writeFileSync(loginFile, Object.entries(values).map(([name, value]) => `export ${name}=${quote(value)}\n`).join(''), { mode: 0o600, flag: 'wx' });
   }
-  return { unset, loginFile, program: entry?.command ?? null };
+  return { unset, loginFile, program: entry?.command ?? null, queueEnv };
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env }) {

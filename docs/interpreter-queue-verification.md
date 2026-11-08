@@ -7,7 +7,8 @@ repositories, profile folders and queue directories. Cleanup removes them.
 Run:
 
 ```sh
-node --test test/interpreter-queue.test.mjs test/interpreter-queue-runtime.test.mjs
+node --test test/interpreter-queue.test.mjs test/interpreter-queue-runtime.test.mjs test/interpreter-queue-repair.test.mjs
+node --test test/workflow-chat-queue.test.mjs
 node --test --test-name-pattern='interpreter queue|interpreter waiting' test/autopilot-launcher.test.mjs test/workflow-runner.test.mjs
 ```
 
@@ -22,6 +23,16 @@ interruption, dead waiting owners, unknown paid work, same-ID recovery, unreadab
 ownership, busy back-off and recovery to the configured limit. Queue waits pause
 the stuck clock without counting request execution time. Workflow text and JSON
 show the waiting position without changing workflow progress.
+
+Recovery cases expire or interrupt a locally waiting check, then retry its saved
+batch from a new caller. Another case kills a native caller while a check waits
+and recovers the batch in a new process. Unsent IDs receive no GET or POST.
+A matching terminal `--request ID` read frees a retained slot; the next public
+check can proceed. Invalid locks fail closed. Live lock contention stops ledger
+mutations on interruption or within five seconds and keeps dispatch evidence.
+Workflow tests execute generated start, resume and replacement shell commands
+with stand-in agents under a missing or stale daemon environment. Queue settings
+also reach Codex command environments, and workflow status reads the same queue.
 
 Each machine queue ticket is also its request ledger row. Read
 `readInterpreterProgress({cwd,env})` to obtain the ordered `requests` inventory.

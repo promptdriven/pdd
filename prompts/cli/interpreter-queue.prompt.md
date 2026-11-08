@@ -10,8 +10,19 @@ replacement and the native PID/token admission lock. Never hold the lock across
 network work or sleep. Default directory is `/tmp/pdd-interpreter-UID`; an absolute
 `PDD_INTERPRETER_QUEUE` overrides it. `PDD_INTERPRETER_CONCURRENCY` is a positive safe
 integer, default 2. Invalid capacity uses 2 with a warning. A relative directory
-or unreadable queue fails closed before POST. Keep state outside the checkout,
+or unreadable queue fails closed before POST. An admission lock with malformed,
+non-regular, unreadable or unverifiable PID/token ownership fails immediately with
+`local-state-unavailable`; never steal it. Only verified live contention may wait.
+Dispatch marking and observation try an uncontended update even during cleanup,
+but stop waiting on interruption or deadline, and within five seconds otherwise.
+A cancelled dispatch mark forbids POST. A failed observation keeps the prior
+dispatch evidence and capacity for later same-ID recovery. Keep state outside
+the checkout,
 private to the OS user; never save credentials, request bodies or response prose.
+
+Export `interpreterQueueEnvironment(env)` returning the effective
+`PDD_INTERPRETER_QUEUE` and `PDD_INTERPRETER_CONCURRENCY` as strings under the
+settings above, so workflow launch and status use the same queue.
 
 Export `acquireInterpreterSlot({cwd, origin, requestId, kind, env, deadline}, ports)`
 for lint/check only. Return `{root,ticket}` after admission, or null at deadline or

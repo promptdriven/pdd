@@ -15,6 +15,10 @@ function portsFor(env = process.env, ports = {}) {
   if (raw !== undefined && p.limit === 2 && String(raw) !== '2') p.say('Warning: PDD_INTERPRETER_CONCURRENCY must be a positive safe integer; using 2.');
   return p;
 }
+export function interpreterQueueEnvironment(env = process.env) {
+  const p = portsFor(env);
+  return { PDD_INTERPRETER_QUEUE: p.root, PDD_INTERPRETER_CONCURRENCY: String(p.limit) };
+}
 function read(p, path) {
   const stat = p.fs.lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink()) throw Error('Queue record is not a regular file.');
@@ -54,13 +58,34 @@ function capacity(p) {
   if (!Number.isSafeInteger(row.limit) || row.limit < 1 || !Number.isFinite(row.until) || !Number.isFinite(row.blockedUntil)) throw Error('Unreadable interpreter capacity.');
   return row;
 }
-async function locked(p, action, ended = () => false) {
+async function locked(p, action, ended = () => false, settling = false) {
   const acquire = p.acquireLock ?? (await import('./workflow-runner.mjs')).acquireRunLock;
-  while (!ended()) {
+  const stopAt = settling ? Math.min(p.now() + 5000, p.deadline ?? Infinity) : Infinity;
+  while (settling || !ended()) {
     let release;
     try { release = acquire(p.root, 'interpreter-admission.lock'); }
-    catch (error) { if (error.code !== 'run_busy') throw error; await p.sleep(100); continue; }
-    try { return ended() ? null : action(); } finally { release(); }
+    catch (error) {
+      if (error.code !== 'run_busy') throw error;
+      // acquireRunLock deliberately combines live contention with unverifiable
+      // ownership. Only a verified live PID/token authorizes a queue wait.
+      const path = join(p.root, 'interpreter-admission.lock');
+      let owner;
+      try {
+        if (p.fs.lstatSync(path).size > 4096) throw Error('Oversized admission lock.');
+        owner = read(p, path);
+        if (!owner || Object.keys(owner).some(key => !['pid', 'token'].includes(key))
+          || !Number.isSafeInteger(owner.pid) || owner.pid <= 0
+          || typeof owner.token !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(owner.token ?? '')
+          || !p.alive(owner.pid)) throw Error('Unverifiable admission lock ownership.');
+      } catch (error) {
+        // A live holder can release between the failed acquire and this read.
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+      if (settling && (ended() || p.now() >= stopAt)) throw Error('Admission lock wait stopped.');
+      await p.sleep(100); continue;
+    }
+    try { return !settling && ended() ? null : action(); } finally { release(); }
   }
   return null;
 }
@@ -112,10 +137,11 @@ export async function markInterpreterDispatch({ root, ticket }, ports = {}) {
   const p = portsFor({ PDD_INTERPRETER_QUEUE: root }, ports);
   try {
     await locked(p, () => {
+      if (p.interrupted() || p.now() >= (p.deadline ?? Infinity)) throw Error('Dispatch marking stopped.');
       const row = read(p, join(root, `ticket-${ticket}.json`));
       if (row.pid !== p.pid || row.state !== 'running' || row.dispatched) throw Error('Interpreter dispatch ownership changed.');
       row.dispatched = true; save(p, `ticket-${ticket}.json`, row);
-    });
+    }, () => p.interrupted(), true);
   } catch (error) { throw problem(error); }
 }
 export async function observeInterpreterRequest({ env = process.env, origin, requestId, outcome, terminal = false, busy = false, waitMs = 5000 }, ports = {}) {
@@ -136,7 +162,7 @@ export async function observeInterpreterRequest({ env = process.env, origin, req
         cap.blockedUntil = Math.max(cap.blockedUntil, p.now() + Math.min(60_000, Math.max(1000, Number.isFinite(waitMs) ? waitMs : 5000)));
       } else if (outcome === 'verdict' && terminal && p.now() >= cap.until) cap.limit = Math.min(p.limit, cap.limit + 1);
       save(p, 'capacity.json', cap);
-    });
+    }, () => p.interrupted(), true);
   } catch (error) { throw problem(error); }
 }
 export function readInterpreterProgress({ cwd, since = 0, env = process.env }, ports = {}) {
