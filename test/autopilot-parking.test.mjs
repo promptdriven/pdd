@@ -15,6 +15,83 @@ import {checkDependencyStart} from '../src/issue-dependencies-intake.mjs';
 const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
 const launches = f => f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run');
 const deliveries = f => f.herdr.calls.filter(args => args[0] === 'agent' && args[1] === 'prompt');
+
+test('3091 repair 2 person park becomes one stable inferred interpreter wait', async t => {
+  const {f, tick, ports, stateFile, warnings} = await setup(t);
+  fullTicks(f, stateFile, ports);
+  ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+  const held = f.record(); held.state = 'waiting';
+  held.question = {at: f.clock, text: 'Which product option?'}; save(f, held);
+  await tick(); assert.equal(f.record().parking.blocker.kind, 'person');
+  const age = f.record().parking.at;
+  f.tick();
+  const changed = f.record(); delete changed.question; changed.state = 'stuck';
+  changed.gate = {kind: 'approve-pr', area: changed.areas[changed.area].name};
+  changed.parkReason = 'Interpreter saved read is unknown (runner-stopped).'; changed.updatedAt = f.clock; save(f, changed);
+  const identities = [];
+  for (let i = 0; i < 3; i++) {
+    f.tick(); await tick();
+    const state = JSON.parse(readFileSync(stateFile));
+    identities.push(Object.keys(state.interpreterPattern.seen));
+    assert.equal(state.interpreterPattern.streak, 1, 'one saved wait counts once across tick writes');
+    assert.ok(!state.interpreterPattern.testMode);
+    assert.deepEqual([state.parking.working, state.parking.parked], [0, 1]);
+  }
+  assert.deepEqual(identities[1], identities[0]); assert.deepEqual(identities[2], identities[0]);
+  const parked = f.record();
+  assert.equal(parked.parking.blocker.kind, 'interpreter');
+  assert.ok(Number.isFinite(parked.parking.interpreterWait.at));
+  assert.deepEqual(parked.parking.interpreterGate, changed.gate);
+  assert.equal(parked.parking.at, age);
+  assert.equal(parked.parking.personWait, undefined);
+  for (const key of ['root', 'branch', 'gate', 'question', 'done', 'automaticOrigin']) assert.deepEqual(parked[key], changed[key]);
+  assert.equal(parked.chats.at(-1).session.id, held.chats.at(-1).session.id);
+  assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+  assert.deepEqual(warnings, []);
+});
+
+for (const throughPerson of [true, false])
+  test(`3091 repair 2 replacement interpreter wait reads current batch through person ${throughPerson}`, async t => {
+    const {f, tick, ports, stateFile, warnings} = await setup(t);
+    fullTicks(f, stateFile, ports);
+    ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
+    const oldBatch = '20261101-120000-abcd', newBatch = '20261102-120000-efgh';
+    const held = f.record(); held.state = 'stuck';
+    held.parkReason = `Interpreter saved read ${oldBatch} is unknown (runner-stopped).`; save(f, held);
+    await tick();
+    assert.equal(f.record().parking.interpreterWait.batch, oldBatch);
+    const age = f.record().parking.at, oldWait = f.record().parking.interpreterWait;
+    if (throughPerson) {
+      f.tick(); const question = f.record(); question.question = {at: f.clock, text: 'Which independent product option?'};
+      save(f, question); await tick(); assert.equal(f.record().parking.blocker.kind, 'person');
+      assert.deepEqual(f.record().question, question.question);
+      assert.equal(f.record().parking.interpreterWait, undefined);
+      assert.equal(f.record().parking.interpreterGate, undefined);
+    }
+    f.tick(); const changed = f.record(); delete changed.question;
+    changed.gate = {kind: 'approve-pr', area: changed.areas[changed.area].name};
+    changed.parkReason = `Interpreter saved read ${newBatch} is unknown (runner-stopped).`; changed.updatedAt = f.clock; save(f, changed);
+    await tick();
+    const parked = f.record();
+    assert.equal(parked.parking.interpreterWait.batch, newBatch, 'replacement owns the current saved batch');
+    assert.notEqual(parked.parking.interpreterWait.at, oldWait.at);
+    assert.equal(parked.parking.at, age);
+    assert.deepEqual(parked.parking.interpreterGate, changed.gate);
+    const wait = parked.parking.interpreterWait;
+    f.tick(); await tick(); assert.deepEqual(f.record().parking.interpreterWait, wait);
+    ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
+    await tick();
+    assert.equal(f.record().parking, undefined);
+    assert.deepEqual(f.record().gate, changed.gate);
+    assert.deepEqual(f.record().decisions, changed.decisions);
+    assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
+    assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
+    const sent = JSON.stringify(deliveries(f)[0]);
+    assert.ok(sent.includes(`--read ${newBatch}`)); assert.ok(!sent.includes(oldBatch));
+    await tick(); assert.equal(deliveries(f).length, 1);
+    assert.deepEqual(warnings, []);
+  });
+
 async function setup(t, agent = 'claude') {
   const f = await fixture(t, {agent});
   assert.equal((await f.run()).exitCode, 0);

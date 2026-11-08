@@ -7,13 +7,15 @@ const reasonFor = run => [run.parkReason, run.question && !run.question.answered
 export function interpreterWaitFor(run) {
   if (ended(run)) return null;
   if (run.runtimeWait) return run.runtimeWait;
-  if (run.parking?.interpreterWait) return run.parking.interpreterWait;
+  const cached = run.parking?.blocker?.kind === 'interpreter' ? run.parking.interpreterWait : null;
   const reason = String(run.parkReason ?? '');
   if (!stopped(run) || !(run.stuckCause === 'interpreter' || /pdd:no[- ]verdict|runner-stopped|unknown saved[- ]read/i.test(reason)
-    || /interpreter/i.test(reason) && /no[- ]verdict|unknown|runner-stopped|saved[- ](?:batch|read)|outage/i.test(reason))) return null;
-  return {at: run.updatedAt ?? run.startedAt ?? 0, reason,
+    || /interpreter/i.test(reason) && /no[- ]verdict|unknown|runner-stopped|saved[- ](?:batch|read)|outage/i.test(reason)))
+    return cached && !reason && !run.stuckCause && JSON.stringify(run.gate ?? null) === JSON.stringify(run.parking.interpreterGate ?? null) ? cached : null;
+  const inferred = {at: run.updatedAt ?? run.startedAt ?? 0, reason,
     batch: /\b\d{8}-\d{6}-[a-z0-9]+\b/i.exec(reason)?.[0] ?? null,
     cause: /unknown|runner-stopped/i.test(reason) ? 'unknown' : 'service'};
+  return cached && ['reason', 'batch', 'cause'].every(key => cached[key] === inferred[key]) ? cached : inferred;
 }
 export function blockerFor(run) {
   if (ended(run)) return null;
