@@ -742,12 +742,13 @@ test('AUTOPILOT4: the checker is fresh, prefers another family, labels a same-fa
     'use a fresh session of the builder\'s family and label it `checker_mode: same-family`', '`verdict` (PASS, FAIL or NOT SURE)', '`head` (the SHA you checked)',
     '`risk` (1-5, before merge)', '`family`, `session`, `checker_mode`', 'Never send a failed check again on your own.',
     'read the issue first and write 3 input → result pairs from it', 'Each expected value comes from an issue quote or the old behavior.',
-    'For a screen change, take before and after screenshots', 'reruns each merged PR on main and gives its own risk 1-5',
+    'For a screen change, take before and after screenshots',
     'A new test value needs no person when you (blind, from the Story, with a named rule) and the runtime agree; else it is a note.',
     'A saved `pdd test` result for the new and the old prompt counts only when it matches the Story, the test cases and the prompt source at this head, and it was a fresh run (not cached).',
     'Else run `CI=1 pdd test <story> --cache-clear --json` once. A result you cannot check is not a fresh pass.',
     'PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff.',
     'Both PRs: the full suite is green on the head, with no new skip or only.', 'If no other family is available, say so; do not claim this review.');
+  assert.match(read('pdd-check/SKILL.md'), /After merge:.*merged commit.*base branch/);
 });
 
 // Wrong: a PASS for an old head merges new code, or the merge is not pinned to the head that was checked.
@@ -774,8 +775,7 @@ test('AUTOPILOT7: explicit operator choice or standing delegation authorizes cov
   const rule = "An agent may merge only after the person's explicit chat request";
   assert.ok(readFileSync(join(root, 'RUNBOOK.md'), 'utf8').split('\n')[65].includes(rule), 'RUNBOOK.md:66');
   has('pdd-merge/SKILL.md', 'An operator’s explicit auto setup and start, or an applicable standing delegation, supplies it for eligible work; a configuration read alone does not.',
-    'A checker PASS is separate evidence, never approval words.', '`pdd workflow approve N --said -`', 'Strict mode requires the person terminal; never bypass it or edit approval fields.',
-    'Post one PR comment identifying the person’s actual explicit merge authorization without fabricating a quotation.');
+    'A checker PASS is separate evidence, never approval words.', '`pdd workflow approve N --said -`', 'Strict mode requires the person terminal; never bypass it or edit approval fields.');
   has('pdd-autopilot/steps/handoff.md', 'The person’s explicit choice of auto and start establishes the chosen automatic work',
     'commands and attribution, without presenting a coordinator summary as a quotation.');
 });

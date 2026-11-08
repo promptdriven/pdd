@@ -38,6 +38,13 @@ Help forms and completion name only the `NAMES` words.
 
 ## Autopilot routes
 
+Catalog `autopilot.merge` with prefix `autopilot merge`, local `autopilot-merge`,
+one required issue-type numeric PR operand, text option `--input` and flag
+`--observe`. Form: `pdd autopilot merge PR --input - [--observe]`.
+Description: Check merge rules and submit to the base branch queue or merge the
+exact head. Read evidence JSON from stdin. --observe reads the result and audit
+without a write. [Merge owner](autopilot-merge.prompt.md) owns validation.
+
 Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
 - `pdd autopilot start [--runs N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.
@@ -231,7 +238,7 @@ The closing lines are exactly:
 ```text
 Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
 workflow run opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.
-The CLI has no merge command. Auto agents use pdd-merge after repository review and tests, with required human approvals.
+Auto agents use pdd-merge and pdd autopilot merge after repository review and tests, with required human approvals.
 ```
 
 (`run` is the [NAMES](#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.)
@@ -261,6 +268,9 @@ In PDD, prompts are the source. Code follows the prompts.
 
 
 ## Dependencies
+
+- [Autopilot merge](autopilot-merge.prompt.md): required native generation,
+  verification and testing context for the guarded merge command form.
 
 [Workflow scope](workflow-scope.prompt.md) is required authoring, generation, runtime, verification and testing context for the scope route meanings.
 
