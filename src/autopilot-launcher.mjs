@@ -8,7 +8,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4121f8c2bae066d1679aaab91c6d5da041723316def40c25632b13a62a628c34).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 75f2ea2f10d6b518042f5abe926faabc499193e65ed140d5eedd1524d453ac6a).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -683,6 +683,7 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   } else if (!p.readRuntimeWaits) {
     const runs = await parkingPorts(state, p).list();
     for (const run of runs) {
+      if (typeof run.root !== 'string' || !run.root.trim()) continue;
       const at = latestCheckVerdict({root: run.root, since: pattern.verdictAt ?? 0}, {env: p.env});
       if (at !== null) verdictAt = Math.max(verdictAt ?? at, at);
     }

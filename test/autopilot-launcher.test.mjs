@@ -2101,3 +2101,22 @@ test('3071 repair refreshed packet base agrees with automatic workflow startup',
   assert.equal(packet.baseBranch, workflow.record().baseBranch);
   assert.equal(workflow.record().baseSha, workflow.git(workflow.source, 'rev-parse', 'refs/remotes/origin/new-default'));
 });
+
+// #3091 native discovery must not turn incomplete saved rows into a tick failure.
+for (const [name, root] of [['absent', undefined], ['null', null], ['number', 42], ['object', {}]])
+  test(`3091 integration verdict scan keeps incomplete ${name} root rows unknown`, async t => {
+    const f = await fixture(t);
+    f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+    assert.equal((await f.invoke('start', {env: f.ports.env})).exitCode, 0);
+    const folder = join(f.cwd, '.git', 'pdd', 'runs', '901'); mkdirSync(folder, {recursive: true});
+    const file = join(folder, 'status.json');
+    const bytes = JSON.stringify({v: 1, number: 901, repo: 'owner/repo', state: 'running', root});
+    writeFileSync(file, bytes);
+    const before = f.prompts.length;
+    f.time += 30 * 60 * 1000;
+    await assert.doesNotReject(async () => {assert.equal((await f.tick()).exitCode, 0);});
+    assert.equal(f.prompts.length, before);
+    assert.equal(f.state().interpreterPattern.streak, 0);
+    assert.equal(f.state().interpreterPattern.verdictAt, undefined);
+    assert.equal(readFileSync(file, 'utf8'), bytes);
+  });
