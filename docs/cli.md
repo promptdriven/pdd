@@ -579,5 +579,13 @@ they can join. A running umbrella gets one note when membership changes.
 The global fix PR references its members. After that PR merges, every member
 needs a fresh sort against the fix. Only members confirmed fixed close with
 evidence; the others stay open. `pdd autopilot status` and the graph issue list
-show group size, cause and umbrella. Local group state is kept in the checkout's
+show group size, cause and umbrella. Umbrella creation uses a shared GitHub
+reservation for each cause. This requires repository Contents write access. The
+reservation is a temporary `pdd/issue-groups/` branch. While holding it, PDD checks
+the current open issue index for an existing trusted umbrella. Separate machines
+therefore recover the same issue. This does not claim the members or start work.
+An uncertain create keeps the reservation and holds another create. A visible
+trusted umbrella can still be recovered on a later tick. Without such evidence,
+a person must inspect the cause before removing a retained reservation. PDD never
+expires it by age. Local group state is kept in the checkout's
 Git common directory. Existing dependencies, claims, trust and merge rules apply.

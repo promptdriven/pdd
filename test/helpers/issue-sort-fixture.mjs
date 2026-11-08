@@ -12,6 +12,7 @@ export function fixture(numbers = [1], options = {}) {
   const context = { codeowners: '', release: '1.0.0', folders: ['src'], ...options.context };
   const issues = numbers.map(number => ({ id: number, number, html_url: key(number), title: `Synthetic issue ${number}`, body: 'A current product defect.', state: 'open', user: { login: 'owner' }, labels: [], assignees: [] }));
   let groups = [];
+  const reservations = new Set();
   const comments = new Map(numbers.map(n => [n, []])), writes = [], waits = [], claims = [], files = new Map();
   const comment = (body, login = 'owner') => ({ id: String(next++), body, created_at: new Date(now).toISOString(), updated_at: new Date(now).toISOString(), user: { login } });
   const append = (n, body, login) => { const c = comment(body, login); comments.get(n).push(c); return c; };
@@ -41,6 +42,14 @@ export function fixture(numbers = [1], options = {}) {
         if (assignee) raw.assignees = [{ login: assignee }];
         if (close) raw.state = 'closed';
         return { ok: true };
+      },
+      // A shared in-memory admission service. Native HTTP pacing is tested separately.
+      withSortGroupAdmission: async ({ rootCause }, action) => {
+        if (reservations.has(rootCause)) return '';
+        reservations.add(rootCause);
+        const result = await action();
+        reservations.delete(rootCause);
+        return result;
       },
       createSortUmbrella: async ({ title, body }) => {
         const number = Math.max(...issues.map(x => x.number)) + 100;

@@ -79,15 +79,19 @@ function service(cwd, ports) {
   // purpose names what the read is for in the GitHub call ledger, repository the ledger of a GraphQL call. With a githubCache
   // port, a GET sends the saved ETag; a 304 reply returns the saved body and next page and does not count against the limit.
   // A saved full last page, or a saved body that does not parse, sends no ETag: a 304 cannot show a new next page.
-  async function api(endpoint, method = 'GET', input, purpose, repository) {
+  async function api(endpoint, method = 'GET', input, purpose, repository, checkOwnership) {
     const cache = method === 'GET' ? ports.githubCache : null;
     let saved = cache?.get(endpoint);
     if (saved) {
       try { saved = { ...saved, value: parse(saved.body) }; if (githubFullLastPage(endpoint, saved.value, saved.next)) saved = undefined; }
       catch { saved = undefined; }
     }
-    const executeRequest = () => run('gh', ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json',
+    const executeRequest = async () => {
+      if (checkOwnership && !await checkOwnership()) throw Error('sort-owner-changed');
+      if (checkOwnership && ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
+      return run('gh', ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json',
       ...(saved ? ['-H', `If-None-Match: ${saved.etag}`] : []), ...(input === undefined ? [] : ['--input', '-'])], input, purpose, !!saved, repository);
+    };
     const mutation = endpoint !== 'graphql' && method !== 'GET';
     if (mutation && ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
     const raw = mutation && ports.admitMutation ? await ports.admitMutation(executeRequest) : await executeRequest();
@@ -101,7 +105,7 @@ function service(cwd, ports) {
     const next = nextRelation?.match(/^https:\/\/api\.github\.com\/([^#]+)$/i)?.[1] ?? '';
     if (nextRelation && !next) throw Error('Unsupported GitHub pagination link');
     const etag = header.match(/^etag:[ \t]*(.*?)[ \t]*\r?$/im)?.[1];
-    const value = parse(body);
+    const value = status === 204 ? null : parse(body);
     if (cache && status === 200 && etag) cache.set(endpoint, { etag, body, next });
     return { value, next };
   }
@@ -216,15 +220,38 @@ function rawGithub(cwd, ports) {
       try { await s.api(`repos/${repository}/labels/${encodeURIComponent(label)}`); }
       catch (error) { if (error.status !== 404) throw error; await write(() => s.api(`repos/${repository}/labels`, 'POST', JSON.stringify({ name: label, color: 'ededed' }))); }
     },
-    sortUpdate: async ({ repository, issue, label, assignee, close }) => {
+    sortUpdate: async ({ repository, issue, label, assignee, close, checkOwnership }) => {
       const endpoint = `repos/${repository}/issues/${issue}`;
       const before = label ? (await s.api(endpoint)).value : null;
       if (label && before.labels?.some(x => (typeof x === 'string' ? x : x.name) === label)) return { ok: true };
       if (label) await s.api(`${endpoint}/labels`, 'POST', JSON.stringify({ labels: [label] }));
-      else await s.api(endpoint, 'PATCH', JSON.stringify(assignee ? { assignees: [assignee] } : { state: 'closed' }));
+      else await s.api(endpoint, 'PATCH', JSON.stringify(assignee ? { assignees: [assignee] } : { state: 'closed' }), undefined, undefined, checkOwnership);
       const observed = (await s.api(endpoint)).value;
       if (label ? !observed.labels?.some(x => x.name === label) : assignee ? !observed.assignees?.some(x => x.login === assignee) : observed.state !== 'closed') throw Error('sort-write-pending');
       return { ok: true };
+    },
+    withSortGroupAdmission: async ({ repository, rootCause, write }, action) => {
+      if (!repositoryName(repository) || !/^[a-z\d]+(?:-[a-z\d]+)*$/.test(rootCause)) throw Error('sort-groups-unavailable');
+      const ref = `refs/heads/pdd/issue-groups/${createHash('sha256').update(rootCause).digest('hex')}`;
+      const endpoint = `repos/${repository}/git/refs/${ref.slice(5)}`;
+      if (write.remaining !== undefined && write.remaining < 3) throw Error('sort-budget-pending');
+      const head = (await s.api(`repos/${repository}/commits/HEAD`)).value;
+      if (!/^[a-f\d]{40,64}$/.test(head.sha ?? '')) throw Error('sort-groups-unavailable');
+      let reserved;
+      try { reserved = await write(() => s.api(`repos/${repository}/git/refs`, 'POST', JSON.stringify({ ref, sha: head.sha }))); }
+      catch (error) {
+        // A positive read of an existing reservation means busy, including a lost
+        // creation response. Never steal it based on age or local coordinator state.
+        const observed = (await s.api(`repos/${repository}/git/ref/${ref.slice(5)}`)).value;
+        if (observed.ref === ref) return '';
+        throw error;
+      }
+      if (reserved.value?.ref !== ref || reserved.value?.object?.sha !== head.sha) throw Error('sort-write-pending');
+      // No finally: an uncertain issue POST must retain admission. Its visible
+      // marker can still recover the group without authorizing another creation.
+      const result = await action();
+      await write(() => s.api(endpoint, 'DELETE'));
+      return result;
     },
     createSortUmbrella: async ({ repository, title, body }) => {
       const created = (await s.api(`repos/${repository}/issues`, 'POST', JSON.stringify({ title, body }))).value;
