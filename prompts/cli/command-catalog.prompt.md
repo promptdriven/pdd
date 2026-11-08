@@ -46,9 +46,9 @@ Catalog local routes `autopilot.off`, `autopilot.observe`, and `autopilot.auto` 
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
-- workflow.run `workflow run NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
+- workflow.run `workflow run NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH] [--adopt-corpus FILE]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 
-For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path to an existing-approved-corpus declaration. Its help description says it adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; keep the existing help form unchanged. Example: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`. The runner and replay owner define validation and trust, not the parser.
+For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path to an existing-approved-corpus declaration. Its help description says it adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; include it in the help form. Example: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`. The runner and replay owner define validation and trust, not the parser.
 
 - workflow.done `workflow done STEP [--summary TEXT] [--skipped REASON]`: STEP is a safe step name; the summary and the reason are free text. Help says it records the step with pdd's own latest `pdd <NAMES.test>`, `pdd <NAMES.lint>` and prove results (the summary is an agent note), and that --skipped records that the step was skipped, and why. Build the two command words from `NAMES`, like every other form, so a rename changes this help too.
 - `workflow.request-uptake` (local `workflow-request-uptake`): the public verb comes only from `NAMES.requestUptake`, used for both the `['workflow', verb]` prefix and help form `pdd workflow <verb> REQUEST_ID --summary TEXT`. Require one text operand and text option `--summary` (dispatch enforces its presence). Help describes an agent in a run worktree recording that it took up one delivered change request, with a short note. Keep all five existing exports, including `NAMES` with its existing keys and values plus the uptake key; consumers find this route by its stable id, never by duplicating the public verb.
@@ -115,7 +115,7 @@ text operand RUN, flags `--no-run` and value `--agent` with codex|claude|gemini|
 `pdd product status [--json]`, `pdd product next`, and
 `pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]`. Help says status counts
 Stories by part and slice, next shows ready runs, and start creates or reuses one
-issue then starts a normal feature run unless `--no-run`. All three make zero
+issue then starts a normal feature run unless `--no-run`; the default agent is Codex, without workflow run admission or first-ready-agent selection. All three make zero
 interpreter calls, and their help says "no interpreter calls". [Product](product.prompt.md) owns their behavior.
 
 ## Help forms
@@ -128,8 +128,8 @@ The ordered help-form list consists of the lines below in their displayed order,
 ```text
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
   pdd product next  Show ready planned runs and their start commands; no interpreter calls.
-  pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
-  pdd workflow run NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.
+  pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy]  Create or reuse the run issue and start a feature run with Codex by default; --no-run only prepares the issue. No interpreter calls.
+  pdd workflow run NAME ISSUE [--agent codex|claude|gemini|agy] [--base BRANCH] [--adopt-corpus FILE]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.
   pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]  Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd's own result.
   pdd workflow done STEP [--summary TEXT] [--skipped REASON]  For the agent in a run worktree: record a step with pdd's own latest pdd test, pdd lint and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
@@ -172,7 +172,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd autopilot auto  Set the repository Autopilot mode to auto.
   pdd autopilot trust NAME...  Add explicitly trusted GitHub names.
   pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
-  pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.
+  pdd setup  Require an available signed-in supported agent before setup actions (Codex, Claude, Gemini or agy); Gemini readiness uses gemini --version, which does not verify sign-in, and agy uses agy models. Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.
 ```
 
 
@@ -186,8 +186,8 @@ Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `closingLines`, `lea
 The closing lines are exactly:
 
 ```text
-Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
-workflow run opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.
+Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting, pdd-product).
+workflow run opens the first area chat in Herdr session pdd and exits. The person approves approval gates; pdd pushes the branch and opens PRs at PR gates.
 pdd never merges.
 ```
 
@@ -213,7 +213,7 @@ In PDD, prompts are the source. Code follows the prompts.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
 4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.
-5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves.
+5. Approve: a person reads each prompt and decides; an agent may relay the person's words with pdd approve PROMPT --said, or the person can approve in a terminal. Strict approvals require a person terminal.
 ```
 
 
