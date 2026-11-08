@@ -462,9 +462,30 @@ senders at their own source; PDD does not change those programs.
 | `pdd workflow card [ISSUE]` | Print the run's Story card from its real files: the issue and what the reporter asked, the verdict line, each Story's acceptance criteria, what must not change and rules to check, the test cases (case, input, expected), the prompts that change with their changed lines, the full paths and the next step. After the Story approval it also shows what changed since then. Read-only: no GitHub, Herdr or interpreter call |
 | `pdd workflow approve [ISSUE] [--said WORDS] [--draft]` | Approve the ready gate and its draft prompts together with your chat words. In a normal run, `--through prompt-pr\|code` records the code-or-stop choice from the Story card. Without ISSUE, select the current worktree or sole waiting run. Without --said use person terminal y/N; agent callers must ask then use --said. Strict mode requires a person terminal. |
 | `pdd workflow changes ISSUE TEXT` | Send the text to the same chat. The chat revises. The gate stays open. Also use it to answer a question that the chat asked. At a gate, a plain approval such as "I approve" is not sent: pdd tells you to run `pdd workflow approve ISSUE` |
+| `pdd workflow tidy [--dry-run]` | Close safely finished chat tabs across runs on this machine. `--dry-run` lists the eligible count without changes. Keep the current chat of each live run, busy chats and chats whose native session or pane identity cannot be verified. |
 | `pdd workflow cancel ISSUE` | Close the run's chat tabs. Keep the worktree and the branch. A new `pdd workflow run` on the issue then starts fresh |
 
-`pdd workflow open ISSUE` focuses or resumes the current area chat. If its Herdr workspace was closed, status says so and gives this command. Both ordinary open and `--new` rebuild that workspace and area tab from the verified saved worktree. A live saved layout workspace ID that belongs to another checkout or repository stops recovery, even when a matching workspace exists. A saved ID absent from live inventory permits recovery. They resume the saved native session when available, or start a fresh chat with the area start message when no saved session can be resumed. A later `--new` on the open workspace starts a fresh session as usual. A missing worktree folder must be restored first. No new Git worktree is made.
+Finished chats close after a 15-minute grace period when they are idle and have a
+saved native session. Each new start and each Autopilot tick tries cleanup.
+`pdd workflow tidy` also retries cleanup. Status and view close nothing. A manual
+start on a completed issue keeps its history and starts a fresh run. A replaced
+run remains discoverable from its retained worktree; its agent sees the old and
+replacement run IDs and must stop. Run `pdd workflow cancel ISSUE` from that old
+worktree to close a retained busy chat.
+
+`PDD_HERDR_PANE_BUDGET` sets the session `pdd` pane budget (default `56`; `0`
+disables it). The count includes personal panes. Before making a new run, pdd
+checks capacity and can close safely finished chats without the grace period.
+If there is no room, `herdr_pane_budget` reports the count and required capacity;
+no new branch or worktree is made. Autopilot holds fresh work with reason `panes`
+and checks again on its next tick. Raise the budget or close unused tabs.
+
+For an ended run, `pdd workflow open ISSUE [AREA]` prints saved screen paths and
+native resume commands with its saved account folder. It changes nothing in
+Herdr. For a live run it can resume a closed historical chat immediately.
+Screens are private files in the run folder's `chats` directory.
+
+`pdd workflow open ISSUE` focuses or resumes the current area chat of a live run. If its Herdr workspace was closed, status says so and gives this command. Both ordinary open and `--new` rebuild that workspace and area tab from the verified saved worktree. A live saved layout workspace ID that belongs to another checkout or repository stops recovery, even when a matching workspace exists. A saved ID absent from live inventory permits recovery. They resume the saved native session when available, or start a fresh chat with the area start message when no saved session can be resumed. A later `--new` on the open workspace starts a fresh session as usual. A missing worktree folder must be restored first. No new Git worktree is made.
 
 Ordinary open and exact-session resume use the chat's saved configuration folder. To select another existing Codex profile for one fresh current-area session, run `CODEX_HOME=/existing/work5 pdd workflow open ISSUE --new` from another terminal outside the agent session. A nonempty `CODEX_HOME`, including an inherited value, overrides the run's saved folder. Empty or unset values keep the saved selection. `~` expands to your home; relative paths resolve from this command's working directory. A missing folder or a regular file refuses before closing the owned chat. PDD selects the folder without checking its login or quota.
 

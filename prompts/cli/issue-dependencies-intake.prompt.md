@@ -357,6 +357,13 @@ blocker closure; preserve global partial status. Completion revalidates coverage
 the subjects' own heads and named issues, impact observations, required input revisions, and current
 owner and cap before effects. Legacy partial packets without coverage stay pending.
 
+## Pane capacity
+
+Before authorizing a fresh automatic start, use the supplied pane-capacity check.
+A `herdr_pane_budget` refusal returns `{allowed:false,reason:"panes"}`. Missing
+or unavailable capacity observations remain unknown, never an issue failure.
+The workflow runner supplies the check and owns cleanup and allocation policy.
+
 ## Dependencies
 
 - [Pure model](issue-dependencies.prompt.md): required authoring, generation,

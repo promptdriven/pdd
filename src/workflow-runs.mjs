@@ -31,10 +31,22 @@ export async function gitContext(cwd, ports = {}) {
   } catch { return null; }
 }
 
+function normalizeArchivedPath(run, directory) {
+  const original = runDirFor(run.commonDir ?? '', run.number);
+  if (run.runDir === original && directory === `${original}-cancelled-${String(run.runId).slice(0,8)}`) {
+    const relocate = value => typeof value === 'string' && (value === original || value.startsWith(original + '/'))
+      ? directory + value.slice(original.length) : Array.isArray(value) ? value.map(relocate)
+      : object(value) ? Object.fromEntries(Object.entries(value).map(([key,v]) => [key,relocate(v)])) : value;
+    Object.assign(run,relocate(run));
+  }
+}
+
 export function readRun(runDir) {
   try {
     const run = JSON.parse(readFileSync(join(runDir, 'status.json'), 'utf8'));
-    return object(run) && run.v === 1 && Number.isSafeInteger(run.number) ? run : null;
+    if (!object(run) || run.v !== 1 || !Number.isSafeInteger(run.number)) return null;
+    normalizeArchivedPath(run, runDir);
+    return run;
   } catch { return null; }
 }
 
@@ -266,6 +278,7 @@ export function writeRun(run, ports = {}) {
 export function updateRun(runDir, update, ports = {}) {
   const committed=ownedRun(runDir,ports,fs=>{
     const run=JSON.parse(fs.readFileSync(join(runDir,'status.json'),'utf8'));
+    if (object(run)) normalizeArchivedPath(run, runDir);
     if (!object(run) || run.v!==1 || !Number.isSafeInteger(run.number) || run.runDir!==runDir) throw Error('The existing run record is missing, unreadable or invalid');
     const original=structuredClone(run);
     const result=update(run);
@@ -293,7 +306,7 @@ export function updateRunCosts(runDir, update, ports = {}) {
 
 export async function runForWorktree(cwd, ports = {}) {
   const context = await gitContext(cwd, ports);
-  return context ? runsIn(context.commonDir).find(run => run.root === context.toplevel) ?? null : null;
+  return context ? runsIn(context.commonDir, {cancelled:true}).find(run => run.root === context.toplevel) ?? null : null;
 }
 
 export async function listRuns({ cwd, cancelled = false }, ports = {}) {
@@ -315,7 +328,7 @@ const choices = runs => runs.map(run => `  ${run.repo}#${run.number} ${run.workf
 export async function resolveRun(ref, { cwd }, ports = {}) {
   const context = await gitContext(cwd, ports);
   if (ref === undefined || ref === null || ref === '') {
-    const runs = context ? runsIn(context.commonDir) : readIndex(ports).map(entry => readRun(entry.runDir)).filter(Boolean);
+    const runs = context ? runsIn(context.commonDir, {cancelled:true}) : readIndex(ports).map(entry => readRun(entry.runDir)).filter(Boolean);
     const own = context && runs.find(run => run.root === context.toplevel);
     if (own) return { run: own };
     const active = runs.filter(run => !ended(run)), waiting = active.filter(run => run.gate);
@@ -326,6 +339,8 @@ export async function resolveRun(ref, { cwd }, ports = {}) {
   const wanted = parseRef(ref);
   if (!wanted) return { error: `"${String(ref).slice(0, 80)}" is not an issue number, owner/repo#N or issue URL.` };
   if (context) {
+    const own = runsIn(context.commonDir, {cancelled:true}).find(run => run.root === context.toplevel);
+    if (own && own.number === wanted.number && (!wanted.repo || sameRepo(own.repo,wanted.repo))) return {run:own};
     const run = readRun(runDirFor(context.commonDir, wanted.number));
     if (run && (!wanted.repo || sameRepo(run.repo, wanted.repo))) return { run };
     if (!wanted.repo) return { error: `This repository has no pdd run for #${wanted.number}. See the runs: pdd workflow status` };

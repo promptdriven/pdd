@@ -1126,6 +1126,16 @@ send or save failure never stops the tick. Repeated 4-hour stuck rules explicitl
 say to send nothing when the cause and required decision are unchanged; elapsed
 time and another review are not new facts. Preserve retry and claim expiry rules.
 
+## Finished chat maintenance
+
+Each enabled tick sweeps safely finished workflow chats using runner tidyRuns
+before intake, with a 5000 ms elapsed budget between candidates. Skip busy runs and report cleanup failures without failing issues.
+Before starting fresh work, a full pane budget is a `panes` capacity hold. Tell
+the coordinator it waits for Herdr session pdd capacity and retry next tick.
+A chat with the durable chat-owner `closed` mark was intentionally stopped:
+automatic stopped-chat recovery must never resume it. Explicit open is the only
+route that can remove the mark after success.
+
 ## Dependencies
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.

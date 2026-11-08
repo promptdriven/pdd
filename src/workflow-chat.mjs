@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const PACKAGE_BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin/pdd.mjs');
 import { promisify } from 'node:util';
-import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
+import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, samePath } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { tomlString } from './toml-string.mjs';
 import { lookupIssueWorktree } from './workflow-worktree.mjs';
@@ -55,6 +55,7 @@ export const launchAnchor = chat => { const times = [chat?.startedAt, chat?.resu
 // never evidence; an unconfirmed launch stays starting.
 export function observeLifecycle(chat, live, at, agent = chat?.agent, ran = null) {
   const state = chatLifecycle(chat);
+  if (chat.closed && !live.alive && ['agent_not_found','pane_not_found','tab_not_found'].includes(live.code)) return {state: 'ended'};
   // Running is the live agent in the saved pane; it is exact unless it shows another session than the saved one.
   if (live.alive) return { state: 'running', exact: !validSessionId(chat.session?.id) || !live.sessionId || live.sessionId === chat.session.id,
     ...(live.sessionId ? { session: { agent, id: live.sessionId } } : {}) };
@@ -250,10 +251,11 @@ export async function startChat({ run, area, message }, ports = {}) {
       workspaceId: layout.workspaceId, ...layout.root} : layout;
     await ports.checkpoint(layout.tabId ? identity(layout) : null, custody);
   };
+  await ensurePaneBudget(1, ports);
   const {layout, chat} = await withHerdrLayoutLock(async () => {
     const layout = await openHerdrRunLayout({ repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run },
-    { command: herdr, checkpoint, directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
+    { command: allocationCommand(herdr,ports), checkpoint, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}), directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
     const chat = identity(layout);
     // Keep exact starting-chat custody durable under the same find/create lock.
     await checkpoint(layout);
@@ -595,7 +597,7 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
       ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
     const layout = await openHerdrRunLayout({repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run},
-    {command: herdr, directory: ports.layoutDirectory, execFile: ports.execFile,
+    {command: allocationCommand(herdr,ports), directory: ports.layoutDirectory, execFile: ports.execFile, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}),
       checkpoint: async value => ports.checkpoint(null, custody(value))});
     const live = await chatSession({...chat, paneId: layout.paneId, workspaceId: layout.workspaceId}, ports);
     if (live.alive || live.code !== 'agent_not_found') throw problem('chat_identity_changed', 'The rebuilt area pane is occupied or cannot be inspected. No chat was started.');
@@ -612,7 +614,7 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
     await ports.checkpoint(chat, custody(layout));
     await launchInPane(herdr, chat.paneId, {commonDir: run.commonDir, sourceRoot: run.sourceRoot,
       agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...(resumeId ? {resumeId, ...resumeInput(run, chat, resumeMessage)} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env, beforeLaunch: ports.beforeLaunch});
-    delete chat.startUnconfirmed;
+    delete chat.startUnconfirmed; if (!ports.background) { delete chat.closed; chat.openedAt = now(); }
     await ports.checkpoint(chat, custody(layout));
     return true;
   }, {directory: ports.layoutDirectory});
@@ -648,7 +650,10 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
       if (!observed.alive && ['agent_not_found', 'pane_not_found'].includes(observed.code)) return { restartAvailable: true };
       throw problem('chat_start_unconfirmed', 'The earlier launch was not confirmed and its saved tab is unavailable. Inspect the original Herdr tab and pane before starting another agent.');
     }
-    const created = await herdr(['tab', 'create', '--workspace', chat.workspaceId, '--cwd', run.root, '--label', chat.area, '--no-focus']);
+    await ensurePaneBudget(1, ports);
+    let created;
+    try { created = await herdr(['tab', 'create', '--workspace', chat.workspaceId, '--cwd', run.root, '--label', chat.area, '--no-focus']); }
+    catch (error) { throw await allocationFailure(error, ports); }
     const terminalId = created.result?.root_pane?.terminal_id;
     if (!created.result?.tab?.tab_id || !created.result?.root_pane?.pane_id || typeof terminalId !== 'string' || !terminalId) throw problem('herdr_tab_failed', 'Herdr did not make a new tab for the chat.');
     chat.tabId = created.result.tab.tab_id; chat.paneId = created.result.root_pane.pane_id; chat.terminalId = terminalId;
@@ -700,6 +705,7 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
     resumed = true;
   }
   if (!ports.background) await herdr(['tab', 'focus', chat.tabId]);
+  if (!ports.background) { delete chat.closed; chat.openedAt = now(); }
   const attach = !ports.background && (ports.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)) && env.HERDR_ENV !== '1';
   if (ports.beforeAttach) await ports.beforeAttach(chat);
   if (attach) await (ports.attach ?? attachSession)();
@@ -711,26 +717,185 @@ const warningReason = error => {
   const code = error?.code ?? 'error', text = String(error?.message ?? '').split('\n')[0].trim(), rest = text.startsWith(`${code}: `) ? text.slice(code.length + 2) : text;
   return !rest || rest === code ? code : `${code}: ${rest}`;
 };
-export async function closeChats(run, ports = {}) {
-  const herdr = herdrCommand(ports), warnings = [];
-  const chats = run.chats ?? [];
-  for (const chat of chats) {
-    try { await herdr(['tab', 'close', chat.tabId]); }
-    catch (error) { if (error.code !== 'tab_not_found') warnings.push(`warning: Herdr did not close tab ${chat.tabId} (${error.code ?? 'error'}).`); }
+// The durable close mark is shared with automatic stopped-chat recovery (#3068).
+const endedRun = run => ['completed', 'cancelled'].includes(run.state);
+export function finishedChats(run) {
+  const chats = run.chats ?? [], current = [...chats].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
+  return chats.filter(chat => endedRun(run) || chat !== current);
+}
+export function finishedAt(run, chat) {
+  return chat.endedAt ?? (endedRun(run) ? run.cancelled?.at ?? run.updatedAt :
+    (run.chats ?? []).find(next => next.startedAt > chat.startedAt)?.startedAt) ?? run.updatedAt ?? run.startedAt;
+}
+
+export async function paneUsage(ports = {}) {
+  const value = (ports.env ?? process.env).PDD_HERDR_PANE_BUDGET;
+  const budget = value === undefined ? 56 : Number(value);
+  if (value !== undefined && !/^[0-9]+$/.test(value) || !Number.isSafeInteger(budget) || budget < 0)
+    throw problem('invalid_pane_budget', 'PDD_HERDR_PANE_BUDGET must be a nonnegative integer.');
+  let reply;
+  try { reply = await herdrCommand(ports)(['pane', 'list']); }
+  catch (error) { if (error.code === 'server_not_running') return {panes: 0, budget}; throw error; }
+  const panes = reply?.result?.panes;
+  if (reply?.result?.type !== 'pane_list' || !Array.isArray(panes) ||
+      panes.some(p => !p?.pane_id || !p.workspace_id || !p.tab_id || !p.terminal_id) ||
+      new Set(panes.map(p => p.pane_id)).size !== panes.length) throw problem('invalid_pane_inventory');
+  ports.onPaneUsage?.(panes);
+  return {panes: panes.length, budget};
+}
+export async function ensurePaneBudget(need, ports = {}) {
+  let closed = 0;
+  if (ports.sweepFinished) closed += (await ports.sweepFinished({graceMs: 15 * 60_000}))?.closed ?? 0;
+  let rows;
+  const countPorts = {...ports,onPaneUsage:value=>{rows=value;ports.onPaneUsage?.(value);}};
+  let usage = await paneUsage(countPorts);
+  if (usage.budget && usage.panes + need > usage.budget) {
+    if (ports.sweepFinished) closed += (await ports.sweepFinished({graceMs: 0, need}))?.closed ?? 0;
+    usage = await paneUsage(countPorts);
+    if (usage.panes + need > usage.budget) throw problem('herdr_pane_budget',
+      `herdr_pane_budget: Herdr session pdd has ${usage.panes} panes and the budget is ${usage.budget}. This start needs ${need}. pdd closed ${closed} finished chats; no other chat is safe to close.\n${ports.describePaneOwners?.(rows ?? []) ?? ''}\nThe count includes personal panes. Close unused tabs, or raise PDD_HERDR_PANE_BUDGET (0 disables it).`);
   }
-  const last = chats.at(-1);
-  if (last?.workspaceId) {
+  return {...usage, closed};
+}
+function allocationCommand(herdr, ports) {
+  return async args => {
+    try { return await herdr(args); }
+    catch (error) {
+      if ((['workspace','tab'].includes(args[0]) && args[1] === 'create') || args[0] === 'worktree' && args[1] === 'open')
+        throw await allocationFailure(error,ports);
+      throw error;
+    }
+  };
+}
+async function allocationFailure(error, ports) {
+  if (error.code === 'herdr_pane_budget') return error;
+  try { const {panes} = await paneUsage(ports); error.message += `\nHerdr refused a new pane at ${panes} panes. This can be a Herdr limit.`; } catch {}
+  return error;
+}
+
+export async function closeFinishedChats(run, ports = {}) {
+  const herdr = herdrCommand(ports), now = ports.now ?? Date.now, warnings = [], kept = [];
+  let closed = 0;
+  const checkpoint = async chat => {
+    if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
+    await ports.checkpoint(chat, null);
+  };
+  const inventory = async (kind, workspace) => {
+    const reply = await herdr([kind, 'list', ...(workspace ? ['--workspace', workspace] : [])]);
+    const rows = reply?.result?.[`${kind}s`], key = `${kind}_id`;
+    if (reply?.result?.type !== `${kind}_list` || !Array.isArray(rows) ||
+        rows.some(row => typeof row?.[key] !== 'string' || !row[key]) ||
+        new Set(rows.map(row => row[key])).size !== rows.length) throw problem('invalid_cleanup_inventory');
+    return rows;
+  };
+  const assertEmptyForeground = async paneId => {
+    let reply;
+    try { reply = await herdr(['pane', 'process-info', '--pane', paneId]); }
+    catch { throw problem('pane-unknown'); }
+    const info = reply?.result?.process_info, rows = info?.foreground_processes;
+    if (reply?.result?.type !== 'pane_process_info' || info?.pane_id !== paneId ||
+        !Number.isSafeInteger(info.shell_pid) || info.shell_pid <= 0 ||
+        !Number.isSafeInteger(info.foreground_process_group_id) || info.foreground_process_group_id <= 0 ||
+        !Array.isArray(rows) || !rows.length || rows.some(row => !Number.isSafeInteger(row?.pid) || row.pid <= 0 || typeof row.name !== 'string' || !row.name))
+      throw problem('pane-unknown');
+    if (info.foreground_process_group_id !== info.shell_pid || rows.length !== 1 || rows[0].pid !== info.shell_pid)
+      throw problem('pane-busy');
+    if (!SHELLS.has(rows[0].name)) throw problem('pane-unknown');
+  };
+  const finished = ports.force ? run.chats ?? [] : finishedChats(run);
+  const candidates = ports.onlyChat ? finished.filter(chat => chat.paneId === ports.onlyChat.paneId && chat.terminalId === ports.onlyChat.terminalId) : finished;
+  for (const chat of [...candidates].sort((a,b) => finishedAt(run,a) - finishedAt(run,b))) {
+    const keep = reason => kept.push({area: chat.area, reason});
     try {
-      const custody = run.layout;
-      const layoutPorts = { command: herdr, checkpoint: async () => {if (ports.checkpoint) await ports.checkpoint(null, custody);}, directory: ports.layoutDirectory };
-      await withHerdrLayoutLock(async () => {
-        await closeHerdrRunLayout({ runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody }, layoutPorts);
-        try { await closeHerdrRepoLayoutIfIdle({ repository: run.repo, commonDir: run.commonDir }, layoutPorts); }
-        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${warningReason(error)}).`); }
-      }, { directory: ports.layoutDirectory });
-    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${warningReason(error)}).`); }
+      if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
+      const grace = ports.force ? 0 : ports.graceMs ?? 15 * 60_000, end = finishedAt(run, chat);
+      if (!ports.force && !chat.closed && (!Number.isFinite(end) || now() < Math.max(end, chat.openedAt ?? 0) + grace)) { keep('grace'); continue; }
+      const workspaces = await inventory('workspace'), workspace = workspaces.find(w => w.workspace_id === chat.workspaceId);
+      if (!workspace) {
+        // A missing workspace is not a license to close IDs on another server.
+        if (!chat.closed) keep('workspace-absent');
+        else if (!ports.dryRun && !Number.isFinite(chat.closed.confirmedAt)) { chat.closed.confirmedAt = now(); await checkpoint(chat); }
+        continue;
+      }
+      if (!samePath(workspace.worktree?.checkout_path, run.root) || !samePath(workspace.worktree?.repo_key, run.commonDir) || workspace.worktree?.is_linked_worktree !== true)
+        { keep('workspace-identity'); continue; }
+      const tabs = await inventory('tab', chat.workspaceId), panes = await inventory('pane', chat.workspaceId);
+      const tab = tabs.find(t => t.tab_id === chat.tabId), rows = panes.filter(p => p.tab_id === chat.tabId);
+      if (!tab && !rows.length && chat.closed) {
+        if (!ports.dryRun && !Number.isFinite(chat.closed.confirmedAt)) { chat.closed.confirmedAt = now(); await checkpoint(chat); }
+        continue;
+      }
+      if (!tab || tab.workspace_id !== chat.workspaceId || rows.length !== 1 || rows[0].workspace_id !== chat.workspaceId ||
+          rows[0].pane_id !== chat.paneId || !chat.terminalId || rows[0].terminal_id !== chat.terminalId)
+        { keep('chat-identity'); continue; }
+      let native;
+      try { native = (await herdr(['agent', 'get', chat.paneId])).result?.agent; if (!native) throw problem('invalid_agent_reply'); }
+      catch (error) { if (error.code !== 'agent_not_found') throw error; }
+      const agent = chat.agent ?? run.agent;
+      if (native && (native.pane_id !== chat.paneId || native.agent !== agent ||
+          validSessionId(chat.session?.id) && native.agent_session?.kind === 'id' && native.agent_session.value !== chat.session.id))
+        { keep('agent-identity'); continue; }
+      if (!ports.force && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
+      if (!ports.force && !native) await assertEmptyForeground(chat.paneId);
+      let id = validSessionId(chat.session?.id) ? chat.session.id : null;
+      if (!id && agent === 'codex') {
+        if (native?.agent_session?.kind === 'id' && validSessionId(native.agent_session.value)) id = native.agent_session.value;
+        else { const own = await ownSession({run, chat, since: launchAnchor(chat), ports}); if (own.kind === 'match') id = own.id; }
+      }
+      if (!ports.force && !id) { keep('no-saved-session'); continue; }
+      if (ports.dryRun) { closed++; continue; }
+      let screen = null;
+      try {
+        const text = await herdr(['pane', 'read', chat.paneId, '--source', 'recent-unwrapped', '--lines', '5000']);
+        const folder = join(run.runDir, 'chats'); mkdirSync(folder, {recursive: true, mode: 0o700});
+        screen = join(folder, `${chat.area}-${chat.startedAt}.txt`);
+        writeFileSync(screen, text, {mode: 0o600});
+      } catch { /* A saved native session retains history if screen capture fails. */ }
+      if (id) chat.session = {agent, id};
+      chat.closed ??= {at: now(), reason: ports.reason ?? (ports.force ? 'cancel' : endedRun(run) ? 'run-end' : 'area-end'), screen};
+      chat.state = 'ended';
+      await checkpoint(chat);
+      const finalWorkspace = (await inventory('workspace')).find(w => w.workspace_id === chat.workspaceId);
+      const finalTabs = await inventory('tab', chat.workspaceId), finalPanes = await inventory('pane', chat.workspaceId);
+      const finalRows = finalPanes.filter(p => p.tab_id === chat.tabId);
+      if (!finalWorkspace || !samePath(finalWorkspace.worktree?.checkout_path,run.root) || !samePath(finalWorkspace.worktree?.repo_key,run.commonDir) || finalWorkspace.worktree?.is_linked_worktree !== true ||
+          !finalTabs.some(t => t.tab_id === chat.tabId && t.workspace_id === chat.workspaceId) || finalRows.length !== 1 || finalRows[0].workspace_id !== chat.workspaceId || finalRows[0].pane_id !== chat.paneId || finalRows[0].terminal_id !== chat.terminalId)
+        { keep('chat-identity'); continue; }
+      let finalNative;
+      try { finalNative = (await herdr(['agent','get',chat.paneId])).result?.agent; if (!finalNative) throw problem('invalid_agent_reply'); }
+      catch (error) { if (error.code !== 'agent_not_found') throw error; }
+      if (finalNative && (finalNative.pane_id !== chat.paneId || finalNative.agent !== agent || id && finalNative.agent_session?.kind === 'id' && finalNative.agent_session.value !== id))
+        { keep('agent-identity'); continue; }
+      if (!ports.force && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
+      if (!ports.force && !finalNative) await assertEmptyForeground(chat.paneId);
+      if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
+      try { await herdr(['tab', 'close', chat.tabId]); }
+      catch (error) { if (error.code !== 'tab_not_found') throw error; }
+      // Require absence, including after a lost acknowledgement on a later sweep.
+      if ((await inventory('tab', chat.workspaceId)).some(t => t.tab_id === chat.tabId)) throw problem('chat_close_unconfirmed');
+      chat.closed.confirmedAt = now(); await checkpoint(chat);
+      closed++;
+    } catch (error) {
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      keep(error.code ?? 'cleanup-unavailable'); warnings.push(`warning: Herdr kept ${chat.area} (${warningReason(error)}).`);
+    }
   }
-  return { warnings };
+  if (!ports.dryRun && (ports.force || endedRun(run)) && !kept.length && (run.chats ?? []).every(chat => chat.closed) && run.layout?.workspaceId && run.layout.phase !== 'closed') {
+    try {
+      const custody = {...run.layout};
+      await withHerdrLayoutLock(() => closeHerdrRunLayout({runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody},
+        {command: herdr, env: ports.env, force: ports.force, checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
+      {directory: ports.layoutDirectory});
+    } catch (error) {
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      kept.push({area:'run shell', reason:error.code ?? 'cleanup-unavailable'});
+      warnings.push(`warning: the run workspace stays open (${warningReason(error)}).`);
+    }
+  }
+  return {closed, kept, warnings};
+}
+export async function closeChats(run, ports = {}) {
+  return closeFinishedChats(run, {...ports, force: true, reason: 'cancel'});
 }
 
 
@@ -944,7 +1109,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       requireHome({ agent, configDir });
       await reconcileHistorical();
       const layout=await openHerdrRunLayout({repository:run.repo,issueNumber:run.number,runId:run.runId,workflowName:run.workflow,stageId:record.recovery.allocationLabel,sourceRoot:run.sourceRoot,cwd:run.root,commonDir:run.commonDir,run},
-        {command:herdr,checkpoint:async()=>{await save(record.phase);await reconcileHistorical();},directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
+        {command:allocationCommand(herdr,ports),beforeCreate:need=>ensurePaneBudget(need,{...ports,sweepFinished:null}),checkpoint:async()=>{await save(record.phase);await reconcileHistorical();},directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
       record.replacement={...record.replacement,area:record.area,agent,tabId:layout.tabId,paneId:layout.paneId,terminalId:layout.terminalId,workspaceId:layout.workspaceId,repoWorkspaceId:layout.repoWorkspaceId,label:original.label,startedAt:record.replacement?.startedAt??now(),session:record.replacement?.session??(agent==='claude'?{agent,id:uuid()}:null),configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
     };
     if(record.phase==='closed') {

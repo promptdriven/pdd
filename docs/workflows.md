@@ -312,3 +312,42 @@ with the repository's actual test command. The machine queue permits three
 running suites and reports each waiter's position. Waiting and suite execution
 pause stuck detection. A failed or timed out suite is reported as a `test-suite`
 incident with its cause. See [the queue command](cli.md#shared-full-suite-queue).
+
+## Finished chat cleanup
+
+Run `pdd workflow tidy --dry-run` to count eligible finished chat tabs, then
+`pdd workflow tidy` to close them. A live run keeps its current area chat,
+including a gate waiting for a person. Finished chats need verified Herdr IDs,
+a saved native session and safe occupancy. The grace period is 15 minutes from
+area/run end and from the last explicit open. Budget pressure can remove the
+grace period. Personal tabs and busy chats remain protected. An idle or done
+agent is safe. If the agent has
+exited, cleanup also requires process information that proves only the shell
+occupies the foreground. Foreground work or uncertain inspection keeps the tab.
+These checks repeat after the saved close intent, before the close request.
+
+After its last chat closes, an ended run can release its original shell workspace.
+Cleanup keeps the shell if it is the caller's pane, has live work, or cannot be
+checked. Tidy counts retained shells and status shows the reason. A failed shell
+close stays pending. The next tidy confirms absence or retries only after it
+checks the same workspace, original shell IDs and occupancy again. This also
+applies when startup failed before the run recorded its first area chat.
+
+An intentional close saves `chats[].closed = {at, reason, screen, confirmedAt?}` in status.json
+before sending the close request. This is the integration contract for automatic
+stopped-chat recovery (#3068): skip any chat with `closed`, even when a close
+request failed or the process/server restarted. `at` is epoch milliseconds;
+`reason` is `area-end`, `run-end`, `budget` or `cancel`; `screen` is the private
+screen file path, or null if capture failed. Optional `confirmedAt` is the epoch-ms time when inventory confirms absence. Without it, status shows a pending close. Keep this mark until an explicit
+successful open clears it and saves `openedAt`. Run state or an absent pane alone
+does not remove it. Keep the saved native session, account folder, worktree,
+branch and first message. A failed close can be retried safely by tidy. Native `openRun` with an
+`automaticResume` context returns `recovery: "skipped"` for a marked chat before
+Herdr effects. Keep this guard and a fresh mark check at automatic dispatch when
+integrating the stopped-chat recovery branch.
+
+Open an ended run to read the saved screen path and a shell-quoted native resume
+command. For a live run, open can resume a closed historical area chat. A manual
+start of the same completed issue makes a fresh run and retains the prior run.
+A replaced agent must stop; commands from its worktree show both run identities.
+To close retained busy chats, cancel from that retained worktree.

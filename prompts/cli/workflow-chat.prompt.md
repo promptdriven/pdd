@@ -10,7 +10,7 @@ Own `src/workflow-chat.mjs`. An area chat is one native Codex, Claude, Gemini or
 - `chatSession(chat, ports)`: read `herdr agent get <pane>`. Return `{alive, status, sessionId}`; when Herdr fails, `{alive: false, status: null, sessionId: null, code, message}` with Herdr's error code (`agent_not_found` when no agent runs in the pane).
 - Module function `chatHealth({run, chat, live}, ports)`: say whether an alive or stopped agent cannot work because its login failed or it reached a usage limit. See [Chat health](#chat-health).
 - `openChat({run, chat}, ports)`: if the tab is gone, make a new tab in the run workspace, except for an unconfirmed launch: inspect its saved agent first. If the tab and agent/pane are both confirmed missing, return restartAvailable without creating a tab, launching or resuming. The caller archives that stale start and offers an explicit new open to start this area again in the same run. A live agent or an unavailable inspection retains the original identity and refuses replacement. Subject to the shared lifecycle (starting/unknown absence does not permit resume), resume a positively ended native session there (`claude --resume <id>`, `codex resume <id>`, `gemini --resume <id>`, `agy --conversation <id>`, with the same full-access flags (and, for agy, the same `--add-dir` folders) and, for Gemini, the same `GEMINI_CLI_TRUST_WORKSPACE=true`), and set `chat.resumedAt` to now. An inspection failure other than confirmed `agent_not_found` must throw before any native launch/resume; unavailable Herdr is not proof of an empty pane. For a retained `startUnconfirmed` chat, an observed live agent confirms the original launch. Without it, refuse another launch/resume and tell the person to inspect that same pane; never send a fresh first message blindly after a lost reply. A failed resume request marks that same chat unconfirmed too. Successful positive observation clears the unconfirmed flag. Focus the tab. Terminal attachment with `herdr session attach pdd` is separate from opening effects and observation persistence: the runner must persist observations and release its run lock before attachment. An optional awaited `ports.beforeAttach(chat)` caller hook may perform that handoff after all opening effects and observations, before attach; a rejected hook prevents attach. Without the hook, direct `openChat` calls retain normal attachment behavior. Attach completion or failure must not trigger later unprotected chat/run writes. Attach only when the caller has a terminal and is not inside Herdr. Otherwise print where the chat is.
-- `closeChats(run, ports)`: close each chat tab, then the run workspace, then request repository cleanup under the layout owner's creation-ownership rule. Failures are warnings. A warning names the error code, or the code once with the first line of its message (for example the layout's [identity refusal](workflow-herdr-layout.prompt.md#identity-refusal)). Chat labels are `<repo name>#N NAME › AREA`.
+- `closeChats(run, ports)`: use the finished-chat cleanup below with explicit cancellation force, then request verified run and repository cleanup. Failures are warnings. A warning names the error code, or the code once with the first line of its message (for example the layout's [identity refusal](workflow-herdr-layout.prompt.md#identity-refusal)). Chat labels are `<repo name>#N NAME › AREA`.
 
 Pass input preAgentRefusal to the layout only for a saved first-start run with no chats, completed steps or
 PRs and the canonical linked_worktree_source chat failure (or its exact saved startup warning on legacy runs).
@@ -245,6 +245,69 @@ port runs after login/command preparation immediately before `pane run` for open
 and rebuild dispatches. A rejection sends no command and cleans up login files. Stopped-session health uses the same
 bounded session reader; if no session verdict exists, read a surviving pane screen
 when available. Missing pane/session data returns null, never a fabricated failure.
+
+## Finished chat cleanup and pane budget
+
+Own the intentional-close record shared with automatic stopped-chat recovery.
+`chat.closed = {at, reason, screen, confirmedAt?}` is a durable **do not automatically resume**
+mark, written before a close request. `at` is epoch milliseconds; `reason` is
+`area-end`, `run-end`, `budget` or `cancel`; `screen` is the saved UTF-8 screen
+path, or null if capture failed. Optional `confirmedAt` is epoch ms when complete inventory confirms absence after the request; absence of this field means the close is pending. Retries of a saved intent do not repeat its grace period. Preserve all native IDs, account and message
+custody. A close failure retains this mark and can be retried by cleanup. Only
+an explicit successful `workflow open` clears it and saves `openedAt` (epoch ms).
+Automatic recovery must skip marked chats, including after process/server restart.
+
+Export `finishedChats(run)`, `finishedAt(run,chat)` (the boundary in epoch ms), and `closeFinishedChats(run, ports={})`. A chat is
+finished when the run is cancelled/completed, or it is not the latest chat of the
+current area. Each finished chat gets an `endedAt` epoch-ms boundary at handoff
+or run end; legacy records use the next area's start, cancellation or saved update
+time. Close only after 15 minutes from that boundary and from `openedAt`.
+`ports.graceMs:0` removes only that grace under budget pressure or replacement.
+Never park the current live chat, including a gate, question or failed chat.
+Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory:
+the saved workspace must match the run checkout and clone, and its saved tab
+must have exactly the saved pane and terminal ID. A reused ID, split tab,
+foreign workspace or unknown inventory is retained with a reason. No live-folder
+comparison establishes pane identity. Inspect the agent immediately before
+closing: idle/done is safe; working/blocked/unknown stays open. Confirmed agent
+absence also requires authoritative `pane process-info --pane <id>` evidence:
+the pane ID matches, positive shell PID equals the foreground process group ID,
+and the nonempty foreground process list contains only that shell PID with a
+recognized shell name (bash, zsh, sh, dash, fish, ksh or tcsh). Retain foreground
+work as `pane-busy`; retain unavailable, malformed or unknown process evidence as
+`pane-unknown`. A saved session and terminal identity alone do not prove an
+unused pane after the agent exits. Require a valid saved native session, learning Codex's session from
+Herdr or one ownSession lookup if needed. No session means retain the tab.
+
+Before close, read `pane read PANE --source recent-unwrapped --lines 5000` into
+`<runDir>/chats/<area>-<startedAt>.txt`, private mode 0600. Read failure does not
+block closing a safely resumable session. Await `ports.checkpoint(chat, layout)`
+before `tab close`; failure sends no close. Retry a marked chat through the same
+identity checks. Missing tabs are ended evidence only with a saved close mark.
+An optional `ports.onlyChat` selects one saved pane/terminal identity from the finished set for globally ordered sweeping. Recheck caller protection, live identity, agent status and the required agent-absence process evidence after the durable checkpoint, immediately before the close. Return `{closed, kept, warnings}`: closed is the number of tabs confirmed closed,
+kept is an array of `{area, reason}`, warnings is an array of diagnostics. Dry run
+(`ports.dryRun`) reports eligible count but writes no file/record or Herdr effect.
+After all ended-run chat tabs are gone, use the [verified layout cleanup](workflow-herdr-layout.prompt.md#cleanup),
+forwarding the caller environment and explicit cancellation force. A retained
+shell is included in kept as `{area:"run shell", reason:<cleanup error code>}`
+and in warnings, so tidy counts it and status reports why it stays open.
+Remove a stale shell retention reason after successful cleanup.
+Explicit cancellation uses the same routine with `ports.force:true`: it bypasses
+busy/session/grace checks, but retains ownership and caller-pane protection.
+`closeChats` delegates to it. A cancelled/replaced run can be cancelled again.
+
+Export `paneUsage(ports)` returning `{panes,budget}` from one complete session-wide
+pane list (an optional `onPaneUsage(rows)` receives that complete inventory), and `ensurePaneBudget(need, ports)` returning that shape plus `closed`.
+`PDD_HERDR_PANE_BUDGET` is a nonnegative safe integer, default 56; 0 disables the
+limit. Count all panes, including personal panes. Before allocation, sweep normal
+finished chats through the supplied `sweepFinished` callback. On pressure sweep
+with zero grace, oldest end first, then recount. If it still cannot fit, throw
+`herdr_pane_budget` with count, budget, need, cleanup count, the caller-supplied `describePaneOwners(rows)` breakdown of saved run chats, run shells and other panes, and an action to close
+unused tabs or raise the variable. Unknown Herdr allocation failures include the
+observed pane count. Open, rebuild, start and replacement check before creating
+panes; the layout owner reserves the complete missing layout before its first
+create. Closed chats count as positively ended on explicit open and resume at
+once. Preserve uncertain-launch protections.
 
 ## Dependencies
 

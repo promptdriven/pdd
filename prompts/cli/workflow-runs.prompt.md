@@ -94,6 +94,14 @@ Keep legacy decisions and approvalRecord readable. New gates have a nonempty str
 
 Before every publication, capture the local [cost ledger](cost-ledger.prompt.md) from the previous durable run and the current record. Keep its cumulative numeric checkpoints in `cost`. Capture failure retains prior cost data with incomplete coverage and never blocks workflow progress.
 
+## Archived run lookup
+
+Include archived ended runs when resolving a run by its invoking worktree,
+before selecting a current issue record or any other active run. Use the actual
+archive directory as runDir even for a legacy record with a stale saved path.
+Preserve the runner's replacedBy, chat closed, endedAt and openedAt fields through
+storage. An archived worktree must never resolve to the replacement run.
+
 ## Dependencies
 
 - [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.

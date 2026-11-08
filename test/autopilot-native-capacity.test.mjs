@@ -215,6 +215,20 @@ try {
     };
     const capped = await checkDependencyStart({ cwd, repository: repo, issue: startIssue, coordinator }, startPorts);
     assert.deepEqual(capped, { allowed: true, reason: 'ok' });
+    let paneChecks = 0;
+    const full = await checkDependencyStart({cwd,repository:repo,issue:startIssue,coordinator}, {
+      ...startPorts, checkPaneCapacity: async () => { paneChecks++; throw Object.assign(Error('capacity'),{code:'herdr_pane_budget'}); }
+    });
+    assert.deepEqual(full,{allowed:false,reason:'panes'});
+    assert.equal(paneChecks,1);
+    const available = await checkDependencyStart({cwd,repository:repo,issue:startIssue,coordinator}, {
+      ...startPorts, checkPaneCapacity: async () => { paneChecks++; }
+    });
+    assert.deepEqual(available,{allowed:true,reason:'ok'}); assert.equal(paneChecks,2);
+    const unavailable = await checkDependencyStart({cwd,repository:repo,issue:startIssue,coordinator}, {
+      ...startPorts, checkPaneCapacity: async () => { throw Object.assign(Error('inventory'),{code:'herdr_failed'}); }
+    });
+    assert.deepEqual(unavailable,{allowed:false,reason:'unknown'});
 
     const uncapped = await checkDependencyStart({
       cwd,

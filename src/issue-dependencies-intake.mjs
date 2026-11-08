@@ -136,6 +136,10 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     }
     const node = projectIssueGraph({ snapshot: copy }).nodes.find(x => selected && issueKey(x.key) === selected);
     if (!node || node.reasons.includes('Incomplete relevant observations')) return { allowed: false, reason: 'unknown' };
+    if (node.eligible && ports.checkPaneCapacity) {
+      try { await ports.checkPaneCapacity(); }
+      catch (error) { return {allowed:false,reason:error.code === 'herdr_pane_budget' ? 'panes' : 'unknown'}; }
+    }
     return node.eligible ? { allowed: true, reason: 'ok' } : { allowed: false, reason: 'dependency' };
   } catch { return { allowed: false, reason: 'unknown' }; }
 }

@@ -84,6 +84,7 @@ const routes = [
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
     operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
+  { id: 'workflow.tidy', prefix: ['workflow','tidy'], local: 'workflow-tidy', operands: [], options: [{name:'--dry-run',kind:'flag'}], forms: [form('pdd workflow tidy [--dry-run]', 'Close safely finished chat tabs on this machine; dry-run reports without changes.')] },
   { id: 'workflow.cancel', prefix: ['workflow', 'cancel'], local: 'workflow-cancel',
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow cancel ISSUE', 'Cancel the run and close its Herdr tabs; keep the worktree and branch.')] },

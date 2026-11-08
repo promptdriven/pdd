@@ -57,6 +57,7 @@ const RUNNER_ROUTES = {
   'workflow-card': plan => ['showStoryCard', { ref: plan.operands[0] }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
+  'workflow-tidy': plan => ['tidyRuns', { dryRun: Boolean(plan.options['--dry-run']) }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
   'workflow-open': plan => ['openRun', { ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
@@ -196,7 +197,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
     }
     case 'workflow-suite': case 'workflow-park': case 'workflow-yield': case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
-    case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': case 'workflow-evidence-associate': case 'workflow-card': {
+    case 'workflow-tidy': case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': case 'workflow-evidence-associate': case 'workflow-card': {
       if (plan.local === 'workflow-suite' && !plan.options['--command']?.trim()) { line(stderr, 'Use pdd workflow suite --command COMMAND [--timeout MIN].'); return 2; }
       if (plan.local === 'workflow-evidence-associate' && (!plan.options['--workspace']?.trim() || !plan.options['--stage'] || !plan.options['--test']?.length)) {
         line(stderr, 'Use pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH... .'); return 2;
@@ -219,7 +220,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot, ...(plan.local === 'workflow-suite' ? {env} : {}) }, { say: text => line(plan.local === 'workflow-suite' ? stdout : stderr, text), ...(['workflow-run', 'workflow-yield'].includes(plan.local) ? { env } : {}) });
+        const result = await runner[name]({ ...input, cwd, packageRoot, ...(plan.local === 'workflow-suite' ? {env} : {}) }, { say: text => line(plan.local === 'workflow-suite' ? stdout : stderr, text), ...(['workflow-run', 'workflow-yield','workflow-tidy'].includes(plan.local) ? { env } : {}) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);

@@ -56,6 +56,11 @@ Dispatch `project-files` to `runProjectFiles({cwd,json}, {stdout,stderr})`
 from the files view module, with json from --json. Return its exit code. This
 local route imports no Runtime client, reads no token and installs no skills.
 
+## Finished chat maintenance route
+
+Dispatch `workflow-tidy` to runner `tidyRuns({dryRun,cwd}, ports)`, forwarding
+`--dry-run` as a Boolean and the caller environment. Print its result normally.
+
 ## Dependencies
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
