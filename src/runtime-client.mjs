@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2e547c9dc6100be7455fc7ce73bf85f7021ae049f0e104bb60b45ddee6f27c1a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 34af2690532e52cd31ad9dcee6c47b5a159ad0ce5ca1604d6b6f3f4897c4bc57).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -1536,7 +1536,7 @@ const waitWord = (answer, read) => read?.kind === 'again' ? `waiting for an answ
 async function runLint(context) {
   const agent = context.agentLimit ?? !context.ports.interactive;
   const lintEnd = context.intent === 'check' && !context.checkDeadlineStarted
-    ? context.timeoutMin && !context.ports.interactive ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity
+    ? context.timeoutMin ? context.startedAt + Math.min(context.timeoutMin * 60_000, context.ports.interactive ? Infinity : AGENT_WAIT_MIN * 60_000) : Infinity
     : context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
   const tick = progressTicker(context.ports.stderr, context.ports.now);
   line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD interpreter (lint, 0 AI calls)…`);

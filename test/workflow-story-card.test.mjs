@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile as callbackExec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -16,7 +16,7 @@ import { writeRun } from '../src/workflow-runs.mjs';
 import { fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { renderJson } from '../src/runtime-output.mjs';
-import { captureSource } from '../src/runtime-preflight.mjs';
+import { captureSource, fillHashes } from '../src/runtime-preflight.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const harbor = join(packageRoot, 'test', 'fixtures', 'harbor');
@@ -97,7 +97,8 @@ const approveStory = async (f, words = 'Yes, this is what I asked for.', extra =
 test('#2962 card: the Story gate shows each part from the real fixture files', async t => {
   const f = await storyGate(t), root = f.run.root, card = f.gate.message;
   const storyText = readFileSync(join(root, STORY), 'utf8'), scenario = JSON.parse(readFileSync(join(root, TEST), 'utf8'));
-  assert.match(card, /example\/project#17/); assert.ok(card.includes('"Show the order total"')); assert.ok(card.includes('https://github.com/example/project/issues/17'));
+  assert.match(card, /example\/project#17/); assert.ok(card.includes('"Show the order total"')); const issue = new URL(card.split('\n').find(line => line.startsWith('Issue: ')).slice(7));
+  assert.equal(issue.protocol, 'https:'); assert.equal(issue.hostname, 'github.com'); assert.equal(issue.pathname, '/example/project/issues/17');
   assert.ok(card.includes(ASKED), 'what the reporter asked, from the saved issue text');
   assert.equal(card.includes('More notes that are not the request'), false);
   for (const line of storyText.split('\n').filter(text => /^\d+\. /.test(text))) assert.ok(card.includes(line), `criterion ${line}`);
@@ -154,7 +155,7 @@ test('#2962 a full check pass opens PR 1 with no question and skips try; pdd sto
   assert.equal(record.gate?.kind, 'ask-code'); assert.equal(record.areas[record.area].name, 'prompt-pr', 'no code area without a code choice');
   const decision = record.decisions.at(-1);
   assert.equal(decision.via, 'automatic-check-pass'); assert.equal(decision.evidence.words, null);
-  assert.deepEqual(decision.evidence.basis, { storyEvidenceId: record.storyApproval.evidenceId, batches: [batch] });
+  assert.deepEqual(decision.evidence.basis, { storyEvidenceId: record.storyApproval.evidenceId, batches: [batch], headSha: f.prs[0].headRefOid });
   assert.ok(out.message.includes(f.prs[0].url));
   assert.equal(record.question, null);
   await autopilotUnchanged(t);
@@ -720,4 +721,108 @@ test('2962 integration completeness: a missing approved Story test blocks until 
   await f.done('check');await approveStory(f);
   assert.equal(f.prs.length,1);
   assert.equal(f.record().decisions.at(-1).via,'automatic-check-pass');
+});
+
+// Exercise the native writer before deliberately interrupting a saved transition.
+async function writeRealCheck(f, t) {
+  const fake = await fakeRuntime(t, (entry, runtime) => {
+    if (entry.command === 'lint') return { status: 200, json: runtime.lint(entry.request.requestId) };
+    const id = entry.request?.requestId ?? entry.url.split('/').at(-1);
+    return { status: 200, json: runtime.check(id, 'passed', ['AC1', 'AC2', 'AC3'].map(criterion_id =>
+      ({ criterion_id, target: 'result', path: '/totalCents', op: 'equals', expected: 900, actual: 900, passed: true }))) };
+  });
+  const made = portsFor({ ...f.ports.env, PDD_RUNTIME_URL: fake.origin }); made.clock.now = f.clock;
+  assert.equal(await runCheck({ cwd: f.run.root, words: [], options: { '--json': true } }, made.ports), 0, made.ports.stderr.text);
+  return JSON.parse(made.ports.stdout.text).batch;
+}
+for (const fault of ['not run', 'partial', 'refused', 'unchecked', 'broken', 'duplicate', 'criteria']) {
+  test(`release: native batch ${fault} blocks a stale passing summary and recovers`, async t => {
+    const f = await storyGate(t); await approveStory(f); const batch = await writeRealCheck(f, t);
+    const path = join(f.ports.env.PDD_STATE_DIR, 'batches', batch, 'batch.json');
+    const good = readFileSync(path, 'utf8'), saved = JSON.parse(good);
+    if (fault === 'unchecked') saved.rows[0].not_checked = ['AC3'];
+    else if (fault === 'broken') saved.rows[0].reason = { code: 'broken-test' };
+    else if (fault === 'duplicate') saved.rows.push({ ...saved.rows[0] });
+    else if (fault === 'criteria') saved.rows[0].criteria = { passed: 2, total: 3 };
+    else saved.rows[0].state = fault;
+    writeFileSync(path, JSON.stringify(saved));
+    await f.done('check');
+    assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+    assert.equal(f.record().decisions.some(row => row.via === 'automatic-check-pass'), false);
+    writeFileSync(path, good);
+    await f.done('check'); assert.equal(f.prs.length, 1);
+  });
+}
+for (const existing of [false, true]) for (const target of ['prompt', 'Story', 'expected', 'dependency']) {
+  test(`release: publication revalidates late ${target} edits (${existing ? 'update' : 'new'})`, async t => {
+    const f = await storyGate(t); await approveStory(f);
+    if (target === 'dependency') {
+      writeFileSync(join(f.run.root, 'rules.md'), 'The menu uses whole cents.\n');
+      writeFileSync(join(f.run.root, PROMPT), readFileSync(join(f.run.root, PROMPT), 'utf8').replace('## Dependencies', '## Dependencies\n\n- [Rules](../rules.md)'));
+    }
+    if (target === 'dependency') {
+      const path = join(f.run.root, PROMPT);
+      writeFileSync(path, readFileSync(path, 'utf8').replace('\"status\": \"approved\"', '\"status\": \"draft\"'));
+      const filled = fillHashes({ root: f.run.root }); assert.equal(filled.refused.length, 0);
+    }
+    await writeRealCheck(f, t);
+    if (existing) { await f.done('check'); await writeRealCheck(f, t); }
+    const decisions = f.record().decisions.filter(row => row.via === 'automatic-check-pass').length;
+    const pushes = f.pushes.length, edits = f.edits.length;
+    const original = f.ports.execFile; let changed = false;
+    f.ports.execFile = async (file, args, options) => {
+      if (!changed && file === 'git' && args[0] === 'status' && args.includes('--porcelain=v1')) {
+        changed = true;
+        if (target === 'prompt') writeFileSync(join(f.run.root, PROMPT), readFileSync(join(f.run.root, PROMPT), 'utf8').replace('Return the order:', 'Return different prices:'));
+        if (target === 'Story') writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8') + '\nNew requirement.\n');
+        if (target === 'expected') reviseStory(f, '900', '950');
+        if (target === 'dependency') writeFileSync(join(f.run.root, 'rules.md'), 'The menu uses different prices.\n');
+      }
+      return original(file, args, options);
+    };
+    f.tick(); await stepDone({ step: 'check', summary: 'checked', cwd: f.run.root }, f.agentPorts());
+    assert.equal(changed, true); assert.equal(f.prs.length, existing ? 1 : 0);
+    assert.equal(f.pushes.length, pushes); assert.equal(f.edits.length, edits);
+    assert.equal(f.record().decisions.filter(row => row.via === 'automatic-check-pass').length, decisions);
+    if (['Story', 'expected'].includes(target)) assert.equal(f.record().gate.kind, 'approve-pr');
+  });
+}
+
+for (const boundary of ['metadata-commit', 'prepared-intent', 'metadata-Story', 'prepared-Story', 'metadata-mode']) test(`release: approval waits for validation at ${boundary}`, async t => {
+  const f = await storyGate(t); await approveStory(f); await writeRealCheck(f, t);
+  const original = f.ports.execFile; let changed = false, statuses = 0;
+  f.ports.execFile = async (file, args, options) => {
+    if (file === 'git' && args[0] === 'status') statuses++;
+    if (!changed && file === 'git' && (boundary.startsWith('metadata-') ? args[0] === 'status' && statuses === 2 : args[0] === 'symbolic-ref')) {
+      changed = true;
+      if (boundary.endsWith('Story')) writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8') + '\nNew requirement.\n');
+      else if (boundary.endsWith('mode')) chmodSync(join(f.run.root, PROMPT), 0o755);
+      else writeFileSync(join(f.run.root, PROMPT), readFileSync(join(f.run.root, PROMPT), 'utf8').replace('Return the order:', 'Return different prices:'));
+      if (boundary.startsWith('prepared-')) { f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Concurrent edit'); }
+    }
+    return original(file, args, options);
+  };
+  f.tick(); await stepDone({ step: 'check', summary: 'checked', cwd: f.run.root }, f.agentPorts());
+  assert.equal(changed, true); assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+  assert.equal(f.record().decisions.some(row => row.via === 'automatic-check-pass'), false);
+  if (boundary.endsWith('Story')) assert.equal(f.record().gate.kind, 'approve-pr');
+});
+test('release: publication preserves peer commits and pushes the approval-bound commit to a local remote', async t => {
+  const f = await storyGate(t); await approveStory(f); await writeRealCheck(f, t);
+  const remote = join(f.base, 'publication.git'); f.git(f.base, 'init', '--bare', '-q', remote);
+  const native = promisify(callbackExec), original = f.ports.execFile; let peer;
+  f.ports.execFile = async (file, args, options) => {
+    if (!peer && file === 'git' && args[0] === 'status') {
+      writeFileSync(join(f.run.root, 'value.mjs'), 'export const value = 3;\n');
+      f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Peer work'); peer = f.git(f.run.root, 'rev-parse', 'HEAD');
+    }
+    if (file === 'git' && args[0] === 'push') await native(file, args.map(arg => arg === 'origin' ? remote : arg), options);
+    return original(file, args, options);
+  };
+  await f.done('check');
+  const evidence = f.record().decisions.find(row => row.via === 'automatic-check-pass').evidence;
+  const pushed = f.git(f.base, '--git-dir=' + remote, 'rev-parse', f.record().branch);
+  assert.equal(pushed, evidence.basis.headSha);
+  f.git(f.run.root, 'merge-base', '--is-ancestor', peer, pushed);
+  assert.equal(f.git(f.base, '--git-dir=' + remote, 'show', `${pushed}:value.mjs`), 'export const value = 3;');
 });

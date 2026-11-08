@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c04baa2d8a7ac05eeb31aec5e081c11317052fd116e891a02ef3f3598c6a3894).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ce73402855991da70f13d11cab559b5157a5d13f428ce80c7b080168fdebcf77).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1627,14 +1627,7 @@ async function requireExistingDraft(run, pr, p) {
   }
   p.inspectProgress?.();
 }
-// Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
-async function publishAreaPr(run, area, p, lines, retry) {
-  if (run.draft !== undefined && typeof run.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
-  const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title) || `Issue #${run.number}`;
-  if (existing) {
-    try { await requireExistingDraft(run, existing, p); }
-    catch (error) { if(error?.code==='workflow_progress_refused')throw error;return fail(error.message); }
-  }
+async function commitPublicationFiles(run, p, lines) {
   const status = await rawGit(p, run.root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
   if (status) {
     const records = status.split('\0');
@@ -1648,8 +1641,19 @@ async function publishAreaPr(run, area, p, lines, retry) {
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
+}
+// Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
+async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
+  if (run.draft !== undefined && typeof run.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
+  const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title) || `Issue #${run.number}`;
+  if (existing) {
+    try { await requireExistingDraft(run, existing, p); }
+    catch (error) { if(error?.code==='workflow_progress_refused')throw error;return fail(error.message); }
+  }
+  await commitPublicationFiles(run, p, lines);
   const changedAdoption = await adoptionFailure(run,p);
   if(changedAdoption)return fail(changedAdoption);
+  if (automatic) { const refused = await automatic.prepare(); if (refused) return refused; }
   const codePr = label !== 'PR 1';
   if (codePr) {
     let baseSha = '', headSha = '', result;
@@ -1709,6 +1713,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
     else if (commitSha(observed?.headSha)) pr.publishedHeadSha = observed.headSha;
   };
   if (existing) {
+    if (automatic) { const refused = await automatic.authorize(); if (refused) return refused; }
     let inventoryOnly = false;
     if (codePr && !opted && commitSha(existing.publishedHeadSha) && existing.publishedHeadSha === run.testInventory.headSha && existing.publicationBodySha256 === bodyIdentity()) {
       try {
@@ -1724,7 +1729,8 @@ async function publishAreaPr(run, area, p, lines, retry) {
       const failed=await editReplay(pending);if(failed)return failed;
     }
     p.say(`Pushing ${run.branch} to ${label}…`);
-    const promptHead = codePr ? null : await git(p,run.root,'rev-parse','--verify','HEAD^{commit}');
+    const promptHead = codePr ? null : automatic?.head ?? await git(p,run.root,'rev-parse','--verify','HEAD^{commit}');
+    if (automatic) { const refused = await automatic.validate(); if (refused) return refused; }
     try {
       const reply = await p.execFile('git', ['push', 'origin', `${codePr && /^[a-f\d]{40,64}$/i.test(run.testInventory.headSha) ? run.testInventory.headSha : promptHead}:refs/heads/${run.branch}`], { cwd: run.root });
       if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
@@ -1782,6 +1788,17 @@ async function publishAreaPr(run, area, p, lines, retry) {
     const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
       : `pdd could not prepare ${label} (${causeOf(error)}). Fix it, then ${retry}.`;
     return fail([...lines, why].join('\n'));
+  }
+  if (automatic) {
+    const changedSource = await automatic.validate(); if (changedSource) return changedSource;
+    if (intent.headSha !== automatic.head) return fail('The publication head changed after validation. Run done check again.');
+    const refused = await automatic.authorize(); if (refused) return refused;
+    // The body must include the approval that was deferred until the prepared
+    // intent was validated, including its native journal evidence.
+    prepared = await publicationEvidence(run, area, p);
+    readable = await readableFor(prepared);
+    body = prBody(run, area, p.env, bodyDrafts, tests, prepared, readable);
+    const changed = await automatic.validate(); if (changed) return changed;
   }
   const outcome = await publishWorkflowPr({ cwd: run.root, intent, body: `${body}\n<!-- ${intent.marker} -->\n`, draft: run.draft ?? false }, p.commandPorts);
   p.inspectProgress?.();
@@ -2009,18 +2026,75 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
 async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
-  let snapshot, edits;
-  try {
-    snapshot = await gatePromptSnapshot(run, p);
-    if (!samePromptReview(snapshot, run.gate.promptSnapshot)) return fail([...lines, `The selected prompts changed while pdd read them. Run done ${step} again.`].join('\n'));
-    edits = await approveGatePrompts(run, p, snapshot);
-  } catch (error) { return fail([...lines, `Cannot approve the selected prompts: ${error.message}. Repair them, then run done ${step} again.`].join('\n')); }
-  const record = { via: 'automatic-check-pass', basis: { storyEvidenceId: run.storyApproval.evidenceId ?? null, batches: [...new Set(check.tests.map(item => item.batch))] } };
-  try { await saveGateApproval(run, area, record, edits, p, snapshot); }
-  catch (error) { return fail([...lines, `Approval failed: ${error.message}`].join('\n')); }
+  let snapshot, edits = [], approvalRecorded = false;
+  const restoreApprovalEdits = () => {
+    for (const edit of edits) {
+      try { if (readFileSync(join(run.root, edit.path), 'utf8') === edit.next) (p.fs ?? { writeFileSync }).writeFileSync(join(run.root, edit.path), edit.text); } catch { /* Preserve a peer's replacement. */ }
+    }
+  };
+  const refused = () => fail([...lines, 'The publication source changed or its check is incomplete. No automatic approval or source publication was made. Run done check again.'].join('\n'));
+  // Readiness belongs to the prepared commit. Approval metadata is the only
+  // permitted difference between that checked tree and the tree we publish.
+  const automatic = {
+    head: null,
+    async prepare() {
+      const checkedHead = await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}');
+      snapshot = await gatePromptSnapshot(run, p);
+      const changed = await changedStoryGate(run, area, step, p, lines, snapshot);
+      if (changed) return changed;
+      const contents = await worktreeContents(run, p);
+      check = fullCheckPass({ root: run.root, since: run.startedAt ?? 0, tests: contents.tests,
+        stories: (run.storyApproval.fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
+        prompts: snapshot.map(row => row.path) }, p);
+      if (!check.pass) return refused();
+      try { edits = await approveGatePrompts(run, p, snapshot); }
+      catch (error) { return fail(`Cannot approve the selected prompts: ${error.message}`); }
+      const fs = p.fs ?? { writeFileSync };
+      try {
+        for (const edit of edits) {
+          if (readFileSync(join(run.root, edit.path), 'utf8') !== edit.text) return refused();
+          fs.writeFileSync(join(run.root, edit.path), edit.next);
+        }
+        await commitPublicationFiles(run, p, lines);
+        const head = await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}');
+        const paths = (await rawGit(p, run.root, 'diff', '--name-only', '-z', checkedHead, head)).split('\0').filter(Boolean);
+        for (const path of paths) {
+          const edit = edits.find(edit => edit.path === path);
+          if (!edit || await rawGit(p, run.root, 'show', `${head}:${path}`) !== edit.next) {
+            return await changedStoryGate(run, area, step, p, lines, await gatePromptSnapshot(run, p)) ?? refused();
+          }
+        }
+        if (await rawGit(p, run.root, 'diff', '--summary', checkedHead, head)) return refused();
+        automatic.head = head;
+        const invalid = await automatic.validate();
+        if (invalid) automatic.head = null;
+        return invalid;
+      } finally {
+        // No journal or gate approval has been recorded on a failed prepare.
+        if (!automatic.head) restoreApprovalEdits();
+      }
+    },
+    async validate() {
+      const head = await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}');
+      const dirty = await rawGit(p, run.root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
+      if (head !== automatic.head || dirty || await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}') !== automatic.head) {
+        const changed = await changedStoryGate(run, area, step, p, lines, await gatePromptSnapshot(run, p));
+        return changed ?? refused();
+      }
+      return null;
+    },
+    async authorize() {
+      const invalid = await automatic.validate(); if (invalid) return invalid;
+      const record = { via: 'automatic-check-pass', basis: { storyEvidenceId: run.storyApproval.evidenceId ?? null,
+        batches: [...new Set(check.tests.map(item => item.batch))], headSha: automatic.head } };
+      try { await saveGateApproval(run, area, record, [], p, snapshot); approvalRecorded = true; }
+      catch (error) { return fail(`Approval failed: ${error.message}`); }
+      return null;
+    }
+  };
   const selectedArea = run.area, selectedGate = structuredClone(run.gate), selectedQuestion = run.question, published = [];
-  const failed = await publishAreaPr(run, area, p, published, `run done ${step} again`);
-  if (failed) return failed;
+  const failed = await publishAreaPr(run, area, p, published, `run done ${step} again`, automatic);
+  if (failed) { if (!approvalRecorded) restoreApprovalEdits(); return failed; }
   const askCode = area.then === 'ask-code', at = p.now();
   commitRun(run, p, latest => {
     if (latest.area === selectedArea && sameGate(latest.gate, selectedGate)) { latest.state = 'waiting'; latest.gate = askCode ? { id: p.randomUUID(), area: area.name, at, kind: 'ask-code' } : null; }
@@ -2607,7 +2681,7 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   if (run.gate && !run.gate.id) { const id=p.randomUUID(); commitRun(run,p,latest=>{if(latest.gate)latest.gate.id??=id;}); }
   const gateId = run.gate?.id ?? p.randomUUID(), gateAt = run.gate?.at;
   const existing = run.decisions.find(decision => decision.gateId === gateId && decision.evidence);
-  if (existing && !edits.length) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return existing; }
+  if (existing && !edits.length && (!record.basis?.headSha || existing.evidence?.basis?.headSha === record.basis.headSha)) { run.approvalRecord = { ...(run.approvalRecord?.gateId === gateId ? run.approvalRecord : {}), gateId, kind: existing.via, area: area.name, at: existing.at, evidence: existing.evidence }; return existing; }
   const at = p.now(), evidence = { id: p.randomUUID(), route: record.via, actor: approvalActor(p.env), at, words: record.text ?? null,
     prompts: (snapshot ?? edits).map(({path,proseSha256}) => ({path,proseSha256})), ...(record.basis ? { basis: record.basis } : {}) };
   p.inspectProgress?.();

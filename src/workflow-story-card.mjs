@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 00a6a5d60844586089d50b999fc05d58de77b0d07e234b0bfb8ec61292f74d47).
+// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 2e483b8975390b44f3212ee269435d88ca2de6212896cf2644500b4d64a6d8f3).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -221,7 +221,7 @@ export function fingerprintChanges(saved, current) {
 
 function readJson(path) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } }
 const real = path => { try { return realpathSync(path); } catch { return resolve(path); } };
-const NO_VERDICT_STATES = new Set(['refused', 'not_run', 'unknown', 'queued', 'running']);
+const NO_VERDICT_STATES = new Set(['refused', 'not run', 'partial', 'waiting', 'sent', 'not_run', 'unknown', 'queued', 'running']);
 // pdd's own saved check results decide whether the prompt check passed in full on the current files.
 export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stories = [] } = {}, ports = {}) {
   const env = ports.env ?? process.env, capture = ports.capture ?? captureSource;
@@ -268,6 +268,14 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stori
     if (!row) { problems.push({ kind: 'no-verdict', path, detail: `batch ${found.name} has no saved result for this test` }); continue; }
     if (state === 'failed') { problems.push({ kind: 'failed', path, detail: `batch ${found.name}: ${clip(row.summary_line ?? 'failed', 200)}` }); continue; }
     if (state !== 'passed') { problems.push({ kind: NO_VERDICT_STATES.has(state) ? 'no-verdict' : 'unavailable', path, detail: `batch ${found.name}: ${state}` }); continue; }
+    const batchRows = found.batch.rows.filter(item => item?.test === path);
+    const summaryRows = found.summary.rows.filter(item => item?.test === path);
+    const incomplete = item => item.state !== 'passed' || item.unsent || item.reason?.code === 'broken-test'
+      || item.note?.code === 'broken-test' || item.refusals?.length || item.not_checked?.length;
+    if (batchRows.length !== 1 || summaryRows.length !== 1 || incomplete(batchRows[0]) || incomplete(row)
+      || batchRows[0].criteria != null && !isDeepStrictEqual(batchRows[0].criteria, row.criteria)) {
+      problems.push({ kind: 'no-verdict', path, detail: `batch ${found.name}: batch and summary do not establish one complete pass` }); continue;
+    }
     const criteria = row.criteria;
     if (!criteria || !Number.isInteger(criteria.total) || !Number.isInteger(criteria.passed)) { problems.push({ kind: 'unavailable', path, detail: `batch ${found.name}: criteria not reported` }); continue; }
     const scenario = readScenario(root, path).doc;

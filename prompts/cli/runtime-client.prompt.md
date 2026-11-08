@@ -1069,8 +1069,10 @@ confirms admission (accepted job or terminal executed result). No such line may
 precede admission, or describe a busy/refused unsent check as sent.
 For a new Check, start the explicit --timeout clock after the free lint gate
 returns. With no explicit limit, ordinary Check stays uncapped, including
-free lint. For an explicitly bounded noninteractive Check, free lint uses the
-standalone agent lint wait (90 seconds), independent of the paid Check clock.
+free lint. For an explicitly bounded Check, free lint has its own finite wait in every
+shell: the explicit timeout, capped at the standalone agent lint wait (90 seconds)
+in a noninteractive shell. This wait is independent of
+the paid Check clock. Admission, maintenance and local-slot waits obey it.
 When that wait ends, keep the lint-pending recovery note but project deadline
 for the held row and lint metadata. It is not a timeout-flag result. A standalone lint --timeout
 still bounds lint. Each explicit timeout result names --timeout, with reason

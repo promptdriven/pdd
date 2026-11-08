@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 1ab8852c4190d1b562797f7f08e8599dcb3b83d2b05d5ecf6eda6dc398a6c366).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 51cf866372bcd55f731acc074d225cc5e2a1e96a727dba20085b087449a171c7).
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';
@@ -167,15 +167,15 @@ const TEMPORARY_WORDS = /\bTry again in a minute\b/;
 const signIn = row => ![row.note, row.reason].some(item => TEMPORARY_WORDS.test(words(item)))
   && (ACCESS_NOTES.has(row.note?.code ?? row.reason?.code) || [row.note, row.reason].some(item => SIGN_IN_WORDS.test(words(item))) || SIGN_IN_WORDS.test(String(row.why ?? '')));
 export function checkCause(rows) {
-  const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object' && row.state !== 'passed');
+  const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object').map(row => ({ ...row, ...resultOutcome(row) })).filter(row => row.state !== 'passed');
   if (!Array.isArray(rows) || !rows.length) return 'none';
   if (!open.length) return 'passed';
   const codes = row => (Array.isArray(row.refusals) ? row.refusals : []).map(item => item?.code);
-  if (open.some(row => row.state === 'failed' || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
-  if (open.some(row => ['not_run', 'unknown'].includes(row.state) && signIn(row))) return 'access';
+  if (open.some(row => row.state === 'failed' || row.reason?.code === 'broken-test' || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
+  if (open.some(row => ['not run', 'partial'].includes(row.state) && signIn(row))) return 'access';
   // An unknown answer that names the AI provider failure is a known end with no verdict.
-  const provider = row => row.state === 'unknown' && (SERVICE_REFUSALS.has(row.reason?.code) || SERVICE_REFUSALS.has(row.provider?.code) || codes(row).length > 0 && codes(row).every(code => SERVICE_REFUSALS.has(code)));
-  return open.every(row => ['refused', 'not_run'].includes(row.state) || provider(row)) ? 'service' : 'unknown';
+  const provider = row => row.state === 'partial' && (SERVICE_REFUSALS.has(row.reason?.code) || SERVICE_REFUSALS.has(row.provider?.code) || codes(row).length > 0 && codes(row).every(code => SERVICE_REFUSALS.has(code)));
+  return open.every(row => ['refused', 'not run'].includes(row.state) || provider(row)) ? 'service' : 'unknown';
 }
 const OPEN_ROWS = new Set(['ready', 'waiting', 'sending', 'queued', 'running']);
 const stateFolder = env => resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime'));
@@ -187,7 +187,7 @@ export function savedCheckCause(batch, { env = process.env } = {}) {
   // A named check whose rows cannot be read has an outcome that is not known.
   if (!summaryRows && !savedRows) return 'unknown';
   // A check still open, or a summary that an interrupted --retry left behind (its saved rows moved on), is not known yet.
-  const states = rows => rows.reduce((map, row) => map.set(`${row?.test}\0${row?.story}`, [...(map.get(`${row?.test}\0${row?.story}`) ?? []), row?.state]), new Map());
+  const states = rows => rows.reduce((map, row) => map.set(`${row?.test}\0${row?.story}`, [...(map.get(`${row?.test}\0${row?.story}`) ?? []), resultOutcome(row ?? {}).state]), new Map());
   if (savedRows?.some(row => OPEN_ROWS.has(row?.state))) return 'unknown';
   const shown = summaryRows && states(summaryRows);
   if (shown && savedRows && [...states(savedRows)].some(([key, list]) => shown.has(key) && shown.get(key).join() !== list.join())) return 'unknown';
