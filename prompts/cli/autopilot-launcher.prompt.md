@@ -958,6 +958,16 @@ a promise of later handling; the independent 30-minute tick remains fallback.
 Use the existing launcher ports and native defaults, including state, Git, settings,
 reconcile and wake boundaries; injected substitutes reach this same path.
 
+## Finished chat maintenance
+
+Each enabled tick sweeps safely finished workflow chats using runner tidyRuns
+before intake, with a 5000 ms elapsed budget between candidates. Skip busy runs and report cleanup failures without failing issues.
+Before starting fresh work, a full pane budget is a `panes` capacity hold. Tell
+the coordinator it waits for Herdr session pdd capacity and retry next tick.
+A chat with the durable chat-owner `closed` mark was intentionally stopped:
+automatic stopped-chat recovery must never resume it. Explicit open is the only
+route that can remove the mark after success.
+
 ## Dependencies
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.

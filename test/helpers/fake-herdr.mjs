@@ -24,6 +24,7 @@ export function fakeHerdr() {
     const flag = name => rest[rest.indexOf(name) + 1];
     if (group === 'status') return { running: true, session: 'pdd', compatible: true };
     if (group === 'workspace' && verb === 'list') return { id: 'cli:workspace:list', result: { type: 'workspace_list', workspaces: h.workspaces } };
+    if (h.paneLimit !== undefined && h.panes.length >= h.paneLimit && ((group === 'workspace' || group === 'tab') && verb === 'create' || group === 'worktree' && verb === 'open')) fail('test_pane_limit');
     if (group === 'workspace' && verb === 'create') {
       const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), ...(!h.realIdentity ? { worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } } : {}) };
       h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); const p = pane(w.workspace_id, t.tab_id, cwd);
@@ -51,7 +52,7 @@ export function fakeHerdr() {
       h.workspaces = h.workspaces.filter(w => w.workspace_id !== rest[0]); h.tabs = h.tabs.filter(t => t.workspace_id !== rest[0]); h.panes = h.panes.filter(p => p.workspace_id !== rest[0]);
       return { id: 'cli:workspace:close', result: { type: 'ok' } };
     }
-    if (group === 'pane' && verb === 'list') return { id: 'cli:pane:list', result: { type: 'pane_list', panes: h.panes.filter(p => p.workspace_id === flag('--workspace') && h.tabs.some(t => t.tab_id === p.tab_id)) } };
+    if (group === 'pane' && verb === 'list') return { id: 'cli:pane:list', result: { type: 'pane_list', panes: h.panes.filter(p => (!rest.includes('--workspace') || p.workspace_id === flag('--workspace')) && h.tabs.some(t => t.tab_id === p.tab_id)) } };
     if (group === 'tab' && verb === 'create') {
       if (!h.workspaces.some(w => w.workspace_id === flag('--workspace'))) fail('workspace_not_found');
       const t = { tab_id: id('t'), workspace_id: flag('--workspace'), label: flag('--label') }; h.tabs.push(t);

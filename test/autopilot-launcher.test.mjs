@@ -1012,7 +1012,7 @@ test('time rule uses cached comment activity and never adds a GitHub query on un
   f.time += hour / 2; await f.tick(); assert.equal(f.prompts.length, 1);
   await f.tick(); assert.equal(f.prompts.length, 1);
   assert.equal(f.comments.length, commentReads);
-  assert.ok(f.runs.slice(processes).every(([command]) => command === 'git'), 'No extra network or model process');
+  assert.ok(f.runs.slice(processes).every(([command,args]) => command === 'git' || command === 'herdr' && JSON.stringify(args) === JSON.stringify(['--session','pdd','pane','list'])), 'No extra network or model process');
 });
 
 test('time rule revalidates trust on a cached due claim without forwarding stranger text', async t => {
@@ -1622,4 +1622,22 @@ test('2903: the relaunch close compares the folder when no terminal id is saved,
   f.saveState(state => { delete state.ownerLaunch.fingerprint; });
   f.status = 304; f.time += 60 * 1000; await f.tick();
   assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.state().paneId, 'w2:p1');
+});
+
+test('2709: a full pane budget holds fresh intake and the next tick can release the hold', async t => {
+  const f = await fixture(t), warnings = [];
+  let count = 56, sweeps = 0;
+  f.ports.warn = text => warnings.push(text);
+  f.ports.tidyRuns = async () => {sweeps++; return {closed:0,kept:0,exitCode:0,message:'sweep'};};
+  f.ports.workflowHerdr = async args => {
+    assert.deepEqual(args,['pane','list']);
+    return {result:{type:'pane_list',panes:Array.from({length:count},(_,i)=>({pane_id:`p${i}`,workspace_id:`w${i}`,tab_id:`t${i}`,terminal_id:`term${i}`}))}};
+  };
+  f.issues = [issue(2709)];
+  assert.equal((await f.invoke('start')).exitCode,0);
+  assert.deepEqual(f.state().githubIntake.eligible,[]);
+  assert.ok(warnings.some(text=>text.includes('panes'))); assert.ok(sweeps >= 1);
+  count = 1; f.status = 304;
+  assert.equal((await f.tick()).exitCode,0);
+  assert.deepEqual(f.state().githubIntake.eligible,[f.issues[0].html_url]);
 });

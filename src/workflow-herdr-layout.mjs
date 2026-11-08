@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: a55724c0548b6b73754182616bf3f88fc6d7ce63942ba81e274a986e8ae35d94).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 5199f75cfdf64aa6dcd0c8d82da3c05d8c1f048cd4055485b2d08908ea5148c8).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -214,6 +214,7 @@ export async function openHerdrRunLayout(input, ports) {
   const createIntent = owner?.layout?.repoCreateIntent;
   let repo = parents.find(w => w.workspace_id === parentHint) ?? parents[0];
   if (!workspace) {
+    await ports.beforeCreate?.(repo || owner?.layout?.repoCreateIntent ? 2 : 3);
     let pendingParent;
     if (createIntent) {
       if (!validCreateIntent(createIntent, parent.root, commonDir)) throw problem('repository_parent_unverified');
@@ -348,6 +349,7 @@ export async function openHerdrRunLayout(input, ports) {
     await save();
     return custody;
   }
+  if (!opened) await ports.beforeCreate?.(1);
   const created = await command(['tab', 'create', '--workspace', workspaceId, '--cwd', cwd, '--label', input.stageId, '--no-focus']);
   const pane = created.result?.root_pane, tabId = created.result?.tab?.tab_id;
   if (created.id !== 'cli:tab:create' || ![tabId, pane?.pane_id, pane?.terminal_id].every(id)) throw problem('invalid_tab_reply');

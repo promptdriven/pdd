@@ -673,3 +673,9 @@ Chat uses your agent account's allowance. The interpreter relays messages and in
 Closing pdd or pressing Ctrl-C disconnects chat and leaves the simulation open. `pdd simulate STORY --no-wait` opens an ordinary Simulator link without a chat bridge. Agent selection does not combine with `--no-wait`, `--cli`, `--serve`, `--stop` or `--save-last`. Shared Simulator links do not grant access to owner chat. If a browser cannot open automatically, pdd prints a separate private owner-chat link; do not share it. Reconnecting replaces the chat connection and clears its temporary history.
 
 Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
+
+When `herdr_pane_budget` prevents a start, run `pdd workflow tidy --dry-run`, then
+`pdd workflow tidy`. The default session budget is 56 panes, including personal
+panes. Close unused tabs or set `PDD_HERDR_PANE_BUDGET` to another nonnegative
+integer (`0` disables the budget). Busy chats and the current chat of a live run
+are kept open. Use `pdd workflow status --all` to inspect capacity and runs.

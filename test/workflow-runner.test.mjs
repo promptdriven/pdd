@@ -595,7 +595,8 @@ test('status --all lists every run on this machine across repositories, person-w
   for (const input of [{ all: true, cwd: a.source }, { cwd: outside }]) {
     const out = await runStatus(input, a.ports);
     assert.equal(out.exitCode, 0, out.message);
-    const lines = out.message.split('\n');
+    const [capacity, ...lines] = out.message.split('\n');
+    assert.match(capacity, /pdd.*[0-9]+.*56/);
     assert.equal(lines.length, 4, out.message);
     assert.match(lines[0], /^example\/project#17 · small-change · plan · waiting for you: approve the plan · Oct 27, 17:00$/);
     assert.match(lines[1], /^example\/project#17 · bug · story · agent working on reproduce · Oct 27, 17:01$/);
@@ -606,7 +607,7 @@ test('status --all lists every run on this machine across repositories, person-w
   const hidden = await runStatus({ all: true, cwd: outside }, a.ports);
   assert.match(hidden.message, /1 cancelled run hidden; add --cancelled to see it/); assert.doesNotMatch(hidden.message, /· bug ·/);
   const shown = await runStatus({ all: true, cancelled: true, cwd: outside }, a.ports);
-  assert.match(shown.message.split('\n')[1], /^example\/project#17 · bug · story · cancelled · /);
+  assert.match(shown.message.split('\n').filter(line => line.startsWith('example/'))[1], /^example\/project#17 · bug · story · cancelled · /);
   const json = JSON.parse((await runStatus({ all: true, json: true, cancelled: true, cwd: outside }, a.ports)).message);
   assert.deepEqual(json.runs.map(run => [run.workflow, run.group, run.words]), [['small-change', 'waiting', 'waiting for you: approve the plan'], ['bug', 'cancelled', 'cancelled']]);
   assert.equal(json.runs[0].ref, 'example/project#17'); assert.equal(typeof json.runs[0].updatedAt, 'number'); assert.ok(json.runs[0].runDir);
@@ -628,13 +629,13 @@ test('status --all shows indexed PR states and discovers no repositories when th
   assert.match((await runStatus({all:true,cwd:f.source},f.ports)).message,/No pdd runs on this machine/);
   writeFileSync(indexFile,indexBytes);
   const open = await runStatus({ all: true, cwd: f.source }, f.ports);
-  assert.match(open.message, /^example\/project#17 · small-change · build · PR open · PR #23 · /);
+  assert.match(open.message.split('\n').find(line => line.startsWith('example/')) ?? '', /^example\/project#17 · small-change · build · PR open · PR #23 · /);
   const seq = f.record().journalSeq; f.tick(3600000);
   await runStatus({ all: true, cwd: f.source }, f.ports);
   assert.equal(f.record().journalSeq, seq, 'reading an unchanged PR does not touch the run');
   f.merged = true;
   const merged = await runStatus({ all: true, cwd: f.source }, f.ports);
-  assert.match(merged.message, /^example\/project#17 · small-change · build · done · PR #23 · /);
+  assert.match(merged.message.split('\n').find(line => line.startsWith('example/')) ?? '', /^example\/project#17 · small-change · build · done · PR #23 · /);
 });
 
 test('R4: at the code gate native replies alone never authorize, including a genuine approval', async t => {
@@ -761,7 +762,7 @@ test('ask marks the run as waiting for the person; changes answers it in the sam
   assert.equal(record.question.text, 'Should -h also print the usage?'); assert.equal(record.state, 'waiting');
   assert.deepEqual(record.waitingFor, { decisions: ['changes'], what: 'Should -h also print the usage?' });
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: waiting for you: Should -h also print the usage\?/);
-  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /^example\/project#17 · small-change · plan · waiting for you: Should -h also print the usage\? · /);
+  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message.split('\n').find(line => line.startsWith('example/')) ?? '', /^example\/project#17 · small-change · plan · waiting for you: Should -h also print the usage\? · /);
   f.tick();
   const answered = await changeRun({ ref: '17', text: 'Yes, the same text as --help.', cwd: f.source }, f.ports);
   assert.equal(answered.exitCode, 0, answered.message); assert.match(answered.message, /answer/);
@@ -1114,7 +1115,7 @@ test('0.1.7 #2: status says the chat stopped when no agent runs in its pane, and
   const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(shown.exitCode, 0);
   assert.match(shown.message, /^State: the chat stopped\. Run pdd workflow open 17 to start it again\.$/m);
-  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /^example\/project#17 · small-change · plan · the chat stopped: run pdd workflow open 17 · /);
+  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message.split('\n').find(line => line.startsWith('example/')) ?? '', /^example\/project#17 · small-change · plan · the chat stopped: run pdd workflow open 17 · /);
   const json = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0];
   assert.deepEqual([json.group, json.words], ['waiting', 'the chat stopped: run pdd workflow open 17']);
   // The pdd Herdr server is down: no chat of it runs.
@@ -1185,7 +1186,7 @@ test('0.1.7 #6: at a gate, status says the agent writes the gate message until t
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
   // done returned; Herdr still shows the chat working on its message.
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^State: the agent writes the gate message for the plan area$/m);
-  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /^example\/project#17 · small-change · plan · agent writing the gate message · /);
+  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message.split('\n').find(line => line.startsWith('example/')) ?? '', /^example\/project#17 · small-change · plan · agent writing the gate message · /);
   assert.equal(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].group, 'working');
   pane.agent.agent_status = 'idle';
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^State: waiting for you: approve the plan area or ask for changes$/m);
@@ -2468,7 +2469,7 @@ test('2640 allocation race retains named files, releases new claim and never sav
     if(file==='git'&&args[0]==='worktree'&&args[1]==='add') {allocated=args.at(-2);writeFileSync(join(allocated,'rules/add.md'),'Racing write.\n');}
     return reply;
   };
-  const out=await begin();assert.equal(out.exitCode,2,out.message);assert.match(out.message,/Retained worktree:/);assert.ok(out.message.includes(allocated));assert.match(out.message,/claim was released/);assert.equal(f.herdr.calls.length,0);assert.throws(()=>f.record());assert.ok(existsSync(allocated));
+  const out=await begin();assert.equal(out.exitCode,2,out.message);assert.match(out.message,/Retained worktree:/);assert.ok(out.message.includes(allocated));assert.match(out.message,/claim was released/);assert.deepEqual(f.herdr.calls.filter(args => JSON.stringify(args) !== JSON.stringify(['pane','list'])),[]);assert.throws(()=>f.record());assert.ok(existsSync(allocated));
 });
 test('2640 adopted prompt publication and code entry retain anchor and ignore caller declaration edits',async t=>{
   const {f,declaration}=await adoptedCorpusRun(t,{multi:true}),run=f.record(),anchor=structuredClone(run.replayBaseline);

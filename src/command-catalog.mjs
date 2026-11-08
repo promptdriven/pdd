@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9a560895a7a549c2804467b25aea7747bf1801a66ac09a63eb9d7e46b2d6b282).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 50650c10592c1b62033935156de2dcb450f2e13abb8eac4bdf7219bbc84352a0).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -78,6 +78,7 @@ const routes = [
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
     operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
+  { id: 'workflow.tidy', prefix: ['workflow','tidy'], local: 'workflow-tidy', operands: [], options: [{name:'--dry-run',kind:'flag'}], forms: [form('pdd workflow tidy [--dry-run]', 'Close safely finished chat tabs on this machine; dry-run reports without changes.')] },
   { id: 'workflow.cancel', prefix: ['workflow', 'cancel'], local: 'workflow-cancel',
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow cancel ISSUE', 'Cancel the run and close its Herdr tabs; keep the worktree and branch.')] },

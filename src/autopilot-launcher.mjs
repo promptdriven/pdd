@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6d458f9c212e77a828ba31b44319a394b071a8e7a919d1f309c2580982cc0ae9).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 26ac37870c46bb0bed402680ce7bebc8472c729684945499808ca2cb86ad7fbd).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -14,6 +14,8 @@ import { gitContext, metricsSource, allRuns, listRuns } from './workflow-runs.mj
 import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
 import * as nativeFiles from 'node:fs';
+import { tidyRuns } from './workflow-runner.mjs';
+import { paneUsage, ensurePaneBudget } from './workflow-chat.mjs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
@@ -1098,6 +1100,15 @@ export async function tickAutopilot(stateFile, ports = {}) {
   return result;
 }
 
+function workflowCleanupPorts(p, ports) {
+  return {...p, herdr: ports.workflowHerdr ?? (async args => {
+    const result = await p.execute('herdr', ['--session','pdd',...args]);
+    if (result.code === 0 && args[0] === 'pane' && args[1] === 'read') return result.stdout;
+    let reply; try { reply = JSON.parse(result.code === 0 ? result.stdout : result.stderr || result.stdout); } catch {}
+    if (result.code !== 0 || reply?.error) throw Object.assign(Error('Workflow Herdr inventory unavailable'), {code:reply?.error?.code ?? 'herdr_failed'});
+    return reply;
+  })};
+}
 async function runTick(stateFile, ports, completion) {
   const outcome = (state, message) => completion ? { state } : ok(message);
   let state = read(stateFile), p, scanGuard; if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.');
@@ -1114,6 +1125,8 @@ async function runTick(stateFile, ports, completion) {
       try { state = read(stateFile); if (!state?.enabled) return outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state); }
       finally { release(); }
     }
+    try { await (ports.tidyRuns ?? tidyRuns)({timeBudgetMs:5000}, workflowCleanupPorts(p, ports)); }
+    catch (error) { p.warn(`Finished chat cleanup waits (${error.code ?? 'unavailable'}).`); }
     const config = await settings(state, p);
     if (config.mode === 'off') return outcome('inactive', line(config.message));
     state.currentMode = config.mode;
@@ -1230,6 +1243,9 @@ async function runTick(stateFile, ports, completion) {
     }
     const deferIntake = budget.state === 'low' && savedIntake && Number.isFinite(savedIntake.at) && p.now() - savedIntake.at < LOW_BUDGET_INTAKE_EVERY
       && Array.isArray(savedIntake.eligible) && Array.isArray(savedIntake.claims);
+    let paneHold = null;
+    try { await ensurePaneBudget(3, {...workflowCleanupPorts(p, ports), sweepFinished: options => (ports.tidyRuns ?? tidyRuns)({...options,timeBudgetMs:5000}, workflowCleanupPorts(p, ports))}); }
+    catch (error) { if (error.code === 'herdr_pane_budget') paneHold = error.message.split('\n')[0]; }
     let intake;
     if (deferIntake) {
       intake = { eligible: savedIntake.eligible, claims: savedIntake.claims, queued: [], skipped: [] };
@@ -1251,6 +1267,7 @@ async function runTick(stateFile, ports, completion) {
       if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [] };
       else delete state.githubIntake;
     }
+    if (paneHold) { intake.eligible = []; state.githubIntake = {...state.githubIntake,eligible:[]}; p.warn(`Autopilot waits: panes. ${paneHold}`); }
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
@@ -1344,7 +1361,7 @@ async function runTick(stateFile, ports, completion) {
         const previous = state.seen[issue.number];
         // GitHub spells html_url with the owner's capitals; graph keys are canonical lowercase.
         const issueIdentity = issueKey(issue.html_url) ?? issue.html_url;
-        const graphEligible = Array.isArray(intake.eligible) ? intake.eligible.some(key => (issueKey(key) ?? key) === issueIdentity) : undefined;
+        const graphEligible = paneHold ? false : Array.isArray(intake.eligible) ? intake.eligible.some(key => (issueKey(key) ?? key) === issueIdentity) : undefined;
         const becameGraphEligible = graphEligible === true && previous && previous.graphEligible !== true;
         const expiredClaim = labels.includes('pdd:working') ? expiredClaims.get(String(issue.html_url).toLowerCase()) : undefined;
         const holdLabels = labels.filter(name => name === 'pdd:working' ? !expiredClaim : ['pdd:stuck', 'pdd:code-pending'].includes(name));

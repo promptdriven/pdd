@@ -74,6 +74,14 @@ After the caller closes its verified area tabs, close only the saved run workspa
 
 `closeHerdrRepoLayoutIfIdle` returns true if a safely owned idle parent was closed or is already gone, false when retained. Adoption is not creation ownership: never close a parent merely because it is a non-linked workspace of the clone. A parent may be closed only with durable run-record evidence that PDD created this exact parent/root, no remaining open run uses it, unchanged verified parent identity and exactly its one original tab/pane. Existing run records with workspace IDs alone do not prove parent creation or its initial roots; preserve those parents and return false. Without that evidence preserve it, including legacy or person-opened parents. Never create another durable layout registry to establish cleanup ownership.
 
+## Pane budget
+
+Before any workspace or area-tab create, use the caller's awaited `beforeCreate`
+port with the number of missing panes: parent shell if absent, run shell if
+absent, and area tab if absent. Reserve the whole missing layout before its first
+creation, so a refusal cannot leave a partial layout. An existing layout with
+no allocation needs no budget. The chat owner supplies the pane-budget policy.
+
 ## Dependencies
 
 - Load the complete [Prompting guide](../../docs/prompting-guide.md) for authoring/generation.
