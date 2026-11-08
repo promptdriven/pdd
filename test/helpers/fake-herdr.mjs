@@ -48,11 +48,12 @@ export function fakeHerdr() {
       return { id: 'cli:worktree:open', result: { workspace: w, tab: t, root_pane: p } };
     }
     if (group === 'workspace' && verb === 'close') {
-      h.workspaces = h.workspaces.filter(w => w.workspace_id !== rest[0]); h.tabs = h.tabs.filter(t => t.workspace_id !== rest[0]);
+      h.workspaces = h.workspaces.filter(w => w.workspace_id !== rest[0]); h.tabs = h.tabs.filter(t => t.workspace_id !== rest[0]); h.panes = h.panes.filter(p => p.workspace_id !== rest[0]);
       return { id: 'cli:workspace:close', result: { type: 'ok' } };
     }
     if (group === 'pane' && verb === 'list') return { id: 'cli:pane:list', result: { type: 'pane_list', panes: h.panes.filter(p => p.workspace_id === flag('--workspace') && h.tabs.some(t => t.tab_id === p.tab_id)) } };
     if (group === 'tab' && verb === 'create') {
+      if (!h.workspaces.some(w => w.workspace_id === flag('--workspace'))) fail('workspace_not_found');
       const t = { tab_id: id('t'), workspace_id: flag('--workspace'), label: flag('--label') }; h.tabs.push(t);
       return { id: 'cli:tab:create', result: { tab: t, root_pane: pane(t.workspace_id, t.tab_id, flag('--cwd')) } };
     }
@@ -67,8 +68,8 @@ export function fakeHerdr() {
       const cd = /^cd ('(?:[^']|'\\'')*') && /.exec(command), target = cd?.[1].slice(1, -1).replace(/'\\''/g, "'");
       if (cd && !folder(target)) { p.commands = [...(p.commands ?? []), command]; return {}; }
       if (cd) p.cwd = target;
-      const kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : null;
-      const session = command.match(/--(?:session-id|resume) ([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume ([0-9a-f-]{36})/)?.[1] ?? '00000000-0000-4000-8000-000000000017';
+      const kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : / gemini /.test(command) ? 'gemini' : / agy /.test(command) ? 'agy' : null;
+      const session = command.match(/--(?:session-id|resume) '?([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume '?([0-9a-f-]{36})/)?.[1] ?? '00000000-0000-4000-8000-000000000017';
       p.commands = [...(p.commands ?? []), command];
       if (kind) {
         p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };

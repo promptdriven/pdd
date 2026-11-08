@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { tomlString } from './toml-string.mjs';
+import { lookupIssueWorktree } from './workflow-worktree.mjs';
 
 // The one shared startup grace: Herdr sees a new agent only after it starts.
 export const START_GRACE_MS = 30_000;
@@ -287,7 +288,78 @@ export async function chatSession(chat, ports = {}) {
     const agent = (await herdrCommand(ports)(['agent', 'get', chat.paneId])).result?.agent;
     const value = agent?.agent_session?.kind === 'id' ? agent.agent_session.value : null;
     return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: validSessionId(value) ? value : null };
-  } catch (error) { return { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message }; }
+  } catch (error) {
+    const missing = { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message };
+    if (['agent_not_found', 'pane_not_found'].includes(error.code) && chat.workspaceId) {
+      try { if (!(await workspaceInventory(herdrCommand(ports))).some(row => row.workspace_id === chat.workspaceId)) missing.workspaceClosed = true; }
+      catch { /* Unavailable inventory cannot prove closure. */ }
+    }
+    return missing;
+  }
+}
+
+async function workspaceInventory(herdr) {
+  const reply = await herdr(['workspace', 'list']), rows = reply?.result?.workspaces;
+  if (reply?.result?.type !== 'workspace_list' || !Array.isArray(rows)
+    || rows.some(row => typeof row?.workspace_id !== 'string' || !row.workspace_id)
+    || new Set(rows.map(row => row.workspace_id)).size !== rows.length) throw problem('invalid_workspace_inventory');
+  return rows;
+}
+
+export async function rebuildClosedChat({ run, chat, message }, ports = {}) {
+  const herdr = herdrCommand(ports), now = ports.now ?? Date.now;
+  await ensureServer(herdr, ports);
+  const present = async () => {
+    const workspace = (await workspaceInventory(herdr)).find(row => row.workspace_id === chat.workspaceId);
+    if (workspace) {
+      if (!samePath(workspace.worktree?.checkout_path, run.root) || !samePath(workspace.worktree?.repo_key, run.commonDir)
+        || workspace.worktree?.is_linked_worktree !== true) throw problem('chat_identity_changed', 'The saved workspace belongs to another checkout or repository. Inspect it in Herdr.');
+    }
+    return Boolean(workspace);
+  };
+  if (await present()) return false;
+  return withHerdrLayoutLock(async () => {
+    if (await present()) return false;
+    if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
+    if (!isFolder(run.root)) throw problem('invalid_worktree', `The saved worktree folder "${run.root}" is missing. Restore that folder before running pdd workflow open ${run.number}.`);
+    const verified = await lookupIssueWorktree({cwd: run.sourceRoot, runId: run.runId, branch: run.branch}, ports);
+    const a = verified.assignment;
+    if (verified.state !== 'ready' || !samePath(a?.worktreePath, run.root) || !samePath(a?.commonDir, run.commonDir)
+      || a?.repository?.toLowerCase() !== run.repo.toLowerCase() || a?.runId !== run.runId)
+      throw problem('invalid_worktree', 'The saved worktree assignment cannot be verified. Inspect this run before reopening it.');
+    const agent = chat.agent ?? run.agent, configDir = expandHome(chat.configDir, ports.env ?? process.env);
+    let resumeId = validSessionId(chat.session?.id) ? chat.session.id : null;
+    if (chat.startUnconfirmed) {
+      const own = await ownSession({run, chat, since: launchAnchor(chat), ports});
+      if (own.kind !== 'match' || resumeId && own.id !== resumeId) throw problem('chat_start_unconfirmed', 'Inspect the saved unconfirmed session before rebuilding its workspace.');
+      resumeId = own.id;
+    }
+    const custody = layout => layout.root ? {repoWorkspaceId: layout.repoWorkspaceId,
+      ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
+      ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
+    const layout = await openHerdrRunLayout({repository: run.repo, issueNumber: run.number, runId: run.runId,
+      workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run},
+    {command: herdr, directory: ports.layoutDirectory, execFile: ports.execFile,
+      checkpoint: async value => ports.checkpoint(null, custody(value))});
+    const live = await chatSession({...chat, paneId: layout.paneId, workspaceId: layout.workspaceId}, ports);
+    if (live.alive || live.code !== 'agent_not_found') throw problem('chat_identity_changed', 'The rebuilt area pane is occupied or cannot be inspected. No chat was started.');
+    Object.assign(chat, {workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
+      tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, state: 'starting', startUnconfirmed: true});
+    delete chat.evidence; delete chat.code;
+    if (resumeId) { chat.session = {agent, id: resumeId}; chat.resumedAt = now(); }
+    else {
+      chat.startedAt = now(); delete chat.resumedAt;
+      chat.session = agent === 'claude' ? {agent, id: (ports.randomUUID ?? randomUUID)()} : null;
+      chat.messageFile = join(run.runDir, `${chat.area}-start.md`);
+      writeFileSync(chat.messageFile, message);
+    }
+    await ports.checkpoint(chat, custody(layout));
+    await herdr(['pane', 'run', chat.paneId, chatCommand({commonDir: run.commonDir, sourceRoot: run.sourceRoot,
+      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...(resumeId ? {resumeId} : {messageFile: chat.messageFile, sessionId: chat.session?.id})})]);
+    delete chat.startUnconfirmed;
+    await ports.checkpoint(chat, custody(layout));
+    return true;
+  }, {directory: ports.layoutDirectory});
 }
 
 function attachSession() {
@@ -397,6 +469,14 @@ export async function closeChats(run, ports = {}) {
 }
 
 
+export function assertRestartCaller({chat, pending}, ports = {}) {
+  const env = ports.env ?? process.env;
+  const session = /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(env.HERDR_SOCKET_PATH ?? ''))?.[1];
+  if (env.PDD_AGENT_SESSION) throw problem('agent_caller', 'Use another terminal outside the agent session to replace this chat.');
+  if ((env.HERDR_ENV === '1' || env.HERDR_SOCKET_PATH) && (!session || !env.HERDR_PANE_ID)) throw problem('caller_pane_unknown', 'Use another terminal with a known Herdr session and pane.');
+  if (session === PDD_HERDR_SESSION && [chat.paneId,pending?.original?.paneId,pending?.replacement?.paneId].includes(env.HERDR_PANE_ID)) throw problem('own_chat', 'Use another terminal to replace this chat.');
+}
+
 // Replacement effects are authorized only by durable, awaited caller checkpoints.
 export async function restartChat({ run, chat, message, pending }, ports = {}) {
   if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required', 'Replacement requires durable checkpoints.');
@@ -412,10 +492,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     if (kind !== 'workspace' && rows.some(row => typeof row.workspace_id !== 'string' || !row.workspace_id || kind === 'pane' && ['tab_id', 'terminal_id', 'cwd'].some(key => typeof row[key] !== 'string' || !row[key]))) throw invalid();
     return rows;
   };
-  const session = /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(env.HERDR_SOCKET_PATH ?? ''))?.[1];
-  if (env.PDD_AGENT_SESSION) throw problem('agent_caller', 'Use another terminal outside the agent session to replace this chat.');
-  if ((env.HERDR_ENV === '1' || env.HERDR_SOCKET_PATH) && (!session || !env.HERDR_PANE_ID)) throw problem('caller_pane_unknown', 'Use another terminal with a known Herdr session and pane.');
-  if (session === PDD_HERDR_SESSION && [chat.paneId,pending?.original?.paneId,pending?.replacement?.paneId].includes(env.HERDR_PANE_ID)) throw problem('own_chat', 'Use another terminal to replace this chat.');
+  assertRestartCaller({chat, pending}, ports);
   let record = pending ? JSON.parse(JSON.stringify(pending)) : undefined;
   const savedConfig = original => expandHome(run.configDir !== undefined ? run.configDir : original.configDir, env);
   const validConfig = value => value === null || typeof value === 'string' && value.length > 0;

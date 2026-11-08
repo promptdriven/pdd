@@ -1,7 +1,7 @@
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 33dc44a7518d2fb7bf424398daf54496e911059e51d2bb93abd85e77ba1308dd).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: cd40783f991db2697a9aa326eb402e50dedda04764be0f7b7201e64df8980f9a).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -20,7 +20,7 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
-import { startChat, sendToChat, herdrCommand, chatSession, openChat, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
+import { startChat, sendToChat, herdrCommand, chatSession, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeChats, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
@@ -190,7 +190,7 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
 const sameFact = (a,b) => JSON.stringify(canonical(a ?? null)) === JSON.stringify(canonical(b ?? null));
 const lastChat = (run, area) => [...(run.chats ?? [])].reverse().find(chat => chat.area === area);
 // The chat identity and lifecycle fields that one observation may change.
-const CHAT_OBSERVATION = ['tabId', 'paneId', 'terminalId', 'session', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code'];
+const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code'];
 const sameChat = (a,b) => a.area === b.area && a.paneId === b.paneId;
 // Publication transports only the named fields produced by this observation.
 // PR entries and metadata are applied separately by their actual publishers.
@@ -397,7 +397,7 @@ const chatFailureWords = run => {
   const failure = activeChatFailure(run);
   return `the ${failure.area} chat ${failure.phase === 'start' ? 'startup' : 'open'} was not confirmed (${failureReason(failure)}). Run pdd workflow open ${run.number} after Herdr is available.`;
 };
-const chatStatusWords = (run, chat) => run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase) ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new` : activeChatFailure(run) ? chatFailureWords(run)
+const chatStatusWords = (run, chat) => run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase) ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new` : chat === 'closed' ? `the Herdr workspace was closed. Reopen it with pdd workflow open ${run.number}.` : activeChatFailure(run) ? chatFailureWords(run)
   : chat === 'unavailable' ? `Herdr status unavailable (server_unavailable); chat activity is unknown. Run pdd workflow open ${run.number} after Herdr is available.`
   : chat === 'starting' ? `the chat is starting, not confirmed: Herdr shows no agent in its tab. Run pdd workflow open ${run.number}.`
   : `chat startup is not confirmed. Run pdd workflow open ${run.number} after Herdr is available.`;
@@ -419,7 +419,7 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (run.state === 'stuck') return `stuck: ${stuckReason(run)}`;
   if (runtimeWaiting(run)) return `waiting for the interpreter: ${run.runtimeWait.reason}. Autopilot checks the interpreter at each tick and wakes it when the interpreter is back; an Autopilot alert names any need for a person (pdd autopilot status)`;
-  if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat)) return chatStatusWords(run, chat);
+  if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
   if (chat === 'stopped' && run.state === 'running') return `the chat stopped. Run pdd workflow open ${run.number} to start it again.`;
@@ -2901,6 +2901,7 @@ async function chatState(run, p) {
   if (!chat) return failure || !run.gate && !prOf(run, area?.name) ? 'unconfirmed' : null;
   if (!(run.state === 'running' || run.gate || failure)) return null;
   const live = await chatSession(chat, p);
+  if (live.workspaceClosed) return 'closed';
   // A never-seen chat after the grace counts as ended only when its own native session shows that the agent ran.
   const own = sessionEvidenceDue(chat, live, p.now()) && !observedSession(chat, chat.agent ?? run.agent) ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
   const observed = observeLifecycle(chat, live, p.now(), chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
@@ -2963,7 +2964,7 @@ function detail(run, chat = null, facts = {}) {
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
-  const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat) ? `pdd workflow open ${run.number}`
+  const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
     : run.gate ? approvalGuide(run)
     : runtimeWaiting(run) ? `nothing for a person unless an Autopilot alert asks (pdd autopilot status). Autopilot wakes this run when the interpreter is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
     : ended(run) ? null : prOf(run, area?.name) ? (run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch && run.pr[0]?.state === 'open' && run.pr[0]?.ci === 'failing'
@@ -2989,7 +2990,7 @@ const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
 function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
-  const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting'].includes(chat);
+  const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
   const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
     : run.state === 'stuck' || run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
@@ -3150,7 +3151,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   const run = found.run;
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. Its worktree is ${run.root}.`);
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
-  let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false;
+  let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
   if (selected < 0) return fail(`Unknown area ${area}. Valid areas: ${run.areas.map(item => item.name).join(', ')}.`);
   if (selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
   const historical = selected < run.area;
@@ -3158,7 +3159,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     const ownershipFailure = await continuationOwnership(run, cwd, p);
     if (ownershipFailure) return fail(ownershipFailure);
   }
-  const areaOriginal = area !== undefined && !newSession ? structuredClone(chat) : null;
+  let areaOriginal = area !== undefined && !newSession ? structuredClone(chat) : null;
   let defaultOriginal = chat ? structuredClone(chat) : undefined;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
   if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack','ended'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
@@ -3177,6 +3178,20 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   if (missing) return fail(missing);
 
   try {
+    if (newSession) assertRestartCaller({chat, pending}, p);
+    if (chat && !recovering) {
+      rebuilt = await rebuildClosedChat({run, chat, message: await areaMessage(run, selected, p, packageRoot)}, {...p,
+        checkpoint: async (observed, layout) => {
+          if (!saveChatObservations(run, defaultOriginal, observed, p, {checkpoint: true, layout}))
+            throw Object.assign(Error('The run changed during workspace recovery.'), {code: 'chat_target_changed'});
+          if (observed) {
+            defaultOriginal = structuredClone(observed);
+            if (areaOriginal) areaOriginal = structuredClone(observed);
+          }
+          if (layout) run.layout = {...run.layout, ...structuredClone(layout)};
+        }});
+      if (rebuilt) newSession = false;
+    }
     if (newSession) {
       if (recovering) chat = pending.original;
       const replacementArea = recovering ? run.areas.findIndex(item => item.name === pending.area) : run.area;
@@ -3234,7 +3249,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     const opened = await openChat({ run, chat }, { ...p, beforeAttach: async () => {
       const saved = areaOriginal ? saveAreaObservations(run, areaOriginal, chat, p)
         : saveChatObservations(run, defaultOriginal, chat, p);
-      if (saved && !historical && Number.isFinite(chat.resumedAt) && launchAnchor(chat) !== priorResumeAnchor) armCurrentAutomaticChat(run, p);
+      if (saved && !historical && (rebuilt || Number.isFinite(chat.resumedAt) && launchAnchor(chat) !== priorResumeAnchor)) armCurrentAutomaticChat(run, p);
       handedOff = true;
       p.releaseRunLock?.();
     } });
