@@ -136,7 +136,7 @@ async function launcherHarness(f) {
         if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return {code: 0, stdout: cwd + '/.git\n', stderr: ''};
         return {code: 0, stdout: cwd + '\n', stderr: ''};
       }
-      if (command === 'gh' && args[0] === 'repo') return {code: 0, stdout: JSON.stringify({nameWithOwner: repository}), stderr: ''};
+      if (command === 'gh' && args[0] === 'repo') return {code: 0, stdout: JSON.stringify({nameWithOwner: repository, defaultBranchRef: { name: 'main' }}), stderr: ''};
       if (command === 'gh' && args[0] === 'api' && args.at(-1).endsWith('/permission')) return {code:0, stdout:'HTTP/1.1 200 OK\r\n\r\n{\"permission\":\"admin\"}', stderr:''};
       if (command === 'gh' && args[0] === 'auth') return {code: 0, stdout: '', stderr: ''};
       if (command === 'herdr' && args[0] === '--version') return {code: 0, stdout: 'fixture', stderr: ''};

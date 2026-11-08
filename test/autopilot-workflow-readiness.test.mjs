@@ -52,7 +52,7 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
         try { return { code: 0, stdout: execFileSync('git', args, { cwd: options.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' }; }
         catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }; }
       }
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') {
         if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
@@ -387,8 +387,8 @@ test('status --all lists every repository with Autopilot on this machine from an
   const lines = stdout.text.trimEnd().split('\n');
   assert.equal(lines[0], 'Autopilot on this machine (2):');
   const row = repo => lines.find(text => text.startsWith(`${repo} in `));
-  assert.equal(row('owner/one'), `owner/one in ${one} · mode auto · Autopilot enabled · timer active · coordinator idle`);
-  assert.equal(row('owner/two'), `owner/two in ${two} · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`);
+  assert.equal(row('owner/one'), `owner/one in ${one} · base unavailable (start Autopilot) · mode auto · Autopilot enabled · timer active · coordinator idle`);
+  assert.equal(row('owner/two'), `owner/two in ${two} · base unavailable (start Autopilot) · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`);
   assert.equal(lines.length, 3);
   assert.ok(!calls.some(([kind]) => ['gh', 'github'].includes(kind)), 'no GitHub call');
   assert.ok(!calls.some(([kind, action]) => kind === 'timer' && action !== 'status'), 'timers are only read');
@@ -448,10 +448,10 @@ test('status --all keeps each line independent when a saved folder is gone or a 
   assert.equal(exitCode, 0, stderr.text);
   // Lines follow the order of the state file names; the ids of one and two depend on the temporary folder.
   const expected = {
-    [goneId]: `owner/gone in ${gone} · mode unknown (folder missing) · Autopilot enabled · timer active · coordinator unavailable (missing)`,
-    ['1'.repeat(20)]: `owner/plain in ${outside} · mode unknown (not a Git repository) · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
-    [id(one)]: `owner/one in ${one} · mode auto · Autopilot enabled · timer active · coordinator idle`,
-    [id(two)]: `owner/two in ${two} · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
+    [goneId]: `owner/gone in ${gone} · base unavailable (start Autopilot) · mode unknown (folder missing) · Autopilot enabled · timer active · coordinator unavailable (missing)`,
+    ['1'.repeat(20)]: `owner/plain in ${outside} · base unavailable (start Autopilot) · mode unknown (not a Git repository) · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
+    [id(one)]: `owner/one in ${one} · base unavailable (start Autopilot) · mode auto · Autopilot enabled · timer active · coordinator idle`,
+    [id(two)]: `owner/two in ${two} · base unavailable (start Autopilot) · mode observe · Autopilot disabled · timer inactive · coordinator unavailable (not recorded)`,
     ['e'.repeat(20)]: `${'e'.repeat(20)}.json: saved state unreadable`,
     ['f'.repeat(20)]: `${'f'.repeat(20)}.json: saved state unreadable`,
   };

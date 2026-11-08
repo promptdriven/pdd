@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: b75da23baa501c80b5b30d893cb240f3b55b0f1cf84b633af76e719f6aa35e28).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: cf34b15706165a8cd15c602f753afd474f568b3d94ea584d78db39463dcb2526).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -23,6 +23,8 @@ const routes = [
   { id: 'metrics.record', prefix: ['metrics', 'record'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics record FILE', 'Record explicit metrics observations.')] },
   { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'},{name:'--resume-custody',kind:'text'}],
     forms: [form('pdd autopilot start [--runs N] [--resume-custody FILE]', 'Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs optionally caps concurrent runs; --resume-custody supplies the verified original-owner projection.')] },
+  { id: 'autopilot.check-base', prefix: ['autopilot', 'check-base'], local: 'autopilot-check-base', operands: [{name:'run',type:'text'},{name:'pr',type:'text'}], options: [],
+    forms: [form('pdd autopilot check-base RUN PR', 'Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only.')] },
   { id: 'autopilot.stop', prefix: ['autopilot', 'stop'], local: 'autopilot-stop', operands: [], options: [],
     forms: [form('pdd autopilot stop', "Stop this machine's timer; let the current agent step finish.")] },
   { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [{name:'--all',kind:'flag'}],

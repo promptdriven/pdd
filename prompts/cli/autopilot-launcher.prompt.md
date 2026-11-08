@@ -4,7 +4,7 @@ Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(
 `tickAutopilot(stateFile, ports)` and `requestAutopilotCompletion({cwd,env}, ports)`, and the pure
 `autopilotLaunchFingerprint(state)` that returns the launch fingerprint below for a saved state. This launcher connects a repository to the
 person's interactive coding agent in a dedicated Herdr session. It adds no
-approval, merge, quota-reset or headless execution route. Preserve existing
+approval, merge, quota-reset or headless execution route. Its read-only base check refuses unsafe merge targets without performing a merge. Preserve existing
 setup, workflow and interpreter behavior.
 
 `runAutopilotLauncher` accepts command start, stop, status or add, cwd, packageRoot, env,
@@ -960,6 +960,8 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 ## Dependencies
 
+- [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
+
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage and identity.
 
 - [Workflow runner](workflow-runner.prompt.md#current-autopilot-start-ownership): required native generation and verification context for the existing shared admission lock.
@@ -1008,3 +1010,9 @@ Each measurement callback is independently best effort outside the native delive
 Telemetry repository discovery uses the same injected native process port as the existing launcher; a separate real process must not escape a controlled caller. A metricsContext port may supply the same repository/common-directory observation for controlled verification.
 
 Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.
+
+## One automatic base
+
+Use [automatic base selection](autopilot-base.prompt.md) for automatic runs. On start, include defaultBranchRef in the existing repository metadata read and cache its name in saved state.defaultBranch. An old saved state without it gets one metadata read on its next start or tick. Never add a metadata read per ordinary tick. Select state.baseBranch from the local config and this cached default at start and tick. Start, status and status --all show the selected base; status reads saved values only and makes no GitHub call for it. Include baseBranch in each work packet and tell the coordinator to use it for automatic starts, never to derive a base from documents. A changed selection must be delivered even when issues are unchanged.
+
+Catalog command `check-base` receives issues `[RUN, PR]`. Resolve the saved run with resolveRun, then call checkAutopilotBase with the saved run and PR through this launcher's counted process port. Return its result unchanged. This read-only command does not require a running coordinator, timer or agent. It supplies the pre-merge guard and post-merge base audit.

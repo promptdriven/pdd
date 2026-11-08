@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 57dcbf10ffa071a39133af7d26486d288d54569440a3321d09f993ba071b419f).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 00798476617d0ac24e57bf94d7e720948f0223515fa2db06cc06f8266e497b9b).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -109,7 +109,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
       } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
     }
-    case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
+    case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
         const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, cwd, packageRoot, env }, autopilotLauncherPorts);

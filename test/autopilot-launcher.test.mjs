@@ -30,7 +30,7 @@ async function fixture(t, options = {}) {
     run: async (command, args) => {
       f.runs.push([command, args]);
       if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"trunk"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
@@ -272,7 +272,7 @@ test('a GitHub owner spelled with capitals matches the canonical lowercase eligi
   const f = await fixture(t);
   const run = f.ports.run;
   f.ports.run = async (command, args, opts) => command === 'gh' && args[0] === 'repo'
-    ? { code: 0, stdout: '{"nameWithOwner":"Serhan-Asad/PDD-Sandbox","url":"https://github.com/Serhan-Asad/PDD-Sandbox"}', stderr: '' }
+    ? { code: 0, stdout: '{"nameWithOwner":"Serhan-Asad/PDD-Sandbox","defaultBranchRef":{"name":"main"},"url":"https://github.com/Serhan-Asad/PDD-Sandbox"}', stderr: '' }
     : run(command, args, opts);
   // GitHub spells html_url with the owner's capitals; the dependency graph stores canonical lowercase keys.
   const mixed = number => issue(number, { user: { login: 'Serhan-Asad' }, html_url: `https://github.com/Serhan-Asad/PDD-Sandbox/issues/${number}` });
@@ -1622,4 +1622,40 @@ test('2903: the relaunch close compares the folder when no terminal id is saved,
   f.saveState(state => { delete state.ownerLaunch.fingerprint; });
   f.status = 304; f.time += 60 * 1000; await f.tick();
   assert.deepEqual(f.closed, ['w1:p1']); assert.equal(f.state().paneId, 'w2:p1');
+});
+
+for (const configured of [undefined, 'develop/topic']) test(`3071 launcher selects and caches base ${configured ?? 'default'}`, async t => {
+  const f = await fixture(t);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({autopilot:{mode:'auto', ...(configured ? {base:configured} : {})}}));
+  writeFileSync(join(f.cwd, 'CONTRIBUTING.md'), 'Use alpha for all PRs.');
+  const expected = configured ?? 'trunk';
+  const start = await f.invoke('start');
+  assert.equal(start.exitCode, 0, start.message);
+  assert.equal(f.state().baseBranch, expected);
+  assert.equal(f.state().defaultBranch, 'trunk');
+  assert.ok(start.message.includes(expected));
+  const packet = JSON.parse(f.prompts[0].trimEnd().split('\n').at(-1));
+  assert.equal(packet.baseBranch, expected); assert.equal(packet.workflow.baseBranch, expected);
+  const reads = () => f.runs.filter(([command,args]) => command === 'gh' && args[0] === 'repo').length;
+  assert.equal(reads(), 1);
+  f.status = 304;
+  await f.tick(); await f.tick();
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0); assert.ok(status.message.includes(expected)); assert.equal(reads(), 1);
+  const all = await f.invoke('status', {all:true}); assert.ok(all.message.includes(expected)); assert.equal(reads(),1);
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({autopilot:{mode:'auto',base:'integration'}}));
+  await f.tick();
+  assert.equal(f.state().baseBranch, 'integration'); assert.equal(reads(),1);
+  const updated = JSON.parse(f.prompts.at(-1).trimEnd().split('\n').at(-1));
+  assert.equal(updated.baseBranch, 'integration');
+});
+
+test('3071 old launcher state reads default metadata once on tick', async t => {
+  const f = await fixture(t); assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(); delete state.defaultBranch; delete state.baseBranch;
+  writeFileSync(f.stateFile(),JSON.stringify(state));
+  f.status=304;
+  await f.tick(); await f.tick();
+  assert.equal(f.state().baseBranch,'trunk');
+  assert.equal(f.runs.filter(([cmd,args])=>cmd==='gh' && args[0]==='repo').length,2);
 });

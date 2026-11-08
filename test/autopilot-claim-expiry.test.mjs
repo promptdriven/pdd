@@ -344,7 +344,7 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }), pathDiagnostic: () => [],
     run: async (command, args, options = {}) => {
       if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };
-      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","url":"https://github.com/owner/repo"}', stderr: '' };
+      if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') {
         const id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(args[4] ?? '')?.[1];
