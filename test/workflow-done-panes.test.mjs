@@ -324,3 +324,19 @@ test('3096: replacement allocation saves refreshed root custody before creating 
   assert.equal(f.record().layout.restartTerminal, true);
   assert.equal(f.record().chatReplacement.phase, 'launched');
 });
+
+test('3096 integration: creation checkpoints retain root custody before area allocation', async t => {
+  const f = await liveLayout(t), snapshots = [];
+  f.ports.checkpoint = async value => {
+    snapshots.push(structuredClone(value));
+    if (!value.workspaceId) return;
+    const shell = f.herdr.panes.find(p => p.workspace_id === value.workspaceId);
+    assert.equal(value.createdWorkspaceId, value.workspaceId);
+    assert.deepEqual([value.root?.tabId, value.root?.paneId, value.root?.terminalId],
+      [shell.tab_id, shell.pane_id, shell.terminal_id]);
+    if (!f.herdr.calls.some(a => a[0] === 'tab' && a[1] === 'create'))
+      assert.equal(value.tabId, undefined, 'root custody cannot invent an area chat');
+  };
+  const opened = await f.open();
+  assert.ok(snapshots.filter(value => value.workspaceId === opened.workspaceId).length >= 2);
+});

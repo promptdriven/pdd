@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 83babbdbe059026ebf4a4b3e2ba4f1dfd83987daf73c6c48caa694a71012ef1f).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 13237aa280d8be0b42f3ebe75292fbb87739f514f8695c3b21ed1f0eb3c71f73).
 import { mkdir, lstat, realpath } from 'node:fs/promises';
 import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -197,11 +197,11 @@ export async function recoverHerdrRunLayout({run, cwd, commonDir}, ports) {
       try { await command(['agent', 'get', pane.pane_id]); }
       catch (error) {
         if (error.code !== 'agent_not_found') throw error;
-        await assertShellForeground(command, pane.pane_id);
         continue;
       }
       throw identityChanged(saved.workspaceId, 'root_pane', root, currentPanes);
     }
+    for (const pane of currentPanes) await assertShellForeground(command, pane.pane_id);
     if ((run.chats ?? []).some(chat => chat.workspaceId === saved.workspaceId && chat.startUnconfirmed && chat.state !== 'ended'))
       throw problem('chat_start_unconfirmed');
   };
@@ -229,7 +229,7 @@ async function runRoot(command, workspaceId, owner, opened, stageId) {
   const panes = await paneRows(command, workspaceId), tabs = await tabsFor(command, workspaceId);
   const saved = owner?.layout?.workspaceId === workspaceId ? owner.layout : null;
   const root = opened?.tab && opened?.root_pane
-    ? {tabId: opened.tab.tab_id, paneId: opened.root_pane.pane_id, terminalId: opened.root_pane.terminal_id} : saved;
+    ? {tabId: opened.tab.tab_id, paneId: opened.root_pane.pane_id, terminalId: opened.root_pane.terminal_id} : saved && [saved.tabId, saved.paneId, saved.terminalId].every(id) ? saved : null;
   let pane;
   if (root) pane = panes.find(p => p.tab_id === root.tabId && p.pane_id === root.paneId && p.terminal_id === root.terminalId);
   else {
@@ -374,7 +374,10 @@ export async function openHerdrRunLayout(input, ports) {
     if (opened.id !== 'cli:worktree:open' || !id(opened.result?.workspace?.workspace_id)) throw problem('invalid_worktree_reply');
     if (opened.result.already_open === false && !workspaceIdsBefore.has(opened.result.workspace.workspace_id)) {
       createdWorkspaceId = opened.result.workspace.workspace_id;
-      custody = {...custody, workspaceId: createdWorkspaceId, createdWorkspaceId, restartTerminal: false};
+      const tab = opened.result.tab, pane = opened.result.root_pane;
+      const root = [tab?.tab_id, pane?.pane_id, pane?.terminal_id].every(id)
+        ? {tabId: tab.tab_id, paneId: pane.pane_id, terminalId: pane.terminal_id, rootLabel: tab.label} : undefined;
+      custody = {...custody, workspaceId: createdWorkspaceId, createdWorkspaceId, restartTerminal: false, ...(root ? {root} : {})};
       await save();
     }
     rows = await inventory(command);
@@ -491,7 +494,7 @@ export async function closeHerdrRunLayout({runId, cwd, layout, commonDir}, ports
     if (refresh) {
       const panes = await paneRows(command, run.workspaceId), tabs = await tabsFor(command, run.workspaceId);
       const pane = panes[0], tab = tabs[0];
-      if (panes.length === 1 && tabs.length === 1 && pane.tab_id === root.tabId && pane.pane_id === root.paneId
+      if (layout.phase !== 'close_intent' && panes.length === 1 && tabs.length === 1 && pane.tab_id === root.tabId && pane.pane_id === root.paneId
         && tab.tab_id === root.tabId && tab.label === (root.rootLabel ?? '1') && pane.terminal_id !== root.terminalId) {
         run.restartTerminal = true;
         await assertRunShell(command, run, ports);
