@@ -85,3 +85,16 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
   f.agentPorts = extra => ({ ...f.ports, isTTY: false, env: { ...f.ports.env, PDD_AGENT_SESSION: '1' }, ...extra });
   return f;
 }
+
+// Explicit live ownership evidence for synthetic automatic runs. Capture it once;
+// later edits to saved origin must not change the observed winner.
+export function matchingClaimObservation(run) {
+  const {repository, coordinatorId, machine, claim} = run.automaticOrigin;
+  assert.equal(repository, run.repo);
+  return {localOwner: coordinatorId, claims: [{issue: run.issue.url, active: true,
+    owner: coordinatorId, coordinatorId, machine, ...claim}]};
+}
+export function matchingClaimPorts(run) {
+  const observation = matchingClaimObservation(run);
+  return {read: async () => ({json: JSON.stringify(observation)})};
+}

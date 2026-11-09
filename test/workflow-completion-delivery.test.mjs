@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync} from 'node:fs';
 import {join} from 'node:path';
-import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
+import {fixture, packageRoot, matchingClaimPorts} from './helpers/workflow-runner-fixture.mjs';
 import {readDependencySnapshot} from '../src/issue-dependencies-github.mjs';
 import {reconcileDependencyIntake, checkDependencyStart} from '../src/issue-dependencies-intake.mjs';
 import {runAutopilotLauncher} from '../src/autopilot-launcher.mjs';
@@ -227,6 +227,7 @@ test('automatic open resume and replacement arm their captured attempts', async 
   assert.equal((await f.run()).exitCode, 0);
   const before = f.record();
   updateRun(before.runDir, run => { run.automaticOrigin = {repository, coordinatorId:'coordinator', machine:'machine', claim:{commentId:'11',labelEventId:'12'}}; return run; }, f.ports);
+  f.ports.owners = matchingClaimPorts(f.record());
   const armed = [], ports = {...f.ports, isTTY:false, env:{...f.ports.env, HERDR_SOCKET_PATH:'/sessions/pdd-autopilot/socket', HERDR_PANE_ID:'coordinator'}, armWorkerCompletion: identity => armed.push(identity)};
   const old = f.record().chats.at(-1); f.herdr.paneOf(old).agent = null; f.tick(31000);
   const resumed = await openRun({ref:'17',cwd:f.source,packageRoot}, ports);

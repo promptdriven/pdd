@@ -7,7 +7,7 @@ import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
 import {nudgeIdleRun, openRun, runStatus} from '../src/workflow-runner.mjs';
-import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
+import {fixture, packageRoot, matchingClaimPorts, matchingClaimObservation} from './helpers/workflow-runner-fixture.mjs';
 
 const WAIT = 600000;
 const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
@@ -62,6 +62,7 @@ async function setup(t, agent = 'claude', name = 'small-change') {
   const run = f.record();
   run.automaticOrigin = {repository: run.repo, coordinatorId: 'idle-owner', machine: 'idle-machine', claim: {commentId: '11', labelEventId: '12'}};
   save(f, run);
+  f.ports.owners = matchingClaimPorts(run);
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   const stateFile = join(f.state, 'launcher.json');
   writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main', stateFile, cwd: f.source, repo: run.repo, packageRoot,
@@ -265,7 +266,7 @@ test('3072 repair 1: a fresh tick process hands off a saved idle stop once', asy
       return {code: 0, ...await exec(file, args, options)};
     };
     const ports = {...healthyMachine, sendDigest: async () => ({exitCode: 0}), checkCapacityPorts: isolatedCheckCapacity(input.stateDir), stateDir: input.stateDir, env: input.env, layoutDirectory: input.layoutDirectory,
-      now: () => input.now, herdr: h.herdr, findNativeSessions: async () => [], run: execute, execFile: execute,
+      now: () => input.now, herdr: h.herdr, owners: {read: async () => ({json: JSON.stringify(input.ownership)})}, findNativeSessions: async () => [], run: execute, execFile: execute,
       warn: value => warnings.push(value), alertPorts: {hostname: () => 'idle-machine',
         http: async request => {requests.push(request); return {status: 200,
           text: JSON.stringify({id: 'fixture-message', content: request.body.content})};}}};
@@ -277,7 +278,7 @@ test('3072 repair 1: a fresh tick process hands off a saved idle stop once', asy
   `;
   const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     cwd: packageRoot, encoding: 'utf8', timeout: 10000,
-    input: JSON.stringify({stateFile, stateDir: f.state, env: f.ports.env, layoutDirectory: f.ports.layoutDirectory, now: f.clock})
+    input: JSON.stringify({stateFile, stateDir: f.state, env: f.ports.env, layoutDirectory: f.ports.layoutDirectory, now: f.clock, ownership: matchingClaimObservation(saved)})
   }));
   assert.deepEqual(result.warnings, []);
   assert.equal(result.requests.length, 1, '3072: a saved idle stop must reach the alert service after restart');

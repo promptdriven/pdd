@@ -8,7 +8,7 @@ import {acknowledgeRequest, askPerson, cancelRun, changeRun, openRun, runStatus,
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {closeFinishedChats} from '../src/workflow-chat.mjs';
-import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
+import {fixture, packageRoot, matchingClaimPorts, matchingClaimObservation} from './helpers/workflow-runner-fixture.mjs';
 
 const origin = {repository: 'example/project', coordinatorId: 'coordinator-a', machine: 'machine-a', claim: {commentId: '11', labelEventId: '12'}};
 const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
@@ -19,6 +19,7 @@ async function setup(t, agent = 'claude', {observe = true} = {}) {
   if (observe) assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
   f.ports.env.XDG_CONFIG_HOME = join(f.ports.env.HOME, '.config');
   const run = f.record(); run.automaticOrigin = structuredClone(origin); save(f, run);
+  f.ports.owners = matchingClaimPorts(run);
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   const stateFile = join(f.state, 'launcher.json');
   writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main', stateFile, cwd: f.source, repo: run.repo, packageRoot,
@@ -475,14 +476,15 @@ for (const confirmed of [false, true]) test(`3068 repair 2: ${confirmed ? 'confi
       return {code: 0, ...await exec(file, args, options)};
     };
     await tickAutopilot(input.stateFile, {stateDir: input.stateDir, env: input.env,
-      layoutDirectory: input.layoutDirectory, now: () => input.now, herdr: h.herdr,
+      layoutDirectory: input.layoutDirectory, now: () => input.now, herdr: h.herdr, owners: {read: async () => ({json: JSON.stringify(input.ownership)})},
       findNativeSessions: async () => [], run: execute, execFile: execute,
+      owners: {read: async () => ({json: JSON.stringify(input.ownership)})},
       warn: value => warnings.push(value), sendAlert: async value => {alerts.push(value); return {exitCode: 0};}});
     process.stdout.write(JSON.stringify({launches: h.calls.filter(a => a[0] === 'pane' && a[1] === 'run'), alerts, warnings}));
   `;
   const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     cwd: packageRoot, encoding: 'utf8', timeout: 10000,
-    input: JSON.stringify({stateFile, stateDir: f.state, env: f.ports.env, layoutDirectory: f.ports.layoutDirectory, now: f.clock})
+    input: JSON.stringify({stateFile, stateDir: f.state, env: f.ports.env, layoutDirectory: f.ports.layoutDirectory, now: f.clock, ownership: matchingClaimObservation(run)})
   }));
   assert.equal(result.launches.length, 0);
   assert.deepEqual(result.warnings, []);
