@@ -42,6 +42,38 @@ test('3139 supported optional exclusions and completion evidence are checked ind
   assert.equal(reviewSmallChangeChecklist({items: [{...requests[0], state: 'done'}]}, [requests[0]])[0].code, 'missing-evidence');
 });
 
+for (const [code, invalid] of [
+  ['pending-request', {state: 'pending'}],
+  ['missing-evidence', {state: 'done', evidence: ''}],
+  ['unsupported-exclusion', {state: 'excluded'}],
+]) test(`3139 duplicate row: ${code} uses the later row's own state`, async t => {
+  const f = await fixture(t); assert.equal((await f.run()).exitCode, 0);
+  const run = f.record();
+  const items = [completed()[0], {...requests[0], id: 'R2', ...invalid}];
+  const expected = [{id: 'R2', code}];
+  writeFileSync(join(run.runDir, 'small-change-checklist.json'), JSON.stringify({
+    schema_version: 'pdd.small-change-checklist.v1', run_id: run.runId,
+    source: {kind: 'git-content-v1', sha256: sourceFingerprint(run.root)}, items,
+  }));
+  const checklist = readSmallChangeChecklist(run);
+  assert.equal(checklist.status, 'recorded');
+  assert.deepEqual(checklist.items, items);
+  // Collect every public result before asserting, so old code exercises each boundary.
+  // Checker ids intentionally differ from the builder's ids.
+  const independent = [{...requests[0], id: 'issue-request'}];
+  const results = {
+    reader: checklist.mustFix,
+    builder: reviewSmallChangeChecklist({items}),
+    independent: reviewSmallChangeChecklist({items}, independent),
+    duplicateIndependent: reviewSmallChangeChecklist({items}, [...independent, {...independent[0], id: 'trusted-request'}]),
+    readinessBlocked: /^⛔/.test(prStatus(render(checklist))),
+  };
+  assert.deepEqual(results, {
+    reader: expected, builder: expected, independent: expected,
+    duplicateIndependent: expected, readinessBlocked: true,
+  });
+});
+
 test('3139 PR checklist retains every item, state, source and exclusion quote', () => {
   const items = completed(); items[1] = {...requests[1], state: 'excluded', exclusion: {reason: 'optional', quote: 'OPTIONAL_3139'}};
   const body = readablePrTop(render({status: 'recorded', items, mustFix: []})).text;

@@ -11,14 +11,15 @@ const sameRequest = (a, b) => ['request', 'source', 'quote'].every(key => a[key]
 export function reviewSmallChangeChecklist(checklist, requests) {
   const items = checklist?.items ?? [], findings = [];
   const add = (item, code) => findings.push({id: item.id, code});
-  for (const request of requests ?? items) {
-    const item = items.find(item => sameRequest(item, request));
-    if (!item) { add(request, 'missing-request'); continue; }
+  for (const item of items) {
     if (item.state === 'pending') add(item, 'pending-request');
     else if (item.state === 'done' && !text(item.evidence)) add(item, 'missing-evidence');
     else if (item.state === 'excluded' && (!text(item.exclusion?.reason) || !text(item.exclusion?.quote)
-      || requests && item.exclusion.quote !== request.exclusion_quote)) add(item, 'unsupported-exclusion');
+      || requests && !requests.some(request => sameRequest(item, request)
+        && item.exclusion.quote === request.exclusion_quote))) add(item, 'unsupported-exclusion');
   }
+  for (const request of requests ?? [])
+    if (!items.some(item => sameRequest(item, request))) add(request, 'missing-request');
   return findings;
 }
 

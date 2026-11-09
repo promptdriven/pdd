@@ -23,9 +23,14 @@ are malformed. Do not truncate an inventory to make it pass.
 id/request/source/quote fields and optional `exclusion_quote`: the exact issue
 text the checker judged authorizes exclusion. Match by source, request and quote,
 not by the builder's id. Missing requests give `missing-request`; extra checklist
-items give no coverage of another request. Pending items give `pending-request`;
+items give no coverage of another request. Validate every checklist row by its
+own unique id, including extra rows and rows with identical request/source/quote.
+A completed row cannot supply another row's state, evidence or exclusion.
+Pending items give `pending-request`;
 done without evidence gives `missing-evidence`; exclusions without a reason and
-an exact match to the independent `exclusion_quote` give `unsupported-exclusion`.
+an exact match to a matching independent request's `exclusion_quote` give
+`unsupported-exclusion`. Report completion findings with the checklist row's id;
+report missing requests with the independent request's id.
 The reader uses the same completion checks without an independent inventory;
 it does not claim semantic completeness or authorize an exclusion. The checker
 must derive requests from the full issue and trusted follow-ups, never the plan.
