@@ -328,8 +328,10 @@ test('base integration: verify then formal then change charges each merged sourc
   assert.equal((await done('verify')).exitCode, 0);
   const verified = f.record();
   assert.deepEqual(verified.integrationRounds, { build: 1 });
-  assert.deepEqual(verified.done.change.integrationSource, original.done.change.integrationSource,
-    'the earlier step must keep its actual source identity');
+  assert.equal(verified.done.change, undefined, 'the earlier step on old source must be recorded again');
+  assert.ok(verified.stepHistory.some(row => row.step === 'change'
+    && JSON.stringify(row.record) === JSON.stringify(original.done.change)),
+    'the earlier step keeps its actual source identity in history');
   assert.notDeepEqual(verified.done.verify.integrationSource, original.done.verify.integrationSource);
   await done('formal', 'failed formal on integrated source');
   assert.equal((await done('verify')).exitCode, 0, 'repeated verify is free');
@@ -341,8 +343,10 @@ test('base integration: verify then formal then change charges each merged sourc
   assert.deepEqual(changed.repairRounds, { build: 2 }, 'repeating change on accounted source is free');
   assert.deepEqual(changed.done.change.integrationSource, verified.done.verify.integrationSource);
   for (const step of ['change', 'verify', 'formal']) {
-    assert.ok(changed.stepHistory.some(row => row.step === step
-      && JSON.stringify(row.record) === JSON.stringify(beforeChange.done[step])), 'retain replaced and cleared source evidence');
+    const previous = beforeChange.done[step] ?? original.done[step];
+    const retained = step !== 'change' && JSON.stringify(changed.done[step]) === JSON.stringify(previous);
+    assert.ok(retained || changed.stepHistory.some(row => row.step === step
+      && JSON.stringify(row.record) === JSON.stringify(previous)), 'retain current or archived source evidence');
   }
   await done('verify'); advanceBase(f, run, 2);
   const second = await done('change');
@@ -367,6 +371,86 @@ function advanceEmptyBase(f, run) {
   f.git(run.root, 'merge', '--no-edit', 'refs/remotes/origin/main');
 }
 
+test('base integration: formal first archives all older source records before publication', async t => {
+  const { f, run, done, edit } = await publishingRun(t);
+  edit(); await done('change'); await done('verify');
+  f.createError = 'HTTP 502: Bad Gateway';
+  assert.equal((await done('formal')).exitCode, 1);
+  const before = f.record(), publications = f.prs.length, pushes = f.pushes.length;
+  advanceBase(f, run, 1);
+  const result = await done('formal', 'formal on integrated source');
+  assert.equal(result.exitCode, 0, result.message);
+  const after = f.record();
+  assert.equal(after.done.verify, undefined, 'changed source requires fresh verification; the old result must be history');
+  assert.equal(after.done.change, undefined, 'all earlier records on the old source must leave current results');
+  for (const step of ['change', 'verify', 'formal']) {
+    assert.ok(after.stepHistory.some(row => row.step === step
+      && JSON.stringify(row.record) === JSON.stringify(before.done[step])), 'keep each old record with its actual source');
+  }
+  assert.notEqual(after.done.formal.integrationSource.tree, before.done.formal.integrationSource.tree);
+  assert.deepEqual(after.integrationRounds, { build: 1 });
+  assert.equal(after.repairRounds, undefined);
+  assert.equal(f.prs.length, publications, 'publishing waits for fresh verification');
+  assert.equal(f.pushes.length, pushes, 'do not push before fresh step records');
+  assert.match(result.message, /Next step: change\b/);
+  assert.match((await done('formal')).message, /Next step: change\b/);
+  assert.equal(f.prs.length, publications);
+  assert.match((await done('change')).message, /Next step: verify\b/);
+  assert.equal(f.prs.length, publications);
+  assert.equal((await done('verify')).exitCode, 0);
+  assert.equal(f.prs.length, publications + 1, 'fresh records allow publication');
+  const fresh = f.record();
+  for (const step of ['change', 'verify', 'formal']) {
+    assert.equal(fresh.done[step].integrationSource.tree, after.done.formal.integrationSource.tree);
+  }
+  assert.deepEqual(fresh.integrationRounds, { build: 1 }, 'rerecording missing steps does not charge again');
+  assert.equal(fresh.repairRounds, undefined);
+  advanceBase(f, run, 2);
+  assert.equal((await done('formal')).exitCode, 0);
+  const second = f.record();
+  assert.equal(second.done.change, undefined); assert.equal(second.done.verify, undefined);
+  assert.deepEqual(second.integrationRounds, { build: 2 });
+  advanceBase(f, run, 3);
+  assert.equal((await done('change')).exitCode, 1, 'a missing current step cannot bypass the integration bound');
+  const refused = f.record();
+  assert.deepEqual(refused.integrationRounds, { build: 2 });
+  assert.equal(refused.repairRounds, undefined);
+  assert.deepEqual(refused.done, second.done); assert.deepEqual(refused.stepHistory, second.stepHistory);
+  assert.equal(refused.integrationLimit.area, 'build');
+});
+
+test('base integration: native assertion failing after a formal-first merge leaves the PR blocked', async t => {
+  const { f, run, done, edit } = await publishingRun(t);
+  writeFileSync(join(f.source, 'ready.mjs'), 'export const ready = true;\n');
+  f.git(f.source, 'add', 'ready.mjs'); f.git(f.source, 'commit', '-qm', 'Old base passes native validation');
+  f.git(f.source, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  f.git(run.root, 'merge', '--no-edit', 'refs/remotes/origin/main');
+  const validate = () => exec(process.execPath, ['--input-type=module', '-e',
+    "import {ready} from './ready.mjs'; import assert from 'node:assert/strict'; assert.equal(ready,true,'REVIEW_BASE_READY');"],
+    { cwd: run.root, env: { ...process.env, ...f.ports.env }, encoding: 'utf8' });
+  edit(); await done('change');
+  await validate(); await done('verify', 'native assertion passed on old source');
+  f.createError = 'HTTP 502: Bad Gateway';
+  assert.equal((await done('formal')).exitCode, 1);
+  const before = f.record(), publications = f.prs.length;
+  writeFileSync(join(f.source, 'ready.mjs'), 'export const ready = false;\n');
+  advanceBase(f, run, 1);
+  await assert.rejects(validate, error => error.code === 1 && /REVIEW_BASE_READY/.test(error.stderr));
+  const result = await done('formal', 'formal on source with failed native assertion');
+  assert.equal(f.prs.length, publications, 'a failed fresh assertion cannot publish with stale verification');
+  assert.equal(f.record().done.verify, undefined);
+  assert.match(result.message, /Next step: change\b/);
+  await done('change');
+  const retry = await done('formal', 'publication retry while fresh verification is missing');
+  assert.match(retry.message, /Next step: verify\b/);
+  assert.equal(f.prs.length, publications);
+  assert.equal(f.record().done.verify, undefined, 'the failed assertion supplies no completed fresh verify step');
+  assert.ok(f.record().stepHistory.some(row => row.step === 'verify'
+    && JSON.stringify(row.record) === JSON.stringify(before.done.verify)));
+  assert.deepEqual(f.record().integrationRounds, { build: 1 });
+  assert.equal(f.record().repairRounds, undefined);
+});
+
 test('base integration: mixed returns after an empty base advance keep the second merge available', async t => {
   const { f, run, done, edit } = await publishingRun(t, { rounds: { build: 2 } });
   const accepted = async step => {
@@ -383,15 +467,20 @@ test('base integration: mixed returns after an empty base advance keep the secon
   const afterEmpty = f.record();
   assert.equal(afterEmpty.done.verify.integrationSource.tree, beforeEmpty.done.verify.integrationSource.tree);
   assert.notEqual(afterEmpty.done.verify.integrationSource.base, beforeEmpty.done.verify.integrationSource.base);
-  assert.deepEqual(afterEmpty.done.change, originalChange, 'old results keep their real source');
+  assert.equal(afterEmpty.done.change, undefined, 'old source records cannot stay current after integration');
+  assert.ok(afterEmpty.stepHistory.some(row => row.step === 'change'
+    && JSON.stringify(row.record) === JSON.stringify(originalChange)), 'old results keep their real source in history');
   assert.deepEqual(afterEmpty.integrationRounds, { build: 1 });
   assert.deepEqual(afterEmpty.repairRounds, { build: 2 });
   await accepted('change');
   assert.deepEqual(f.record().integrationRounds, { build: 1 }, 'the same tree must not be charged again');
   assert.deepEqual(f.record().repairRounds, { build: 2 });
   for (const step of ['change', 'verify', 'formal']) {
-    assert.ok(f.record().stepHistory.some(row => row.step === step
-      && JSON.stringify(row.record) === JSON.stringify(afterEmpty.done[step])));
+    const previous = afterEmpty.done[step] ?? originalChange;
+    const current = f.record();
+    const retained = current.done[step] && JSON.stringify(current.done[step]) === JSON.stringify(previous);
+    assert.ok(retained || current.stepHistory.some(row => row.step === step
+      && JSON.stringify(row.record) === JSON.stringify(previous)));
   }
   advanceBase(f, run, 2); await accepted('change');
   assert.deepEqual(f.record().integrationRounds, { build: 2 }, 'a new tree charges even with no later records');
