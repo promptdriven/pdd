@@ -12,6 +12,9 @@ function setupDraft(t,{nativePass=true,changeProse=false,scripts,broken=false,bu
   const setup=harbor(t,repo=>{
     const file=join(repo,PLACE),text=readFileSync(file,'utf8'),block=interfaceBlocks(text)[0],iface=JSON.parse(block[1]);
     delete iface.status;delete iface.prose_sha256;
+    // Authored coverage evidence lets these safety tests reach their intended checks.
+    // Keep the domain prose and every existing safety assertion.
+    iface.entries[0].result_schema.description=text.replace(block[0],'').replace(/^#{1,6}[^\n]*$/gm,'').replace(/None\.\s*$/,'').trim();
     writeFileSync(file,text.replace(block[0],'')+'\n## Public schema\n\n```json\n'+JSON.stringify(iface)+'\n```\n');
     const scenario=JSON.parse(readFileSync(join(repo,'tests/place-order.json'),'utf8'));
     scenario.criteria=scenario.criteria.slice(0,1);scenario.steps[0].checks=scenario.steps[0].checks.slice(0,1);

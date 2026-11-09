@@ -660,7 +660,8 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
 | `pdd test --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI or interpreter call; missing/hidden parts, order or region differences fail |
-| `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks and lint locally, without AI or network calls. Uncertain schemas stay draft gaps. |
+| `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks from explicit prose or contracts and lint locally, without AI or network calls. Uncertain facts include field questions and a recovery command. |
+| `pdd interface draft PROMPT [--contract FILE] [--extend \| --refresh] [--json]` | Supply schemas and effect ports, extend an existing block, or reopen a stale block as draft. |
 | `pdd approve PROMPT --automatic --tests COMMAND` | Approve a complete draft of unchanged committed behavior after existing native tests and a complete current prompt check. Strict mode requires a person. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Open the Story in the PDD Simulator: make a Simulator link and open it in your browser. It ends in 24 hours. Short form: `pdd sim`. `--agent NAME` chooses a configured display name (quote spaces), or codex, claude or gemini. With terminal stdout or explicit `--agent`, it connects your agent and waits. Without either, it reads saved cases once and returns. `--no-wait` skips the connection. In a terminal, it adds each case saved in the Simulator to the Story's test file, and asks y/n when you click Approve on the page |
@@ -1261,11 +1262,95 @@ The installed interface drafting capability clears a saved Autopilot wait for
 ordinary continuation route. It does not approve a prompt or a person gate.
 
 `pdd interface draft --all` selects workspace prompts and excludes nested fixture
-projects. Existing blocks stay unchanged. Each result includes local lint findings.
+projects. Without extension or refresh, existing blocks stay unchanged. Each result includes local lint findings.
 A clean local lint is not a server lint or a prompt check. Setup offers this command
 when it finds missing blocks. It never approves them.
 
-The automatic approval route requires a complete draft from this command,
+
+Locally valid authored drafts omit the redundant `kind: full` field so the strict Runtime
+parser can read them; a missing kind means full. Partial local drafts retain
+`kind: partial` and their questions.
+
+The local prose drafter recognizes an explicit single-operation transport: a named
+operation, a required named input field with its type, and a required named result
+field with its type, in closed objects. It requires an explicit pure-behavior
+statement. Its draft execution ceilings are `max_steps: 4` and `max_model_calls: 2`.
+The result labels these as `command-default` draft budgets for review. A prose
+draft that uses them needs a person and cannot use automatic approval. To choose
+other ceilings, supply a contract with `--refresh --contract FILE`.
+Numeric inputs remain numbers even if the function rejects fractions. A contract
+that explicitly requests representative JSON rejection shapes can use a disjoint
+`oneOf` for number, string, boolean, null, arrays of numbers and empty objects.
+This transport does not cover arbitrary nested JavaScript objects.
+The JSON row includes local `lint_clean` and a `prose_coverage` report. A draft
+never claims completeness. Each quoted contract sentence is `mapped`, `unmapped`
+or `conflicting`. Mappings name exact fields and their retained values in
+`mappings` (`pointer` and `meaning`); `pointers` lists the same fields. A description
+can retain prose meaning, but cannot override a contradictory schema type.
+Unknown meaning stays unmapped. Each unresolved sentence has a review question
+and a next step. This report is evidence for review, not proof of behavior.
+
+The report covers prose, embedded JSON, dependency JSON, `--contract`, `--refresh`
+and `--extend`, including declared context after shared `$contract` expansion.
+Valid authored JSON is accepted as the author's declaration even when coverage
+needs review. Coverage does not make it partial or rewrite its fields. Extension
+preserves approved declaration bytes. Prose inference with unresolved meaning
+stays partial. Local lint is not Runtime admission: Runtime lint must pass before
+an executable draft is used. Import, refresh and extension validate expanded
+schema copies and preserve authored references in the saved block.
+
+For complex prose, each incomplete result has `questions` with `pointer` and
+`question`, and `next_step`. Answer the questions in a Git-visible JSON contract
+file, with complete `entries`, `calls`, `resources`, `limits` and `conventions`.
+Authored `draft_gaps` and malformed inferred schemas also produce questions and a
+next step on the first invocation. Repeating the command keeps those questions
+stable.
+Use the resource declarations in [RUNBOOK §21](../RUNBOOK.md#21-fake-the-outside-world)
+for file, network and program ports. Then run:
+
+```sh
+pdd interface draft prompts/example.prompt.md --contract contracts/example.json
+pdd lint example
+```
+
+If the prompt already contains an incomplete block, add `--refresh` to the draft
+command. A supplied invalid schema is refused before the prompt changes, with its
+JSON pointer and rule. Local drafting does not contact the Runtime. Runtime lint
+must admit the draft before a check; admission alone does not prove behavior.
+
+To add operations to an approved interface, supply an additive contract fragment:
+
+```sh
+pdd interface draft prompts/example.prompt.md --extend --contract contracts/additions.json
+```
+
+The fragment can add entries, resources or prompt calls. Existing declarations and
+limits must remain equal; conflicts name their pointer and leave the prompt
+unchanged. Extension preserves the exact bytes of existing declarations and appends
+new array members. The Runtime format has one global status, so it cannot hold
+mixed approval status. The whole interface becomes draft and requires full
+re-approval. The result declares `approval_scope: "whole-interface"` and includes
+`interface_diff` with before/after JSON and unchanged declaration pointers. The
+approval view shows the scope and interface diff. Historical approval evidence
+stays intact. To reopen a stale
+block without changing its declarations, use `--refresh`. To replace declarations
+for changed behavior, use `--refresh --contract FILE`. These routes keep prose
+bytes and never record approval. Extension and refresh cannot use automatic
+approval provenance for new behavior.
+
+Runtime refusals retain a reported field pointer and rule. A supplied rule also
+stays visible when the field is unknown, beside the field-unknown note. If the server gives
+only `invalid-interface`, pdd reports any local schema findings separately. When
+there is no local finding, it says that the Runtime did not identify the field.
+No inferred cause is presented as a server diagnosis.
+
+The approval view shows the current coverage report. If any sentence is unmapped
+or conflicting, it asks one grouped question with the quoted sentences: amend the
+prose, amend the declaration, or accept the authored contract as written. A person
+must decide. Delegated approval cannot answer this question.
+
+The automatic approval route requires a valid draft from this command with no
+unmapped or conflicting contract sentence in its freshly computed report,
 unchanged committed prose, code and tests, passing existing native tests, and full
 prompt-check results on current source. It records `automatic-check-pass` with the
 command, results and source hashes. New behavior requires a person.

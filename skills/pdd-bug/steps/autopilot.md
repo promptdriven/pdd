@@ -14,10 +14,10 @@ Overrides SKILL.md and RUNBOOK §2, §4, §11, §12 and §14:
 - Missing route: [record it](../../pdd-autopilot/steps/handoff.md#missing-pdd-route).
 - Merge: pdd-merge, not a person. New words that users see go in its merge line; they do not stop the run.
 
-Keep: product calls the issue does not settle, actions that cannot be undone, `--max-calls`, strict mode, and never sending a failed check again.
+Keep: unresolved product calls, irreversible actions, `--max-calls`, strict mode, and never sending a failed check again.
 
-Find the failed check's cause and change the repair before retrying; two failed rounds alone do not block work. Keep repairing while a useful correction is available, preserving behavior expectations and required validation, for at most 5 repair rounds in one area (a round is a return to an earlier step that clears later steps; a retry of the same step is not one); pdd refuses a 6th. Then, or if a real blocker remains, record its cause and next action in the run and take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress; the coordinator continues other eligible work. Never repeat an external action with an unknown outcome.
+Fix the failed check's cause before retrying; two failed rounds do not block work. Keep repairing while a useful correction is available, preserving behavior expectations and required validation, for at most 5 repair rounds in one area (a round is a return to an earlier step that clears later steps; a retry of the same step is not one); pdd refuses a 6th. For a real blocker or at the limit, record cause and next action; take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress; the coordinator continues other eligible work. Never repeat an external action with an unknown outcome.
 
-Executed prompts: draft and save an interface block through pdd from prose; unused prompts need none. No prompt covers the code: use the verdict "no prompt covers this yet".
+Executed prompts: draft through pdd. Show coverage; unmapped/conflicting sentences need one grouped person decision with quotes, never delegation. Unused prompts need none. No prompt covers the code: use the verdict "no prompt covers this yet".
 
 Full suites/builds follow the [shared queue rule](../../pdd-autopilot/steps/handoff.md).

@@ -255,3 +255,5 @@ finite local cause and returns 5. Catalog owns all syntax.
 Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with the selected arguments, current cwd, stdout and stderr; return its exit code without an interpreter call. Forward optional origin, decisionId and outcome metadata alongside existing base, adoptCorpus and draft fields to startRun; these observations grant no workflow authority.
 
 Dispatch `autopilot-check-base` to the Autopilot launcher with command check-base and both operands in issues, using the same reply validation and stream rules as its other commands. Do not run the remote settings warning for this command.
+
+For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to runInterfaceDraft alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.

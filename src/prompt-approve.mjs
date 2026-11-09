@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 79d08a6a9171b6e16fd252be83ee3424a807883459620eece44b41c9e91c5de4).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 3f6fecd07a8071c6c60e8b5547ddd53a8b85f653582db120764986953182dc4b).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -6,7 +6,7 @@ import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
-import { gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt, proseSha256 } from './runtime-preflight.mjs';
+import { gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt, proseSha256, sha256 } from './runtime-preflight.mjs';
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -150,6 +150,28 @@ function proseView(root, path, text) {
   return capped(`Text changes since the last approved version (${commit}):`, rows, `See all of them with: git diff ${commit} -- ${path}`);
 }
 
+// A global status cannot approve additions separately. Show the full declaration change.
+function interfaceView(root,path,text) {
+  const before=lastApproved(root,path),current=interfaceBlocks(text)[0]?.[1];
+  if(!current) return [];
+  const next=JSON.parse(current);let old=before && interfaceBlocks(before.text)[0]?.[1];
+  if(!old) {
+    try {
+      const record=JSON.parse(readFileSync(join(root,'.pdd/interface-drafts.json'),'utf8'))[path];
+      if(record?.mode==='extend' && record.interface_sha256===sha256(JSON.stringify(next))) old=record.extension_before;
+    } catch { /* Unavailable or edited provenance supplies no display baseline. */ }
+  }
+  if(!old) return [];
+  const previous=JSON.parse(old);
+  const declarations=value=>Object.fromEntries(Object.entries(value).filter(([key])=>!['status','prose_sha256'].includes(key)));
+  if(isDeepStrictEqual(declarations(previous),declarations(next))) return [];
+  const unchanged=['entries','calls','resources','instance_types'].flatMap(key=>(previous[key] ?? []).flatMap((entry,i)=>isDeepStrictEqual(entry,next[key]?.[i]) ? [`/${key}/${i}`] : []));
+  return ['The Runtime has one global status. The whole interface needs re-approval.',
+    `Unchanged declarations: ${unchanged.join(', ') || 'none'}`,
+    before ? `Interface diff since approved ${before.commit.slice(0,12)}:` : 'Interface diff from before extension (display context):',
+    ...lineDiff(old,current).map(([mark,value])=>`  ${mark} ${plain(value)}`)];
+}
+
 // The [start, end) of the string value of a top-level key in a JSON object text, or null.
 function topLevelString(text, key) {
   const skip = at => { let index = at + 1; while (index < text.length && text[index] !== '"') index += text[index] === '\\' ? 2 : 1; return index + 1; };
@@ -219,7 +241,9 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
   }
   const iface = prompt.interface, current = iface.prose_sha256 === hash;
   if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
-  for (const row of [...describeInterface(path, iface), ...proseView(root, path, text)]) line(stdout, row);
+  const {contractCoverage,coverageView}=await import('./interface-draft.mjs');
+  const coverage=contractCoverage({root,path,text,iface});
+  for (const row of [...describeInterface(path, iface), ...coverageView(coverage), ...(coverage.some(row=>row.status!=='mapped') ? ['Coverage decision: amend the prose, amend the declaration, or accept the authored contract as written. Answer yes below only to accept all quoted sentences as written.'] : []), ...interfaceView(root,path,text), ...proseView(root, path, text)]) line(stdout, row);
   if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
   if (said === undefined) stdout.write(`Approve ${path}? y/n `);
   const answer = said === undefined ? await answers.ask() : "yes";

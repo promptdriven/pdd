@@ -1,7 +1,7 @@
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 3b64bfcdefa7dfcad24a2f954467ddf797658e8666ba4f6895a3dd223be53179).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: f89215bd1b6a89fa105936b7d7ef063a298f8d7b71252a99ebbaadbe5b774b75).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -1166,6 +1166,28 @@ function recoverSourceContext(context) {
 }
 const lintOutcome = (answer, row, capture) => outcomeFor(answer ?? {}, { kind: 'lint', test: row.test, steps: row.steps ?? [], sourceFiles: sourceFiles(capture) });
 
+// A generic Runtime refusal is not evidence that any particular local finding caused it.
+function interfaceDiagnostic(view, raw, root, secrets = []) {
+  if (view.code !== 'invalid-interface' && !String(view.code).startsWith('graph-schema-')) return view;
+  const at = cleanText(raw?.at ?? raw?.details?.at, secrets);
+  const pointer = cleanText(raw?.pointer ?? raw?.field ?? raw?.details?.pointer ?? raw?.details?.field, secrets) || (at.startsWith('/') ? at : null);
+  const rule = cleanText(raw?.rule ?? raw?.details?.rule, secrets) || null;
+  if (!pointer && view.field === (raw?.at ?? raw?.section)) view.field = null;
+  if (pointer) {
+    view.field = pointer;
+    view.section = pointer;
+  }
+  if (pointer || rule) view.hint = [pointer, rule].filter(Boolean).join(': ');
+  if (view.code === 'invalid-interface' && !pointer && !view.section?.startsWith('/')) {
+    let findings = [];
+    try { if (view.path) findings = interfaceFindings({root,paths:[view.path]}).filter(item => item.section?.startsWith('/')); } catch { /* No local diagnosis is available. */ }
+    view.hint = [rule, 'The Runtime did not identify the field.', findings.length
+      ? `Local schema findings (not confirmed as the Runtime cause): ${findings.map(item => item.message).join('; ')}`
+      : 'Inspect the interface or request a detailed Runtime diagnostic.'].filter(Boolean).join(' ');
+  }
+  return view;
+}
+
 // The lint outcome of each row, with server text cleaned and pdd's local hint for a prompt it reached.
 function judgeLint(answer, rows, root, visible, secrets = [], capture) {
   return new Map(rows.map(row => {
@@ -1175,7 +1197,7 @@ function judgeLint(answer, rows, root, visible, secrets = [], capture) {
     if (outcome.draft) row.draft = true;
     // Only a refusal pdd wrote for a prompt the test reaches gets the local stale hint or prompt error.
     const refusals = (outcome.refusals ?? []).map(item => {
-      const view = refusalView(item, secrets);
+      const view = interfaceDiagnostic(refusalView(item, secrets), item, root, secrets);
       if (!item.reached) return view;
       if (view.code === 'interface-stale') return { ...view, hint: staleHint };
       const local = /^interface-/.test(view.code) && view.path ? readPrompt(root, visible, view.path) : null;
@@ -1199,7 +1221,8 @@ function lintDiagnostics(context, answer, rows) {
   const added = [];
   for (const item of [...refusals, ...list(result?.report?.program?.refused_prompts)]) {
     if (shown.has(key(cleanItem(item, context.secrets)))) continue;
-    const text = `Lint diagnostic: ${[item.code, item.file ?? item.path, item.reason ?? item.message].filter(Boolean).map(value => cleanText(value, context.secrets)).join('  ')}`;
+    const view = interfaceDiagnostic(refusalView(item, context.secrets), item, context.root, context.secrets);
+    const text = `Lint diagnostic: ${[view.code, view.path, view.section, view.reason ?? view.message, view.hint].filter(Boolean).join('  ')}`;
     if (!context.warnings.includes(text)) { context.warnings.push(text); added.push(text); }
   }
   return added;
@@ -1275,7 +1298,8 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
   const advice = noVerdictAdvice(answer, view);
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
-    refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
+    refusals: view.refusals.map((item, index) => interfaceDiagnostic(item,
+      (answer?.result?.refusals ?? [answer?.result?.report?.refusal])[index], context.root, context.secrets)), calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
     server_seconds: view.server_seconds, busy_display: view.busy_display, time_limit: view.time_limit, known_calls: view.known_calls, unknown_calls: view.unknown_calls,
     accounting_complete: view.accounting_complete,
     why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.why ?? (view.state === 'unknown' && row.lost && row.why !== 'Checks failed.' ? row.why : null) : null,
@@ -2086,15 +2110,15 @@ function lintProblems(context, answer, refusal = null) {
   const canonical = Array.isArray(answer?.result?.problems) ? answer.result.problems : answer?.result?.report?.problems;
   for (const item of Array.isArray(canonical) ? canonical.filter(isObject) : []) {
     const reason = cleanText(item.reason, context.secrets), fix = cleanText(item.fix, context.secrets);
-    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.file ?? item.path, context.secrets) || null,
+    problems.push(interfaceDiagnostic({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.file ?? item.path, context.secrets) || null,
       section: cleanText(item.at ?? item.section, context.secrets) || null,
       message: cleanText(item.message, context.secrets) || [reason, fix].filter(Boolean).join(' ') || null, hint: null,
       severity: cleanText(item.severity, context.secrets) || 'error', pointer: cleanText(item.pointer, context.secrets) || null,
-      source: cleanText(item.source, context.secrets) || null });
+      source: cleanText(item.source, context.secrets) || null }, item, context.root, context.secrets));
   }
   for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
-    const problem = { code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
-      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null };
+    const problem = interfaceDiagnostic({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
+      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null }, item, context.root, context.secrets);
     if (!problems.some(p => p.code === problem.code && p.path === problem.path && p.section === problem.section)) problems.push(problem);
   }
   return problems;

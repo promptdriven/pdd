@@ -65,8 +65,11 @@ The block of Harbor Coffee's `place_order` (schemas cut):
   It needs status and prose_sha256, but no entries or limits. A checker reviews this reason.
   Approval records it. Checks show `not run: <reason>`; they never count it as passed.
 - Missing blocks: run `pdd interface draft PROMPT`, or `pdd interface draft --all` for the repository.
-  This local command uses explicit schemas and contracts without AI calls. It preserves prose.
-  Uncertain schemas remain draft gaps, so lint cannot claim they are clean.
+  This local command uses explicit prose transport declarations or schemas without AI calls and preserves prose.
+  Unknown fields become questions with a `--contract FILE` recovery command. Use `--extend --contract FILE`
+  to add operations without changing existing declarations. Use `--refresh [--contract FILE]` to reopen
+  a stale or changed block as draft. Effect ports use §21 resources. Run `pdd lint STORY` for Runtime
+  admission; local drafting alone proves no Runtime acceptance.
 - A complete block drafted from unchanged committed behavior can use
   `pdd approve PROMPT --automatic --tests COMMAND`. Existing native tests and a complete
   current prompt check must pass; pdd records `automatic-check-pass` evidence.

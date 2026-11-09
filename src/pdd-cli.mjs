@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 155eb494851a359b69aac75296d9b0e819758f12f318db37d915f5364d81104b).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 35c00ac6e6f83e9b8de8ea402af28b4d7918af7aadd38307ff35b63458b47783).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -362,7 +362,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'interface-draft': {
       const {runInterfaceDraft}=await import('./interface-draft.mjs');
-      return runInterfaceDraft({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json']},{stdout,stderr});
+      return runInterfaceDraft({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json'],contract:plan.options['--contract'],extend:!!plan.options['--extend'],refresh:!!plan.options['--refresh']},{stdout,stderr});
     }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
