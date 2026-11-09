@@ -564,7 +564,24 @@ for (const change of ['Story', 'expected']) test(`#3099 registered parked ${chan
 test('PR 1 refreshed interpreter wait reconciles before intake and preserves independent blockers', async t => {
   for (const boundary of ['inferred', 'dependency', 'busy']) {
     const f = await setup(t, {registered: true});
-    if (boundary === 'busy') f.herdr.paneOf(f.record().chats.at(-1)).agent.agent_status = 'working';
+    if (boundary === 'busy') {
+      const pane = f.herdr.paneOf(f.record().chats.at(-1));
+      pane.agent.agent_status = 'working';
+      await f.scan();
+      assert.equal(f.record().parking, undefined, '3132 busy work must defer the initial parking reservation');
+      assert.ok(f.herdr.paneOf(f.record().chats.at(-1)), 'initial busy work retains its pane');
+      pane.agent.agent_status = 'idle';
+      const herdr = f.tickPorts.herdr;
+      f.tickPorts.herdr = async args => {
+        if (args[0] === 'pane' && args[1] === 'read')
+          throw Object.assign(Error('synthetic screen capture unavailable'), {code: 'screen_unavailable'});
+        return herdr(args);
+      };
+      await f.scan();
+      f.tickPorts.herdr = herdr;
+      assert.equal(f.record().parking.phase, 'closing', 'an unconfirmed screen capture retains closing custody');
+      pane.agent.agent_status = 'working';
+    }
     if (boundary === 'dependency') {
       const run = f.record(); run.blockedOn = {kind: 'dependency', until: '18'};
       writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));

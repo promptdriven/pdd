@@ -43,10 +43,18 @@ async function ready(t, route) {
   } else if (route === 'resume') {
     f.herdr.paneOf(run.chats.at(-1)).agent = null;
     f.tick(120000);
-  } else if (route === 'missing-tab') {
+  } else if (['missing-tab', 'confirmed-absent-tab'].includes(route)) {
     const chat = run.chats.at(-1);
     f.herdr.tabs = f.herdr.tabs.filter(tab => tab.tab_id !== chat.tabId);
     f.herdr.panes = f.herdr.panes.filter(pane => pane.pane_id !== chat.paneId);
+    if (route === 'missing-tab') {
+      const herdr = f.ports.herdr;
+      f.ports.herdr = async args => {
+        const reply = await herdr(args);
+        if (args[0] === 'pane' && args[1] === 'list') reply.result.panes = {};
+        return reply;
+      };
+    }
   }
   f.action = () => route === 'resume' ? resumeStoppedRun(args, f.ports)
     : route === 'wake' ? wakeParkedRun({...args, at: f.record().parking.at}, f.ports)
@@ -56,7 +64,7 @@ async function ready(t, route) {
   return f;
 }
 
-for (const route of ['open', 'area', 'historical', 'new', 'missing-tab', 'resume', 'wake', 'parked-open']) {
+for (const route of ['open', 'area', 'historical', 'new', 'missing-tab', 'confirmed-absent-tab', 'resume', 'wake', 'parked-open']) {
   test(`claim transfer refuses ${route}, retains work and releases identified local chats`, async t => {
     const f = await ready(t, route), before = f.record();
     f.observation.claims = [{...winner(before), owner: 'owner-b', coordinatorId: 'owner-b',
@@ -72,13 +80,22 @@ for (const route of ['open', 'area', 'historical', 'new', 'missing-tab', 'resume
       assert.deepEqual(after[key], before[key], key);
     assert.ok(existsSync(before.root));
     if (route === 'missing-tab') {
-      // A missing tab without a prior close checkpoint has uncertain custody.
-      // The existing cleanup owner must retain that fact, never claim release.
+      // Invalid inventory cannot establish absence for the missing tab.
+      // The cleanup owner must retain that uncertainty, never claim release.
       assert.ok(after.cleanupKept.length > 0);
       assert.match(result.message, /kept/i);
+      assert.ok(after.cleanupKept.some(item => item.reason === 'invalid_cleanup_inventory'));
     } else {
       assert.equal(f.herdr.panes.filter(p => p.workspace_id === before.layout.workspaceId).length, 0);
       assert.equal(after.layout.phase, 'closed');
+    }
+    if (route === 'confirmed-absent-tab') {
+      const saved = before.chats.at(-1), chat = after.chats.at(-1);
+      assert.equal(chat.closed.reason, 'absent');
+      assert.ok(Number.isFinite(chat.closed.confirmedAt));
+      assert.equal(chat.state, 'ended');
+      assert.deepEqual(chat.session, saved.session);
+      assert.equal(f.herdr.calls.filter(args => args[0] === 'tab' && args[1] === 'close').length, 0);
     }
     assert.equal(f.pushes.length, 0); assert.equal(f.prs.length, 0);
     f.herdr.calls.length = 0;
