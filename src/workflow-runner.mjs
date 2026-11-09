@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 486a7cb6538de96a60f17d5f21c305f6d9bfc268fb76d5536a866ef1aab3e5f3).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1651c389d0d9cf8d68e504c150ff59275ec3326a86ccfeefef8bec4aad28555c).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -605,6 +605,7 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (chat === 'stopped' && run.state === 'running') return `the chat stopped. Run pdd workflow open ${run.number} to start it again.`;
   if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). ${codeLater(run)}`;
   if (run.state === 'completed') return 'complete: the PR is merged';
+  if (run.gate?.automaticHold) return `PR 1 waits: ${run.gate.automaticHold}`;
   if (run.gate && chat === 'working') return revising(run) ? `the agent works on your changes to the ${run.gate.area} area` : `the agent writes the gate message for the ${run.gate.area} area`;
   if (normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run)) return 'the agent must finish the prompt check before PR 1';
   if (normal && run.storyApproval && run.gate?.kind === 'ask-code' && !drafts.length) return run.through === 'code'
@@ -2241,6 +2242,49 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
       : `Do not ask the person to approve. Repair and check again, then run: ${p.pdd} workflow done check --summary "one line". After 2 fix rounds for the same ✗, stop with the evidence. When the fix needs a Story or expected-value change, propose it and run done again: pdd then shows the Story card with the change, for the person.`,
     ].join('\n'));
 }
+// The coordinator supplies custody, never approval words or a model verdict.
+function automaticPr1Scope(run, p, packageRoot) {
+  try {
+    if (readApprovalPolicy({root: run.sourceRoot}, p).strictApprovals) return 'strict approval policy requires a person terminal';
+    if (JSON.parse(readFileSync(join(run.sourceRoot, 'pdd.json'), 'utf8'))?.autopilot?.mode !== 'auto'
+      || !automaticHandoff(run, p, packageRoot)) return 'current automatic operator scope is unavailable';
+  } catch { return 'current automatic approval policy or operator scope is unavailable'; }
+  return null;
+}
+export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutation(args, ports, async ({ref, cwd, packageRoot = PACKAGE_ROOT, coordinatorId, machine}, ports) => {
+  const p = deps(ports); p.pdd = pddFor(p, packageRoot);
+  const found = await resolveRun(ref, {cwd}, p);
+  if (found.error) return fail(found.error);
+  const run = found.run, area = run.areas[run.area];
+  if (!validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== coordinatorId
+    || run.automaticOrigin.machine !== machine || !samePath(run.sourceRoot, cwd)
+    || !['pdd-bug', 'pdd-feature'].includes(run.skill) || run.state !== 'waiting'
+    || run.parking || openQuestion(run) || run.repairLimit
+    || run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase)
+    || run.gate?.kind !== 'approve-pr' || run.gate.area !== area?.name
+    || area.gate !== 'pr' || area.before !== 'approve' || prOf(run, area.name)
+    || area.steps.some(step => !run.done[step])) return done('Automatic PR 1 gate skipped.');
+  const hold = reason => {
+    const gateId = run.gate.id;
+    commitRun(run, p, latest => { if (latest.gate?.id === gateId) latest.gate.automaticHold = reason; });
+    return done(`PR 1 waits: ${reason}.`);
+  };
+  const scope = automaticPr1Scope(run, p, packageRoot);
+  if (scope) return hold(scope);
+  if (run.gate.storyChanges?.length) return hold('Story changes require a person approval');
+  if (!storyCoverage(run)?.fingerprint) return hold('saved Story approval coverage is missing');
+  const ownership = await continuationOwnership(run, run.root, p);
+  if (ownership) return hold(ownership);
+  const snapshot = await gatePromptSnapshot(run, p);
+  const changed = await changedStoryGate(run, area, 'check', p, [], snapshot);
+  if (changed) return hold('Story changes require a person approval');
+  const contents = await worktreeContents(run, p);
+  const check = fullCheckPass({root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0,
+    tests: contents.tests, stories: (storyCoverage(run).fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
+    prompts: snapshot.map(row => row.path)}, p);
+  if (!check.pass) return hold(`prompt check is not a full pass: ${check.problems.slice(0, 20).map(problem => `${problem.kind}: ${problem.path}: ${problem.detail}`).join('; ')}`);
+  return automaticPr1(run, area, 'check', p, [], check, packageRoot);
+}));
 async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
@@ -2256,6 +2300,8 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
   const automatic = {
     head: null,
     async prepare() {
+      const scope = Object.hasOwn(run, 'automaticOrigin') && automaticPr1Scope(run, p, packageRoot);
+      if (scope) return fail(scope);
       const checkedHead = await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}');
       snapshot = await gatePromptSnapshot(run, p);
       const changed = await changedStoryGate(run, area, step, p, lines, snapshot);
@@ -2303,8 +2349,13 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
     },
     async authorize() {
       const invalid = await automatic.validate(); if (invalid) return invalid;
+      if (Object.hasOwn(run, 'automaticOrigin')) {
+        const refusal = automaticPr1Scope(run, p, packageRoot) || await continuationOwnership(run, run.root, p);
+        if (refusal) return fail(refusal);
+      }
       const record = { via: 'automatic-check-pass', basis: { storyEvidenceId: storyCoverage(run).evidenceId ?? null,
-        batches: [...new Set(check.tests.map(item => item.batch))], headSha: automatic.head } };
+        batches: [...new Set(check.tests.map(item => item.batch))], headSha: automatic.head,
+        ...(Object.hasOwn(run, 'automaticOrigin') ? {origin: 'automatic', automaticOrigin: run.automaticOrigin} : {}) } };
       try { await saveGateApproval(run, area, record, [], p, snapshot); approvalRecorded = true; }
       catch (error) { return fail(`Approval failed: ${error.message}`); }
       return null;
@@ -2323,6 +2374,7 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
     `pdd recorded ${step}. The prompt check passed in full on the current prompts (${check.tests.length} test${check.tests.length === 1 ? '' : 's'}), so pdd opened ${label === 'the PR' ? 'the PR' : label} with no approval question (route automatic-check-pass).`, ...published];
   if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
   const shownGate = run.gate ? await showGate(run, p) : [];
+  if (Object.hasOwn(run, 'automaticOrigin')) return done([...head, ...shownGate, `PR 1: ${url}`, automaticHandoff(run, p, packageRoot), 'PR 1 is open. Continue through the scoped automatic code gate.'].filter(Boolean).join('\n'));
   return afterPr1(run, area, p, [...head, ...shownGate], packageRoot);
 }
 // After PR 1 opens in a normal run: follow the code-or-stop choice saved with the Story approval; ask nothing.
@@ -3964,7 +4016,7 @@ function detail(run, chat = null, facts = {}) {
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
-  const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
+  const next = run.gate?.automaticHold ? `Resolve the PR 1 hold: ${run.gate.automaticHold}.` : pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
     : chat === 'cannot-work' && facts.health && run.state === 'running' ? cannotWorkWords(run, facts.health).next
     : environmentRecovery(run) ? (environmentRecovery(run).attempts >= ENVIRONMENT_BACKOFF.length
       ? 'Environment retries are exhausted. Inspect the environment alert in pdd autopilot status before resuming the failed validation.'
@@ -4023,6 +4075,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : cannotWork ? cannotWorkWords(run, cannotWork).short
     : !run.gate && running && chat === 'blocked' ? `waiting for you: the chat asks a question in its window`
     : !run.gate && running && chat === 'stopped' ? `the chat stopped: run pdd workflow open ${run.number}`
+    : run.gate?.automaticHold ? `PR 1 waits: ${run.gate.automaticHold}`
     : writing ? (revising(run) ? 'agent working on your changes' : 'agent writing the gate message')
     : run.gate?.kind === 'ask-code' && drafts.length ? `waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''}, then the code PR (PR 1 open)`
     : run.gate?.kind === 'ask-code' && cardRun ? run.through === 'code' ? 'code PR requested; code entry waits' : 'stopped after PR 1; code can start when requested'
