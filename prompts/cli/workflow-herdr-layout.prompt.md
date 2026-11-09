@@ -82,7 +82,7 @@ area allocation and reopen. Retain it on adoption only for that same workspace I
 A lost reply, a workspace label or checkout identity alone cannot establish creation.
 Both cleanup and changed-layout rebuilding require `createdWorkspaceId` equal to
 the target ID; otherwise retain the workspace with `layout_cleanup_uncertain`.
-Legacy records without this evidence remain protected. This does not authorize
+Only the finished/parking chat cleanup consumer may adopt a legacy record with a genuinely absent `createdWorkspaceId` field: complete live inventory must show the saved workspace ID, canonical checkout_path equal to run.root, repo_key equal to run.commonDir, is_linked_worktree true and label exactly `<repository name>#<number> <workflow>`. It must checkpoint the adopted ID before any close. This exception does not apply to allocation adoption or changed-layout rebuilding. An explicit null records that creation was not proved; null, malformed values and conflicting creator IDs never gain closure authority from a matching label or checkout. Other legacy records remain protected. This does not authorize
 closing repository parents or unowned workspaces.
 
 After the caller closes its verified area tabs, close only the saved run workspace with `workspace close`, never worktree remove or group close. Revalidate its checkout/repo identity and saved initial root tab/pane/terminal; require exactly that original tab and pane. Extra tabs, split panes or changed roots prevent closure; a split root tab or a changed root refuses with the identity refusal above, an extra tab with `run_has_open_tabs`. A moved root shell does not prevent closure. For terminal-only restart drift,

@@ -238,6 +238,11 @@ test('factory 9: stopped legacy runs free a full shared budget for a second repo
     assert.ok(parked.chats.every(c=>existsSync(c.closed.screen)));
   }
   assert.ok(w.herdr.panes.includes(busy),'foreign-busy-pane-survives');
+  await second.begin();
+  const first=second.record(),firstChat=first.chats.at(-1);
+  assert.equal(first.state,'running','second-repository-first-workflow-starts');
+  assert.ok(firstChat?.paneId);
+  assert.equal(second.herdr.paneOf(firstChat)?.agent?.agent,'codex','second-repository-first-chat-is-live');
   for(const {number,run,sessions} of held) {
     await w.command(['workflow','changes',String(number),'Continue this factory run with its saved session.']);
     await w.tick();

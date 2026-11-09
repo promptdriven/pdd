@@ -583,9 +583,28 @@ export async function chatSession(chat, ports = {}) {
   try {
     const agent = (await herdrCommand(ports)(['agent', 'get', chat.paneId])).result?.agent;
     const value = agent?.agent_session?.kind === 'id' ? agent.agent_session.value : null;
+    // Agent detection alone does not prove resume custody. A terminal can be replaced
+    // while its pane ID stays live, or it can contain another kind of coding agent.
+    let identity = false;
+    if (agent?.pane_id === chat.paneId && agent.agent === (chat.agent ?? ports.run?.agent)
+        && chat.terminalId && validSessionId(value)
+        && (!validSessionId(chat.session?.id) || value === chat.session.id)) {
+      try {
+        const reply = await herdrCommand(ports)(['pane', 'list', ...(chat.workspaceId ? ['--workspace', chat.workspaceId] : [])]);
+        const panes = reply?.result?.panes;
+        if (reply?.result?.type === 'pane_list' && Array.isArray(panes)
+            && panes.every(p => typeof p?.pane_id === 'string' && p.pane_id)
+            && new Set(panes.map(p => p.pane_id)).size === panes.length) {
+          const pane = panes.find(p => p.pane_id === chat.paneId);
+          identity = pane?.terminal_id === chat.terminalId
+            && (!chat.workspaceId || pane.workspace_id === chat.workspaceId)
+            && (!chat.tabId || pane.tab_id === chat.tabId);
+        }
+      } catch { /* Unavailable terminal identity grants no session custody. */ }
+    }
     let namingError;
     if (agent && chat.herdrAgentName && agent.name !== chat.herdrAgentName) {
-      let verified = agent.agent === chat.agent && validSessionId(value) && (!validSessionId(chat.session?.id) || value === chat.session.id);
+      let verified = identity;
       if (verified && chat.agent === 'codex') {
         // Resume retains the original native metadata. Keep the latest launch time for grace/discovery,
         // but prove this known resumed UUID against its original identity in the saved account.
@@ -599,7 +618,7 @@ export async function chatSession(chat, ports = {}) {
         catch (error) { namingError = {code: error.code ?? 'herdr_failed'}; }
       } else namingError = {code:'chat_name_unverified'};
     }
-    return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: validSessionId(value) ? value : null,
+    return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: identity && !namingError ? value : null,
       ...(namingError ? {namingError} : {}) };
   } catch (error) {
     const missing = { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message };
@@ -894,7 +913,7 @@ export async function closeFinishedChats(run, ports = {}) {
   if (run.layout?.workspaceId && run.layout.createdWorkspaceId !== run.layout.workspaceId) {
     const workspace = (await inventory('workspace')).find(w => w.workspace_id === run.layout.workspaceId);
     const label = `${run.repo?.split('/')[1]}#${run.number} ${run.workflow}`;
-    if (run.layout.createdWorkspaceId == null && workspace?.label === label
+    if (!Object.hasOwn(run.layout, 'createdWorkspaceId') && workspace?.label === label
         && samePath(workspace.worktree?.checkout_path, run.root)
         && samePath(workspace.worktree?.repo_key, run.commonDir) && workspace.worktree?.is_linked_worktree === true) {
       if (!ports.dryRun) {
@@ -947,7 +966,8 @@ export async function closeFinishedChats(run, ports = {}) {
       if ((!ports.force || restarted || ports.reason === 'park') && !native) await assertEmptyForeground(chat.paneId);
       let id = validSessionId(chat.session?.id) ? chat.session.id : null;
       if (!id) {
-        if (native?.agent_session?.kind === 'id' && validSessionId(native.agent_session.value)) id = native.agent_session.value;
+        const live = native ? await chatSession(chat, {...ports, run}) : null;
+        if (validSessionId(live?.sessionId)) id = live.sessionId;
         else { const own = await ownSession({run, chat, since: launchAnchor(chat), ports}); if (own.kind === 'match') id = own.id; }
       }
       if (id && !ports.dryRun && chat.session?.id !== id) { chat.session = {agent, id}; await checkpoint(chat); }

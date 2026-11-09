@@ -44,7 +44,7 @@ the same merge.
 | Restart | Claim, allocation, completed steps and chat session survive; no duplicate publication. |
 | Lost verdict | Timer ticks send nothing again; one explicit synthetic person decision permits one resend. |
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |
-| Stopped panes across repositories | A full shared pane budget is reclaimed from stopped runs without saved session IDs or workspace-creation fields. Same-machine coordinator claims are recovered. A second repository starts, and every held run resumes its own current session. |
+| Stopped panes across repositories | A full shared pane budget is reclaimed from stopped runs without saved session IDs or workspace-creation fields. Same-machine coordinator claims are recovered. A second repository starts its coordinator and first workflow run. Every held run then resumes its own current session. |
 | Capacity and queues | Pane and check-slot waits recover; dead holders release reservations without resending an uncertain request. |
 | Claim transfer | The old coordinator cannot continue the current chat or publish after another machine takes the claim. |
 | PR 1 re-entry | The corrected prompt survives code entry and merge; expected values stay fixed. |

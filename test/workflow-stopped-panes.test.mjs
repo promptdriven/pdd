@@ -3,9 +3,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {existsSync, mkdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {fixture} from './helpers/workflow-runner-fixture.mjs';
+import {fixture, packageRoot, matchingClaimPorts} from './helpers/workflow-runner-fixture.mjs';
+import {openHerdrRunLayout} from '../src/workflow-herdr-layout.mjs';
 import {ownSession, ensurePaneBudget} from '../src/workflow-chat.mjs';
-import {parkBlockedRun, sweepIdleRuns, tidyRuns, runStatus, resumeStoppedRun} from '../src/workflow-runner.mjs';
+import {parkBlockedRun, sweepIdleRuns, tidyRuns, runStatus, resumeStoppedRun, wakeParkedRun} from '../src/workflow-runner.mjs';
 const ids=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333'];
 const save=(f,r)=>writeFileSync(join(r.runDir,'status.json'),JSON.stringify(r));
 async function stopped(t) {
@@ -160,4 +161,83 @@ test('3123 tick recovery saves all found IDs even when the current agent still r
   await resumeStoppedRun({ref:'17',cwd:f.source,coordinatorId:'current',machine:'fixture'},f.ports);
   assert.deepEqual(f.record().chats.map(c=>c.session?.id),ids,'tick-evidence-is-durable-without-parking');
   assert.equal(f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run').length,0,'observation-does-not-relaunch-a-live-chat');
+});
+
+for (const guard of ['foreign-agent','changed-terminal','foreign-pane','naming-failed'])
+  for (const state of ['paused','running']) test(`3123 repair 1 ${state} status rejects ${guard} custody through park and resume`, async t => {
+    const {f,r}=await stopped(t),current=r.chats.at(-1),pane=f.herdr.paneOf(current);
+    const foreign='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    f.herdr.sessions=f.herdr.sessions.filter(s=>s.id!==ids[2]);
+    pane.agent={agent:guard==='foreign-agent'?'claude':'codex',agent_status:'idle',
+      name:guard==='naming-failed'?'unrelated':current.herdrAgentName,agent_session:{kind:'id',value:foreign}};
+    if(guard==='changed-terminal')pane.terminal_id='replacement-terminal';
+    const herdr=f.ports.herdr;
+    f.ports.herdr=async args=>{
+      const reply=await herdr(args);
+      if(guard==='foreign-pane'&&args[0]==='agent'&&args[1]==='get'&&args[2]===current.paneId)
+        reply.result.agent.pane_id='another-pane';
+      return reply;
+    };
+    r.state=state;save(f,r);
+    await runStatus({ref:'17',cwd:f.source},f.ports);
+    assert.equal(f.record().chats.at(-1).session,null,'unproved-live-UUID-is-not-custody');
+    pane.agent=null;f.ports.herdr=herdr;
+    const held=f.record();held.state='paused';save(f,held);
+    const args={ref:'17',cwd:f.source,coordinatorId:'current',machine:'fixture',blocker:r.blockedOn};
+    const refused=await parkBlockedRun(args,f.ports);
+    assert.equal(refused.recovery,'skipped');
+    assert.equal(refused.reasonCounts?.['no-saved-session'],1);
+    assert.equal(f.record().chats.at(-1).session,null);
+    assert.ok(f.herdr.paneOf(current),'unproved-current-chat-is-kept');
+    // Restore the saved terminal and prove its exact live UUID without native files.
+    pane.terminal_id=current.terminalId;
+    pane.agent={agent:'codex',agent_status:'idle',name:current.herdrAgentName,
+      agent_session:{kind:'id',value:ids[2]}};
+    await runStatus({ref:'17',cwd:f.source},f.ports);
+    assert.deepEqual(f.record().chats.at(-1).session,{agent:'codex',id:ids[2]});
+    pane.agent=null;
+    f.herdr.sessions.push({agent:'codex',root:r.root,at:current.startedAt,id:ids[2]});
+    assert.equal((await parkBlockedRun(args,f.ports)).recovery,'parked');
+    f.ports.owners=matchingClaimPorts(f.record());
+    f.herdr.calls.length=0;
+    const resumed=await wakeParkedRun({...args,at:f.record().parking.at,packageRoot},f.ports);
+    assert.equal(resumed.recovery,'resumed',resumed.message);
+    assert.equal(f.record().chats.at(-1).session.id,ids[2]);
+    const launches=f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run');
+    assert.equal(launches.length,1);
+    assert.ok(launches[0][3].includes(ids[2]));
+    assert.ok(!launches[0][3].includes(foreign));
+  });
+
+test('3123 repair 1 layout reuse null never becomes workspace close authority',async t=>{
+  const f=await fixture(t,{agent:'codex',name:'bug'});await f.run();
+  const r=f.record();f.herdr.idle();
+  r.state='paused';r.blockedOn={kind:'pdd',until:'capability:fixture-fix'};
+  r.automaticOrigin={repository:r.repo,coordinatorId:'current',machine:'fixture',claim:{commentId:'11',labelEventId:'12'}};
+  f.ports.autopilotStateFile=join(f.state,'owner.json');
+  writeFileSync(f.ports.autopilotStateFile,JSON.stringify({enabled:true,cwd:r.sourceRoot,repo:r.repo,coordinatorId:'current',machine:'fixture'}));
+  const reused=await openHerdrRunLayout({runId:r.runId,repository:r.repo,sourceRoot:r.sourceRoot,
+    commonDir:r.commonDir,cwd:r.root,issueNumber:r.number,workflowName:r.workflow,stageId:r.areas[r.area].name},
+    {command:f.herdr.herdr,checkpoint:async()=>{},execFile:f.ports.execFile,directory:f.ports.layoutDirectory});
+  assert.equal(reused.createdWorkspaceId,null,'reuse-does-not-prove-creation');
+  r.layout=reused;save(f,r);f.herdr.calls.length=0;
+  const result=await parkBlockedRun({ref:'17',cwd:f.source,coordinatorId:'current',machine:'fixture',blocker:r.blockedOn},f.ports);
+  assert.equal(f.record().layout.createdWorkspaceId,null,'explicit-noncreation-custody-is-retained');
+  assert.ok(f.herdr.workspaces.some(w=>w.workspace_id===reused.workspaceId),'reused-workspace-survives');
+  assert.equal(result.recovery,'skipped');
+  assert.equal(result.reasonCounts?.['not-pdd-created'],1);
+  assert.equal(f.herdr.calls.filter(a=>['workspace','tab'].includes(a[0])&&a[1]==='close').length,0);
+});
+
+test('3123 repair 1 direct park rejects a live UUID with failed naming proof',async t=>{
+  const {f,r}=await stopped(t),current=r.chats.at(-1);
+  f.herdr.sessions=f.herdr.sessions.filter(s=>s.id!==ids[2]);
+  f.herdr.paneOf(current).agent={agent:'codex',agent_status:'idle',name:'unrelated',
+    agent_session:{kind:'id',value:ids[2]}};
+  const result=await parkBlockedRun({ref:'17',cwd:f.source,coordinatorId:'current',machine:'fixture',blocker:r.blockedOn},f.ports);
+  assert.equal(f.record().chats.at(-1).session,null,'failed-naming-is-not-resume-custody');
+  assert.equal(result.recovery,'skipped');
+  assert.equal(result.reasonCounts?.['no-saved-session'],1);
+  assert.ok(f.herdr.paneOf(current));
+  assert.equal(f.record().chats.filter(c=>c.closed?.confirmedAt).length,2);
 });
