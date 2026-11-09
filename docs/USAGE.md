@@ -93,9 +93,11 @@ Important:
 
 Follow [Autopilot on your own repository](../README.md#autopilot-on-your-own-repository)
 for the ordered installation, sign-in, setup, doctor, start, status and stop path.
-It requires Node.js 22.20 or newer and repository write permission.
+Use Node.js 22.20 or newer. Repository writes need write permission.
 `pdd autopilot doctor` reads readiness without GitHub writes or AI calls.
 Start runs the same checks before it changes local state or starts work.
+Only missing or signed-out agent sign-in refuses preflight. All other findings
+warn with fix commands in observe and auto mode. Native start keeps its own guards.
 Manual gates need your later approval. Explicit auto setup and start can delegate
 ordinary automatic gates and eligible merges. Strict approvals and required
 human reviews still need a person. An empty trust list still trusts the owner

@@ -128,7 +128,7 @@ bytes after later observations. Finish the workflow with a fresh successful
 validation; the failed attempt stays available. Use only the factory's private
 home, config and queues. Retain this scenario as a failing assertion on the base.
 
-Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr and interpreter fakes. An executable stale pdd earlier on PATH and missing Codex sign-in must produce PATH and agent failure lines with concrete commands; start returns the identical diagnostics and creates no state, timers, panes, claims, GitHub writes or interpreter jobs. Run the real doctor for existing factory starts with the factory program, file, profile and health ports. Do not replace selected-profile observations with a separately healthy account. A restart with an unrelated signed-out caller must retain the healthy saved profile and coordinator identity. No real machine/account read escapes.
+Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr and interpreter fakes. An executable stale pdd earlier on PATH and missing Codex sign-in must produce a PATH warning and an agent failure line with concrete commands; start returns the identical diagnostics and creates no state, timers, panes, claims, GitHub writes or interpreter jobs. Run the real doctor for existing factory starts with the factory program, file, profile and health ports. Do not replace selected-profile observations with a separately healthy account. A restart with an unrelated signed-out caller must retain the healthy saved profile and coordinator identity. No real machine/account read escapes.
 
 ## Dependencies
 

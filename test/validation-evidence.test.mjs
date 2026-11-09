@@ -102,3 +102,30 @@ test('receipt redaction precedes byte clipping even for a long synthetic quoted 
   const saved=serializeValidationReceipt(raw);
   assert.equal(saved.includes('a'.repeat(100)),false);assert.ok(Buffer.byteLength(saved)<=65536);
 });
+
+
+test('known values are hidden at every two-chunk and line split before overflow',()=>{
+  const value='synthetic-known-prefix-€\nsynthetic-known-suffix-🔑';
+  const huge='h'.repeat(MAX_EVIDENCE_LINE_BYTES)+'synthetic-known-ending';
+  for(const secret of [value,huge]) {
+    const input=Buffer.from('safe-before\n'+secret+'\nsafe-after\n');
+    const splits=secret===value?Array.from({length:input.length+1},(_,i)=>i):[1,4093,MAX_EVIDENCE_LINE_BYTES-1,MAX_EVIDENCE_LINE_BYTES+1,input.length-1];
+    for(const split of splits) {
+      let saved='';const stream=redactingLines(text=>saved+=text,[secret]);
+      stream.write(input.subarray(0,split));stream.write(input.subarray(split));stream.end();
+      assert.doesNotMatch(saved,/synthetic-known/);assert.ok(saved.includes('safe-before'));assert.ok(saved.endsWith('safe-after\n'));
+    }
+  }
+});
+
+for(const scheme of ['Bearer','Basic']) test(`multiline ${scheme} recognition survives chunks and omitted whitespace`,()=>{
+  const credential='synthetic-scheme-credential';
+  for(const gap of ['\n','\r\n\t',' '.repeat(MAX_EVIDENCE_LINE_BYTES)+'\n']) {
+    const input=Buffer.from(scheme+gap+credential+'\nsafe-after\n');
+    for(const width of [1,4093,65536]) {
+      let saved='';const stream=redactingLines(text=>saved+=text);
+      for(let offset=0;offset<input.length;offset+=width)stream.write(input.subarray(offset,offset+width));
+      stream.end();assert.equal(saved.includes(credential),false);assert.ok(saved.endsWith('safe-after\n'));
+    }
+  }
+});

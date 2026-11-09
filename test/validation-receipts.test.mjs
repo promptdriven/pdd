@@ -10,6 +10,9 @@ import {spawn,execFileSync} from 'node:child_process';
 import {runTestSuite,readSuiteProgress,executeSuite} from '../src/test-suite-queue.mjs';
 import {checkMachine,withCheckLifetime} from './helpers/check-machine.mjs';
 import {calculateCheckCapacity} from '../src/test-suite-queue.mjs';
+import {checkRuntimeHealth} from '../src/runtime-client.mjs';
+import {runAutopilotDoctor} from '../src/autopilot-doctor.mjs';
+import {doctorFixture} from './helpers/doctor-fixture.mjs';
 import {redactSecrets} from '../src/secret-redaction.mjs';
 import {redactingLines,MAX_EVIDENCE_LINE_BYTES,MAX_VALIDATION_LOG_BYTES,MAX_VALIDATION_RECEIPT_BYTES} from '../src/validation-evidence.mjs';
 
@@ -361,4 +364,43 @@ test('repair 1: oversized required metadata fails closed before execution',async
     execute:async()=>{executions++;return {exitCode:0};}});
   assert.equal(executions,0);assert.equal(result.exitCode,1);
   assert.equal(fs.existsSync(f.receipt),false);
+});
+
+
+for(const channel of ['stdout','stderr']) for(const scheme of ['Bearer','Basic'])
+test(`012 fix-ups: ${scheme} and known values reach ${channel} storage and forwarding safely`,async t=>{
+  const f=fixture(t),program=join(f.root,'known.cjs'),dataPath=join(f.root,'known.input');
+  const values=['opaque-synthetic-a','opaque-synthetic-b\nopaque-synthetic-c','opaque-synthetic-d','opaque-synthetic-e','opaque-synthetic-f'];
+  for(const [index,name] of ['CUSTOM_TOKEN','SERVICE_SECRET','APP_PASSWORD','SERVICE_KEY','GH_TOKEN'].entries())f.env[name]=values[index];
+  // Credentials learned through real PDD read boundaries are transferred to
+  // the recorder in memory, even when they have no recognizable token prefix.
+  const ghCredential='opaque-gh-read-value',agentCredential='opaque-agent-read-value';
+  const health=await checkRuntimeHealth({env:{PDD_RUNTIME_URL:'https://runtime.example.test'}},
+    {gh:()=>({status:0,stdout:ghCredential}),fetch:async()=>new Response('{}',{status:200})});
+  assert.equal(health.state,'healthy');
+  const doctor=doctorFixture({kind:'gemini'}),unusedCredential='opaque-unused-profile-value';
+  doctor.ports.agentDefinitions=()=>[{id:'unused',kind:'claude',command:'missing-agent',env:{UNSELECTED_API_KEY:unusedCredential}},{id:'gemini',kind:'gemini',command:'gemini',env:{}}];
+  doctor.paths.set(join(doctor.input.env.HOME,'.gemini','oauth_creds.json'),JSON.stringify({refresh_token:agentCredential}));
+  assert.equal((await runAutopilotDoctor(doctor.input,doctor.ports)).exitCode,0);
+  values.push(ghCredential,agentCredential,unusedCredential);
+  const credential=scheme==='Basic'?'c3ludGhldGljOnJldmlldzAxMg==':'synthetic-review012-bearer-credential';
+  const safe='safe-recovery\n';
+  const data=values.map(value=>value+'\n').join('')+scheme+'\n'+credential+'\n'+safe+
+    'x'.repeat(MAX_EVIDENCE_LINE_BYTES+1)+values[1]+'\n'+safe+
+    (safe.repeat(Math.ceil(MAX_VALIDATION_LOG_BYTES/safe.length)))+values[0]+'\n'+safe;
+  fs.writeFileSync(dataPath,data);
+  const other=channel==='stdout'?'stderr':'stdout';
+  fs.writeFileSync(program,`const fs=require('node:fs');const data=fs.readFileSync(${JSON.stringify(dataPath)});const send=(stream,bytes)=>new Promise(done=>process[stream].write(bytes,done));(async()=>{await send(${JSON.stringify(channel)},${JSON.stringify(scheme+'\n')});await send(${JSON.stringify(other)},${JSON.stringify('independent-stream\n')});await send(${JSON.stringify(channel)},${JSON.stringify(credential+'\n')});for(let offset=0;offset<data.length;offset+=4093)await send(${JSON.stringify(channel)},data.subarray(offset,offset+4093));})();`);
+  let forwarded='';const capture={write(bytes){forwarded+=bytes;}};
+  const result=await runTestSuite({cwd:f.root,command:`${quote(process.execPath)} ${quote(program)}`,env:f.env},{...f.ports,stdout:capture,stderr:capture});
+  const row=read(f.receipt),log=fs.readFileSync(row.logPath,'utf8');
+  assert.equal(result.exitCode,0,result.message+'\n'+forwarded.slice(0,2000));assert.equal(row.outcome,'completed');
+  for(const text of [log,forwarded]) {
+    for(const value of [...values,credential,'opaque-synthetic-b','opaque-synthetic-c'])assert.equal(text.includes(value),false,'credential must not reach evidence');
+    assert.ok(text.includes(safe));assert.ok(text.includes('independent-stream'));
+  }
+  assert.ok(fs.statSync(row.logPath).size<=MAX_VALIDATION_LOG_BYTES);assert.equal(fs.statSync(row.logPath).mode&0o777,0o600);
+  assert.ok(row.logPath.startsWith(join(f.env.HOME,'.local','state','pdd','validation')));
+  assert.equal(row.evidence.outputBytes,Buffer.byteLength(data+scheme+'\n'+credential+'\n'+'independent-stream\n'));
+  assert.equal(row.evidence.truncated,true);
 });

@@ -8,15 +8,13 @@ The doctor is read-only: no GitHub writes, agent generation, interpreter jobs,
 state files, timer changes, workspace allocation, cleanup or approvals.
 
 Return {exitCode, message, checks}. Checks are ordered records with exactly id,
-status (pass, warn, fail), detail and fix. Exit 1 if any required check fails,
-else 0. Only prerequisites that start cannot recover itself may fail: the selected
-pdd installation, Node, Git/gh installation and sign-in, repository access and
-configuration, agent CLI installation and sign-in, required local tools and user
-scheduler, and PDD setup. Pane room, interpreter health, check slots, agent usage
-limits and other capacity observations are advisory: report WARN with a fix
-command, never refuse start for them. Start already sweeps, parks and waits;
-its native guards decide admission and recovery. Missing gh sign-in remains a
-prerequisite failure even when interpreter access is also unproved.
+status (pass, warn, fail), detail and fix. Exit 1 only for missing or signed-out
+agent sign-in; otherwise exit 0. This is the only new refusal allowed before
+native start. Every other doctor finding is WARN with a fix command, including
+a different pdd on PATH, read-only repository permission and disabled merge
+methods, in both observe and auto mode. Preserve native start admission,
+cleanup, parking and recovery decisions. Start displays advisory lines and
+continues to its native guards; doctor findings must not add other refusals.
 Message has one line per record: STATUS id: detail; fix: command.
 Collapse control characters and newlines in details. Never echo auth payloads,
 tokens or provider diagnostics. Each fix is a concrete shell command, safely
@@ -31,7 +29,7 @@ this invocation environment for every prerequisite, including PATH, GitHub,
 provider sign-in, usage, skills, interpreter and scheduling. Claude user skills
 live under CLAUDE_CONFIG_DIR/skills when set; HOME overrides select user roots.
 Keep the caller environment unchanged. An agents.json read or parse failure gets
-its own required agent-config line with the actual file path and an editor repair
+its own advisory agent-config line with the actual file path and an editor repair
 command; never echo raw errors or configuration values.
 
 Export resolveAutopilotAgent(input, ports = {}) for the launcher's same selection
@@ -51,18 +49,19 @@ user service/session, or sign in); a status command alone is insufficient.
 
 Check these boundaries in order and continue after failures:
 - PATH: first executable pdd resolves to packageRoot/bin/pdd.mjs and its help
-  advertises autopilot. A different install is required failure even at the same
+  advertises autopilot. A different install warns even at the same
   version; include its path and safe version. Fix with an absolute Node plus
   this CLI doctor command, so source checkouts work too.
 - Node >=22.20.0; Git present; Git checkout and GitHub origin; gh signed in;
   repo viewerPermission is ADMIN, MAINTAIN or WRITE and at least one merge method
-  is enabled. Missing tools, auth or write permission are failures. Read effective
+  is enabled. Missing tools, gh auth or write permission warn. Read effective
   rules for the default branch separately. Unreadable rules warn; list rule types
   and say required reviews/checks still apply. Do not claim merge eligibility.
 - Choose a signed-in configured agent using the launcher's normal provider order
   and invocation environment. Probe only Codex login status or Claude auth status
-  --json (preserve supported agy/Gemini launcher selection through its read-only readiness/credential ports). Without a selected account fail with the installed agent's sign-in
-  command. Missing CLIs name their install command. Read Codex limits using its
+  --json (preserve supported agy/Gemini launcher selection through its read-only readiness/credential ports). When sign-in is missing or signed out, fail with the installed agent's sign-in
+  command. A configuration read error is advisory; it does not establish missing
+  sign-in and must not create a failing agent check. Missing CLIs name their install command. Read Codex limits using its
   read-only account port. Limited and unknown are warnings. For Claude,
   unsupported read-only usage evidence is warning with `claude` and /usage advice;
   no generation call to discover allowance, and no credit/reset advice.
@@ -82,7 +81,7 @@ Check these boundaries in order and continue after failures:
   Recommend the native tidy command for capacity, or unset an invalid budget.
 - Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all ten skill
   entrypoints in one selected provider's supported project/user skill root,
-  and valid pdd.json autopilot mode/trust. Off fails. Describe observe versus auto
+  and valid pdd.json autopilot mode/trust. Off warns; native start owns mode admission. Describe observe versus auto
   authority, owner/write-access trust even with [], explicit trusted users and
   strict approvals in plain words. Never change mode or trust.
 - Enumerate tracked *.prompt.md and report draft/missing interfaces as advisory
@@ -97,12 +96,15 @@ Check these boundaries in order and continue after failures:
   invalid PDD_RUNTIME_URL names that setting and advises an HTTPS origin or unsetting
   it to use the default, with an executable unset-and-retry command. No auth body
   or token appears in the report.
-- Linux requires a readable systemd user session; lingering is advisory for logout
-  persistence and names loginctl enable-linger. macOS requires a readable launchctl
+- Linux checks for a readable systemd user session; lingering is advisory for logout
+  persistence and names loginctl enable-linger. macOS checks for a readable launchctl
   user domain; read pmset and warn when sleep can pause work, with caffeinate -i.
-  Other platforms fail. All checks have exact commands for diagnosis or repair.
+  Other platforms warn. All checks have exact commands for diagnosis or repair.
 
 ## Dependencies
+
+- [Secret redaction](secret-redaction.prompt.md): register invocation secrets and
+  gh/Gemini credentials read here in the in-memory value inventory.
 
 - [Agent adapters](agent-adapters.prompt.md): sign-in parsers and non-model process port.
 - [Agent config](agent-config.prompt.md): provider definitions and profile environment.
@@ -130,7 +132,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "567e8436ec26b25bcdfd88298b9c657e16d7f4baefb93b2049dc1ee620d56f83",
+  "prose_sha256": "7fc0ee92e59718fc535ceb4e43dddefd02ba88d2d7190b86720db8e56fa91b2e",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

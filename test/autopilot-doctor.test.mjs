@@ -36,11 +36,11 @@ test('doctor: stale PATH and missing sign-in accumulate; start returns identical
   f.ports.files.realpathSync=path=>path;
   const doctor=await invoke(f),start=await invoke(f,'start');
   assert.equal(doctor.code,1);assert.equal(start.code,1);assert.equal(start.text,doctor.text);
-  check(doctor,'path','FAIL');check(doctor,'agent','FAIL');
+  check(doctor,'path','WARN');check(doctor,'agent','FAIL');
   assert.match(doctor.text,/\/node.*\/install\/bin\/pdd.mjs.*autopilot doctor/);assert.match(doctor.text,/codex.*login/);
 });
 
-test('doctor: required failures refuse start; warnings permit readiness',async()=>{
+test('doctor: non-agent findings warn; warnings permit readiness',async()=>{
   for(const fault of ['node','permission','merge','setup','timers']) {
     const f=doctorFixture();
     if(fault==='node')f.ports.nodeVersion='22.19.9';
@@ -48,7 +48,8 @@ test('doctor: required failures refuse start; warnings permit readiness',async()
     if(fault==='merge')f.merge=false;
     if(fault==='setup')f.paths.delete('/project/AGENTS.md');
     if(fault==='timers'){const run=f.ports.run;f.ports.run=(file,args,o)=>file==='systemctl'?f.answer('',1):run(file,args,o);}
-    const r=await invoke(f,'start');assert.equal(r.code,1,`${fault}: ${r.text}`);
+    const r=await invoke(f);assert.equal(r.code,0,`${fault}: ${r.text}`);
+    check(r,{node:'node',permission:'github-permission',merge:'merge-method',setup:'setup-block',timers:'user-timers'}[fault],'WARN');
   }
   const f=doctorFixture();f.tracked='one.prompt.md\0';f.paths.set('/project/one.prompt.md','# Draft');f.ports.codexLimits=async()=>({state:'unknown'});
   const r=await invoke(f);assert.equal(r.code,0,r.text);check(r,'draft-prompts','WARN');check(r,'agent-usage','WARN');
@@ -123,7 +124,7 @@ test('doctor: malformed agents.json identifies its file and a repair without con
   mkdirSync(join(folder,'.config','pdd'),{recursive:true});writeFileSync(path,'{"SECRET_VALUE":');
   delete f.ports.agentDefinitions;
   const result=await runAutopilotDoctor(f.input,f.ports),line=result.checks.find(c=>c.id==='agent-config');
-  assert.equal(result.exitCode,1);assert.equal(line?.status,'fail');assert.ok(line.detail.includes(path));assert.match(line.fix,/vi /);assert.ok(!result.message.includes('SECRET_VALUE'));
+  assert.equal(result.exitCode,0);assert.equal(line?.status,'warn');assert.ok(line.detail.includes(path));assert.match(line.fix,/vi /);assert.ok(!result.message.includes('SECRET_VALUE'));
 });
 
 test('doctor: invalid runtime address and unavailable user session give repair commands',async()=>{
@@ -132,7 +133,7 @@ test('doctor: invalid runtime address and unavailable user session give repair c
   f.ports.runtimeHealth=()=>assert.fail('invalid origin must not reach health port');
   const run=f.ports.run;f.ports.run=(file,args,o)=>file==='systemctl'?f.answer('',1):run(file,args,o);
   const result=await runAutopilotDoctor(f.input,f.ports),runtime=result.checks.find(c=>c.id==='interpreter'),timers=result.checks.find(c=>c.id==='user-timers');
-  assert.equal(result.exitCode,1);assert.equal(runtime.status,'warn');assert.equal(timers.status,'fail');assert.match(runtime.detail,/PDD_RUNTIME_URL/);assert.match(runtime.fix,/unset PDD_RUNTIME_URL/);assert.match(timers.fix,/systemctl start/);assert.ok(!result.message.includes('SECRET_VALUE'));
+  assert.equal(result.exitCode,0);assert.equal(runtime.status,'warn');assert.equal(timers.status,'warn');assert.match(runtime.detail,/PDD_RUNTIME_URL/);assert.match(runtime.fix,/unset PDD_RUNTIME_URL/);assert.match(timers.fix,/systemctl start/);assert.ok(!result.message.includes('SECRET_VALUE'));
 });
 
 

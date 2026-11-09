@@ -1,3 +1,4 @@
+import {rememberSecrets} from './secret-redaction.mjs';
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: 052509645626cb536e8213d1c9791d35bae95c2316184e1a22b0c18d57bea0ae).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
@@ -421,6 +422,7 @@ function signIn(gh, store) {
   if (token.error?.code === 'ENOENT') throw new Stop(5, 'Install the GitHub CLI, then run gh auth login');
   const value = token.status === 0 ? String(token.stdout ?? '').trim() : '';
   if (!value) throw new Stop(5, 'Run gh auth login');
+  rememberSecrets(value);
   if (store) store.secrets = [value];
   const user = gh(['api', 'user', '--jq', '.login + " " + (.id|tostring)']);
   const [login, id] = user.status === 0 ? String(user.stdout ?? '').trim().split(' ') : [];
@@ -511,6 +513,7 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   try { origin = runtimeOrigin(env); } catch { return { state: 'access', detail: 'PDD_RUNTIME_URL is not an HTTPS origin', fix: HEALTH_ADDRESS }; }
   let token = '';
   try { const reply = ports.gh(['auth', 'token']); token = reply.status === 0 ? String(reply.stdout ?? '').trim() : ''; } catch { token = ''; }
+  rememberSecrets(token);
   if (!token) return { state: 'access', detail: 'no gh sign-in', fix: HEALTH_SIGN_IN };
   const reply = await new Runtime({ origin, token, ports }).send('/v1/capacity', { method: 'GET' }, givenPorts.timeoutMs ?? 10_000);
   if (reply.lost) return { state: 'unavailable', detail: reply.unreachable ? 'not reached' : 'no answer' };

@@ -2249,7 +2249,7 @@ async function localCosts(input, ports, state = {}) {
 }
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, checks, resumeCustody, issues = [] } = input;
-  let startSelection;
+  let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
     const env = input.env ?? ports.env ?? process.env;
@@ -2280,6 +2280,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       })),
       onSelection:selection=>{startSelection=selection;}});
     if (command === 'doctor' || diagnostics.exitCode !== 0) return diagnostics;
+    startWarnings = diagnostics.message.split('\n').filter(line=>line.startsWith('WARN '));
   }
   let state = { cwd: input.cwd, environment: keepEnv(input.env ?? process.env) };
   let p = portsFor(state, { ...ports, env: input.env });
@@ -2483,7 +2484,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       }
     }
     catch (e) { warning += ` Warning: ${line(e.message)}; next tick will retry.`; }
-    return ok(`Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: herdr session attach ${SESSION}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
+    return ok(`${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: herdr session attach ${SESSION}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
   } catch (e) { return bad(e.exact ? e.message : `Autopilot: ${e.code === 'ENOENT' ? 'install git, gh and Herdr, and sign in to your agent, then retry.' : line(e.message)}`); }
   finally { releaseAdmission?.(); controlLock?.(); }
 }

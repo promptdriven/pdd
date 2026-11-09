@@ -570,7 +570,7 @@ test('factory 3125: fresh repo with stale PATH and no agent sign-in refuses star
   const doctor=await w.command(['autopilot','doctor'],opts);
   const start=await w.command(['autopilot','start'],opts);
   assert.equal(doctor.code,1,'doctor must diagnose stale PATH and missing agent sign-in');
-  assert.match(doctor.stderr,/FAIL path:.*0\.1\.15.*; fix: .*autopilot doctor/);
+  assert.match(doctor.stderr,/WARN path:.*0\.1\.15.*; fix: .*autopilot doctor/);
   assert.match(doctor.stderr,/FAIL agent:.*; fix: .*codex.*login/);
   assert.equal(start.code,1,'preflight must refuse a first start');
   assert.equal(start.stderr,doctor.stderr,'start must use the same doctor report');

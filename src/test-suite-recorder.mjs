@@ -1,5 +1,6 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9939fbc1b7baf7521667a72a652c2c79c4283a4e56c98e43da34b02f898d644d).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 3e356c7050d2f78585c5ddb8e23859b5573bdb17787bd081e2c05a1a53e39e5a).
 // This process keeps validation evidence when the calling chat disappears.
+import {rememberSecrets} from './secret-redaction.mjs';
 import * as fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {serializeValidationReceipt, redactingLines, validationLog, safeEvidenceText} from './validation-evidence.mjs';
@@ -15,7 +16,8 @@ process.on('message', async message => {
   if (message.cancel && started) { process.emit(message.cancel); return; }
   if (!message.start || started) return;
   started = true;
-  const {command, record, environmentRoot, ...options} = message.start;
+  const {command, record, environmentRoot, secrets = [], ...options} = message.start;
+  rememberSecrets(...secrets);
   const save = () => {
     const temp = `${record.receiptPath}.${randomUUID()}.tmp`;
     try { fs.writeFileSync(temp, serializeValidationReceipt(record), {mode:0o600}); fs.renameSync(temp,record.receiptPath); }

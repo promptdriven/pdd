@@ -102,36 +102,39 @@ untracked file contents across the whole checkout, even from a nested cwd, or nu
 null), `issue` (matching issue number or null), and `error` (unavailable source
 reason or null). Source identity describes the start; it does not authorize a
 merge or prove the checkout stayed unchanged. Keep each attempt separately.
-Store receipts and logs with mode 0600 in the private queue directory.
+Store receipts with mode 0600 in the private queue directory. Store bounded logs
+with mode 0600 under the caller's user state folder (PDD_STATE_DIR, otherwise
+HOME/.local/state/pdd), in a validation subfolder unique to the queue.
 Commands can contain unrecognizable positional secrets. Save `command` as
 `[redacted]` and `commandFingerprint` as the SHA-256 hex digest of the original
 UTF-8 command; execute the original only in memory. The fingerprint identifies
 an attempt without storing command values. Do not reconstruct the command.
 
 Before any durable write, redact every receipt string and stdout/stderr using
-[shared secret redaction](secret-redaction.prompt.md). Redact error messages too,
-including setup, source, custody and output-save failures. Apply redaction before
-clipping so a clipped prefix cannot expose a credential. Stream boundaries are
-not redaction boundaries: buffer each stream independently until a complete line
-or EOF. `MAX_EVIDENCE_LINE_BYTES = 262144` bounds each pending raw line. Suppress
-an oversized line in full, including its continuation, and emit a marker with
-its exact raw byte count at its newline or EOF. Discarding raw bytes must not
-discard recognition state: scan in bounded windows, retaining only bounded
-delimiter context and state for every supported multiline form. Recognize
-openers before or after overflow, even across window or transport boundaries.
-Once a sensitive field name is recognized, keep bounded pending state across
-all whitespace accepted by shared redaction, including spaces, tabs, CR and LF,
-before its separator and before its value. Omitted oversized parts must not
-clear that state. Consume and redact the later quoted or unquoted value before
-its first save or forwarding. Stdout and stderr have independent state; a
-pending field in one stream must not consume ordinary output from the other.
-While a quoted secret or private key remains open, suppress continuation lines
-through the closing delimiter (or EOF) and mark them `[redacted]`; an oversized
-continuation still uses its exact omission marker. Escaped quotes do not close
-a value. Continue recognizing later openers after a delimiter, including on a
-discarded line. Resume ordinary redaction on the next safe line. Neither an
-unbounded line nor a long secret may require unbounded retained raw text.
-Forward only sanitized output, after saving it.
+[shared secret redaction](secret-redaction.prompt.md). Its exact-value guarantee
+covers the process and caller environment secret values and credentials pdd has
+read. Transfer that inventory to the detached recorder only in memory over IPC;
+do not pass it into the clean suite environment. Apply exact-value stream
+redaction before line handling, pattern matching or clipping. Use separate
+bounded overlap windows for stdout and stderr, including values containing LF
+and values spanning transport, line and overflow boundaries.
+
+Pattern-based redaction is a best-effort extra layer. It cannot guarantee removal
+of unknown formats, encodings or positional secrets. Buffer sanitized streams
+until a complete line or EOF. `MAX_EVIDENCE_LINE_BYTES = 262144` bounds each
+pending line. Suppress an oversized line in full, including its continuation,
+and emit a marker with its exact raw byte count at its newline or EOF. Scan raw
+bytes too: discarding them must not discard bounded pattern recognition state.
+Keep pending assignment fields and Basic/Bearer schemes across whitespace,
+including LF and omitted lines. Suppress their following value before storage
+or forwarding. While a quoted secret or private key remains open, suppress
+continuation lines through the closing delimiter (or EOF). Escaped quotes do
+not close a value. Continue recognizing later openers after a delimiter,
+including on discarded lines. Resume ordinary output on the next safe line.
+Neither a long line nor pattern value may require unbounded retained raw text.
+The exact-value overlap bound depends on the longest known secret. Forward
+only sanitized output, after saving it. Redact setup, source, custody and
+output-save errors too. Preserve raw byte counts independently of redaction.
 
 `MAX_VALIDATION_LOG_BYTES = 1048576` bounds each saved log, including markers.
 Keep full sanitized output within that limit. On overflow retain the first and

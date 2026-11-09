@@ -1,6 +1,6 @@
 // Owned by prompts/cli/test-suite-queue.prompt.md.
 import {StringDecoder} from 'node:string_decoder';
-import {redactSecrets} from './secret-redaction.mjs';
+import {redactSecrets, redactingValues, knownSecretValues} from './secret-redaction.mjs';
 
 export const MAX_VALIDATION_LOG_BYTES = 1048576;
 export const MAX_VALIDATION_RECEIPT_BYTES = 65536;
@@ -36,10 +36,17 @@ export function serializeValidationReceipt(record) {
 function multilineSecrets() {
   let tail='', field=null, quote=null, escaped=false, privateKey=false;
   let header=null, label='', dashes=0, suppressed=false, continuedField=false;
+  let scheme=null;
   return {
     write(text) {
       for(const char of text) {
         tail=(tail+char).slice(-32);
+        if (scheme==='space' && !/\s/.test(char)) { scheme='value'; suppressed=true; }
+        else if (scheme==='value') {
+          if (/\s/.test(char)) scheme=null;
+          else suppressed=true;
+        }
+        if (/\s/.test(char) && /\b(?:Bearer|Basic)$/i.test(tail.slice(0,-1))) scheme='space';
         if(header) {
           if(char==='-') {
             if(!dashes && !label.endsWith('PRIVATE KEY')) header=null;
@@ -91,7 +98,7 @@ function multilineSecrets() {
 
 // Hold whole lines across transport chunks. Scan discarded bytes too, without
 // retaining their raw contents or losing multiline suppression state.
-export function redactingLines(emit) {
+export function redactingLines(emit, values = knownSecretValues()) {
   const decoder = new StringDecoder('utf8');
   const secrets=multilineSecrets();
   let pending = [], length = 0, oversized = false;
@@ -102,22 +109,26 @@ export function redactingLines(emit) {
     else emit(redactSecrets(Buffer.concat(pending).toString('utf8')),0);
     pending = []; length = 0; oversized = false;
   };
+  const exact = redactingValues((text,raw) => {
+    const replaced = text !== raw;
+    let first = true;
+    for (const part of raw.split(/(?<=\n)/)) {
+      if (!part) continue;
+      length += part.length;
+      const safe = replaced ? (first ? '[redacted]' : '') + (part.endsWith('\n') ? '\n' : '') : part;
+      first = false;
+      secrets.write(decoder.write(Buffer.from(safe,'latin1')));
+      if (length > MAX_EVIDENCE_LINE_BYTES) { oversized = true; pending = []; }
+      else if (!oversized) pending.push(Buffer.from(safe,'latin1'));
+      if (part.endsWith('\n')) line(true);
+    }
+  }, values.map(value=>Buffer.from(value).toString('latin1')));
   return {
     write(bytes) {
-      let start = 0;
-      while (start < bytes.length) {
-        const newline = bytes.indexOf(10,start), end = newline < 0 ? bytes.length : newline+1;
-        for(let offset=start;offset<end;offset+=4096) {
-          const part=bytes.subarray(offset,Math.min(offset+4096,end));
-          secrets.write(decoder.write(part));length+=part.length;
-          if (length > MAX_EVIDENCE_LINE_BYTES) { oversized = true; pending = []; }
-          else if (!oversized) pending.push(Buffer.from(part));
-        }
-        if (newline >= 0) line(true);
-        start = end;
-      }
+      for (let offset=0;offset<bytes.length;offset+=4096)
+        exact.write(bytes.subarray(offset,offset+4096).toString('latin1'));
     },
-    end() { secrets.write(decoder.end());if (length) line(false); },
+    end() { exact.end(); secrets.write(decoder.end()); if (length) line(false); },
   };
 }
 

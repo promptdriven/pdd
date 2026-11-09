@@ -1,4 +1,5 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9939fbc1b7baf7521667a72a652c2c79c4283a4e56c98e43da34b02f898d644d).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 3e356c7050d2f78585c5ddb8e23859b5573bdb17787bd081e2c05a1a53e39e5a).
+import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
 import { join, isAbsolute, resolve } from 'node:path';
@@ -221,6 +222,7 @@ export function suiteStatusWords(suite) {
 export async function runTestSuite({ cwd, command, timeout = 30, env = process.env }, ports = {}) {
   if (typeof command !== 'string' || !command.trim() || !Number.isInteger(timeout) || timeout < 1 || timeout > 120)
     return { exitCode: 2, message: 'Supply a suite command and a timeout of 1 to 120 minutes.' };
+  rememberSecrets(...knownSecretValues(env));
   let p, row, environmentRoot, executionStarted = false, keepEnvironment = false;
   try {
     p = portsFor(env, ports);
@@ -229,10 +231,11 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       const all = records(p), ticket = (all.at(-1)?.ticket ?? 0) + 1;
       const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
       Object.assign(record, {command:'[redacted]', commandFingerprint:createHash('sha256').update(command).digest('hex'), source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),
-        logPath:join(p.root,`validation-${ticket}.log`), receiptPath:join(p.root,`ticket-${ticket}.json`),
+        logPath:join(env.PDD_STATE_DIR ?? join(env.HOME || process.env.HOME,'.local','state','pdd'), 'validation', createHash('sha256').update(p.root).digest('hex').slice(0,20), `validation-${ticket}.log`), receiptPath:join(p.root,`ticket-${ticket}.json`),
         recorderPid:null, recorderIdentity:null, exitCode:null, signal:null, counts:null, outcome:'running'});
       // Validate the receipt before creating even an empty log.
       serializeValidationReceipt(record);
+      p.fs.mkdirSync(join(record.logPath,'..'), {recursive:true,mode:0o700});
       p.fs.writeFileSync(record.logPath, '', {mode:0o600,flag:'wx'});
       try { save(p, record); }
       catch (error) { try { p.fs.unlinkSync(record.logPath); } catch {} throw error; }
@@ -277,7 +280,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     childEnv.PDD_CHECK_CPUS = String(row.coresPerCheck);
     executionStarted = true;
     const result = await p.execute(command, { cwd, env:childEnv, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: Number(timeout) * 60_000,
-      record:row, environmentRoot,
+      record:row, environmentRoot, secrets:knownSecretValues(env),
       onRecorder: pid => { row.recorderPid = pid; row.recorderIdentity = p.processIdentity(pid); save(p,row); keepEnvironment = true; },
       onChild: pid => { row.childPid = pid; save(p, row); } });
     if (result.record) row = result.record;
@@ -370,8 +373,8 @@ async function executeRecordedSuite(command, options, ports) {
     child.once('spawn', () => {
       try {
         options.onRecorder(child.pid);
-        const {cwd,env,timeoutMs,cpuIds,taskset,record,environmentRoot} = options;
-        child.send({start:{command,cwd,env,timeoutMs,cpuIds,taskset,record,environmentRoot}},()=>{});
+        const {cwd,env,timeoutMs,cpuIds,taskset,record,environmentRoot,secrets} = options;
+        child.send({start:{command,cwd,env,timeoutMs,cpuIds,taskset,record,environmentRoot,secrets}},()=>{});
       } catch (error) { child.disconnect(); reject(error); }
     });
   });

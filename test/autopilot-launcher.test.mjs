@@ -2296,6 +2296,11 @@ test('start: an absent selected provider directory masks an unrelated ambient pr
 // base checkout repeats the same states against its real public launcher too.
 const admissionStates=[
   {name:'fresh with room',baseAdmitted:true},
+  ...['observe','auto'].flatMap(mode=>[
+    {name:`different PATH install in ${mode}`,mode,prerequisite:'path',baseAdmitted:true},
+    {name:`read-only repository in ${mode}`,mode,prerequisite:'github-permission',baseAdmitted:true},
+    {name:`disabled merge methods in ${mode}`,mode,prerequisite:'merge-method',baseAdmitted:true},
+  ]),
   {name:'fresh with full workflow session',panes:1,budget:'1',baseAdmitted:false},
   {name:'fresh with unlimited workflow session',panes:2,budget:'0',baseAdmitted:true},
   {name:'fresh with invalid budget',budget:'invalid',baseAdmitted:false},
@@ -2312,7 +2317,13 @@ const admissionStates=[
 ];
 for(const row of admissionStates)test(`start admission parity: ${row.name}`,async t=>{
   const prepare=async module=>{
-    const f=await fixture(t);if(module)f.module=module;
+    const f=await fixture(t,{mode:row.mode});if(module)f.module=module;
+    if(row.prerequisite) {
+      const run=f.ports.run;
+      f.ports.run=async(file,args,options)=>file==='gh'&&args[0]==='repo'
+        ? {code:0,stdout:JSON.stringify({nameWithOwner:'owner/repo',defaultBranchRef:{name:'trunk'},url:'https://github.com/owner/repo',viewerPermission:row.prerequisite==='github-permission'?'READ':'WRITE',mergeCommitAllowed:row.prerequisite!=='merge-method'}),stderr:''}
+        : run(file,args,options);
+    }
     f.ports.allRuns=()=>[];
     f.ports.tidyRuns=async()=>({closed:0});
     f.ports.workflowHerdr=async args=>{
@@ -2326,6 +2337,7 @@ for(const row of admissionStates)test(`start admission parity: ${row.name}`,asyn
     const original=f.ports.doctorPorts;
     f.ports.doctorPorts=input=>{
       const p=original(input),run=p.run;
+      if(row.prerequisite==='path')p.files.realpathSync=path=>path;
       p.run=async(file,args,options)=>{
         if(file==='herdr'&&args[0]==='--session') {
           assert.ok(['pdd','pdd-autopilot'].includes(args[1]));
@@ -2335,6 +2347,8 @@ for(const row of admissionStates)test(`start admission parity: ${row.name}`,asyn
             return {code:0,stdout:JSON.stringify(value),stderr:''};
           } catch(error) {return {code:1,stdout:'',stderr:JSON.stringify({error:{code:error.code}})};}
         }
+        if(file==='gh'&&args[0]==='repo')return {code:0,stdout:JSON.stringify({nameWithOwner:'owner/repo',defaultBranchRef:{name:'trunk'},viewerPermission:row.prerequisite==='github-permission'?'READ':'WRITE',mergeCommitAllowed:row.prerequisite!=='merge-method'}),stderr:''};
+        if(file==='git'&&args[0]==='remote')return {code:0,stdout:'https://github.com/owner/repo.git',stderr:''};
         return run(file,args,options);
       };
       if(row.runtime404)p.fetch=async()=>new Response('{"error":{"code":"not-found"}}',{status:404});
@@ -2354,6 +2368,7 @@ for(const row of admissionStates)test(`start admission parity: ${row.name}`,asyn
     if(prior&&result.exitCode===0) {
       assert.equal(f.state().paneId,prior.paneId);assert.equal(f.state().coordinatorId,prior.coordinatorId);
     }
+    if(result.exitCode===0)assert.ok(f.timers.some(([action])=>action==='start'),'admitted start must start its timer');
     return result;
   };
   let baseAdmitted=row.baseAdmitted;
@@ -2366,6 +2381,8 @@ for(const row of admissionStates)test(`start admission parity: ${row.name}`,asyn
   }
   const result=await prepare();
   assert.equal(result.exitCode===0,baseAdmitted&&!row.signedOut,result.message);
+  if(row.prerequisite)assert.match(result.message,new RegExp(`(?:^|\\n)WARN ${row.prerequisite}:.*; fix: .+`));
+  t.diagnostic(JSON.stringify({state:row.name,base:baseAdmitted,candidate:result.exitCode===0,exception:Boolean(row.signedOut)}));
 });
 
 

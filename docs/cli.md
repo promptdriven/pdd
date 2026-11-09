@@ -928,15 +928,23 @@ Queue admission still uses the caller's queue selectors. Each ticket records
 If private folder setup fails before execution starts, the ticket finishes with
 the failure reason and releases its slot. Any allocated private folders are removed.
 
-The native CLI prints a receipt path and an output-evidence log path in the shared
-queue for each attempt. The compatibility runner keeps its lifecycle output; its
+The native CLI prints a receipt path in the shared queue and an output-evidence
+log path under user state for each attempt. The compatibility runner keeps its lifecycle output; its
 receipts are in the same queue. The receipt stores a redacted command, its SHA-256 fingerprint, cwd, starting Git head and
 worktree fingerprint, matching workflow run, owned recorder and child, terminal
 exit and signal, and complete TAP summary counts when available. Missing counts
-stay unknown. Logs and receipts use private file permissions. Commands are saved as
+stay unknown. Logs and receipts use mode 0600. Logs are under PDD_STATE_DIR, or
+HOME/.local/state/pdd, in a validation folder for the selected queue. Commands are saved as
 `[redacted]` because positional arguments can hold secrets. Execution uses the
-original command. Credentials in output and error text are redacted before any
-save or forwarding, including credentials split across output chunks.
+original command. Known secret values in output and error text are redacted before any save or
+forwarding. These include secret-named environment values (TOKEN, SECRET,
+PASSWORD, *_KEY and similar names) and gh and agent credentials read by pdd.
+Each stream keeps a bounded overlap window based on the longest known value.
+Exact matches can span chunks and lines, including values containing LF.
+Transformed or encoded copies are outside this exact-value guarantee.
+Pattern redaction for unknown headers, assignments and private keys is a
+best-effort extra layer. Unknown formats, encodings and arbitrary positional
+values can evade it. Do not treat pattern matching as complete secret detection.
 
 Each log is limited to 1 MiB. Overflow keeps its beginning and end with an exact
 `N bytes omitted` marker. A pending output line is limited to 256 KiB; a larger
@@ -945,7 +953,8 @@ quoted secrets and private keys in omitted lines. Their continuation stays
 redacted through its closing delimiter or end of output. A recognized credential
 field stays pending across assignment whitespace, including line breaks and
 omitted lines, until its quoted or unquoted value is redacted. Stdout and stderr
-keep separate recognition state. Each receipt is limited
+keep separate recognition state. Basic/Bearer schemes also stay pending across
+line breaks and omitted whitespace until their credential is suppressed. Each receipt is limited
 to 64 KiB, with free-text fields limited to 4 KiB. Required source and ownership metadata
 that cannot fit prevents execution. The `evidence` fields report raw output
 bytes, saved log bytes, omitted bytes and whether truncation occurred. Counts

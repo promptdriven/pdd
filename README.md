@@ -82,7 +82,7 @@ if you need your own write access.
    Explicit trust names add users. Observe mode reports eligible work.
    Strict approvals and required human reviews still need a person.
 
-4. Fix each required doctor failure, then start and inspect the run:
+4. Sign in to an agent, review doctor warnings, then start and inspect the run:
 
    ```sh
    pdd autopilot start --runs 1
@@ -90,7 +90,8 @@ if you need your own write access.
    herdr session attach pdd-autopilot
    ```
 
-   Start runs the same doctor first and refuses work if a required check fails.
+   Start runs the same doctor first. Only missing agent sign-in refuses preflight.
+   Other findings warn with fix commands; native start keeps its own guards.
    Doctor reads tools, sign-ins, permissions, setup, pane room and interpreter
    access. It makes no GitHub writes or AI calls. A read-only interpreter access
    check does not prove prompt behavior. Draft prompts can need approval at the

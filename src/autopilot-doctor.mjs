@@ -1,4 +1,5 @@
 // Source: prompts/cli/autopilot-doctor.prompt.md.
+import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
 import {constants} from 'node:fs';
 import {join, resolve, delimiter} from 'node:path';
@@ -40,6 +41,7 @@ export async function resolveAutopilotAgent(input, ports = {}) {
   const installed = [], cwd = input.cwd, files = ports.files ?? nativeFiles;
   try { definitions = await (ports.agentDefinitions ?? loadAgentDefinitions)({cwd,env:definitionEnv}); }
   catch (error) { configurationError = error; }
+  for (const def of Array.isArray(definitions)?definitions:[]) rememberSecrets(...knownSecretValues(def.env));
   definitions = [...(Array.isArray(definitions)?definitions:[]),{id:'agy',kind:'agy',command:'agy',env:{}}];
   if (profile) definitions = definitions.filter(def=>def.id===profile.agent.id && def.kind===profile.agent.kind);
   const current = caller.CODEX_THREAD_ID?'codex':caller.CLAUDECODE?'claude':null;
@@ -58,6 +60,7 @@ export async function resolveAutopilotAgent(input, ports = {}) {
         const info=await run(['--version']);
         let credentials;
         try { credentials=JSON.parse(files.readFileSync(join(env.GEMINI_CLI_HOME||env.HOME||'','.gemini','oauth_creds.json'),'utf8')); } catch {}
+        rememberSecrets(...knownSecretValues(credentials));
         if (ready(info)&&typeof credentials?.refresh_token==='string'&&credentials.refresh_token) { agent=def; break; }
       } else if (['codex','claude'].includes(def.kind)) {
         const status=await run(def.kind==='codex'?['login','status']:['auth','status','--json']);
@@ -86,8 +89,9 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const json = text => { try { return JSON.parse(text); } catch { return null; } };
   const same = (a,b) => { try { return files.realpathSync(a) === files.realpathSync(b); } catch { return false; } };
   const executable = path => { try { files.accessSync(path, constants.X_OK); return files.statSync(path).isFile(); } catch { return false; } };
+  rememberSecrets(...knownSecretValues(env));
   const checks = [];
-  const add = (id,status,detail,fix) => checks.push({id,status,detail:clean(detail),fix});
+  const add = (id,status,detail,fix) => checks.push({id,status:status==='fail' && !['agent','agent-signin'].includes(id)?'warn':status,detail:clean(detail),fix});
   const retry = `${quote(ports.nodePath ?? process.execPath)} ${quote(join(input.packageRoot,'bin/pdd.mjs'))} autopilot doctor`;
   const install = name => platform === 'darwin' ? `brew install ${name}` : `sudo apt-get install ${name}`;
   const selected = (env.PATH ?? '').split(delimiter).map(dir => resolve(cwd,dir || '.', 'pdd')).find(executable);
@@ -130,7 +134,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const {agent,preferred,installed}=selection;
   const login = `${quote(preferred?.command ?? 'codex')}${preferred?.kind==='claude'?' auth login':['agy','gemini'].includes(preferred?.kind)?'':' login'}`;
   const statusArgs={codex:'login status',claude:'auth status --json',agy:'models',gemini:'--version'};
-  add('agent',agent?'pass':'fail',agent?`${agent.kind} signed in`:'Sign in to a configured agent; account missing or unavailable',configurationFix??(agent?`${quote(agent.command ?? agent.kind)} ${statusArgs[agent.kind]}`:installed.length?login:'npm install -g @openai/codex'));
+  add('agent',agent?'pass':configurationFix?'warn':'fail',agent?`${agent.kind} signed in`:'Sign in to a configured agent; account missing or unavailable',configurationFix??(agent?`${quote(agent.command ?? agent.kind)} ${statusArgs[agent.kind]}`:installed.length?login:'npm install -g @openai/codex'));
   if (!configurationFix && !agent && !installed.length) add('agent-signin','fail','Sign in after installing Codex, or install Claude Code and sign in',login);
   let usage = {state:'unknown'};
   if (agent?.kind==='codex') { try { usage = await (ports.codexLimits ?? readCodexLimits)({command:agent.command??'codex',cwd,env}, {spawn:ports.spawn}); } catch {} }
@@ -191,6 +195,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
     else if (ports.runtimeHealth) health = await ports.runtimeHealth({env});
     else {
       const token = await run('gh',['auth','token']);
+      if (ready(token)) rememberSecrets(token.stdout.trim());
       health=await checkRuntimeHealth({env},{gh:()=>({status:token.code,stdout:token.stdout}),fetch:ports.fetch,now:ports.now});
       if (!ready(token)||!token.stdout.trim()) health={...health,state:'auth'};
     }
