@@ -101,6 +101,20 @@ a saved code-only route wait while the capability is absent, then use the defaul
 installed capability through the #3112 wake. Wake once, preserving progress,
 route history and independent questions, without approval or a fabricated answer.
 
+## Validation session change (#3117)
+
+Start a controlled validation with the native suite queue in a real factory
+workflow. Hold it after it emits more than a terminal tail. End its calling
+process and change the fake chat session while validation is running. A fresh
+workflow status process must find the same ticket, source, log and owned child.
+Release the validation once. Its full stdout/stderr, nonzero exit and complete
+TAP counts must survive in the saved receipt. Command identity follows the
+shared queue contract: a redacted command and its original command fingerprint. Assert one command invocation,
+no duplicate ticket, no signal to a recovered process, and unchanged receipt
+bytes after later observations. Finish the workflow with a fresh successful
+validation; the failed attempt stays available. Use only the factory's private
+home, config and queues. Retain this scenario as a failing assertion on the base.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

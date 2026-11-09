@@ -111,7 +111,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
       child.stdin.on('error',()=>{});child.stdin.end(o.input);
     });
   };
-  w.command=async(argv,{cwd=w.cwd,actor='agent',env={},stdin,allowFailure=false,operation}={})=>{
+  w.command=async(argv,{cwd=w.cwd,actor='agent',env={},stdin,allowFailure=false,operation,onSpawn,expectInterrupted=false}={})=>{
     const child=fork(fileURLToPath(new URL('./worker.mjs',import.meta.url)),[],{cwd:base,env:{...w.env,...env,GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:`url.${w.remote}.insteadOf`,GIT_CONFIG_VALUE_0:`https://github.com/${repository}.git`},execArgv:[],stdio:['ignore','pipe','pipe','ipc'],serialization:'advanced'});
     w.children.add(child);
     let processOut='',processErr='';child.stdout.on('data',s=>{processOut+=s;});child.stderr.on('data',s=>{processErr+=s;});
@@ -120,7 +120,10 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
       let settled=false;
       const timer=setTimeout(()=>{child.kill('SIGTERM');reject(Error(`factory command deadline: ${argv?.join(' ')??operation}`));},25000);
       const finish=(err,value)=>{if(settled)return;settled=true;clearTimeout(timer);if(child.connected)child.disconnect();err?reject(err):done(value);};
-      child.on('error',err=>finish(err));child.on('exit',code=>{w.children.delete(child);if(!settled)finish(Error(`factory worker exited ${code}: ${processErr}`));});
+      child.on('error',err=>finish(err));child.on('exit',(code,signal)=>{w.children.delete(child);if(!settled) {
+        if(expectInterrupted)finish(null,{code,signal,interrupted:true,stdout:processOut,stderr:processErr,time:w.time});
+        else finish(Error(`factory worker exited ${code}: ${processErr}`));
+      }});
       child.on('message',async m=>{
         if(m.done){finish(null,m.done);return;}
         if(m.failed){finish(Error(m.failed.stack));return;}
@@ -143,6 +146,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
         } catch(error){if(child.connected)child.send({reply:m.id,error:{message:error.message,code:error.code,stdout:error.stdout,stderr:error.stderr}});}
       });
       child.send({start:request});
+      onSpawn?.(child);
     });
     if(child.exitCode===null && child.signalCode===null)await new Promise(r=>child.once('exit',r));
     result.nativeOutput=processOut;

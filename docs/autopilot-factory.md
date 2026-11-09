@@ -48,6 +48,7 @@ the same merge.
 | Check plan | A full native check saves target and baseline scope; a saved read retains it. A missing interface blocks paid dispatch. |
 | Small change, bug, feature | One or two PRs reach merge; PR 2 starts stacked on PR 1. |
 | Code-only bug | An unchanged correct prompt passes on both snapshots; native old code fails for the issue reason and new code passes. Independent review reaches merge. A saved route wait wakes once when the checker capability is installed. |
+| Validation session change | A held native validation keeps its source, bounded secret-safe log and child identity after caller loss and a changed fake chat session. A fresh observer reads the same ticket. The custodian saves the nonzero exit and TAP counts. A later pass keeps that failed receipt. |
 | Restart | Claim, allocation, completed steps and chat session survive; no duplicate publication. |
 | Lost verdict | Timer ticks send nothing again; one explicit synthetic person decision permits one resend. |
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |

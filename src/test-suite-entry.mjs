@@ -14,6 +14,7 @@ try {
     const log = text => { process.stdout.write(`${text}\n`); appendFileSync(history, `${text}\n`); };
     process.stdout.write(`queued ${stamp()} in ${process.cwd()}\n`);
     const result = await runTestSuite({cwd:process.cwd(), env, command:env.SUITE?.trim() ? env.SUITE : 'POCKET_BROWSER_BIN=/usr/bin/google-chrome npm test'}, {
+      announceReceipt: false,
       say: text => text === 'running the full test suite' ? log(`started ${stamp()} in ${process.cwd()}`) : process.stdout.write(`${text}\n`),
     });
     log(`finished ${stamp()} exit ${result.exitCode} in ${process.cwd()}`);
