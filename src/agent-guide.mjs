@@ -1,6 +1,6 @@
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-guide.prompt.md (sha256: 3553676cff839ba33793ee0836d1898eaeb89f65d408721ae5930cdcd6db9a21).
+// Generated from prompts/cli/agent-guide.prompt.md (sha256: 490563a320dee141b683e3fbfa512b0107a4fcb7fe5bd68cf0f84fb71f9a0732).
 import {createHash} from 'node:crypto';
 import {buildProjectCard,readAgentScenarios} from './agent-project.mjs';
 import {createRunJudge,compareExpectation} from './agent-judge.mjs';

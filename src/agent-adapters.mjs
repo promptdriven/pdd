@@ -1,5 +1,5 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 9dc74bacd457bf58690744bdda2f33c50e2e0ee91f052784e9a7d6f28623fe30).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: db44fa9caaa62adbd14208ab76143424aaa3961de2cfc181d9ebfe48ab228e96).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, statSync, constants } from 'node:fs';

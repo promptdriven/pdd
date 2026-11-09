@@ -10,7 +10,13 @@ Use the [workspace authority](runtime-workspace.prompt.md) before reading any de
 
 ## Dependencies
 
+- [Runtime prompt inventory](interface-draft.prompt.md#inventory-results): required generation and verification context for the additive repository `runtime` coverage shape and counting rules.
+
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Inventory contract](../../docs/runtime-bindings.md), required for generation and verification.
 - [Preflight](runtime-preflight.prompt.md), required for the existing `PreflightError` and `readPrompt` exports and discovery record shapes.
+
+## Runtime prompt coverage
+
+Compose the interface drafting owner's repository coverage as additive `runtime` in bindingCoverage results, including when no module inventory exists. Preserve module binding semantics.

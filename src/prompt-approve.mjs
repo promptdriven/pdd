@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: aa81368920b093a6cdd2e94abae711b0788a099317571146d033b8f499fefdca).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 79d08a6a9171b6e16fd252be83ee3424a807883459620eece44b41c9e91c5de4).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -64,6 +64,8 @@ function nested(schema, indent) {
 // The interface in plain words, for the person who approves it.
 export function describeInterface(path, iface) {
   const out = [`${path} (${iface.status})`];
+  if (iface.kind) out.push(`Kind: ${iface.kind}`);
+  if (iface.kind === 'native-only') out.push(`Reason: ${iface.reason}`);
   for (const entry of Array.isArray(iface.entries) ? iface.entries : []) {
     out.push(`Operation ${entry?.operation}`, 'Input:', ...describe(entry?.input_schema, '  '), 'Result:', ...describe(entry?.result_schema, '  '),
       `Errors: ${Array.isArray(entry?.errors) && entry.errors.length ? entry.errors.join(', ') : 'none'}`);
@@ -238,7 +240,7 @@ export function promptPath(root, cwd, word) {
 }
 
 // pdd approve PROMPT. Returns the exit code.
-export async function runApprove({ words = [], cwd = process.cwd(), said } = {}, ports = {}) {
+export async function runApprove({ words = [], cwd = process.cwd(), said, automatic = false, tests } = {}, ports = {}) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr, stdin = ports.stdin ?? process.stdin;
   const interactive = ports.interactive ?? (!!process.stdin.isTTY && !!process.stdout.isTTY);
   try {
@@ -248,6 +250,12 @@ export async function runApprove({ words = [], cwd = process.cwd(), said } = {},
     if (top.status !== 0) throw new Stop(2, 'pdd approve works in a Git repository.');
     const root = realpathSync(top.stdout.trim()), path = promptPath(root, cwd, words[0]);
     if (!path) throw new Stop(2, `${relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/')} is not a Git-visible *.prompt.md file in this repository.`);
+    if (automatic) {
+      if(said !== undefined) throw new Stop(2,'--automatic does not combine with --said.');
+      const {runAutomaticApproval}=await import('./interface-draft.mjs');
+      return runAutomaticApproval({path,root,tests},{...ports,stdout,stderr});
+    }
+    if(tests !== undefined) throw new Stop(2,'--tests requires --automatic.');
     const { strictApprovals } = readApprovalPolicy({ root }, ports);
     const env = ports.env ?? process.env;
     const agent = approvalActor(env).kind === 'agent';
@@ -270,7 +278,7 @@ export async function runApprove({ words = [], cwd = process.cwd(), said } = {},
     const answers = said === undefined ? lineReader(stdin) : { close() {} };
     const commit = async ({ text, next, hash }) => {
       const fs = ports.fs ?? { writeFileSync };
-      const evidence = { id: (ports.randomUUID ?? randomUUID)(), route: said === undefined ? 'terminal' : 'said', actor: approvalActor(env), at: (ports.now ?? Date.now)(), words: said ?? null, prompts: [{ path, proseSha256: hash }] };
+      const evidence = { id: (ports.randomUUID ?? randomUUID)(), route: said === undefined ? 'terminal' : 'said', actor: approvalActor(env), at: (ports.now ?? Date.now)(), words: said ?? null, prompts: [{ path, proseSha256: hash, ...(() => { const iface = JSON.parse(interfaceBlocks(text)[0][1]); return {kind:iface.kind ?? 'full',...(iface.kind === 'native-only' ? {reason:iface.reason} : {})}; })() }] };
       try {
         fs.writeFileSync(join(root, path), next);
         await recordPromptApproval({ commonDir, evidence }, ports);
