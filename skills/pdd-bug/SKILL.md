@@ -16,7 +16,7 @@ Step briefs are in `steps/`. `?` means optional.
 
 - If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
 - Main chat: coordinate; no code or checks.
-- Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. In every step brief, require “the run's main chat” for its coordinating chat in the brief and resulting notes; attribute actual people and roles accurately, and preserve filesystem root meanings. Wait once: long time-out; no small follow-ups. Read §11 once. See pdd-prompting RUNBOOK "Bounded handoffs".
+- Fresh agents; no builder reuse/checks. Step file/paths at once; no history. Briefs require "the run's main chat" in brief/notes; keep actors/root paths. One long wait; no follow-ups. Read §11 once; RUNBOOK §22.
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
