@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: d854b1810d557ad86f632db86751747482918fc6513924e97fb51ef5eefa8af5).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 926f71311105773c695574d5f63dbd9e3befebacb5e5fe14d950759614b2142d).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -86,9 +86,17 @@ export async function ownSession({ run, chat, since, sessionId, ports = {} }) {
   const folder = expandHome(chat.configDir, env) ?? join(env.HOME || homedir(), kind === 'claude' ? '.claude' : '.codex');
   if (sessionId !== undefined && !validSessionId(sessionId)) return { kind: 'unknown' };
   const saved = sessionId ?? (kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null);
+  let end = (ports.now ?? Date.now)();
+  if (kind === 'codex' && !saved) {
+    const next = (run.chats ?? []).flatMap(item => [item.startedAt, item.resumedAt])
+      .filter(at => Number.isFinite(at) && at > since);
+    if (next.length) end = Math.min(end, Math.min(...next) - 1);
+    if (Number.isFinite(chat.endedAt)) end = Math.min(end, chat.endedAt);
+    if (!Number.isFinite(since) || end < since) return {kind: 'unknown'};
+  }
   let sessions;
   try {
-    sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: (ports.now ?? Date.now)(), ...(saved && kind === 'claude' ? { sessionId: saved } : {}) },
+    sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: end, ...(saved && kind === 'claude' ? { sessionId: saved } : {}) },
       { env, ...(folder ? (kind === 'claude' ? { claudeConfigDir: folder } : { codexHome: folder }) : {}) });
   } catch { return { kind: 'unknown' }; }
   if (!Array.isArray(sessions)) return { kind: 'unknown' };
@@ -744,6 +752,7 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
   }
   if (sessionEvidenceDue(chat, live, now()) && !observedSession(chat, agent)) {
     const own = await ownSession({ run, chat, since: launchAnchor(chat), ports });
+    if (own.kind === 'match') chat.session = {agent, id: own.id};
     observed = observeLifecycle(chat, live, now(), agent, own.kind === 'match' ? own.id : null);
   }
   applyLifecycle(chat, observed);
@@ -756,10 +765,9 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
   if (observed.state === 'ended') {
     let id = validSessionId(chat.session?.id) ? chat.session.id : null;
     if (!id) {
-      const found = await (ports.findNativeSessions ?? findNativeSessions)({ agent: run.agent, root: run.root, startedAt: chat.startedAt, endedAt: now() },
-        { env, ...(configDir ? (run.agent === 'claude' ? { claudeConfigDir: configDir } : { codexHome: configDir }) : {}) });
-      if (found.length !== 1 || !validSessionId(found[0].id)) throw problem('native_session_unknown', `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
-      id = found[0].id; chat.session = { agent: run.agent, id };
+      const found = await ownSession({run, chat, since: launchAnchor(chat), ports});
+      if (found.kind !== 'match') throw problem('native_session_unknown', `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
+      id = found.id; chat.session = { agent: run.agent, id };
     }
     // A missing agents.json entry refuses before the resume request.
     savedAgentEntry(run, run.agent, env);
@@ -810,17 +818,22 @@ export async function paneUsage(ports = {}) {
 }
 export async function ensurePaneBudget(need, ports = {}) {
   let closed = 0;
-  if (ports.sweepFinished) closed += (await ports.sweepFinished({graceMs: 15 * 60_000}))?.closed ?? 0;
-  if (ports.sweepIdle) closed += (await ports.sweepIdle({graceMs: 60_000}))?.closed ?? 0;
+  const retained = {};
+  const sweep = async (kind, options) => {
+    const result = await ports[kind](options);
+    retained[kind] = result?.reasonCounts ?? {}; closed += result?.closed ?? 0;
+  };
+  if (ports.sweepFinished) await sweep('sweepFinished', {graceMs: 15 * 60_000});
+  if (ports.sweepIdle) await sweep('sweepIdle', {graceMs: 60_000});
   let rows;
   const countPorts = {...ports,onPaneUsage:value=>{rows=value;ports.onPaneUsage?.(value);}};
   let usage = await paneUsage(countPorts);
   if (usage.budget && usage.panes + need > usage.budget) {
-    if (ports.sweepFinished) closed += (await ports.sweepFinished({graceMs: 0, need}))?.closed ?? 0;
-    if (ports.sweepIdle) closed += (await ports.sweepIdle({graceMs: 0, need}))?.closed ?? 0;
+    if (ports.sweepFinished) await sweep('sweepFinished', {graceMs: 0, need});
+    if (ports.sweepIdle) await sweep('sweepIdle', {graceMs: 0, need});
     usage = await paneUsage(countPorts);
     if (usage.panes + need > usage.budget) throw problem('herdr_pane_budget',
-      `herdr_pane_budget: Herdr session pdd has ${usage.panes} panes and the budget is ${usage.budget}. This start needs ${need}. pdd closed ${closed} chat tabs; no other chat is safe to close.\n${ports.describePaneOwners?.(rows ?? []) ?? ''}\nThe count includes personal panes. Close unused tabs, or raise PDD_HERDR_PANE_BUDGET (0 disables it).`);
+      `herdr_pane_budget: Herdr session pdd has ${usage.panes} panes and the budget is ${usage.budget}. This start needs ${need}. pdd closed ${closed} chat tabs; no other chat is safe to close. Retained: ${reasonWords(mergeReasonCounts(...Object.values(retained)))}.\n${ports.describePaneOwners?.(rows ?? []) ?? ''}\nThe count includes personal panes. Close unused tabs, or raise PDD_HERDR_PANE_BUDGET (0 disables it).`);
   }
   return {...usage, closed};
 }
@@ -839,6 +852,15 @@ async function allocationFailure(error, ports) {
   try { const {panes} = await paneUsage(ports); error.message += `\nHerdr refused a new pane at ${panes} panes. This can be a Herdr limit.`; } catch {}
   return error;
 }
+
+export const countReasons = kept => kept.reduce((counts, item) => {
+  counts[item.reason] = (counts[item.reason] ?? 0) + 1; return counts;
+}, {});
+export const mergeReasonCounts = (...groups) => groups.reduce((counts, group) => {
+  for (const [reason, count] of Object.entries(group)) counts[reason] = (counts[reason] ?? 0) + count;
+  return counts;
+}, {});
+export const reasonWords = counts => Object.entries(counts).sort(([a],[b]) => a.localeCompare(b)).map(([reason,count]) => `${reason} ${count}`).join(', ') || 'none';
 
 export async function closeFinishedChats(run, ports = {}) {
   const herdr = herdrCommand(ports), now = ports.now ?? Date.now, warnings = [], kept = [];
@@ -869,6 +891,23 @@ export async function closeFinishedChats(run, ports = {}) {
       throw problem('pane-busy');
     if (!SHELLS.has(rows[0].name)) throw problem('pane-unknown');
   };
+  if (run.layout?.workspaceId && run.layout.createdWorkspaceId !== run.layout.workspaceId) {
+    const workspace = (await inventory('workspace')).find(w => w.workspace_id === run.layout.workspaceId);
+    const label = `${run.repo?.split('/')[1]}#${run.number} ${run.workflow}`;
+    if (run.layout.createdWorkspaceId == null && workspace?.label === label
+        && samePath(workspace.worktree?.checkout_path, run.root)
+        && samePath(workspace.worktree?.repo_key, run.commonDir) && workspace.worktree?.is_linked_worktree === true) {
+      if (!ports.dryRun) {
+        run.layout.createdWorkspaceId = run.layout.workspaceId;
+        if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
+        await ports.checkpoint(null, run.layout);
+      }
+    } else if (ports.reason === 'park') {
+      const kept = (run.chats ?? []).filter(chat => !Number.isFinite(chat.closed?.confirmedAt)).map(chat => ({area: chat.area, reason: 'not-pdd-created'}));
+      if (!kept.length) kept.push({area: 'run shell', reason: 'not-pdd-created'});
+      return {closed: 0, kept, warnings, reasonCounts: countReasons(kept)};
+    }
+  }
   const finished = ports.force ? run.chats ?? [] : finishedChats(run);
   const candidates = ports.onlyChat ? finished.filter(chat => chat.paneId === ports.onlyChat.paneId && chat.terminalId === ports.onlyChat.terminalId) : finished;
   for (const chat of [...candidates].sort((a,b) => finishedAt(run,a) - finishedAt(run,b))) {
@@ -904,25 +943,30 @@ export async function closeFinishedChats(run, ports = {}) {
       if (native && (native.pane_id !== chat.paneId || native.agent !== agent ||
           validSessionId(chat.session?.id) && native.agent_session?.kind === 'id' && native.agent_session.value !== chat.session.id))
         { keep('agent-identity'); continue; }
-      if (!ports.force && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
+      if ((!ports.force || ports.reason === 'park') && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
       if ((!ports.force || restarted || ports.reason === 'park') && !native) await assertEmptyForeground(chat.paneId);
       let id = validSessionId(chat.session?.id) ? chat.session.id : null;
-      if (!id && agent === 'codex') {
+      if (!id) {
         if (native?.agent_session?.kind === 'id' && validSessionId(native.agent_session.value)) id = native.agent_session.value;
         else { const own = await ownSession({run, chat, since: launchAnchor(chat), ports}); if (own.kind === 'match') id = own.id; }
       }
-      if ((!ports.force || ports.reason === 'park') && !id) { keep('no-saved-session'); continue; }
+      if (id && !ports.dryRun && chat.session?.id !== id) { chat.session = {agent, id}; await checkpoint(chat); }
+      const current = !finishedChats(run).includes(chat);
+      if ((!ports.force || ports.reason === 'park') && !id && current) { keep('no-saved-session'); continue; }
       if (ports.dryRun) { closed++; continue; }
       let screen = null;
       try {
         const text = await herdr(['pane', 'read', chat.paneId, '--source', 'recent-unwrapped', '--lines', '5000']);
         const folder = join(run.runDir, 'chats'); mkdirSync(folder, {recursive: true, mode: 0o700});
-        screen = join(folder, `${chat.area}-${chat.startedAt}.txt`);
-        writeFileSync(screen, text, {mode: 0o600});
-      } catch { /* A saved native session retains history if screen capture fails. */ }
+        const file = join(folder, `${chat.area}-${chat.startedAt}.txt`);
+        writeFileSync(file, text, {mode: 0o600});
+        screen = file;
+      } catch { /* Session custody retains history for ordinary cleanup. */ }
+      if (!screen && (ports.reason === 'park' || !id)) { keep('screen-unavailable'); continue; }
       if (terminalChanged) chat.terminalId = rows[0].terminal_id;
       if (id) chat.session = {agent, id};
       chat.closed ??= {at: now(), reason: ports.reason ?? (ports.force ? 'cancel' : endedRun(run) ? 'run-end' : 'area-end'), screen};
+      if (screen) chat.closed.screen = screen;
       if (restarted) chat.closed.restartTerminal = true;
       chat.state = 'ended';
       await checkpoint(chat);
@@ -938,7 +982,7 @@ export async function closeFinishedChats(run, ports = {}) {
       if (finalNative && (finalNative.pane_id !== chat.paneId || finalNative.agent !== agent || id && finalNative.agent_session?.kind === 'id' && finalNative.agent_session.value !== id))
         { keep('agent-identity'); continue; }
       if (restarted && finalNative) { keep('agent-identity'); continue; }
-      if (!ports.force && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
+      if ((!ports.force || ports.reason === 'park') && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
       if ((!ports.force || restarted || ports.reason === 'park') && !finalNative) await assertEmptyForeground(chat.paneId);
       if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
       await ports.beforeClose?.();
@@ -968,7 +1012,7 @@ export async function closeFinishedChats(run, ports = {}) {
       warnings.push(`warning: the run workspace stays open (${warningReason(error)}).`);
     }
   }
-  return {closed, kept, warnings};
+  return {closed, kept, warnings, reasonCounts: countReasons(kept)};
 }
 export async function closeChats(run, ports = {}) {
   return closeFinishedChats(run, {...ports, force: true, reason: 'cancel'});

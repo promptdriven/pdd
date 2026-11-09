@@ -278,12 +278,12 @@ and the nonempty foreground process list contains only that shell PID with a
 recognized shell name (bash, zsh, sh, dash, fish, ksh or tcsh). Retain foreground
 work as `pane-busy`; retain unavailable, malformed or unknown process evidence as
 `pane-unknown`. A saved session and terminal identity alone do not prove an
-unused pane after the agent exits. Require a valid saved native session, learning Codex's session from
-Herdr or one ownSession lookup if needed. No session means retain the tab.
+unused pane after the agent exits. Try session proof from saved custody, matching
+Herdr identity or one bounded ownSession lookup. The stopped-run evidence rules below own current-chat retention and screen-backed cleanup of finished areas.
 
 Before close, read `pane read PANE --source recent-unwrapped --lines 5000` into
-`<runDir>/chats/<area>-<startedAt>.txt`, private mode 0600. Read failure does not
-block closing a safely resumable session. Await `ports.checkpoint(chat, layout)`
+`<runDir>/chats/<area>-<startedAt>.txt`, private mode 0600. For ordinary cleanup, read failure does not
+block closing a safely resumable session; parking requires the saved screen. Await `ports.checkpoint(chat, layout)`
 before `tab close`; failure sends no close. Retry a marked chat through the same
 identity checks. Missing tabs are ended evidence only with a saved close mark.
 An optional `ports.onlyChat` selects one saved pane/terminal identity from the finished set for globally ordered sweeping. Recheck caller protection, live identity, agent status and the required agent-absence process evidence after the durable checkpoint, immediately before the close. Return `{closed, kept, warnings}`: closed is the number of tabs confirmed closed,
@@ -370,7 +370,17 @@ The stable saved name and pane let tools inspect and interrupt the chat with
 
 ## Parking cleanup
 
-The existing close path accepts `reason: park`. Even with force it requires a positively saved native session for every agent chat before closing. Preserve sessions and use existing identity checks and checkpoints; closing the owned terminal stops its foreground chat process. Inject `processes.closeChat({runId,root,tabId,paneId,sessionId})` for the stop-and-close effect; its native default is the existing Herdr tab close, which owns terminal process shutdown. Call optional injected beforeClose immediately before closing a chat tab, so the runner can revalidate progress and check custody after the final native reads. Keep the saved-session checkpoint before this effect and verify absence afterward. Foreground inspection stays on the injected Herdr process-info port. Confirm pane absence, including the run shell, before the runner frees capacity. A different or unknown process stays occupied. A background open that resumes a deliberately parked chat removes its closed mark after confirmed dispatch, so the canonical continuation path can deliver once. Preserve all other cleanup/reopen behavior.
+The existing close path accepts `reason: park`. Even with force it follows the per-chat session and screen rules below before closing. Preserve sessions and use existing identity checks and checkpoints; closing the owned terminal stops its foreground chat process. Inject `processes.closeChat({runId,root,tabId,paneId,sessionId})` for the stop-and-close effect; its native default is the existing Herdr tab close, which owns terminal process shutdown. Call optional injected beforeClose immediately before closing a chat tab, so the runner can revalidate progress and check custody after the final native reads. Keep the saved-session checkpoint before this effect and verify absence afterward. Foreground inspection stays on the injected Herdr process-info port. Confirm pane absence, including the run shell, before the runner frees capacity. A different or unknown process stays occupied. A background open that resumes a deliberately parked chat removes its closed mark after confirmed dispatch, so the canonical continuation path can deliver once. Preserve all other cleanup/reopen behavior.
+
+## Stopped-run session evidence (#3123)
+
+Bound Codex discovery for one chat to its latest launch anchor, ending before the next launch or resume in the same run worktree, or at its own endedAt, whichever comes first; otherwise end at now. A known resumed UUID still uses its original session window and exact identity filter. Session observation is positive evidence: callers must checkpoint a discovered UUID even when the lifecycle is already ended. Discovery never selects from ambiguous evidence.
+
+For parking, attempt each chat independently. Learn a UUID from saved custody, matching Herdr agent_session or bounded native discovery. Require it for the current area's chat, which must resume later. A finished-area chat can close without a UUID only after saving its screen. Keep a chat with no required evidence and name no-saved-session; keep a failed required screen capture as screen-unavailable. Parking never bypasses busy-agent checks, including the last observation before close. Save each screen before parking closes its tab; save session and close custody before the effect. Dry-run makes no durable changes.
+
+An old layout with an absent createdWorkspaceId may be adopted only from complete live workspace inventory: its saved workspace ID must have checkout_path equal to run.root, the linked checkout and clone identity must match, and its label must equal `<repository name>#<number> <workflow>`. Checkpoint createdWorkspaceId before any close. An explicit different createdWorkspaceId is never adopted. Retain other workspaces with not-pdd-created. This compatibility proof authorizes cleanup of the run workspace only; existing caller, tab, terminal and foreground protections still apply.
+
+Export countReasons(kept) to count the reason fields, mergeReasonCounts(...groups) to sum reason-to-count mappings, and reasonWords(counts) to format sorted `reason count` pairs separated by comma-space (empty is `none`). Cleanup returns counts by retained reason as reasonCounts in addition to existing results. Pane-budget errors include retained counts by reason from the latest finished/idle sweeps, without double counting repeated passes over the same class.
 
 ## Dependencies
 
@@ -389,7 +399,7 @@ The existing close path accepts `reason: park`. Even with force it requires a po
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"70f15b1535a5531b6ba138d6c2cc2a1591e0e1f2ed95c5a0a6acecbd08e86e66","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"926f71311105773c695574d5f63dbd9e3befebacb5e5fe14d950759614b2142d","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {createGithubRepoFake} from '../github-repo-fake.mjs';
 
 export function factoryGithub(w) {
-  const f = createGithubRepoFake({repository:'example/project',owner:'example',issues:0,now:()=>w.time});
+  const f = createGithubRepoFake({repository:w.repository,owner:'example',issues:0,now:()=>w.time});
   f.add(17,{title:'Use value two',body:'The value must be 2.',created:w.time-1000,updated:w.time-1000});
   f.prs = []; f.commands = []; f.merges = [];
   const ok = value => ({code:0,stdout:typeof value==='string'?value:JSON.stringify(value),stderr:''});

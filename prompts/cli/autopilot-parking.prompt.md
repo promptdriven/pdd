@@ -18,6 +18,11 @@ Default maximum park age is 48 hours (policy.hours); default parked count limit 
 
 The central coordinator ledger is {records,groups}. Each record has id (JSON identity of runId, kind, step, question and at), kind, runId, run (issue number), issue (URL), step, question (unaltered agent text), at and until. Each group has kind, count (distinct records), recordIds (in insertion order), and optional issue {state,at,url}; issue state is creating, opened or unknown, at is the attempt time and url is null until confirmed. collectRouteQuestions preserves prior records/groups and issue attempts, drains the durable per-run routeReports history as well as current legacy questions, appends unseen identities and updates counts. Retained reports from ended owned runs remain eligible. Repeated ticks/restarts do not increase counts. Different kinds stay separate; foreign/manual runs are filtered by the caller. Records survive wake/release. An installed route clears through the existing pdd capability/commit evidence rules, never a package version or an issue closing. Preserve gates and independent questions. A matching legacy route question can retire only on that installed-route wake; never fabricate an answer.
 
+
+## Legacy stopped runs (#3123)
+
+A missing saved UUID or old layout field does not reject the whole park. The workflow/chat owners prove each close and retain only unsafe chats with reasons. A closing reservation remains occupied until all required absence checks pass. Old-coordinator runs enter this policy only after the caller proves current same-machine claim ownership and adopts them; transferred claims use the normal handover path. Busy agents remain open.
+
 ## Dependencies
 
 - [Environment causes](autopilot-environment.prompt.md): required generation/runtime/testing context for eligible environmentRetry and its bounded backoff. No other dependency policy is copied here.
@@ -25,6 +30,6 @@ The central coordinator ledger is {records,groups}. Each record has id (JSON ide
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"fa7bf6eb41fced4f4f1a02054f391392dd7b67683f4513d76074295757f565ba","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"284de410e0162548bf2f3df439b32d5b02a4237609693fdca276eb6c13072372","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

@@ -1257,6 +1257,11 @@ Persist runtime.lostDecision with the sorted number/batch identities so unchange
 
 Before parking reconciliation, collect this coordinator's route gaps through the parking owner's routeQuestionFor/collectRouteQuestions into state.routeQuestions, saved by scanGuard even on local/budget-deferred ticks. This is the single record and count location. Once a kind has at least two distinct records, on an auto tick with GitHub work allowed create one issue in promptdriven/pdd through injected createRouteIssue({kind,title,body}) or native GitHub POST. Include kind, count, run/step/question records and a stable marker for the group. Save issue creating before the external effect; save opened with its confirmed URL, or unknown on failure/uncertain reply. Never blindly repeat a creating/unknown/opened attempt, including after restart. A refused reservation makes no external effect. Do not create issues in observe mode or local/budget-deferred maintenance. No model calls. The native adapter uses structured argument values, the existing GitHub budget and guarded mutation ports. JSON status includes routeQuestions, an array of {repository,cwd,records,groups} from matching saved coordinator ledgers (all ledgers for --all); records/groups retain the parking owner schema. Status reads local state only. Reuse pdd installed-fix wake checks for pdd-route and send a notice naming the fix; worker capacity, custody and independent questions follow the parking owner.
 
+
+## Reclamation before admission (#3123)
+
+Before allocating a missing coordinator workspace, request one pane through the same bounded finished/idle workflow sweeps used for worker admission. Reconcile same-repository, same-folder, same-machine older coordinator runs through live stable-claim recovery before final pane admission and worker filtering. Claim recovery failure is retried; proven transfer uses the workflow owner's normal handover path. Pane-budget reclamation can also reclaim blocked runs of another repository through that repository's enabled owner and guarded claim recovery. It never assigns those runs to the requesting repository. Retained pane reasons appear in the pane hold warning.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.

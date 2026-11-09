@@ -491,12 +491,12 @@ senders at their own source; PDD does not change those programs.
 | `pdd workflow approve [ISSUE] [--said WORDS] [--draft] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]` | Approve the ready gate and its draft prompts together with your chat words. In a normal run, `--through prompt-pr\|code` records the code-or-stop choice from the Story card. Without ISSUE, select the current worktree or sole waiting run. Without --said use person terminal y/N; agent callers must ask then use --said. Strict mode requires a person terminal. |
 | `pdd workflow resend ISSUE... [--said WORDS]` | Record one person decision and resend each lost check once. `--said -` reads exact words from stdin. Strict mode requires a person terminal. |
 | `pdd workflow changes ISSUE TEXT` | Send the text to the same chat. The chat revises. The gate stays open. Also use it to answer a question that the chat asked. At a gate, a plain approval such as "I approve" is not sent: pdd tells you to run `pdd workflow approve ISSUE` |
-| `pdd workflow tidy [--dry-run]` | Close safely finished chat tabs across runs on this machine. `--dry-run` lists the eligible count without changes. Keep the current chat of each live run, busy chats and chats whose native session or pane identity cannot be verified. |
+| `pdd workflow tidy [--dry-run]` | Close safely finished chat tabs across runs on this machine. `--dry-run` lists the eligible count without changes. Keep the current chat of each live run, busy chats and chats whose pane identity cannot be verified. A finished chat without a native session requires a saved screen. Show retained counts by reason. |
 | `pdd workflow cancel ISSUE` | Close the run's chat tabs. Keep the worktree and the branch. A new `pdd workflow run` on the issue then starts fresh |
 
-Finished chats close after a 15-minute grace period when they are idle and have a
-saved native session. Each new start and each Autopilot tick tries cleanup.
-`pdd workflow tidy` also retries cleanup. It refreshes restart terminal IDs for matching area tabs and the saved run shell, with confirmed agent absence and idle foreground shells. Done runs release their workspace after verified chat cleanup. Workspace closure requires a saved creation record for that exact workspace. Adopted workspaces and legacy records without creation evidence remain open with a cleanup reason. Saved native sessions, run folders and Git worktrees remain available. Missing or foreign workspaces stay protected. List status suggests tidy only when its read-only eligibility check finds a chat it can close. Status shows pane counts for working, parked, done and unowned panes. It warns at 90 percent of the configured pane budget and lists unowned workspaces with commands for manual closure. These observations do not authorize automatic closure. Status and view close nothing. A manual
+Finished chats close after a 15-minute grace period when they are idle and have
+a saved native session or a saved screen. Each new start and each Autopilot tick tries cleanup.
+`pdd workflow tidy` also retries cleanup. It refreshes restart terminal IDs for matching area tabs and the saved run shell, with confirmed agent absence and idle foreground shells. Done runs release their workspace after verified chat cleanup. Workspace closure requires a saved creation record for that exact workspace. If the creation field is missing, pdd can save it only when the workspace has the run worktree path, clone identity and run label. Other workspaces remain open with a cleanup reason. Saved native sessions, run folders and Git worktrees remain available. Missing or foreign workspaces stay protected. List status suggests tidy only when its read-only eligibility check finds a chat it can close. Status shows pane counts for working, parked, done and unowned panes. It warns at 90 percent of the configured pane budget and lists unowned workspaces with commands for manual closure. These observations do not authorize automatic closure. Status and view close nothing. A manual
 start on a completed issue keeps its history and starts a fresh run. A replaced
 run remains discoverable from its retained worktree; its agent sees the old and
 replacement run IDs and must stop. Run `pdd workflow cancel ISSUE` from that old
@@ -505,7 +505,7 @@ worktree to close a retained busy chat.
 `PDD_HERDR_PANE_BUDGET` sets the session `pdd` pane budget (default `56`; `0`
 disables it). The count includes personal panes. Before making a new run, pdd
 checks capacity and can close safely finished chats without the grace period.
-If there is no room, `herdr_pane_budget` reports the count and required capacity;
+If there is no room, `herdr_pane_budget` reports the count, required capacity and retained counts by reason;
 no new branch or worktree is made. Autopilot holds fresh work with reason `panes`
 and checks again on its next tick. Raise the budget or close unused tabs.
 

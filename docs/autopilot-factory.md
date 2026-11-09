@@ -7,12 +7,10 @@ scripts/factory-test.sh
 ```
 
 The shell entry selects private home, configuration, runtime state and queue
-folders. It removes its temporary folder when it exits. It has a 890-second
+folders and a unique fake Herdr session name. No real Herdr server is opened.
+It removes its temporary folder when it exits. It has a 890-second
 limit and a five-second termination grace. Any failed scenario returns a nonzero
 status. A candidate gap stays a failing assertion, with its gap name in the output.
-The known gap `claim-transfer-open` is in factory 6: the old coordinator can open
-its current chat after another machine takes the claim. The script names this
-gap and keeps its failure nonzero. This scenario is not a pass.
 
 The test entry is `test/autopilot-factory.e2e.test.mjs`. Each command and timer tick
 runs in a fresh Node process. Native CLI dispatch, workflow definitions, gates,
@@ -46,6 +44,7 @@ the same merge.
 | Restart | Claim, allocation, completed steps and chat session survive; no duplicate publication. |
 | Lost verdict | Timer ticks send nothing again; one explicit synthetic person decision permits one resend. |
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |
+| Stopped panes across repositories | A full shared pane budget is reclaimed from stopped runs without saved session IDs or workspace-creation fields. Same-machine coordinator claims are recovered. A second repository starts, and every held run resumes its own current session. |
 | Capacity and queues | Pane and check-slot waits recover; dead holders release reservations without resending an uncertain request. |
 | Claim transfer | The old coordinator cannot continue the current chat or publish after another machine takes the claim. |
 | PR 1 re-entry | The corrected prompt survives code entry and merge; expected values stay fixed. |

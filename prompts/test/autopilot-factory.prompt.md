@@ -49,6 +49,11 @@ real gh, agent, system timer or live Herdr process may run. Never touch another
 process or its state. Use the repository fakes as the starting point. Keep
 execution reports outside source. Keep production code unchanged in this phase.
 
+
+## Stopped-pane factory (#3123)
+
+Include a complete pane budget held by several stopped runs. Each has several area chats in one worktree, no saved session IDs, an old layout without createdWorkspaceId and an older coordinator ID for the same machine and folder. Hide Herdr IDs so bounded native discovery must prove the correct sessions. Start a second repository's coordinator against the shared Herdr service; it must obtain panes through native reclamation. Later clear the blockers and resume every held run with its own current-area UUID. Assert screens exist before closes, saved sessions match each area, claim recovery preserves each admitted claim era, and foreign workspaces and busy agents survive. Use only disposable homes, config, queues and service fakes; select a unique throwaway session name for the harness.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

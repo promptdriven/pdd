@@ -9,8 +9,8 @@ import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
-import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1fdebeaf1286e33b43acafbb13b558159e666cf8634495089553ff49ced6e979).
+import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 854c926b08a33c59fd06f3eda513f971ea93628d5d6b610c49e5ed68e61ad644).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -29,7 +29,7 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
-import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
+import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
@@ -197,6 +197,13 @@ function commitRun(run, p, update) {
   for (const key of Object.keys(run)) delete run[key];
   Object.assign(run,saved);
   return run;
+}
+// Maintenance must not make a legacy blocked worker look newly active.
+function commitMaintenance(run, p, update) {
+  return commitRun(run, {...p,preserveProgress:true}, latest => {
+    latest.progressAt ??= latest.updatedAt ?? latest.startedAt ?? 0;
+    update(latest);
+  });
 }
 // Revalidate command authority at local commits and before consequential effects.
 function protectProgress(run,p,{approval=false,validate}={}) {
@@ -684,10 +691,13 @@ async function continuationOwnership(run, cwd, ports, custody = null) {
       || observation.claims.some(claim => !claim || typeof claim !== 'object' || Array.isArray(claim)
         || !nonempty(claim.issue) || typeof claim.active !== 'boolean')) return reason;
     const claims = observation.claims.filter(claim => claim?.issue === run.issue.url && claim?.active === true);
-    if (claims.length !== 1) return reason;
+    if (claims.length !== 1) { if (custody && claims.length === 0) custody.unowned = true; return reason; }
     const claim = claims[0];
     if (!['owner', 'coordinatorId', 'machine', 'commentId', 'labelEventId'].every(key => nonempty(claim[key]))) return reason;
-    if (custody) custody.transferred = claim.owner === claim.coordinatorId && claim.machine !== origin.machine;
+    if (custody) {
+      custody.transferred = claim.owner === claim.coordinatorId && claim.machine !== origin.machine;
+      custody.superseded = claim.owner === claim.coordinatorId && (claim.commentId !== origin.claim.commentId || claim.labelEventId !== origin.claim.labelEventId);
+    }
     if (observation.localOwner !== origin.coordinatorId
       || claim.owner !== origin.coordinatorId || claim.coordinatorId !== origin.coordinatorId
       || claim.machine !== origin.machine || claim.commentId !== origin.claim.commentId
@@ -696,11 +706,12 @@ async function continuationOwnership(run, cwd, ports, custody = null) {
   } catch { return reason; }
 }
 
-async function chatContinuationOwnership(run, p) {
+async function chatContinuationOwnership(run, p, {releaseUnowned = false} = {}) {
   const handedOver = run.cancelled?.state === 'handed-over', custody = {};
   let reason = handedOver ? run.cancelled.reason : await continuationOwnership(run, run.sourceRoot, p, custody);
-  if (!reason || !handedOver && !custody.transferred) return reason;
-  if (!handedOver) reason = 'Chat continuation refused: claim ownership transferred to another machine.';
+  if (!reason || !handedOver && !(custody.transferred || releaseUnowned && (custody.unowned || custody.superseded))) return reason;
+  if (releaseUnowned && continuationCheckHeld(run,p)) return reason;
+  if (!handedOver) reason = custody.transferred ? 'Chat continuation refused: claim ownership transferred to another machine.' : 'Chat continuation refused: the admitted claim is no longer active.';
   // Persist the terminal state before cleanup, so an interrupted close cannot
   // leave the old worker eligible for another continuation or publication.
   if (!handedOver) commitRun(run, p, latest => {
@@ -710,7 +721,8 @@ async function chatContinuationOwnership(run, p) {
     latest.cancelled = {state: 'handed-over', at: p.now(), reason};
     for (const chat of latest.chats ?? []) chat.endedAt ??= latest.cancelled.at;
   });
-  const {warnings, kept} = await cleanupRunChats(run, {...p, progressGuard: undefined}, {force: true, reason: 'handover'});
+  const {warnings, kept} = await cleanupRunChats(run, {...p, progressGuard: undefined}, {force: !releaseUnowned, reason: 'handover', ...(releaseUnowned ? {graceMs:0} : {})});
+  if (releaseUnowned) await releaseIssueClaim({cwd:run.sourceRoot,issueNumber:run.number,runId:run.runId},p.commandPorts);
   return [reason, `This local run was handed over to another machine. The worktree stays at ${run.root}.`,
     ...warnings, ...(kept.length ? [`Kept open: ${kept.map(item => `${item.area} (${item.reason})`).join(', ')}. Retry safe cleanup with pdd workflow tidy.`] : [])].join('\n');
 }
@@ -3995,7 +4007,7 @@ async function cleanupRunChats(run, p, options = {}) {
   const snapshot = structuredClone(run), savedTerminals = new Map((run.chats ?? []).map(chat => [chat.paneId, chat.terminalId]));
   for (const chat of finishedChats(snapshot)) chat.endedAt ??= finishedAt(snapshot,chat);
   const result = await closeFinishedChats(snapshot, {...p, ...options, checkpoint: async (chat, layout) => {
-    commitRun(run, p, latest => {
+    commitMaintenance(run, p, latest => {
       if (chat) {
         const target = latest.chats?.find(item => sameChat(item,chat) && item.terminalId === savedTerminals.get(chat.paneId));
         if (!target || !options.force && !finishedChats(latest).includes(target)) throw Object.assign(Error('Cleanup target changed'), {code:'workflow_progress_refused'});
@@ -4010,7 +4022,7 @@ async function cleanupRunChats(run, p, options = {}) {
       ? (run.cleanupKept ?? []).filter(item => item.area === 'run shell') : [];
     const nextKept = [...(options.onlyChat ? (run.cleanupKept ?? []).filter(item => item.area !== options.onlyChat.area && item.area !== 'run shell') : []), ...shellKept, ...result.kept];
     if (!equalFact(run.cleanupKept ?? [],nextKept) || snapshot.chats?.some(chat => chat.endedAt !== run.chats?.find(item => sameChat(item,chat))?.endedAt))
-      commitRun(run, p, latest => {
+      commitMaintenance(run, p, latest => {
         latest.cleanupKept = nextKept;
         for (const chat of finishedChats(latest)) chat.endedAt ??= snapshot.chats?.find(item => sameChat(item,chat))?.endedAt;
       });
@@ -4019,24 +4031,54 @@ async function cleanupRunChats(run, p, options = {}) {
 }
 // The target's origin alone is not authority to close it. Read the current
 // source coordinator, independently of the selected run snapshot.
-function currentParkingOwner(run, p) {
+function currentParkingOwner(run, p, {allowOlder = false} = {}) {
   try {
     const root = realpathSync(run.sourceRoot), id = createHash('sha256').update(root).digest('hex').slice(0, 20);
     const folder = p.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
     const state = JSON.parse(readFileSync(p.autopilotStateFile ?? join(folder, `${id}.json`), 'utf8'));
     return state.enabled === true && samePath(state.cwd, root) && state.repo?.toLowerCase() === run.repo?.toLowerCase()
-      && state.coordinatorId === run.automaticOrigin?.coordinatorId && state.machine === run.automaticOrigin?.machine ? state : null;
+      && state.machine === run.automaticOrigin?.machine
+      && (allowOlder || state.coordinatorId === run.automaticOrigin?.coordinatorId) ? state : null;
   } catch {return null;}
 }
+// Called under the run lock. A remote recovery is retryable if the local save failed.
+async function recoverParkingOwner(run, owner, p) {
+  if (run.automaticOrigin.coordinatorId === owner.coordinatorId) return true;
+  const origin = structuredClone(run.automaticOrigin);
+  const recovery = await (p.recoverCoordinatorClaim ?? recoverCoordinatorClaim)({cwd: run.sourceRoot,
+    repository: run.repo, claim: {...origin.claim, issue: run.issue.url, coordinatorId: origin.coordinatorId, machine: origin.machine},
+    coordinatorId: owner.coordinatorId, machine: owner.machine, at: new Date(p.now()).toISOString()}, p);
+  if (recovery.state !== 'recovered') {
+    await chatContinuationOwnership(run, p, {releaseUnowned:true});
+    return false;
+  }
+  commitMaintenance(run, p, latest => {
+    if (!sameFact(latest.automaticOrigin, origin) || ended(latest) || currentParkingOwner(latest, p, {allowOlder:true})?.coordinatorId !== owner.coordinatorId)
+      throw Object.assign(Error('Coordinator custody changed'), {code:'workflow_progress_refused'});
+    latest.automaticOrigin = {...latest.automaticOrigin, coordinatorId: owner.coordinatorId};
+  });
+  return recovery;
+}
+
+export const recoverAutomaticRunOwner = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
+  const p = deps(ports), found = await resolveRun(input.ref, {cwd:input.cwd}, p), run = found.run;
+  const skip = () => ({...done(''), recovery:'skipped'});
+  if (!run || ended(run) || !validSavedAutomaticOrigin(run) || !samePath(run.sourceRoot,input.cwd)) return skip();
+  const owner = currentParkingOwner(run,p,{allowOlder:true});
+  if (!owner || owner.coordinatorId !== input.coordinatorId || owner.machine !== input.machine) return skip();
+  if (run.automaticOrigin.coordinatorId === owner.coordinatorId) return skip();
+  const result = await recoverParkingOwner(run,owner,p);
+  return result ? {...done(''),recovery:'recovered',claim:result.claim} : skip();
+}));
 // Admission reuses parking custody. It never starts a worker or releases a claim.
 export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {}, ports = {}) {
   const p = deps(ports), runs = allRuns({}, p).sort((a,b) => idleSince(a) - idleSince(b) || a.number - b.number);
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
-  let closed = 0, kept = 0;
+  let closed = 0, kept = 0, reasonCounts = {};
   for (const run of runs) {
     if (timeBudgetMs !== undefined && elapsed() - began >= timeBudgetMs) break;
     if (need !== undefined) {const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) break;}
-    const owner = currentParkingOwner(run, p);
+    const owner = currentParkingOwner(run, p, {allowOlder:true});
     if (!owner || !validSavedAutomaticOrigin(run) || readRunOwnership(run.runDir, p) || explicitlyStopped(run, p)
       || ['parked', 'waking', 'releasing'].includes(run.parking?.phase)) continue;
     const blocker = idleParkingBlocker(run, p.now(), graceMs);
@@ -4048,8 +4090,9 @@ export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {},
     closed += (latest?.runId === run.runId ? latest.chats ?? [] : []).filter(chat => Number.isFinite(chat.closed?.confirmedAt)
       && !(run.chats ?? []).some(old => sameChat(old, chat) && Number.isFinite(old.closed?.confirmedAt))).length;
     if (result.recovery !== 'parked') kept++;
+    reasonCounts = mergeReasonCounts(reasonCounts, result.reasonCounts ?? {});
   }
-  return {closed, kept};
+  return {closed, kept, reasonCounts};
 }
 
 export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {}, ports = {}) {
@@ -4079,7 +4122,7 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
       if (error.code !== 'run_busy') warnings.push(failureReason(error));
     } finally { release?.(); }
   }
-  return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}.`, ...warnings].join('\n')),closed,kept:kept.length};
+  return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
 }
 
 async function cancelRunCommand({ ref, cwd }, ports) {
@@ -4134,7 +4177,22 @@ async function refreshPr(run, p) {
 // start after the shared grace), 'unavailable', 'cannot-work' (the agent is alive, but its login or usage limit stops every
 // turn; the chat owner's chatHealth result goes into facts.health), 'idle' (an exact idle/done session), or null (still within the grace, or pdd cannot
 // tell, and status keeps its words). A lifecycle change is saved into the same chat of the run record.
+async function observeRunSessions(run, p) {
+  if (run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return;
+  for (const chat of [...run.chats ?? []]) {
+    if (validSessionId(chat.session?.id) || chat.startUnconfirmed) continue;
+    const live = await chatSession(chat, {...p, run});
+    const id = validSessionId(live.sessionId) ? live.sessionId :
+      (await ownSession({run, chat, since: launchAnchor(chat), ports:p}));
+    const found = typeof id === 'string' ? id : id?.kind === 'match' ? id.id : null;
+    if (found) commitMaintenance(run, p, latest => {
+      const saved = latest.chats?.find(item => sameChat(item,chat));
+      if (saved && sameFact(saved, chat)) saved.session = {agent:chat.agent ?? run.agent,id:found};
+    });
+  }
+}
 async function chatState(run, p, facts = {}) {
+  await observeRunSessions(run, p);
   if (run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return 'unconfirmed';
   if (ended(run)) return null;
   const area = run.areas[run.area], failure = activeChatFailure(run), chat = currentChat(run);
@@ -4162,6 +4220,7 @@ async function chatState(run, p, facts = {}) {
   }
   // Status saves only positive facts: the exact live agent (running) or end evidence. An unclear observation changes nothing.
   let next = structuredClone(chat);
+  if (own?.kind === 'match') next.session = {agent: chat.agent ?? run.agent, id: own.id};
   if (live.namingError) next.namingError = live.namingError;
   else delete next.namingError;
   facts.timeZone = p.timeZone;
@@ -4630,6 +4689,10 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
     const ownership = await chatContinuationOwnership(run, p);
     if (ownership) return fail(ownership);
   }
+  if (automaticResume && !ended(run) && !run.parking) {
+    await observeRunSessions(run,p);
+    chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name);
+  }
   let beforeLaunch, resumeSuccess = null;
   if (automaticResume?.parked) {
     if (!validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== automaticResume.coordinatorId
@@ -4997,15 +5060,21 @@ function replaceParkingBlocker(run, blocker, interpreterBatch, interpreterCheck,
 
 export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
   const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
-  const skipped = () => ({...done(''), recovery: 'skipped'});
+  const skipped = reason => ({...done(''), recovery: 'skipped', ...(reason ? {reasonCounts:{[reason]:1}} : {})});
   if (!run || ended(run) || !validSavedAutomaticOrigin(run)
-    || run.automaticOrigin.coordinatorId !== input.coordinatorId || run.automaticOrigin.machine !== input.machine
+    || run.automaticOrigin.machine !== input.machine
     || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || ['waking', 'releasing'].includes(run.parking?.phase)) return skipped();
   if (['area-end', 'run-end', 'budget', 'cancel'].includes(currentChat(run)?.closed?.reason)) return skipped();
-  if (!run.layout?.workspaceId || run.layout.createdWorkspaceId !== run.layout.workspaceId) return skipped();
+  if (!run.layout?.workspaceId) return skipped('not-pdd-created');
   if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'stuckCause', 'environmentRetry', 'automaticOrigin', 'progressAt', 'updatedAt', 'chatIdleLimit', 'chatResumeLimit']
     .some(key => !sameFact(run[key], input.expected[key]))) return skipped();
-  if (input.idleGraceMs !== undefined && (!currentParkingOwner(run, p) || !idleParkingBlocker(run, p.now(), input.idleGraceMs))) return skipped();
+  if (input.idleGraceMs !== undefined && (!currentParkingOwner(run, p, {allowOlder:true}) || !idleParkingBlocker(run, p.now(), input.idleGraceMs))) return skipped();
+  if (run.automaticOrigin.coordinatorId !== input.coordinatorId) {
+    const owner = currentParkingOwner(run, p, {allowOlder:true});
+    if (owner?.coordinatorId !== input.coordinatorId) return skipped('claim-unavailable');
+    try { if (!await recoverParkingOwner(run, owner, p)) return skipped(ended(run) ? 'claim-transferred' : 'claim-unavailable'); }
+    catch { return skipped('claim-unavailable'); }
+  }
   if (run.parking?.phase === 'parked') {
     commitRun(run, p, fresh => {
       replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch, input.interpreterCheck, p.now());
@@ -5015,7 +5084,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     return {...done(''), recovery: 'parked'};
   }
   if (continuationCheckHeld(run, p)) return skipped();
-  if (!input.blocker || !(run.chats ?? []).every(chat => validSessionId(chat.session?.id))) return skipped();
+  if (!input.blocker) return skipped();
   const snapshot = {state: run.state, area: run.area, gate: run.gate, question: run.question, done: run.done,
     blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, stuckCause: run.stuckCause, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin,
     chatIdleLimit: run.chatIdleLimit, chatResumeLimit: run.chatResumeLimit};
@@ -5052,7 +5121,8 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     && readRun(run.runDir).chats.every(chat => Number.isFinite(chat.closed?.confirmedAt));
   if (closed) conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at,
     fresh => {fresh.parking.phase = 'parked';});
-  return {...done(result.warnings.join('\n')), recovery: closed ? 'parked' : 'skipped'};
+  conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at, fresh => {fresh.cleanupKept = result.kept;});
+  return {...done(result.warnings.join('\n')), recovery: closed ? 'parked' : 'skipped', reasonCounts: result.reasonCounts};
 }));
 
 // Keep run custody through the irreversible release. Unknown effects retain a
