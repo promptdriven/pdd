@@ -81,11 +81,19 @@ export async function withHerdrLayoutLock(action, ports = {}) {
   if(!claimLock(directory))throw problem('herdr_layout_busy');
   try {return await action();} finally {unlinkSync(join(directory,'lock'));}
 }
-async function inventory(command) {
-  const reply=await command(['workspace','list']),rows=reply.result?.workspaces;
-  if(reply.id!=='cli:workspace:list'||reply.result?.type!=='workspace_list'||!Array.isArray(rows)
-    ||rows.some(w=>!id(w?.workspace_id))||new Set(rows.map(w=>w.workspace_id)).size!==rows.length)throw problem('invalid_workspace_inventory');
+export function validateHerdrInventory(reply, kind, workspaceId) {
+  const rows = reply?.result?.[`${kind}s`], key = `${kind}_id`;
+  if (!['workspace','tab','pane'].includes(kind) || reply?.result?.type !== `${kind}_list` || !Array.isArray(rows)
+    || rows.some(row => !id(row?.[key]) || kind !== 'workspace' &&
+      (!id(row.workspace_id) || workspaceId !== undefined && row.workspace_id !== workspaceId
+        || kind === 'pane' && (!id(row.tab_id) || !id(row.terminal_id))))
+    || new Set(rows.map(row => row[key])).size !== rows.length) throw problem(`invalid_${kind}_inventory`);
   return rows;
+}
+async function inventory(command) {
+  const reply = await command(['workspace','list']);
+  if (reply?.id !== 'cli:workspace:list') throw problem('invalid_workspace_inventory');
+  return validateHerdrInventory(reply, 'workspace');
 }
 function ownedWorkspace(rows, saved, cwd) {
   const row=rows.find(w=>w.workspace_id===saved.workspaceId);
@@ -99,9 +107,11 @@ function ownedWorkspace(rows, saved, cwd) {
 // A live workspace that is this run's linked worktree of this clone.
 const runWorkspace = (row, cwd, commonDir) => samePath(row.worktree?.checkout_path, cwd) && samePath(row.worktree?.repo_key, commonDir) && row.worktree?.is_linked_worktree === true;
 async function paneRows(command, workspaceId) {
-  const response=await command(['pane','list','--workspace',workspaceId]),panes=response.result?.panes;
-  if(response.id!=='cli:pane:list'||response.result?.type!=='pane_list'||!Array.isArray(panes)||panes.some(p=>![p?.tab_id,p?.pane_id,p?.terminal_id].every(id)||p.workspace_id!==workspaceId)||new Set(panes.map(p=>p.pane_id)).size!==panes.length)throw identityChanged(workspaceId,'pane_list',{type:'pane_list'},response.result?.type);
-  return panes;
+  const response = await command(['pane','list','--workspace',workspaceId]);
+  try {
+    if (response?.id !== 'cli:pane:list') throw problem('invalid_pane_inventory');
+    return validateHerdrInventory(response, 'pane', workspaceId);
+  } catch { throw identityChanged(workspaceId,'pane_list',{type:'pane_list'},response?.result?.type); }
 }
 async function assertRunRoot(command, run, closing = false) {
   const panes=await paneRows(command,run.workspaceId);
@@ -120,11 +130,10 @@ async function assertRunRoot(command, run, closing = false) {
 }
 async function tabsFor(command, workspaceId) {
   const reply = await command(['tab', 'list', '--workspace', workspaceId]);
-  if (reply.id !== 'cli:tab:list' || reply.result?.type !== 'tab_list' || !Array.isArray(reply.result.tabs)
-    || reply.result.tabs.some(t => !id(t?.tab_id) || t.workspace_id !== workspaceId)
-    || new Set(reply.result.tabs.map(t => t.tab_id)).size !== reply.result.tabs.length)
-    throw identityChanged(workspaceId, 'tab_list', 'valid unique tabs', reply.result?.type);
-  return reply.result.tabs;
+  try {
+    if (reply?.id !== 'cli:tab:list') throw problem('invalid_tab_inventory');
+    return validateHerdrInventory(reply, 'tab', workspaceId);
+  } catch { throw identityChanged(workspaceId, 'tab_list', 'valid unique tabs', reply?.result?.type); }
 }
 const rootFields = pane => ({tabId: pane.tab_id, paneId: pane.pane_id, terminalId: pane.terminal_id});
 function completeParentRoot(root, cwd) {

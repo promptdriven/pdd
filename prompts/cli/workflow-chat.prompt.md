@@ -267,8 +267,12 @@ time. Close only after 15 minutes from that boundary and from `openedAt`.
 `ports.graceMs:0` removes only that grace under budget pressure or replacement.
 Ordinary finished-chat cleanup leaves the current chat, including a gate,
 question or failed chat. Forced parking includes it with the guards below.
-Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory:
-the saved workspace must match the run checkout and clone, and its saved tab
+Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory.
+Use the layout owner's `validateHerdrInventory` for every workspace, tab and pane
+inventory in chat cleanup and replacement, session proof and pane counting.
+Cleanup retains invalid or out-of-scope inventory as `invalid_cleanup_inventory`,
+without writing a new close mark, confirmedAt or ended state from that evidence.
+The saved workspace must match the run checkout and clone, and its saved tab
 must have exactly the saved pane. After a restart, terminal-only drift may be refreshed when the saved area tab label still matches, agent absence is authoritative, and the foreground is an idle shell. Save that terminal identity before close and recheck it after the checkpoint. A refreshed terminal requires the matching area tab label, authoritative agent absence and an empty shell at both checks, including forced cancellation. Persist `closed.restartTerminal: true` with its close intent so these guards also apply on retries. A live agent with a different terminal, a reused ID, split tab,
 foreign workspace or unknown inventory is retained with a reason. No live-folder
 comparison establishes pane identity. Inspect the agent immediately before

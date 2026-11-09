@@ -839,8 +839,12 @@ Set `autopilot.parking.hours` in `pdd.json` to change the 48-hour park limit. `a
 Parking waits for the current agent to be idle or done. A done chat closes without
 finished-chat grace after its screen and session are saved. Complete Herdr
 inventory can confirm an absent workspace or pane, including a starting chat,
-as closed with reason `absent`. This sends no close request and keeps its saved
-session. A `closing` run holds a working slot in status and admission until all
+as closed with reason `absent`. Every tab and pane row must name the requested
+workspace and include its required IDs. An empty scoped list proves absence
+only after a valid workspace list confirms that workspace exists. Malformed
+or out-of-scope inventory retains the chat with `invalid_cleanup_inventory`
+and supplies no close mark. Confirmed absence sends no close request and keeps
+the saved session. A `closing` run holds a working slot in status and admission until all
 chat and shell absence checks pass. Each tick retries guarded cleanup. Status
 names the retained reasons; after 60 seconds it also shows `closing-retry`.
 Busy agents and uncertain identity keep their protection during every retry.
