@@ -37,6 +37,12 @@ question and no lead repair commands:
    inventory as well as derived coverage. Removing only the cache leaves the
    approved reconstruction evidence available to the workflow runner.
 
+9. An automatic merge starts a fresh scripted auditor through the native audit
+   command, saves OK with parent/merge evidence and posts the verdict once. A
+   repeat command reuses the saved result without launching another agent. A BAD
+   verdict creates a real revert branch and PR, preserves the remote base and
+   records one alert.
+
 Every scenario records its actual commands and useful structural observations.
 Assertions use states, identities, hashes, counts and effects, not exact English
 sentences. A bounded failure must name the stage and saved state. The shell
@@ -47,7 +53,7 @@ Keep this assertion enabled and return nonzero on failure. Select private HOME,
 XDG_CONFIG_HOME, PDD_STATE_DIR, suite and interpreter queues. No external network,
 real gh, agent, system timer or live Herdr process may run. Never touch another
 process or its state. Use the repository fakes as the starting point. Keep
-execution reports outside source. Keep production code unchanged in this phase.
+execution reports outside source.
 
 ## Dependencies
 

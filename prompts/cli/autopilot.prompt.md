@@ -16,6 +16,10 @@ Future workflow skills own run actions: in auto they record the checker’s PASS
 
 Autopilot config optionally accepts `parking: {hours,maxParked}`. Positive finite hours defaults to 48; positive safe-integer maxParked defaults to twice chosen run capacity. Expose recognized valid fields as optional parking in the native settings result; omit invalid fields so the defaults apply; preserve it on other setting edits.
 
+
+`autopilot.audit` is an optional Boolean; false disables post-merge audits.
+Preserve it on settings writes. The audit owner reads it from the source checkout.
+
 ## Dependencies
 
 - [GitHub calls](github-calls.prompt.md#budget): required generation and verification context for reading `autopilot.github` with `githubBudgetSettings`.

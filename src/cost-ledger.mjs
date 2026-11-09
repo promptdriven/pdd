@@ -66,6 +66,18 @@ function tokenValues(usage, agent) {
 }
 const savedChats = run => [...(run?.chats ?? []), ...(run?.abandonedChats ?? []),
   ...[run?.chatReplacement?.original, run?.chatReplacement?.replacement].filter(Boolean)];
+function auditChats(run, fs, cost) {
+  if(!run?.runDir) return [];
+  let files;try {files=fs.readdirSync(join(run.runDir,'audits'));} catch {return [];}
+  const chats=[];
+  for(const name of files.filter(n=>/^\d+\.json$/.test(n))) {
+    const audit=readJson(fs,join(run.runDir,'audits',name));
+    if(audit?.runId!==run.runId) continue;
+    if(audit.chat?.session?.id) chats.push(audit.chat);
+    else cost.coverage.push('audit-session-unavailable');
+  }
+  return chats;
+}
 function captureTokens(cost, run, chats, ports, at) {
   const fs = ports.sessionFs ?? ports.fs ?? nativeFs, env = ports.env ?? process.env, home = env.HOME || homedir();
   const visited = new Set();
@@ -76,7 +88,7 @@ function captureTokens(cost, run, chats, ports, at) {
     const account = `${agent}:${hash(config)}`, identity = hash(`${account}:${id}`);
     if (visited.has(identity)) continue; visited.add(identity);
     const saved = cost.sessions[identity] ?? { account, agent, offset: 0, usage: emptyTokens(), messages: {} };
-    const file = sessionFile(fs, config, agent, id, chat, run.root, at);
+    const file = sessionFile(fs, config, agent, id, chat, chat.root ?? run.root, at);
     const batch = file ? rows(fs, file, saved.offset, agent === 'codex') : null;
     if (!batch) { cost.coverage.push('session-unavailable'); continue; }
     if (batch.backlog) cost.coverage.push('session-backlog');
@@ -160,7 +172,7 @@ export function captureCosts(before, run, ports = {}) {
   const at = (ports.now ?? Date.now)(), fs = ports.fs ?? nativeFs;
   const cost = structuredClone(run.cost?.schema === 'pdd.cost.v1' ? run.cost : before?.cost?.schema === 'pdd.cost.v1' ? before.cost : initial(run, at));
   cost.coverage = [];
-  const chats = [...savedChats(before), ...savedChats(run)];
+  const chats = [...savedChats(before), ...savedChats(run), ...auditChats(run, fs, cost)];
   if (ports.skipCostSessions) cost.coverage.push('session-capture-deferred');
   else captureTokens(cost, run, chats, ports, at);
   capturePerson(cost, before, run, at);

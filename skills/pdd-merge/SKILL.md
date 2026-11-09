@@ -15,10 +15,12 @@ A PR with no checker verdict (the checker could not run or gave none): add the `
 
 Apply all [$pdd-autopilot merge conditions](../pdd-autopilot/steps/handoff.md#merge-conditions) before merging.
 
-In an Autopilot run, read the owner notes for the attributed operator action or exact delegation and scope. For an ordinary non-strict gate covered by that authority, after the gate is ready and its prerequisites are met, record the actual attributed operator action or delegation words with `pdd workflow approve N --said -` using the safe stdin form in RUNBOOK §2. This scoped rule overrides manual ask-and-stop guidance; no repeated per-issue approval is needed. A checker PASS is separate evidence, never approval words. If authority is absent or does not cover the gate, wait for actual authorized approval. Strict mode requires the person terminal; never bypass it or edit approval fields. Keep other work moving while approval is pending.
+In an Autopilot run, read owner notes for the attributed operator action or delegation and scope. For covered non-strict gates, once ready with prerequisites met, record that actual action with `pdd workflow approve N --said -` (safe stdin, RUNBOOK §2). This overrides manual ask-and-stop; no repeated approval is needed. A checker PASS is separate evidence, never approval words. Without covering authority, wait for actual approval. Strict mode requires the person terminal; never bypass it or edit approval fields. Keep other eligible work moving.
 
 Post one PR comment identifying the person’s actual explicit merge authorization without fabricating a quotation. It gives the verdict, the head and the checker. It lists the new words that users see (command names, help text, error messages) and each screen change, with its screenshot path and one line on what changed, so a person can look at them before a release. These do not stop the merge. A failed comment stops. If PR 1 has a PASS but no runtime verdict, it merges; add the `pdd:no-verdict` label to the PR.
 
 Before merging and after it, require `pdd autopilot check-base RUN PR` exit 0. Report refusals; a post-merge mismatch is an incident.
 
 Check the head again, then run `gh pr merge PR --merge --match-head-commit <sha>`. Never use `--auto`. A changed head stops. Read the merged state back. After PR 1, add the `pdd:code-pending` label to the issue. After the code PR, close each issue that waited on it with "Fixed in #PR" and remove `pdd:code-pending`. Remove the `pdd:working` label.
+
+After each automatic merge, follow [post-merge audit](../pdd-autopilot/steps/handoff.md#post-merge-audit).

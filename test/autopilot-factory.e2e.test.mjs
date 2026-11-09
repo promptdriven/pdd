@@ -191,3 +191,32 @@ test('factory interpreter: a refused check remains a refusal and sends nothing o
   const posts=w.interpreter.posts.length;await w.tick();await w.tick();
   assert.equal(w.interpreter.posts.length,posts);assert.equal(w.github.prs.length,0);assert.equal(w.record().parking?.blocker?.kind,'interpreter');assert.deepEqual(w.leadActions,[]);
 });
+
+
+test('factory 9: automatic merge starts a fresh audit and saves its verdict once',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
+  const pr=w.github.prs[0];
+  await w.tick();w.messages();
+  assert.ok(w.packets.some(p=>p.timeRules?.some(r=>r.kind==='post-merge-audit' && r.number===17 && r.pr===pr.number)),'closed issue merge must remain offered for audit');
+  await w.command(['autopilot','audit','17',String(pr.number)],{actor:'coordinator'});
+  const saved=readJson(join(w.record().runDir,'audits',`${pr.number}.json`));
+  assert.equal(saved.result.verdict,'OK');assert.equal(saved.merge,pr.mergeCommit.oid);assert.equal(saved.comment.state,'sent');
+  assert.equal(w.auditCalls.length,1);assert.equal(w.auditCalls[0].observations[0].code,1);assert.equal(w.auditCalls[0].observations[1].code,0);
+  assert.ok(!w.record().chats.some(c=>c.session?.id===saved.chat.session.id));
+  const before=w.github.issues.get(17).comments.length;
+  await w.command(['autopilot','audit','17',String(pr.number)],{actor:'coordinator'});
+  assert.equal(w.auditCalls.length,1);assert.equal(w.github.issues.get(17).comments.length,before);assert.deepEqual(w.leadActions,[]);
+});
+
+
+test('factory 10: BAD audit creates a real revert PR and never changes the base',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
+  const merged=w.git(w.remote,'rev-parse','main');w.auditVerdict='BAD';
+  await w.command(['autopilot','audit','17',String(w.github.prs[0].number)],{actor:'coordinator'});
+  const saved=readJson(join(w.record().runDir,'audits',`${w.github.prs[0].number}.json`)),revert=w.github.prs[1];
+  assert.equal(saved.result.verdict,'BAD');assert.equal(saved.revert.state,'sent');assert.equal(revert.state,'OPEN');assert.equal(revert.baseRefName,'main');
+  assert.match(revert.headRefName,/^pdd\/revert-/);assert.equal(w.git(w.remote,'rev-parse','main'),merged);
+  assert.equal(w.git(w.remote,'show',`${revert.headRefName}:value.mjs`),'export const value = 1;');assert.equal(w.alerts.filter(a=>a.kind==='decision').length,1);
+  await w.command(['autopilot','audit','17',String(w.github.prs[0].number)],{actor:'coordinator'});
+  assert.equal(w.github.prs.length,2);assert.equal(w.auditCalls.length,1);assert.equal(w.alerts.filter(a=>a.kind==='decision').length,1);assert.deepEqual(w.leadActions,[]);
+});

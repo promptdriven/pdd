@@ -1,3 +1,4 @@
+import {auditMerge, pendingAudits} from './autopilot-audit.mjs';
 import {collectRouteQuestions, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession} from './workflow-chat.mjs';
@@ -1789,6 +1790,13 @@ async function runTick(stateFile, ports, completion) {
     cachePullRequests(state);
     const work = [], pending = {}, warnings = [], selections = [], held = new Set();
     const timeRules = [], pendingTimes = {};
+    if(config.mode === 'auto') {
+      const auditConfig = p.readConfig ? await p.readConfig(state.cwd) : read(join(state.cwd,'pdd.json'),{});
+      if(auditConfig.autopilot?.audit !== false) for(const run of await (p.listRuns ?? listRuns)({cwd:state.cwd,cancelled:true},p)) {
+        if(run.repo?.toLowerCase()!==state.repo.toLowerCase() || run.automaticOrigin?.coordinatorId!==state.coordinatorId) continue;
+        for(const pr of pendingAudits({run})) timeRules.push({kind:'post-merge-audit',number:run.number,pr,reason:`Run pdd autopilot audit ${run.number} ${pr}; retain the saved verdict and do not launch an auditor by hand.`});
+      }
+    }
     for (const claim of ownClaims) {
       const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]), key = `stuck:${number}`;
       if (!state.parkedNumbers?.includes(number) && !environmentNumbers.has(number) && Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
@@ -2249,6 +2257,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
   let p = portsFor(state, { ...ports, env: input.env });
   let controlLock, releaseAdmission;
   try {
+    if (command === 'audit') {
+      const found = await resolveRun(issues[0], {cwd:input.cwd}, {...ports,env:p.env,execFile:async(file,args,options)=>({stdout:await p.checked(file,args,options)})});
+      if(found.error) return bad(found.error);
+      state.repo=found.run.repo;
+      return auditMerge({run:found.run,pr:issues[1]},{...ports,env:p.env,execFile:(file,args,options)=>p.execute(file,args,{...options,purpose:'audit'})});
+    }
     if (command === 'check-base') {
       const found = await resolveRun(issues[0], { cwd: input.cwd }, { ...ports, env: p.env, execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
       if (found.error) return bad(found.error);

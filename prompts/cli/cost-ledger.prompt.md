@@ -102,6 +102,14 @@ same repo/issue once. Do not combine different repositories with equal issue num
 issue for tokens, suite, CI, GitHub calls, person interactions, active and wait
 minutes, plus outcome counts, per-account token totals and coverage.
 
+
+Include native auditor chats in `runDir/audits/*.json` with matching runId in
+the same session accounting and deduplication as workflow chats. Auditor chats
+carry `root` for their private checkout; resolve Claude's project transcript there
+rather than at the worker checkout. A launched audit
+without a captured session adds `audit-session-unavailable` coverage. Read through
+the filesystem port. Repeated status reads never count a session twice.
+
 ## Dependencies
 
 The [GitHub call counter](github-calls.prompt.md) is a navigation-only consumer

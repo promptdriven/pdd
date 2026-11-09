@@ -1257,6 +1257,16 @@ Persist runtime.lostDecision with the sorted number/batch identities so unchange
 
 Before parking reconciliation, collect this coordinator's route gaps through the parking owner's routeQuestionFor/collectRouteQuestions into state.routeQuestions, saved by scanGuard even on local/budget-deferred ticks. This is the single record and count location. Once a kind has at least two distinct records, on an auto tick with GitHub work allowed create one issue in promptdriven/pdd through injected createRouteIssue({kind,title,body}) or native GitHub POST. Include kind, count, run/step/question records and a stable marker for the group. Save issue creating before the external effect; save opened with its confirmed URL, or unknown on failure/uncertain reply. Never blindly repeat a creating/unknown/opened attempt, including after restart. A refused reservation makes no external effect. Do not create issues in observe mode or local/budget-deferred maintenance. No model calls. The native adapter uses structured argument values, the existing GitHub budget and guarded mutation ports. JSON status includes routeQuestions, an array of {repository,cwd,records,groups} from matching saved coordinator ledgers (all ledgers for --all); records/groups retain the parking owner schema. Status reads local state only. Reuse pdd installed-fix wake checks for pdd-route and send a notice naming the fix; worker capacity, custody and independent questions follow the parking owner.
 
+
+## Post-merge audits
+
+Dispatch `audit` with RUN and PR through the audit owner. Resolve the saved run
+without requiring a live coordinator or issue claim (the merge can close both).
+On auto ticks with audit enabled, offer pendingAudits for saved automatic runs as
+`post-merge-audit` time rules naming RUN and PR, even for completed runs and closed
+issues. The coordinator runs `pdd autopilot audit RUN PR`. Ticks make no model
+calls. Load [audit policy](autopilot-audit.prompt.md) as required context.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.

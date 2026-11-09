@@ -77,6 +77,10 @@ Dispatch `pdd interface draft [PROMPT...] [--all] [--json]` locally to the inter
 
 Pass workflow-park --route unchanged as route to parkAutomaticRun only when supplied. Omit the route key when absent, preserving the input shape of existing park callers.
 
+
+Dispatch `autopilot-audit` to the launcher with command audit and both operands
+in issues. Use the existing reply and stream rules; no remote settings warning.
+
 ## Dependencies
 
 - [Interface drafting](interface-draft.prompt.md): required generation and verification context for local `runInterfaceDraft` and `missingInterfaces` dispatch. Automatic approval dispatch is owned by the prompt approval module.

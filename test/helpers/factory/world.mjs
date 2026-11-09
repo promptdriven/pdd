@@ -65,7 +65,23 @@ export async function factoryWorld(t,{workflow='small-change'}={}) {
     }
     return result;
   };
+  w.auditCalls=[];
   w.execute=async(file,a,o={})=>{
+    if(file==='codex' && a[0]==='exec') {
+      const input=JSON.parse(o.input.split('Task input:\n').at(-1));
+      const observations=[];
+      for(const revision of [input.parent,input.merge]) {
+        w.git(o.cwd,'checkout','--detach',revision);
+        const probe="import {value} from './value.mjs';import assert from 'node:assert/strict';assert.equal(value,2,'FACTORY_VALUE');";
+        const r=await new Promise(resolve=>execFile(process.execPath,['--input-type=module','-e',probe],{cwd:o.cwd,env:w.env,encoding:'utf8'},(e,stdout,stderr)=>resolve({code:e?.code??0,stdout,stderr})));
+        observations.push({revision,...r});
+      }
+      assert.equal(observations[0].code,1,'audit must reproduce the value bug on the parent');
+      assert.ok(observations[0].stderr.includes('FACTORY_VALUE'));
+      assert.equal(observations[1].code,0,'audit must confirm the value fix on the merge');
+      const session=randomUUID();w.auditCalls.push({session,args:a,observations});
+      return {code:0,stdout:JSON.stringify({type:'thread.started',thread_id:session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({verdict:w.auditVerdict??'OK',kind:'',summary:'Value correction reproduced.',evidence:observations.map(r=>`${r.revision}: exit ${r.code}\n${r.stdout}${r.stderr}`).join('\n'),revert:w.auditVerdict==='BAD'})}})+'\n',stderr:''};
+    }
     if(file==='gh')return w.github.gh(a,o);
     if(file==='herdr') {
       if(a[0]==='--version')return {code:0,stdout:'1.0.0',stderr:''};
@@ -78,7 +94,7 @@ export async function factoryWorld(t,{workflow='small-change'}={}) {
     }
     assert.equal(file,'git',`external program denied: ${file}`);
     assert.ok(o.cwd?.startsWith(base),'Git must stay in the factory');
-    if(a[0]==='push'||a[0]==='fetch'||a[0]==='ls-remote')a=['-c',`url.${w.remote}.insteadOf=https://github.com/example/project.git`,...a];
+    if(a[0]==='push'||a[0]==='fetch'||a[0]==='ls-remote'||a[0]==='clone')a=['-c',`url.${w.remote}.insteadOf=https://github.com/example/project.git`,...a];
     return new Promise((done,reject)=>{
       const child=execFile('git',a,{cwd:o.cwd,env:w.env,encoding:o.encoding??'utf8',maxBuffer:o.maxBuffer??32*1024*1024},(error,stdout,stderr)=>{
         if(!error && a.includes('push'))w.github.syncHeads();

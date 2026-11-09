@@ -268,6 +268,11 @@ RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
 In PDD, prompts are the source. Code follows the prompts.
 1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then `The workflow park options also include text `--blocker` and `--until`. Show `pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` for a named external blocker; clearing values belong to the runner contract.
 
+
+Catalog `autopilot.audit` with prefix `autopilot audit`, local `autopilot-audit`,
+required text operands RUN and PR, no options. Form: `pdd autopilot audit RUN PR`.
+Description: Audit an automatic merge once with a fresh agent and save its verdict.
+
 ## Dependencies`, then one Runtime interface block.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.

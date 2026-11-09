@@ -35,6 +35,7 @@ process.on('message',async m=>{
       herdr:(...a)=>rpc('herdr',...a),workflowHerdr:(...a)=>rpc('herdr',...a),
       findNativeSessions:(...a)=>rpc('sessions',...a),
       checkCapacityPorts:{...isolatedCheckCapacity(base,{taskset:null}),queueRoot:env.PDD_SUITE_QUEUE,now:()=>time},
+      codexLimits:async()=>({state:'healthy'}),agentDefinitions:()=>[{kind:'codex',name:'codex',command:'codex',env:{}}],
       selectAgent:async()=>({id:'codex',kind:'codex',command:'codex',env:{}}),pathDiagnostic:()=>[],timer:async()=>true,
       allocationCheck:async()=>({state:'ready'}),isTTY:false,skipMetricsDelivery:true,stdin:(async function*(){if(stdin!==undefined)yield stdin;})(),
       armCoordinatorIdle:()=>{},wait:async()=>{},
