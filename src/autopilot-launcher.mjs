@@ -2,14 +2,14 @@ import {auditMerge, pendingAudits} from './autopilot-audit.mjs';
 import {collectRouteQuestions, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession} from './workflow-chat.mjs';
-import {WORKFLOW_CAPABILITIES, sweepIdleRuns, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
+import {WORKFLOW_CAPABILITIES, sweepIdleRuns, recoverAutomaticRunOwner, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
 import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 12bbaaf6c8d3fefeb495d005f00d82d7482c1381968382a3b2a5033b60750b5a).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: e5b81f0c026e2e19e33e2f800e922568423ba3077ba88a0e4fd924572d254d82).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -29,7 +29,7 @@ import { tidyRuns } from './workflow-runner.mjs';
 import { paneUsage, ensurePaneBudget } from './workflow-chat.mjs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, releaseParkedClaim, recoverCoordinatorClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, advanceAutomaticPr1, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
 import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict, savedLostCheck, savedCheckCause } from './workflow-results.mjs';
@@ -262,6 +262,10 @@ async function openWorkspace(state, p) {
     }
   }
   if (!state.paneId) {
+    const cleanup = workflowCleanupPorts(p, p);
+    await ensurePaneBudget(1, {...cleanup,
+      sweepFinished: options => (p.tidyRuns ?? tidyRuns)({...options,timeBudgetMs:5000}, cleanup),
+      sweepIdle: options => sweepIdleRuns({...options,timeBudgetMs:5000}, cleanup)});
     const create = () => herdr(['workspace', 'create', '--cwd', state.cwd, '--label', `${state.repo} Autopilot`, '--no-focus'], p);
     const reply = p.scanAction ? await p.scanAction(create) : await create();
     state.paneId = reply.result?.root_pane?.pane_id;
@@ -1517,7 +1521,11 @@ export async function tickAutopilot(stateFile, ports = {}) {
 }
 
 function workflowCleanupPorts(p, ports) {
-  return {...p, herdr: ports.workflowHerdr ?? ports.herdr ?? (async args => {
+  return {...p, execFile: p.execFile ?? (async (file, args, options) => {
+    const result = await p.execute(file, args, options);
+    if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
+    return result;
+  }), herdr: ports.workflowHerdr ?? ports.herdr ?? (async args => {
     const result = await p.execute('herdr', ['--session','pdd',...args]);
     if (result.code === 0 && args[0] === 'pane' && args[1] === 'read') return result.stdout;
     let reply; try { reply = JSON.parse(result.code === 0 ? result.stdout : result.stderr || result.stdout); } catch {}
@@ -1743,28 +1751,13 @@ async function runTick(stateFile, ports, completion) {
         || origin.coordinatorId === state.coordinatorId || origin.repository?.toLowerCase() !== state.repo.toLowerCase()
         || candidate.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(candidate.sourceRoot, state.cwd)
         || !candidate.runDir || !candidate.root || !existsSync(candidate.runDir) || !existsSync(candidate.root)) continue;
-      const index = observedClaims.findIndex(claim => claim.issue === candidate.issue?.url && claim.machine === state.machine
-        && claim.commentId === origin.claim?.commentId && claim.labelEventId === origin.claim?.labelEventId);
-      if (index < 0) continue;
       try {
-        await p.scanAction(async () => {
-          const release = acquireRunLock(candidate.runDir);
-          try {
-            const run = readRun(candidate.runDir);
-            if (!run || ['completed', 'cancelled'].includes(run.state) || JSON.stringify(run.automaticOrigin) !== JSON.stringify(origin)) return;
-            const recovery = await (p.recoverCoordinatorClaim ?? recoverCoordinatorClaim)({ cwd: state.cwd, repository: state.repo,
-              claim: { ...observedClaims[index], coordinatorId: origin.coordinatorId, machine: origin.machine }, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
-              { ...ports, now: p.now, env: p.env, execFile: async (file, args, options) => p.execute(file, args, { ...options, purpose: 'claims' }) });
-            if (recovery.state !== 'recovered') return;
-            updateRun(run.runDir, latest => {
-              if (['completed', 'cancelled'].includes(latest.state) || JSON.stringify(latest.automaticOrigin) !== JSON.stringify(origin)) throw Error('Run custody changed during claim recovery');
-              latest.automaticOrigin = { ...latest.automaticOrigin, coordinatorId: state.coordinatorId };
-              return latest;
-            }, p);
-            observedClaims[index] = recovery.claim;
-            recoveredRuns.add(run.runDir);
-          } finally { release(); }
-        });
+        const result = await p.scanAction(() => recoverAutomaticRunOwner({ref:String(candidate.number),cwd:state.cwd,
+          coordinatorId:state.coordinatorId,machine:state.machine}, {...workflowCleanupPorts(p,ports),autopilotStateFile:stateFile}));
+        if (result.recovery !== 'recovered') continue;
+        const index = observedClaims.findIndex(claim => claim.issue === candidate.issue?.url);
+        if (index >= 0 && result.claim) observedClaims[index] = result.claim;
+        recoveredRuns.add(candidate.runDir);
       } catch (error) { p.warn(`Claim recovery deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
     }
     if (config.mode === 'auto' && recoveredRuns.size) await resumeStoppedWorkers(state, p, recoveredRuns);

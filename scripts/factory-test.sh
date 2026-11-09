@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 factory_tmp=$(mktemp -d "${TMPDIR:-/tmp}/pdd-factory.XXXXXXXX")
 trap 'rm -rf -- "$factory_tmp"' EXIT
+export PDD_FACTORY_HERDR_SESSION="pdd-factory-${factory_tmp##*/}"
 export HOME="$factory_tmp/home"
 export XDG_CONFIG_HOME="$factory_tmp/config"
 export PDD_STATE_DIR="$factory_tmp/state"

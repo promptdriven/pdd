@@ -267,6 +267,7 @@ async function setup(t, agent = 'claude', name = 'small-change') {
   const f = await fixture(t, {agent, name});
   assert.equal((await f.run()).exitCode, 0);
   assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
+  f.herdr.idle(); // This fixture represents a stopped worker, not a busy turn.
   const run = f.record();
   run.automaticOrigin = {repository: run.repo, coordinatorId: 'park-owner', machine: 'park-machine', claim: {commentId: '11', labelEventId: '12'}};
   save(f, run);
@@ -334,7 +335,10 @@ test('3091 confirmed parked occupancy backfills native admission and refuses a d
 for (const damage of ['session', 'terminal', 'foreign', 'process', 'check']) test(`3091 unknown ${damage} custody remains occupied`, async t => {
   const {f, tick, ports} = await setup(t);
   const held = f.record(); held.state = 'waiting'; held.question = {at: f.clock, text: 'Choose the case'};
-  if (damage === 'session') held.chats.at(-1).session = null;
+  if (damage === 'session') {
+    held.chats.at(-1).session = null; f.herdr.paneOf(held.chats.at(-1)).agent = null;
+    ports.findNativeSessions = async () => [];
+  }
   if (damage === 'terminal') f.herdr.paneOf(held.chats.at(-1)).terminal_id = 'unrelated';
   if (damage === 'foreign') held.automaticOrigin.coordinatorId = 'other';
   if (damage === 'process') {const pane = f.herdr.paneOf(held.chats.at(-1)); pane.agent = null; pane.processInfo = {pane_id: pane.pane_id, shell_pid: 100, foreground_process_group_id: 999, foreground_processes: [{pid: 999, name: 'unrelated'}]};}
@@ -380,6 +384,7 @@ async function anotherRun(f, number) {
   assert.equal((await startRun({name: 'small-change', issue: String(number), agent: 'claude', cwd: f.source, packageRoot}, f.ports)).exitCode, 0);
   assert.equal((await runStatus({ref: String(number), cwd: f.source}, f.ports)).exitCode, 0);
   const path = join(f.record().commonDir, 'pdd', 'runs', String(number), 'status.json');
+  f.herdr.idle(); // The additional run is also stopped before parking.
   const run = JSON.parse(readFileSync(path)); run.automaticOrigin = f.record().automaticOrigin;
   run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'};
   save(f, run);
@@ -1215,7 +1220,7 @@ for (const cause of ['pdd', 'interpreter reason', 'stuckCause', 'interpreter rea
     f.tick(60001);
     const waiting = f.record(); waiting.state = 'waiting';
     waiting.gate = {kind: 'ask-code', area: waiting.areas[waiting.area].name, at: f.clock};
-    save(f, waiting); f.herdr.calls.length = 0;
+    save(f, waiting); f.herdr.idle(); f.herdr.calls.length = 0;
     await tick(); await tick();
     const parked = f.record();
     assert.equal(parked.parking?.blocker.kind, 'person', 'consumed recovery must not own a later person gate');

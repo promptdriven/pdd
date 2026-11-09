@@ -289,3 +289,65 @@ test('factory 11: damaged audit evidence holds while new work is delivered',asyn
   assert.equal(w.auditCalls.length,1);assert.equal(w.github.issues.get(17).comments.length,comments);
   assert.deepEqual(w.leadActions,[]);
 });
+
+test('factory 12: stopped legacy runs free a full shared budget for a second repository and resume their sessions',async t=>{
+  const w=await factoryWorld(t,{workflow:'bug'});await w.begin();
+  const readRecord=w.record,held=[];
+  for(const number of [17,18]) {
+    if(number===18) {
+      w.github.add(18,{title:'Use value two in another run',body:'The value must be 2.',created:w.time-1000,updated:w.time});
+      await w.begin({number});
+    }
+    w.record=()=>readRecord(number);
+    await scriptedAgent(w).until(r=>r.area===2);
+    const r=w.record();assert.equal(r.chats.length,3);
+    const sessions=r.chats.map(c=>w.herdr.sessions.find(s=>s.root===r.root&&s.at>=c.startedAt)?.id);
+    assert.ok(sessions.every(Boolean));
+    held.push({number,run:r,sessions});
+  }
+  w.record=readRecord;
+  for(const {number} of held) {
+    const r=readRecord(number);
+    await w.command(['workflow','ask','Choose the next factory action'],{cwd:r.root});
+    await w.command(['workflow','park','--reason','Wait for the factory reply','--blocker','person'],{cwd:r.root});
+    const stopped=readRecord(number);
+    for(const c of stopped.chats) {c.session=null;w.herdr.paneOf(c).agent=null;}
+    delete stopped.layout.createdWorkspaceId;put(stopped.runDir,'status.json',stopped);
+  }
+  // Restarted local coordinator: claims still name this machine's previous owner.
+  const state=w.state(),oldOwner=state.coordinatorId;state.coordinatorId='factory-restarted-coordinator';
+  state.ownerLaunch.coordinator.coordinatorId=state.coordinatorId;put(w.stateRoot,state.stateFile.split('/').at(-1),state);
+  const second=await factoryWorld(t,{repository:'example/second',shared:w});
+  assert.equal(second.sessionName,w.sessionName);assert.match(w.sessionName,/^pdd-factory-/);
+  second.time=w.time+120000;w.time=second.time;
+  const foreign=await w.herdr.herdr(['workspace','create','--cwd',w.cwd,'--label','personal','--no-focus']);
+  const busy=w.herdr.panes.find(p=>p.pane_id===foreign.result.root_pane.pane_id);
+  busy.agent={agent:'codex',agent_status:'working',agent_session:{kind:'id',value:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}};
+  const budget=w.herdr.panes.length;
+  w.env.PDD_HERDR_PANE_BUDGET=String(budget);second.env.PDD_HERDR_PANE_BUDGET=String(budget);
+  w.herdr.paneLimit=budget;
+  await second.start();
+  assert.ok(second.state().paneId,'second-repository-coordinator-starts');
+  for(const {number,run,sessions} of held) {
+    const parked=readRecord(number);assert.equal(parked.parking?.phase,'parked',JSON.stringify({gap:'legacy-run-yields-shared-panes',number,state:parked.state,closed:parked.chats.map(c=>c.closed),origin:parked.automaticOrigin,secondWarnings:second.warnings,owner:w.state().coordinatorId}));
+    assert.notEqual(parked.automaticOrigin.coordinatorId,oldOwner);
+    assert.deepEqual(parked.automaticOrigin.claim,run.automaticOrigin.claim);
+    assert.deepEqual(parked.chats.map(c=>c.session.id),sessions,'each-area-native-session-is-retained');
+    assert.ok(parked.chats.every(c=>existsSync(c.closed.screen)));
+  }
+  assert.ok(w.herdr.panes.includes(busy),'foreign-busy-pane-survives');
+  await second.begin();
+  const first=second.record(),firstChat=first.chats.at(-1);
+  assert.equal(first.state,'running','second-repository-first-workflow-starts');
+  assert.ok(firstChat?.paneId);
+  assert.equal(second.herdr.paneOf(firstChat)?.agent?.agent,'codex','second-repository-first-chat-is-live');
+  for(const {number,run,sessions} of held) {
+    await w.command(['workflow','changes',String(number),'Continue this factory run with its saved session.']);
+    await w.tick();
+    const resumed=readRecord(number);assert.notEqual(resumed.parking?.phase,'parked');
+    assert.equal(resumed.chats.at(-1).session.id,sessions.at(-1),'right-session-resumes');
+    assert.ok(w.herdr.panes.some(p=>p.cwd===run.root&&p.agent?.agent_session?.value===sessions.at(-1)),'native-resume-observed');
+  }
+  assert.ok(w.herdr.panes.includes(busy),'foreign-busy-pane-survives-resume');
+  assert.deepEqual(w.leadActions,[]);assert.deepEqual(second.leadActions,[]);
+});

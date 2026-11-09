@@ -49,6 +49,7 @@ async function fixture(t, options = {}) {
       f.herdrCalls ??= []; f.herdrCalls.push(args);
       if (args[0] === 'status') return { running: f.serverRunning !== false };
       const live = { pane_id:'p1', workspace_id:'w1', cwd, foreground_cwd:cwd, tab_id:'t1', terminal_id:'term1', agent:'codex', agent_status:f.agentStatus ?? 'idle', agent_session:'session' };
+      if (args[0] === 'pane' && args[1] === 'list') return {result:{type:'pane_list',panes:f.agentStarted?[live]:[]}};
       if (args[0] === 'workspace') return { result: { type:'workspace_info', workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
       if (args[0] === 'pane' && args[1] === 'get') return { result: { type:'pane_info', pane:live } };
       if (args[0] === 'agent' && args[1] === 'get') {
@@ -1100,6 +1101,7 @@ async function relaunchFixture(t, options = {}) {
     f.herdrCalls ??= []; f.herdrCalls.push(args);
     const [group, action, id] = args;
     if (group === 'status') return { running: true };
+    if (group === 'pane' && action === 'list') return {result:{type:'pane_list',panes:[...panes.values()].filter(p=>!p.closed)}};
     if (group === 'workspace' && action === 'create') {
       const n = ++workspaces, pane = { pane_id: `w${n}:p1`, workspace_id: `w${n}`, tab_id: `w${n}:t1`, terminal_id: `term${n}`, session: `session-${n}`, agent: false, closed: false, shell: f.elsewhere ?? null, agentCwd: null };
       panes.set(pane.pane_id, pane);
@@ -1960,7 +1962,7 @@ test('native run progress subtracts saved interpreter waiting after a launcher r
 });
 test('2709: a full pane budget holds fresh intake and the next tick can release the hold', async t => {
   const f = await fixture(t), warnings = [];
-  let count = 56, sweeps = 0;
+  let count = 55, sweeps = 0;
   f.ports.warn = text => warnings.push(text);
   f.ports.tidyRuns = async () => {sweeps++; return {closed:0,kept:0,exitCode:0,message:'sweep'};};
   f.ports.workflowHerdr = async args => {
@@ -1969,6 +1971,7 @@ test('2709: a full pane budget holds fresh intake and the next tick can release 
   };
   f.issues = [issue(2709)];
   assert.equal((await f.invoke('start')).exitCode,0);
+  count = 56; await f.tick();
   assert.deepEqual(f.state().githubIntake.eligible,[]);
   assert.ok(warnings.some(text=>text.includes('panes'))); assert.ok(sweeps >= 1);
   count = 1; f.status = 304;

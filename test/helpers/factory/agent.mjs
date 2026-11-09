@@ -40,10 +40,10 @@ export function scriptedAgent(w) {
     const run=w.record();assert.ok(run.gate);
     // Synthetic operator setup/start is the authorization. No real prompt is approved.
     const words=`The factory operator started Autopilot in auto mode for example/project. This covers the ordinary ${run.gate.kind} gate for issue 17 and automatic merge under the bundled rules.`;
-    await w.command(['workflow','approve','17','--said','-'],{cwd:run.root,actor:'coordinator',stdin:words});
+    await w.command(['workflow','approve',String(w.record().number),'--said','-'],{cwd:run.root,actor:'coordinator',stdin:words});
   };
   a.step=async({allowFailure=false}={})=>{
-    await w.command(['workflow','status','17']);
+    await w.command(['workflow','status',String(w.record().number)]);
     const run=w.record(),area=run.areas[run.area];
     if(run.gate){await a.gate();return;}
     const step=area.steps.find(s=>!run.done[s]);assert.ok(step,`no step at ${area.name}`);
@@ -58,7 +58,7 @@ export function scriptedAgent(w) {
     if(step==='verify') {
       if(w.git(run.root,'status','--porcelain')){w.git(run.root,'add','.');w.git(run.root,'commit','-qm','Factory implementation and native checks');}
       const result=await w.command(['workflow','suite','--command',nativeCommand],{cwd:run.root});a.suites.push(result);
-      await w.command(['workflow','prove','17','--test',nativeCommand,'--expect','FACTORY_VALUE'],{cwd:run.root});
+      await w.command(['workflow','prove',String(w.record().number),'--test',nativeCommand,'--expect','FACTORY_VALUE'],{cwd:run.root});
       const proof=readJson(join(run.runDir,'old-code-proof.json'));assert.equal(proof.outcome,'proved');assert.equal(proof.base.exitCode,1);assert.equal(proof.head.exitCode,0);
       if(area.replay_evidence)a.evidence();
     }
@@ -111,7 +111,7 @@ export function scriptedAgent(w) {
       } else assert.equal(r.status,0,r.stdout+r.stderr);
       pr.statusCheckRollup=[{name:saved.stage==='prompt-pr'?'factory-prompt':'factory-native',status:'COMPLETED',conclusion:'SUCCESS',headSha:pr.headRefOid}];
       await w.github.gh(['pr','comment',String(pr.number),'--body-file','-'],{input:JSON.stringify({verdict:'PASS',head:pr.headRefOid,risk:1,family:'script',session:'fresh-'+pr.number,checker_mode:'scripted',evidence:{nativeExit:r.status,promptVerdict:promptResult?.code??null,oldPromptExit:oldPromptResult?.code??null,pairedNativeExit:pairedNative?.status??null}})});
-      await w.command(['workflow','status','17']);
+      await w.command(['workflow','status',String(w.record().number)]);
       await w.command(['autopilot','check-base','17',String(pr.number)]);
       const head=JSON.parse((await w.github.gh(['pr','view',String(pr.number),'--json','headRefOid'])).stdout).headRefOid;
       await w.github.gh(['pr','comment',String(pr.number),'--body-file','-'],{input:'Merge authorized by the synthetic factory operator auto setup and start; checked head '+head});
@@ -119,7 +119,7 @@ export function scriptedAgent(w) {
       await w.command(['autopilot','check-base','17',String(pr.number)]);
       assert.equal(JSON.parse((await w.github.gh(['pr','view',String(pr.number),'--json','state'])).stdout).state,'MERGED');
     }
-    await w.github.gh(['issue','close','17']);await w.github.gh(['issue','edit','17','--remove-label','pdd:working']);await w.command(['workflow','status','17']);
+    await w.github.gh(['issue','close','17']);await w.github.gh(['issue','edit','17','--remove-label','pdd:working']);await w.command(['workflow','status',String(w.record().number)]);
     assert.ok(w.github.prs.every(pr=>pr.state==='MERGED'));assert.equal(w.github.issues.get(17).state,'closed');assert.deepEqual(w.leadActions,[]);
   };
   return a;

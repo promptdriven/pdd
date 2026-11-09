@@ -46,9 +46,9 @@ test('2709: tidy closes finished chats, checkpoints durable intent before close 
   assert.equal(f.record().chats[0].closed.reason,'run-end');
 });
 
-for (const condition of ['busy','blocked','own-pane','foreign-terminal','foreign-workspace','split','no-session','grace','opened-recently','current-gate']) {
+for (const condition of ['busy','blocked','own-pane','foreign-terminal','foreign-workspace','split','no-session-no-screen','grace','opened-recently','current-gate']) {
   test(`2709: tidy protects ${condition}`, async t => {
-    const {f,run,chat} = await ended(t,condition === 'no-session' ? 'gemini' : 'claude');
+    const {f,run,chat} = await ended(t,condition === 'no-session-no-screen' ? 'gemini' : 'claude');
     const pane = f.herdr.paneOf(chat);
     if (condition === 'busy') pane.agent.agent_status = 'working';
     if (condition === 'blocked') pane.agent.agent_status = 'blocked';
@@ -59,6 +59,12 @@ for (const condition of ['busy','blocked','own-pane','foreign-terminal','foreign
     if (condition === 'grace') { run.chats[0].endedAt = f.clock; save(f,run); }
     if (condition === 'opened-recently') { run.chats[0].openedAt = f.clock-5*60_000; save(f,run); }
     if (condition === 'current-gate') { run.state = 'waiting'; run.gate = {area:'story',kind:'approve',at:f.clock}; save(f,run); }
+    if (condition === 'no-session-no-screen') {
+      pane.agent=null;run.chats[0].session=null;save(f,run);
+      const h=f.ports.herdr; f.ports.herdr=async args=>{
+      if (args[0]==='pane' && args[1]==='read') throw Object.assign(Error('capture unavailable'),{code:'screen_unavailable'});
+      return h(args);
+    }; }
     const before = f.herdr.panes.length;
     assert.equal((await tidy(f)).exitCode,0);
     assert.equal(f.herdr.panes.length,before);
