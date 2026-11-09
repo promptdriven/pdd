@@ -247,13 +247,19 @@ for(const kind of ['invalid-schema','wrong-identity','omitted','invalid-index-ro
   const w=await world(t);w.config({auditTokenLimit:1000});w.nativeUsage=true;seedWorkflowUsage(w);
   const dir=join(w.run.commonDir,'pdd','runs',kind==='omitted'?'outside-discovery':'18');mkdirSync(dir,{recursive:true});
   const file=join(dir,'status.json');
-  if(kind==='invalid-json')writeFileSync(file,'{');
-  else if(kind==='unreadable')mkdirSync(file);
-  else if(kind==='invalid-schema')writeFileSync(file,JSON.stringify({repo:w.run.repo,number:18}));
-  else if(kind!=='missing')writeFileSync(file,JSON.stringify({...w.run,number:kind==='wrong-identity'?19:18,runDir:dir}));
+  if(kind==='invalid-schema')writeFileSync(file,JSON.stringify({repo:w.run.repo,number:18}));
+  else writeFileSync(file,JSON.stringify({...w.run,number:kind==='wrong-identity'?19:18,runDir:dir}));
   const indexPath=join(w.ports.stateDir,'runs.json'),index=JSON.parse(readFileSync(indexPath,'utf8'));
   index.runs.push({...(kind==='invalid-index-row'?{}:{repo:w.run.repo}),number:18,runDir:dir});writeFileSync(indexPath,JSON.stringify(index));
   assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+  if(kind==='invalid-schema') {
+    unlinkSync(file); // The same indexed history must also hold when absent.
+    assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+    writeFileSync(file,'{');
+    assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+    unlinkSync(file);mkdirSync(file); // EISDIR models an unreadable record.
+    assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+  }
 });
 for(const kind of ['damaged','invalid-schema','unreadable-file','unreadable-folder'])test(`3111 repair earlier ${kind} audit holds CLI before any additional launch`,async t=>{
   const w=await world(t);assert.equal((await w.check()).code,0);seedWorkflowUsage(w);
