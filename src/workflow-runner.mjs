@@ -1,4 +1,4 @@
-import {interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
+import {idleParkingBlocker, idleSince, interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
 import { selectAutopilotBase } from './autopilot-base.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
 
@@ -127,7 +127,7 @@ function deps(ports = {}) {
   // The native runner records each gh call in the GitHub call ledger of its repository.
   const execFile = ports.execFile ?? nativeGithubCounter((file, args, options = {}) => execute(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...options }), { env });
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
-    isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}), describePaneOwners: ports.describePaneOwners ?? (rows=>describePaneOwners(rows,ports)), sweepFinished: ports.sweepFinished ?? (options => tidyRuns(options, {...ports, progressGuard: undefined})) };
+    isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}), describePaneOwners: ports.describePaneOwners ?? (rows=>describePaneOwners(rows,ports)), sweepIdle: ports.sweepIdle ?? (options => sweepIdleRuns(options, {...ports, progressGuard: undefined})), sweepFinished: ports.sweepFinished ?? (options => tidyRuns(options, {...ports, progressGuard: undefined})) };
 }
 // This run lock is independent of the shared Herdr layout lock. Never wait on a live owner.
 const lockProblem = cause => Object.assign(new Error('Another open operation holds this run, or its ownership cannot be verified. Wait for it to finish and retry.', cause ? { cause } : undefined), { code: 'run_busy' });
@@ -3909,6 +3909,41 @@ async function cleanupRunChats(run, p, options = {}) {
   }
   return result;
 }
+// The target's origin alone is not authority to close it. Read the current
+// source coordinator, independently of the selected run snapshot.
+function currentParkingOwner(run, p) {
+  try {
+    const root = realpathSync(run.sourceRoot), id = createHash('sha256').update(root).digest('hex').slice(0, 20);
+    const folder = p.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+    const state = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'));
+    return state.enabled === true && samePath(state.cwd, root) && state.repo?.toLowerCase() === run.repo?.toLowerCase()
+      && state.coordinatorId === run.automaticOrigin?.coordinatorId && state.machine === run.automaticOrigin?.machine ? state : null;
+  } catch {return null;}
+}
+// Admission reuses parking custody. It never starts a worker or releases a claim.
+export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {}, ports = {}) {
+  const p = deps(ports), runs = allRuns({}, p).sort((a,b) => idleSince(a) - idleSince(b) || a.number - b.number);
+  const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
+  let closed = 0, kept = 0;
+  for (const run of runs) {
+    if (timeBudgetMs !== undefined && elapsed() - began >= timeBudgetMs) break;
+    if (need !== undefined) {const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) break;}
+    const owner = currentParkingOwner(run, p);
+    if (!owner || !validSavedAutomaticOrigin(run) || readRunOwnership(run.runDir, p) || explicitlyStopped(run, p)
+      || ['parked', 'waking', 'releasing'].includes(run.parking?.phase)) continue;
+    const blocker = idleParkingBlocker(run, p.now(), graceMs);
+    if (!blocker) continue;
+    const result = await parkBlockedRun({ref: String(run.number), cwd: run.sourceRoot,
+      coordinatorId: owner.coordinatorId, machine: owner.machine,
+      blocker, expected: run, idleGraceMs: graceMs}, {...p, progressGuard: undefined});
+    const latest = readRun(run.runDir);
+    closed += (latest?.runId === run.runId ? latest.chats ?? [] : []).filter(chat => Number.isFinite(chat.closed?.confirmedAt)
+      && !(run.chats ?? []).some(old => sameChat(old, chat) && Number.isFinite(old.closed?.confirmedAt))).length;
+    if (result.recovery !== 'parked') kept++;
+  }
+  return {closed, kept};
+}
+
 export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {}, ports = {}) {
   const p = deps(ports), runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
   let closed = 0;
@@ -4837,8 +4872,10 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     || run.automaticOrigin.coordinatorId !== input.coordinatorId || run.automaticOrigin.machine !== input.machine
     || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || ['waking', 'releasing'].includes(run.parking?.phase)) return skipped();
   if (['area-end', 'run-end', 'budget', 'cancel'].includes(currentChat(run)?.closed?.reason)) return skipped();
-  if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'stuckCause', 'environmentRetry', 'automaticOrigin']
+  if (!run.layout?.workspaceId || run.layout.createdWorkspaceId !== run.layout.workspaceId) return skipped();
+  if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'stuckCause', 'environmentRetry', 'automaticOrigin', 'progressAt', 'updatedAt', 'chatIdleLimit', 'chatResumeLimit']
     .some(key => !sameFact(run[key], input.expected[key]))) return skipped();
+  if (input.idleGraceMs !== undefined && (!currentParkingOwner(run, p) || !idleParkingBlocker(run, p.now(), input.idleGraceMs))) return skipped();
   if (run.parking?.phase === 'parked') {
     commitRun(run, p, fresh => {
       replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch, input.interpreterCheck, p.now());
@@ -4850,8 +4887,12 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   if (continuationCheckHeld(run, p)) return skipped();
   if (!input.blocker || !(run.chats ?? []).every(chat => validSessionId(chat.session?.id))) return skipped();
   const snapshot = {state: run.state, area: run.area, gate: run.gate, question: run.question, done: run.done,
-    blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, stuckCause: run.stuckCause, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin};
-  const unchanged = fresh => fresh && fresh.runId === run.runId && fresh.root === run.root && !ended(fresh) && Object.entries(snapshot).every(([key, value]) => sameFact(fresh[key], value));
+    blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, stuckCause: run.stuckCause, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin,
+    chatIdleLimit: run.chatIdleLimit, chatResumeLimit: run.chatResumeLimit};
+  let cleanupUpdatedAt = run.updatedAt, cleanupProgressAt = run.progressAt;
+  const unchanged = fresh => fresh && fresh.runId === run.runId && fresh.root === run.root && !ended(fresh)
+    && fresh.updatedAt === cleanupUpdatedAt && fresh.progressAt === cleanupProgressAt && (input.idleGraceMs === undefined || currentParkingOwner(fresh, p))
+    && Object.entries(snapshot).every(([key, value]) => sameFact(fresh[key], value));
   if (!conditionalCommit(run, p, unchanged, fresh => {
     fresh.parking ??= {at: p.now(), blocker: input.blocker, phase: 'closing',
       ...(input.blocker.kind === 'person' && (run.gate || openQuestion(run))
@@ -4859,7 +4900,12 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch, input.interpreterCheck, p.now());
   })) return skipped();
   const parked = readRun(run.runDir), copy = structuredClone(parked);
-  const result = await closeFinishedChats(copy, {...p, force: true, reason: 'park', checkpoint: async (chat, layout) => {
+  cleanupUpdatedAt = parked.updatedAt; cleanupProgressAt = parked.progressAt;
+  const result = await closeFinishedChats(copy, {...p, force: true, reason: 'park', beforeClose: async () => {
+    const fresh = readRun(run.runDir);
+    if (!unchanged(fresh) || continuationCheckHeld(fresh, p))
+      throw Object.assign(Error('Parking custody changed before close'), {code: 'workflow_progress_refused'});
+  }, checkpoint: async (chat, layout) => {
     if (continuationCheckHeld(readRun(run.runDir), p)) throw Object.assign(Error('Check process custody changed'), {code: 'workflow_progress_refused'});
     if (!conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at, fresh => {
       if (chat) {
@@ -4869,11 +4915,13 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
       }
       if (layout) fresh.layout = structuredClone(layout);
     })) throw Object.assign(Error('Parking custody changed'), {code: 'workflow_progress_refused'});
+    const saved = readRun(run.runDir);
+    cleanupUpdatedAt = saved.updatedAt; cleanupProgressAt = saved.progressAt;
   }});
   const closed = !result.kept.length && readRun(run.runDir)?.layout?.phase === 'closed'
     && readRun(run.runDir).chats.every(chat => Number.isFinite(chat.closed?.confirmedAt));
   if (closed) conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at,
-    fresh => {fresh.parking.phase = 'parked'; if (fresh.parking.blocker.kind === 'unknown') fresh.state = 'stuck';});
+    fresh => {fresh.parking.phase = 'parked';});
   return {...done(result.warnings.join('\n')), recovery: closed ? 'parked' : 'skipped'};
 }));
 

@@ -1,7 +1,7 @@
 import {blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession} from './workflow-chat.mjs';
-import {WORKFLOW_CAPABILITIES, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
+import {WORKFLOW_CAPABILITIES, sweepIdleRuns, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
 import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
@@ -1480,7 +1480,7 @@ export async function tickAutopilot(stateFile, ports = {}) {
 }
 
 function workflowCleanupPorts(p, ports) {
-  return {...p, herdr: ports.workflowHerdr ?? (async args => {
+  return {...p, herdr: ports.workflowHerdr ?? ports.herdr ?? (async args => {
     const result = await p.execute('herdr', ['--session','pdd',...args]);
     if (result.code === 0 && args[0] === 'pane' && args[1] === 'read') return result.stdout;
     let reply; try { reply = JSON.parse(result.code === 0 ? result.stdout : result.stderr || result.stdout); } catch {}
@@ -1670,7 +1670,7 @@ async function runTick(stateFile, ports, completion) {
     const deferIntake = budget.state === 'low' && savedIntake && Number.isFinite(savedIntake.at) && p.now() - savedIntake.at < LOW_BUDGET_INTAKE_EVERY
       && Array.isArray(savedIntake.eligible) && Array.isArray(savedIntake.claims);
     let paneHold = null;
-    try { await ensurePaneBudget(3, {...workflowCleanupPorts(p, ports), sweepFinished: options => (ports.tidyRuns ?? tidyRuns)({...options,timeBudgetMs:5000}, workflowCleanupPorts(p, ports))}); }
+    try { await ensurePaneBudget(3, {...workflowCleanupPorts(p, ports), sweepIdle: options => sweepIdleRuns({...options,timeBudgetMs:5000}, workflowCleanupPorts(p, ports)), sweepFinished: options => (ports.tidyRuns ?? tidyRuns)({...options,timeBudgetMs:5000}, workflowCleanupPorts(p, ports))}); }
     catch (error) { if (error.code === 'herdr_pane_budget') paneHold = error.message.split('\n')[0]; }
     let intake;
     if (deferIntake) {

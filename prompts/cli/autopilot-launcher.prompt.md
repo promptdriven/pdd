@@ -13,6 +13,8 @@ shared queue machine/filesystem ports independently of the launcher process port
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
 
+Workflow cleanup and pane admission use the injected workflowHerdr port, then the injected herdr port, with the native pdd-session transport only as fallback. This port is separate from coordinator transport. Before fresh intake, bind the runner's idle sweep to pane admission alongside finished cleanup; idle cleanup uses the existing parking and resume route.
+
 ## Waiting PR 1 gates
 
 In auto mode, every tick and completion reconciliation handles saved waiting

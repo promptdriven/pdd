@@ -302,13 +302,12 @@ Export `paneUsage(ports)` returning `{panes,budget}` from one complete session-w
 pane list (an optional `onPaneUsage(rows)` receives that complete inventory), and `ensurePaneBudget(need, ports)` returning that shape plus `closed`.
 `PDD_HERDR_PANE_BUDGET` is a nonnegative safe integer, default 56; 0 disables the
 limit. Count all panes, including personal panes. Before allocation, sweep normal
-finished chats through the supplied `sweepFinished` callback. On pressure sweep
-with zero grace, oldest end first, then recount. If it still cannot fit, throw
+finished chats through the supplied `sweepFinished` callback and idle automatic chats through the optional `sweepIdle` callback (60-second grace). On pressure sweep finished chats and then idle chats with zero grace and `need`, oldest first in each class, then recount. The runner owns idle classification and safe parking; this module only requests reclamation. If it still cannot fit, throw
 `herdr_pane_budget` with count, budget, need, cleanup count, the caller-supplied `describePaneOwners(rows)` breakdown of saved run chats, run shells and other panes, and an action to close
 unused tabs or raise the variable. Unknown Herdr allocation failures include the
 observed pane count. Open, rebuild, start and replacement check before creating
 panes; the layout owner reserves the complete missing layout before its first
-create. Closed chats count as positively ended on explicit open and resume at
+create. Disable both cleanup callbacks while the layout lock is held; the outer admission check owns reclamation. Closed chats count as positively ended on explicit open and resume at
 once. Preserve uncertain-launch protections.
 
 
@@ -371,7 +370,7 @@ The stable saved name and pane let tools inspect and interrupt the chat with
 
 ## Parking cleanup
 
-The existing close path accepts `reason: park`. Even with force it requires a positively saved native session for every agent chat before closing. Preserve sessions and use existing identity checks and checkpoints; closing the owned terminal stops its foreground chat process. Inject `processes.closeChat({runId,root,tabId,paneId,sessionId})` for the stop-and-close effect; its native default is the existing Herdr tab close, which owns terminal process shutdown. Keep the saved-session checkpoint before this effect and verify absence afterward. Foreground inspection stays on the injected Herdr process-info port. Confirm pane absence, including the run shell, before the runner frees capacity. A different or unknown process stays occupied. A background open that resumes a deliberately parked chat removes its closed mark after confirmed dispatch, so the canonical continuation path can deliver once. Preserve all other cleanup/reopen behavior.
+The existing close path accepts `reason: park`. Even with force it requires a positively saved native session for every agent chat before closing. Preserve sessions and use existing identity checks and checkpoints; closing the owned terminal stops its foreground chat process. Inject `processes.closeChat({runId,root,tabId,paneId,sessionId})` for the stop-and-close effect; its native default is the existing Herdr tab close, which owns terminal process shutdown. Call optional injected beforeClose immediately before closing a chat tab, so the runner can revalidate progress and check custody after the final native reads. Keep the saved-session checkpoint before this effect and verify absence afterward. Foreground inspection stays on the injected Herdr process-info port. Confirm pane absence, including the run shell, before the runner frees capacity. A different or unknown process stays occupied. A background open that resumes a deliberately parked chat removes its closed mark after confirmed dispatch, so the canonical continuation path can deliver once. Preserve all other cleanup/reopen behavior.
 
 ## Dependencies
 
@@ -390,7 +389,7 @@ The existing close path accepts `reason: park`. Even with force it requires a po
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"a63ff6db7bd8c25f144322195c73962fad2b598e9edac087e77dd7d051efbca6","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"a63ff6db7bd8c25f144322195c73962fad2b598e9edac087e77dd7d051efbca6","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

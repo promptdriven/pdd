@@ -285,7 +285,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   const {layout, chat} = await withHerdrLayoutLock(async () => {
     const layout = await openHerdrRunLayout({ repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run },
-    { env, command: allocationCommand(herdr,ports), checkpoint, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}), directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
+    { env, command: allocationCommand(herdr,ports), checkpoint, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null,sweepIdle:null}), directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) });
     const chat = identity(layout);
     // Keep exact starting-chat custody durable under the same find/create lock.
     await checkpoint(layout);
@@ -659,7 +659,7 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
     }
     const layout = await openHerdrRunLayout({repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run},
-    {env, command: allocationCommand(herdr,ports), directory: ports.layoutDirectory, execFile: ports.execFile, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null}),
+    {env, command: allocationCommand(herdr,ports), directory: ports.layoutDirectory, execFile: ports.execFile, beforeCreate: need => ensurePaneBudget(need, {...ports,sweepFinished:null,sweepIdle:null}),
       checkpoint: async value => ports.checkpoint(null, custody(value))});
     const live = await chatSession({...chat, paneId: layout.paneId, workspaceId: layout.workspaceId}, ports);
     if (live.alive || live.code !== 'agent_not_found') throw problem('chat_identity_changed', 'The rebuilt area pane is occupied or cannot be inspected. No chat was started.');
@@ -811,14 +811,16 @@ export async function paneUsage(ports = {}) {
 export async function ensurePaneBudget(need, ports = {}) {
   let closed = 0;
   if (ports.sweepFinished) closed += (await ports.sweepFinished({graceMs: 15 * 60_000}))?.closed ?? 0;
+  if (ports.sweepIdle) closed += (await ports.sweepIdle({graceMs: 60_000}))?.closed ?? 0;
   let rows;
   const countPorts = {...ports,onPaneUsage:value=>{rows=value;ports.onPaneUsage?.(value);}};
   let usage = await paneUsage(countPorts);
   if (usage.budget && usage.panes + need > usage.budget) {
     if (ports.sweepFinished) closed += (await ports.sweepFinished({graceMs: 0, need}))?.closed ?? 0;
+    if (ports.sweepIdle) closed += (await ports.sweepIdle({graceMs: 0, need}))?.closed ?? 0;
     usage = await paneUsage(countPorts);
     if (usage.panes + need > usage.budget) throw problem('herdr_pane_budget',
-      `herdr_pane_budget: Herdr session pdd has ${usage.panes} panes and the budget is ${usage.budget}. This start needs ${need}. pdd closed ${closed} finished chats; no other chat is safe to close.\n${ports.describePaneOwners?.(rows ?? []) ?? ''}\nThe count includes personal panes. Close unused tabs, or raise PDD_HERDR_PANE_BUDGET (0 disables it).`);
+      `herdr_pane_budget: Herdr session pdd has ${usage.panes} panes and the budget is ${usage.budget}. This start needs ${need}. pdd closed ${closed} chat tabs; no other chat is safe to close.\n${ports.describePaneOwners?.(rows ?? []) ?? ''}\nThe count includes personal panes. Close unused tabs, or raise PDD_HERDR_PANE_BUDGET (0 disables it).`);
   }
   return {...usage, closed};
 }
@@ -939,6 +941,7 @@ export async function closeFinishedChats(run, ports = {}) {
       if (!ports.force && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
       if ((!ports.force || restarted || ports.reason === 'park') && !finalNative) await assertEmptyForeground(chat.paneId);
       if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
+      await ports.beforeClose?.();
       try {
         if (ports.reason === 'park' && ports.processes?.closeChat) await ports.processes.closeChat({runId: run.runId, root: run.root, tabId: chat.tabId, paneId: chat.paneId, sessionId: id});
         else await herdr(['tab', 'close', chat.tabId]);
@@ -1202,7 +1205,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       requireHome({ agent, configDir });
       await reconcileHistorical();
       const layout=await openHerdrRunLayout({repository:run.repo,issueNumber:run.number,runId:run.runId,workflowName:run.workflow,stageId:record.recovery.allocationLabel,sourceRoot:run.sourceRoot,cwd:run.root,commonDir:run.commonDir,run},
-        {env, command:allocationCommand(herdr,ports),beforeCreate:need=>ensurePaneBudget(need,{...ports,sweepFinished:null}),checkpoint:async layout=>{
+        {env, command:allocationCommand(herdr,ports),beforeCreate:need=>ensurePaneBudget(need,{...ports,sweepFinished:null,sweepIdle:null}),checkpoint:async layout=>{
           const custody = layout.root ? {createdWorkspaceId: layout.createdWorkspaceId, restartTerminal: layout.restartTerminal, repoWorkspaceId: layout.repoWorkspaceId,
             ...(Object.hasOwn(layout, 'repoRoot') ? {repoRoot: layout.repoRoot} : {}),
             ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
