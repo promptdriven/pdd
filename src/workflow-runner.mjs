@@ -3670,7 +3670,7 @@ export function isRetryRequest(text) {
 }
 const isPersonRetry = (run, text) => run.state === 'stuck' && isRetryRequest(text);
 async function personRetryRefusal(run, text, p, savedRetry = false) {
-  if (!(run.state === 'stuck' && savedRetry) && !isPersonRetry(run, text)) return null;
+  if (!savedRetry && !isPersonRetry(run, text)) return null;
   if (run.repairLimit) return 'The repair limit requires the existing cancel and new-run route.';
   if (explicitlyStopped(run, p)) return 'Automatic continuation refused: Autopilot is stopped.';
   return await continuationOwnership(run, run.root, p);
@@ -3776,7 +3776,7 @@ Nothing was sent to the chat.` };
         deferredEnvironment.add(entry.id);
         continue;
       }
-      const personRetry = entry.kind === 'change' && run.state === 'stuck' && isRetryRequest(entry.text);
+      const personRetry = entry.kind === 'change' && (entry.personRetry || run.state === 'stuck' && isRetryRequest(entry.text));
       const retryRefusal = personRetry && await personRetryRefusal(run, entry.text, p, true);
       if (retryRefusal) return fail(retryRefusal);
       const retryTarget = environmentRecovery(run)?.step;
@@ -4964,6 +4964,10 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
       || !sameFact(latest.automaticOrigin, run.automaticOrigin)
       || latest.parking.phase === 'parked' && !sameFact(blockerFor(latest) ?? latest.parking.blocker, input.expectedBlocker)
       || continuationCheckHeld(latest, p)) return skipped();
+  }
+  for (const reply of parkedReplyEntries(run, p)) if (reply.personRetry) {
+    const refusal = await personRetryRefusal(readRun(run.runDir), reply.text, p, true);
+    if (refusal) return {...fail(refusal), recovery: 'skipped'};
   }
   const text = run.parking.text ?? input.text;
   const inferredGate = run.parking.blocker.kind === 'interpreter' && run.parking.interpreterWait && sameFact(run.gate, run.parking.interpreterGate) && run.gate?.kind === 'approve-pr' && !openQuestion(run);

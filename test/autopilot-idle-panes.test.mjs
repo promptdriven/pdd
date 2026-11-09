@@ -172,12 +172,13 @@ for (const boundary of ['check-probe', 'close-checkpoint', 'final-native-read'])
 
 
 for (const kind of ['idle', 'resume']) test(`3110 explicit retry resumes a parked ${kind} ceiling once`, async t => {
-  const {f, run, tick} = await setup(t);
+  const {f, run, ports, tick} = await setup(t);
+  Object.assign(ports, retryPorts(f));
   run.state = 'stuck'; run.progressAt = f.clock - 120_000;
   run[kind === 'idle' ? 'chatIdleLimit' : 'chatResumeLimit'] = {at: run.progressAt, area: run.chats.at(-1).area};
   save(run); await tick();
   assert.equal(f.record().parking?.phase, 'parked');
-  const result = await changeRun({ref: '17', cwd: f.source, packageRoot, text: 'Please retry the current step'}, f.ports);
+  const result = await changeRun({ref: '17', cwd: f.source, packageRoot, text: 'Please retry the failed step'}, retryPorts(f));
   assert.equal(result.exitCode, 0, result.message);
   assert.equal(launches(f).length, 0);
   await tick();
@@ -193,4 +194,33 @@ for (const kind of ['idle', 'resume']) test(`3110 explicit retry resumes a parke
   await tick();
   assert.equal(launches(f).length, 1);
   assert.equal(f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt').length, 1);
+});
+
+
+function retryPorts(f) {
+  return {...f.ports, owners: {read: async () => ({json: JSON.stringify({localOwner: 'idle-owner', runsKnown: true, runs: [],
+    claims: [{issue: f.record().issue.url, active: true, owner: 'idle-owner', coordinatorId: 'idle-owner', machine: 'idle-machine', commentId: '11', labelEventId: '12'}]})})}};
+}
+
+for (const timing of ['queued', 'before-delivery']) test(`3110 parked retry rechecks repair limit ${timing}`, async t => {
+  const {f, run, ports, tick} = await setup(t);
+  Object.assign(ports, retryPorts(f));
+  run.state = 'stuck'; run.progressAt = f.clock - 120_000;
+  run.chatIdleLimit = {at: run.progressAt, area: run.chats.at(-1).area}; save(run);
+  await tick(); assert.equal(f.record().parking?.phase, 'parked');
+  const result = await changeRun({ref: '17', cwd: f.source, packageRoot, text: 'Please retry the failed step'}, retryPorts(f));
+  assert.equal(result.exitCode, 0, result.message);
+  let changed = false;
+  const setLimit = () => {if (changed) return; changed = true; const current = f.record(); current.repairLimit = {at: f.clock, count: 2}; save(current);};
+  if (timing === 'queued') setLimit();
+  else {
+    const herdr = ports.herdr;
+    ports.herdr = async args => {if (launches(f).length && args[0] === 'agent' && args[1] === 'get') setLimit(); return herdr(args);};
+  }
+  await tick();
+  assert.equal(changed, true);
+  assert.equal(f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt').length, 0, '3110 queued retry must preserve the repair ceiling');
+  if (timing === 'queued') assert.equal(launches(f).length, 0);
+  assert.ok(f.record().repairLimit);
+  assert.ok(f.record().parking);
 });
