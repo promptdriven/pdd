@@ -1143,7 +1143,10 @@ Build scripts and commands without test results do not qualify.
 Autopilot calls `pdd autopilot audit RUN PR` after each automatic merge. Its fixed
 brief requires before/after reproduction, scope, Story quality, old-code tests,
 real check evidence, unchanged checks and actual merge gates. Audit files remain
-in the run's `audits/` folder. An interrupted auditor is unknown, never a pass.
+in shared durable custody under the machine workflow state root, keyed by
+repository, run attempt, PR and merge commit. The run's `audits/` folder holds
+evidence copies. Every clone reads shared results and effect reservations under
+the repository lock. An interrupted auditor is unknown, never a pass.
 Pending known work is offered to the coordinator on later ticks.
 
 Set `autopilot.audit` to `false` in this repository's `pdd.json` to disable audits.
@@ -1163,4 +1166,8 @@ from distinct PRs create one process issue in the repository. Publication
 attempts are saved before sending. An uncertain comment, PR, process issue or
 alert is never blindly repeated after a restart. Audit admission and concern
 records share the machine workflow state root by repository identity, including
-independent local clones. Separate machines retain separate local cost ledgers.
+independent local clones. Every indexed repository record must validate and appear
+in run discovery before capped admission. Damaged or unreadable earlier audit
+evidence, including an unreadable audit folder, holds before another auditor
+launch. Unknown audit costs retain an explicit coverage marker. Separate machines
+retain separate local cost ledgers.

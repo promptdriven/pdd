@@ -8,7 +8,7 @@ import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
 import {runAutopilotAlerts} from './autopilot-alerts.mjs';
 import {recordCostGithub, costReport} from './cost-ledger.mjs';
-import {allRuns, stateDirFor, updateRunCosts} from './workflow-runs.mjs';
+import {allRuns, readRun, stateDirFor, updateRunCosts} from './workflow-runs.mjs';
 import {launchProfile} from './workflow-launch-profile.mjs';
 import {expandHome} from './workflow-chat.mjs';
 import {acquireRunLock} from './workflow-runner.mjs';
@@ -21,6 +21,19 @@ const read = (fs, path, fallback = null) => {
 };
 const repositoryFolder=(run,ports)=>ports.auditStateRoot ?? join(stateDirFor(ports),'autopilot-audits',createHash('sha256').update(run.repo.toLowerCase()).digest('hex').slice(0,20));
 const fileFor = (run, pr) => join(run.runDir, 'audits', `${pr}.json`);
+const auditIdentity = audit => createHash('sha256').update(JSON.stringify([audit.runId,audit.pr,audit.merge])).digest('hex');
+const validAudit = audit => audit?.schema === 'pdd.audit.v1' && named(audit.runId)
+  && Number.isSafeInteger(audit.pr) && audit.pr > 0 && sha(audit.merge) && sha(audit.parent)
+  && audit.chat && typeof audit.chat === 'object' && !Array.isArray(audit.chat);
+function auditRecords(fs, folder, local = false) {
+  let names;
+  try {names=fs.readdirSync(folder);} catch(e) {if(e.code==='ENOENT') return [];throw e;}
+  return names.filter(n=>local ? /^\d+\.json$/.test(n) : n.endsWith('.json')).map(name=>{
+    const audit=read(fs,join(folder,name));
+    if(!validAudit(audit) || local && audit.pr!==Number(name.slice(0,-5))) throw Error('Audit evidence unavailable');
+    return audit;
+  });
+}
 const finished = a => a?.result && a.comment && (a.result.verdict !== 'BAD' || a.revert && a.alert)
   && (a.result.verdict !== 'CONCERN' || a.concern);
 export function pendingAudits({run}, ports = {}) {
@@ -69,7 +82,8 @@ async function auditMergeOwned({run, pr}, ports = {}) {
   if(!run?.automaticOrigin || !/^[\w.-]+\/[\w.-]+$/.test(run.repo ?? '') || !/^[1-9]\d*$/.test(String(pr))
     || !(run.pr ?? []).some(p => p.number === Number(pr)) || !named(run.baseBranch)
     || run.baseBranch.startsWith('-') || run.baseBranch.startsWith('refs/')) return fail('saved automatic run or PR is unavailable.');
-  const cwd = run.sourceRoot ?? run.root, file = fileFor(run,pr), profile=launchProfile(run);
+  const cwd = run.sourceRoot ?? run.root, localFile = fileFor(run,pr), profile=launchProfile(run);
+  const recordsFolder=join(repositoryFolder(run,ports),'records');
   profile.configDir=expandHome(profile.configDir,env);
   const config = await (ports.readConfig ?? (root => read(fs,join(root,'pdd.json'),{})))(cwd);
   if(config.autopilot?.audit === false) return {exitCode:0,message:'Post-merge audit disabled for this repository.'};
@@ -81,10 +95,41 @@ async function auditMergeOwned({run, pr}, ports = {}) {
     if(result.code !== undefined && result.code !== 0) throw Error('External operation did not confirm success.');
     return result.stdout;
   };
-  let audit = read(fs,file);
+  // Validate all earlier evidence before a launch, including the session-reuse inventory.
+  const localRecords=auditRecords(fs,dirname(localFile),true);
+  const sharedRecords=auditRecords(fs,recordsFolder);
+  if(sharedRecords.some(a=>a.repository!==run.repo.toLowerCase())) return fail('shared audit repository differs.');
+  let audit=read(fs,localFile);
   if(audit && audit.runId !== run.runId) return fail('audit belongs to another run attempt.');
-  if(audit && !audit.result) return fail('auditor outcome is unknown; inspect saved evidence before any retry.');
-  const persist = () => save(fs,file,audit);
+  const saved=run.pr.find(p=>p.number===Number(pr));
+  const savedMerge=saved.mergeCommit?.oid ?? saved.mergeCommit ?? saved.mergeSha;
+  let merge=audit?.merge;
+  if(!audit) {
+    const pull = JSON.parse(await command('gh',['api',`repos/${run.repo}/pulls/${pr}`]));
+    if(pull.number !== Number(pr) || pull.merged !== true || pull.base?.ref !== run.baseBranch
+      || pull.base?.repo?.full_name?.toLowerCase() !== run.repo.toLowerCase() || !sha(pull.merge_commit_sha)) return fail('the merged PR and saved base could not be verified.');
+    merge=pull.merge_commit_sha;
+  }
+  if(savedMerge && savedMerge!==merge) return fail('saved merge identity differs from GitHub.');
+  const file=join(recordsFolder,`${auditIdentity({runId:run.runId,pr:Number(pr),merge})}.json`);
+  const shared=read(fs,file);
+  if(shared) audit=shared;
+  const persist = () => {
+    // Shared authority is committed first. Local copies cannot authorize effects.
+    save(fs,file,audit);
+    fs.mkdirSync(dirname(localFile),{recursive:true,mode:0o700});save(fs,localFile,audit);
+  };
+  if(audit) {
+    if(!validAudit(audit) || audit.runId!==run.runId || audit.pr!==Number(pr) || audit.merge!==merge) return fail('audit identity differs.');
+    fs.mkdirSync(recordsFolder,{recursive:true,mode:0o700});
+    audit.repository=run.repo.toLowerCase();
+    if(!shared) for(const key of ['comment','revert','alert']) {
+      try {fs.statSync(`${localFile}.${key}`);if(!audit[key])audit[key]={state:'unknown',at:now()};}
+      catch(e) {if(e.code!=='ENOENT')throw e;}
+    }
+    persist();
+    if(!audit.result) return fail('auditor outcome is unknown; inspect saved evidence before any retry.');
+  }
   // Each effect owns an exclusive reservation. An uncertain external reply is never retried.
   const effect = async (key, action) => {
     audit=read(fs,file);
@@ -98,13 +143,6 @@ async function auditMergeOwned({run, pr}, ports = {}) {
   };
   try {
     if(!audit) {
-      const pull = JSON.parse(await command('gh',['api',`repos/${run.repo}/pulls/${pr}`]));
-      if(pull.number !== Number(pr) || pull.merged !== true || pull.base?.ref !== run.baseBranch
-        || pull.base?.repo?.full_name?.toLowerCase() !== run.repo.toLowerCase() || !sha(pull.merge_commit_sha)) return fail('the merged PR and saved base could not be verified.');
-      const merge = pull.merge_commit_sha;
-      const saved=run.pr.find(p=>p.number===Number(pr));
-      const savedMerge=saved.mergeCommit?.oid ?? saved.mergeCommit ?? saved.mergeSha;
-      if(savedMerge && savedMerge!==merge) return fail('saved merge identity differs from GitHub.');
       const commit = JSON.parse(await command('gh',['api',`repos/${run.repo}/commits/${merge}`]));
       const parent = commit.parents?.[0]?.sha;
       if(commit.sha !== merge || !sha(parent)) return fail('first parent is unavailable.');
@@ -123,26 +161,35 @@ async function auditMergeOwned({run, pr}, ports = {}) {
           try {index=read(fs,join(stateDirFor(ports),'runs.json'));} catch {return unknown;}
           if(!Array.isArray(index?.runs) || index.runs.length>=200
             || !index.runs.some(row=>row?.runDir===run.runDir)) return unknown;
+          if(index.runs.some(row=>!named(row?.repo) || !named(row?.runDir) || !Number.isSafeInteger(row?.number))) return unknown;
           for(const row of index.runs.filter(r=>r?.repo?.toLowerCase()===run.repo.toLowerCase())) {
             if(!named(row.runDir)) return unknown;
-            let record;try {record=read(fs,join(row.runDir,'status.json'));} catch {return unknown;}
-            if(!record || record.repo?.toLowerCase()!==run.repo.toLowerCase()) return unknown;
+            const record=readRun(row.runDir);
+            if(!record || record.repo?.toLowerCase()!==run.repo.toLowerCase() || record.number!==row.number
+              || record.runDir!==row.runDir || !named(record.runId) || !Number.isFinite(record.startedAt)) return unknown;
           }
           const runs = (await allRuns({cancelled:true},ports)).filter(r=>r.repo?.toLowerCase()===run.repo.toLowerCase());
+          for(const row of index.runs.filter(r=>r?.repo?.toLowerCase()===run.repo.toLowerCase())) {
+            const record=readRun(row.runDir);
+            if(!runs.some(r=>r.runDir===row.runDir && r.number===row.number && r.runId===record?.runId && r.startedAt===record?.startedAt)) return unknown;
+          }
+          if(sharedRecords.some(a=>!runs.some(r=>r.runId===a.runId))) return unknown;
           let refreshFailed=false;
           const measured = runs.map(r => {try {return (ports.refreshCosts ?? updateRunCosts)(r.runDir,latest => {
             if(latest.runId!==r.runId || latest.startedAt!==r.startedAt) throw Error('Cost attempt changed');
             return latest;
-          },{...ports,env});} catch {refreshFailed=true;return r;}});
+          },{...ports,env,auditRecords:sharedRecords.filter(a=>a.runId===r.runId)});} catch {refreshFailed=true;return r;}});
           const report = costReport(measured,now());
           return {total:report.day.totals.totalTokens ?? 0,known:!refreshFailed && !report.day.coverage.some(c => ['session-unavailable','audit-session-unavailable','usage-unavailable','session-capture-deferred','session-backlog','session-truncated','usage-identity-missing','capture-failed','not-captured'].includes(c))};
         }))();
         if(!usage.known || usage.total >= limit) return fail('daily cost limit holds the audit; no paid call was made.');
       }
-      fs.mkdirSync(dirname(file),{recursive:true,mode:0o700});
-      audit = {schema:'pdd.audit.v1',runId:run.runId,pr:Number(pr),merge,parent,at:now(),state:'starting',chat:{agent:definition.kind,configDir:profile.configDir ?? env[definition.kind==='codex'?'CODEX_HOME':'CLAUDE_CONFIG_DIR'] ?? null,startedAt:now()}};
+      fs.mkdirSync(recordsFolder,{recursive:true,mode:0o700});
+      fs.mkdirSync(dirname(localFile),{recursive:true,mode:0o700});
+      audit = {schema:'pdd.audit.v1',repository:run.repo.toLowerCase(),runId:run.runId,pr:Number(pr),merge,parent,at:now(),state:'starting',chat:{agent:definition.kind,configDir:profile.configDir ?? env[definition.kind==='codex'?'CODEX_HOME':'CLAUDE_CONFIG_DIR'] ?? null,startedAt:now()}};
       try {fs.writeFileSync(file,JSON.stringify(audit),{flag:'wx',mode:0o600});}
       catch(e) {if(e.code==='EEXIST') return fail('audit already reserved.');throw e;}
+      persist();
       const scratch = join(run.runDir,'audits',`scratch-${pr}`), checkout = join(scratch,'repo');
       fs.mkdirSync(scratch,{recursive:true,mode:0o700});
       await command('git',['clone','--no-checkout','--',`https://github.com/${run.repo}.git`,checkout]);
@@ -164,7 +211,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
       }
       audit.chat.session = {id:parsed.sessionId};
       const previous = [...(run.chats??[]),...(run.abandonedChats??[]),run.chatReplacement?.original,run.chatReplacement?.replacement].filter(Boolean).map(c=>c.session?.id);
-      for(const name of fs.readdirSync(dirname(file)).filter(n=>n.endsWith('.json') && n!==`${pr}.json`)) previous.push(read(fs,join(dirname(file),name))?.chat?.session?.id);
+      for(const earlier of [...localRecords,...sharedRecords]) previous.push(earlier.chat?.session?.id);
       if(answer.code !== 0 || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(parsed.sessionId??'') || previous.includes(parsed.sessionId) || !validResult(parsed.result)) {
         audit.state='unknown';persist();return fail('auditor session or verdict is invalid.');
       }

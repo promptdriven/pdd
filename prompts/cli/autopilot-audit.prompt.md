@@ -15,8 +15,13 @@ PR read; legacy records without that field use the fresh immutable PR merge.
 Use the merged commit's first parent as the before
 revision, including squash merges. Never audit a moving branch as the merge.
 
-One auditor per PR and run attempt: reserve an exclusive durable file in
-`runDir/audits/PR.json` before launch. A failed, interrupted or uncertain launch
+One auditor per repository, run attempt, PR and pinned merge: reserve an exclusive
+durable record in the shared repository audit folder before launch. Keep the result
+and every external-effect reservation there under the repository operation lock.
+Each clone reads this authority before launch or publication, including after the
+previous owner released the lock or left an uncertain result. Keep a local
+`runDir/audits/PR.json` evidence copy for cost capture; it is not publication authority.
+Import legacy local evidence and reservations into shared custody before effects. A failed, interrupted or uncertain launch
 is unknown, never OK and never automatically launched again. Persist a fresh
 native session identity, agent, private checkout root and config directory for cost capture, even when
 output is invalid. Do not resume any session or pass builder/reviewer/checker
@@ -73,7 +78,13 @@ complete snapshot cannot establish current spending. A missing, malformed
 or saturated (200 entries) machine run index cannot establish complete cost
 coverage and holds a capped audit. Missing indexed records for this repository
 or absence of the current run in the index also hold; never treat missing
-discovery as measured zero. Use the native dead-owner recovery lock through an
+discovery as measured zero. Validate each indexed repository record through readRun,
+the discovery boundary, and reconcile its directory, issue, repository and attempt
+with allRuns before measuring costs. Missing, malformed, unreadable or omitted
+records hold before launch. Read earlier local and shared audit evidence before
+launch, including the session-reuse inventory. An unreadable folder or damaged
+record holds before launch. Supply shared auditor chats to cost refresh by runId;
+a shared attempt absent from discovery leaves cost admission unknown. Use the native dead-owner recovery lock through an
 injected acquireAuditLock port; it is not the workflow mutation lock. A second
 caller waits for a later tick, never sends an early BAD alert. The concern file
 uses that same custody, so a crash cannot leave a separate permanent lock. Separate
@@ -83,7 +94,7 @@ never grants approval, changes workflow progress or erases merge evidence.
 
 ## Saved observations and ports
 
-Audit JSON is `{schema:"pdd.audit.v1",runId,pr,merge,parent,at,state,chat}` plus
+Audit JSON is `{schema:"pdd.audit.v1",repository,runId,pr,merge,parent,at,state,chat}` plus
 conditional fields below. `pr` is an integer; merge/parent are commit SHAs;
 `at` and all other times are epoch milliseconds. `state` is starting, recorded
 or unknown. `chat` has agent, configDir (string or null), startedAt, optional
@@ -108,8 +119,11 @@ codexLimits, refreshCosts (the identity-guarded updateRunCosts boundary), dailyU
 alertPorts and acquireAuditLock; defaults use the declared native dependencies.
 `auditStateRoot` optionally selects this repository's private bookkeeping folder;
 otherwise use stateDirFor(ports)/autopilot-audits/ plus the first 20 hex characters
-of SHA-256 of the lowercase repository. This folder owns operation.lock and
-concerns/KIND.json. Run evidence stays under the run's audits folder.
+of SHA-256 of the lowercase repository. This folder owns operation.lock, concerns/KIND.json and
+records/IDENTITY.json, where IDENTITY is SHA-256 of the JSON tuple
+[runId, integer PR, merge SHA]. Shared records retain the lowercase repository.
+Run evidence copies stay under the run's audits folder. A damaged authority is a
+hold, never absence. Legacy local reservation files also prevent resend.
 
 ## Dependencies
 

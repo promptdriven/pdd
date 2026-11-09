@@ -107,7 +107,13 @@ Include native auditor chats in `runDir/audits/*.json` with matching runId in
 the same session accounting and deduplication as workflow chats. Auditor chats
 carry `root` for their private checkout; resolve Claude's project transcript there
 rather than at the worker checkout. A launched audit
-without a captured session adds `audit-session-unavailable` coverage. Read through
+without a captured session adds `audit-session-unavailable` coverage. A damaged,
+malformed or unreadable audit record also adds that marker before any runId filter.
+An unreadable audit folder adds the marker; only ENOENT means no folder. Valid
+records for a different attempt may be excluded. Validate schema, runId, PR,
+merge/parent identity and chat shape before accepting an audit record. Include
+optional ports.auditRecords (shared records already read under repository custody),
+filtered by runId, in the same session inventory and deduplication. Read through
 the filesystem port. Repeated status reads never count a session twice.
 
 ## Dependencies
