@@ -13,11 +13,19 @@ relative links from the Story, remove fragments, reject outside paths, URLs,
 backslashes, duplicate sections and empty declarations with an Error whose code
 is `binding-boundary-invalid`. Only this explicit declaration establishes a
 boundary; ordinary English cannot silently exclude an executable dependency.
+Use the shared repository Markdown link parser for inline links (including titles
+and angle destinations) and full, collapsed or shortcut reference links, with
+definitions anywhere in the Story. Accept standalone links, optionally in list
+items, and reference definitions in the section. Refuse any unsupported or
+unresolved declaration with binding-boundary-invalid; never accept a partial list.
 
 Export `buildBindingPlan({test,storyText,prompts})`, where test is the selected
 {path,storyPath,doc}, and prompts is a Map of safely read path to parsed Runtime
 interface. Do no I/O. For each step in order follow its entry and transitive
-Runtime calls, once per path. Never treat a Markdown context link as a call.
+Runtime calls, once per path. A declared boundary also seeds every explicitly
+included member in each step, so its resources and calls remain required even
+when it is reached only as context. Never treat an ordinary Markdown context
+link as a call.
 Require entries and call targets to be in a declared boundary. Return exactly
 schema_version (`pdd.binding-plan.v1`), test (path), story (path), boundary (paths
 or null), steps, edges and problems. steps contains {step_id,closure} with sorted
@@ -53,8 +61,11 @@ client evidence, separate from the server verdict.
 
 ## Dependencies
 
-None. Callers supply authored Story text and safely parsed interfaces. Use only
-standard path arithmetic; all filesystem, Git and service access belongs to callers.
+- [Markdown links](runtime-markdown.prompt.md): required shared destination and
+  reference-definition parsing for boundary declarations.
+
+Callers supply authored Story text and safely parsed interfaces. Use standard
+path arithmetic; all filesystem, Git and service access belongs to callers.
 
 <details><summary>Runtime interface</summary>
 

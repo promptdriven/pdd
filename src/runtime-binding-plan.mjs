@@ -1,14 +1,36 @@
-// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 668730e6cf3fd4bc747861525aeb304c577d9eb6a5fe92d68bda40c988421e91).
+// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 8328fa8793373a5fbaf0e363222ffb7380f4d6e9dcbd81f39e6525a582424963).
 import { posix } from 'node:path';
+import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 
 const rows = value => Array.isArray(value) ? value : [];
 const invalid = detail => { throw Object.assign(Error(`binding-boundary-invalid: ${detail}`), {code:'binding-boundary-invalid'}); };
 export function runtimeBoundary(storyPath, text) {
-  const sections = [...text.matchAll(/^## Runtime boundary\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)];
+  const markdown = markdownSectionText(text);
+  const sections = [...markdown.matchAll(/^##[ \t]+Runtime boundary[ \t]*\r?\n([\s\S]*?)(?=^#{1,2}[ \t]|$(?![\s\S]))/gm)];
   if (!sections.length) return null;
   if (sections.length !== 1) invalid('declare one Runtime boundary section');
-  const paths = [...sections[0][1].matchAll(/\[[^\]\n]*\]\(([^)\s]+)\)/g)].map(match => {
-    const raw = match[1].split('#')[0];
+  // Validate whole declarations before asking the shared discovery parser for
+  // destinations. Its permissive discovery mode alone cannot certify a boundary.
+  const destination = String.raw`(?:<[^<>\n]+>|[^\s()<>"']+)`;
+  const title = String.raw`(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?`;
+  const inline = new RegExp(String.raw`^\[[^\[\]\n]*\]\([ \t]*${destination}${title}[ \t]*\)$`);
+  const definition = new RegExp(String.raw`^\[[^\[\]\n]+\]:[ \t]*${destination}${title}[ \t]*$`);
+  const reference = /^\[[^\[\]\n]+\](?:\[[^\[\]\n]*\])?$/;
+  const definitions = markdownDefinitions(markdown), destinations = [];
+  // Use authored section bytes for admission: a masked example must refuse,
+  // rather than silently disappearing beside a valid declaration.
+  const section = sections[0], start = section.index + section[0].length - section[1].length;
+  for (const row of text.slice(start,start + section[1].length).split(/\r?\n/)) {
+    const line = row.trim().replace(/^(?:[-+*]|\d+[.)])[ \t]+/, '');
+    if (!line) continue;
+    if (definition.test(line)) continue;
+    if (!inline.test(line) && !reference.test(line)) invalid('unsupported Runtime boundary declaration');
+    const parsed = markdownLinks(line,definitions);
+    if (parsed.length !== 1) invalid('unresolved or unsupported Runtime boundary link');
+    destinations.push(parsed[0]);
+  }
+  const paths = destinations.map(destination => {
+    const raw = destination.split('#')[0];
     if (!raw || /[:\\%]/.test(raw) || raw.startsWith('/')) invalid('use relative local prompt links');
     const path = posix.normalize(posix.join(posix.dirname(storyPath), raw));
     if (path.startsWith('../') || !path.endsWith('.prompt.md')) invalid('use in-repository .prompt.md paths');
@@ -23,7 +45,7 @@ export function buildBindingPlan({test, storyText, prompts}) {
   const allowed = path => boundary === null || boundary.includes(path);
   for (const step of rows(test.doc?.steps)) {
     if (!step || typeof step.entry_path !== 'string') continue;
-    const closure = new Set(), pending = [step.entry_path];
+    const closure = new Set(), pending = [step.entry_path, ...(boundary ?? [])];
     for (let index = 0; index < pending.length; index++) {
       const path = pending[index];
       if (closure.has(path)) continue;

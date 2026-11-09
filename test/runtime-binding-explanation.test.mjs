@@ -169,10 +169,15 @@ test('3135: incomplete lookup and missing binding each retain a concrete repair 
   assert.match(ports.stdout.text,/repair:.*dispatch\.changeRun/);
 });
 
-test('3135: incompatible Story boundaries refuse instead of merging executable scopes',t=>{
+test('3135: an unscoped Story retains its required edges beside a scoped Story',t=>{
   const f=setup(t,{boundary:true}),doc=JSON.parse(read(f,'tests/unknown-item.json'));
   doc.steps[0].entry_path=OTHER;save(f,'tests/unknown-item.json',doc);
-  assert.throws(()=>captureSource(f.repo,{tests:[TEST,'tests/unknown-item.json']}),error=>error.code==='binding-boundary-conflict','3135_BOUNDARY_UNION');
+  let capture;
+  assert.doesNotThrow(()=>{capture=captureSource(f.repo,{tests:[TEST,'tests/unknown-item.json']});},'3135_BOUNDARY_UNION');
+  assert.equal(interfaceBlocks(capture.sources.find(row=>row.path===OTHER).bytes.toString()).length,1,'3135_BOUNDARY_UNION');
+  assert.deepEqual(capture.bindingPlans[0].boundary,[PLACE]);
+  assert.equal(capture.bindingPlans[1].boundary,null);
+  assert.equal(capture.bindingPlans[1].edges.find(edge=>edge.key==='files.read').state,'missing');
 });
 
 test('3135: boundary check sends the projected closure to the repo fake and passes',async t=>{

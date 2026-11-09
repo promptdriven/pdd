@@ -1281,14 +1281,22 @@ A Story can set its executable scope with local prompt links:
 [CLI](../prompts/cli.prompt.md)
 ```
 
-List the entry prompt and every executable Runtime call target. Ordinary links
-in prompt dependencies still provide source context. For this declared scope,
+List the entry prompt and every executable Runtime call target. Each declared
+member adds its resource requirements even when no Runtime call reaches it.
+Use one Markdown link per line, optionally as a list item. Titled inline links,
+angle destinations and full, collapsed or shortcut reference links are supported;
+reference definitions can appear anywhere in the Story. Unsupported or unresolved
+declarations refuse with `binding-boundary-invalid`, without accepting a partial
+boundary. Ordinary links in prompt dependencies still provide source context.
+For this declared scope,
 context outside the boundary keeps its prose in the upload but omits its Runtime
 interface. Files on disk do not change. A real call outside the boundary refuses
-locally; expand the boundary only if the Story requires that behavior. Conflicting
-Story scopes must be checked separately. A Story without this section retains
-ordinary source capture. The workspace permission boundary still applies to all
-reads.
+locally; expand the boundary only if the Story requires that behavior. Selecting
+several Stories retains the union of their boundaries. A required edge included
+by any selected Story remains required. Each plan keeps its own Story boundary.
+A Story without this section retains ordinary source capture and prevents
+interface removal from the combined upload. The workspace permission boundary
+still applies to all reads.
 
 Fix the smallest named cause: correct the fixture resource/operation key, add
 the required binding, or declare the Story boundary. Step overrides replace
