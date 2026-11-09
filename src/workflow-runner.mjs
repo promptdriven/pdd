@@ -8,7 +8,8 @@ import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
-import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
+import { readDependencySnapshot, createDependencyReadPorts, applyReproducedBugRelations } from './issue-dependencies-github.mjs';
+import { readBugFindings } from './bug-findings.mjs';
 // Generated from prompts/cli/workflow-runner.prompt.md (sha256: 29204dbd66bef20604c92d39abdc8d1d45f06c97d481400710285e93f5c5f28f).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
@@ -1569,7 +1570,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   // A code PR reads PR 1's state and CI on every render, also a new code PR (the red pair of RUNBOOK §2).
   const first = layout === 'code' && pr1 ? await prStatusOf(run, pr1, p) : null;
   const pr1Merged = Boolean(pr1) && (run.prBase === run.baseBranch || first?.state === 'merged');
-  return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
+  return { bugFindings: layout === 'spec' ? run.bugFindings : null, layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
     stories, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'this run changes no Story file',
     fields, thisPr: holds.length ? `${others.length ? '' : 'no code change. '}It holds ${listed(holds)}.` : 'no code change.', diff,
     area: prArea({ area: fields.area, files, workflow: run.workflow }), title: fields.title,
@@ -1981,6 +1982,7 @@ async function refreshReadableTop(run, pr, p, { observed = new Map(), pr2 = null
     const rows = body.split('\n'), open = rows.indexOf(DETAILS_OPEN);
     if (open < 1) return [];
     const facts = structuredClone(pr.readable.facts);
+    if (facts.layout === 'spec') facts.bugFindings = run.bugFindings ?? null;
     facts.records = { ...facts.records, ci: status.ci ?? 'unknown', checker: await checkerOf(pr, head, p, cwd, seen) };
     facts.headChanged = head.toLowerCase() !== String(pr.readable.head).toLowerCase();
     facts.updatedAt = p.now();
@@ -2399,6 +2401,34 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     const before = area.steps.slice(0, area.steps.indexOf(step)).filter(item => !run.done[item] && !area.optional.includes(item));
     if (before.length) lines.push(`warning: ${before.join(', ')} ${before.length > 1 ? 'are' : 'is'} not done yet. pdd recorded ${step} anyway.`);
   }
+  if (run.workflow === 'bug' && step === 'reproduce' && skipped === undefined) {
+    let releaseFindings;
+    try {
+      releaseFindings = acquireRunLock(run.runDir, 'bug-findings.lock');
+      const latest = readRun(run.runDir);
+      if (!latest || runIdentity(latest) !== runIdentity(run)) throw Error('run changed');
+      if (latest.bugFindings) run.bugFindings = latest.bugFindings;
+      const supplied = run.bugFindings ? null : readBugFindings(run);
+      if (supplied || run.bugFindings) {
+        if (!run.bugFindings) commitRun(run, p, latest => { latest.bugFindings = { ...supplied, outcomes: [], checkpoints: {} }; });
+        const bound = run.bugFindings;
+        if (bound.input.reproduced && !bound.completed) {
+          const checkpoint = {
+            read: ({index}) => run.bugFindings.checkpoints?.[index] ?? null,
+            write: ({index, effect, state, outcome, baseline}) => commitRun(run, p, latest => {
+              latest.bugFindings.checkpoints ??= {};
+              latest.bugFindings.checkpoints[index] = { effect, state, ...(outcome ? {outcome} : {}), ...(baseline ? {baseline} : latest.bugFindings.checkpoints[index]?.baseline ? {baseline: latest.bugFindings.checkpoints[index].baseline} : {}) };
+            })
+          };
+          const apply = p.applyReproducedBugRelations ?? applyReproducedBugRelations;
+          const result = await apply({ cwd: run.root, repository: run.repo, issue: run.number, relations: bound.input.relations }, { ...p, checkpoint, relationClaim: validSavedAutomaticOrigin(run) ? { coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim } : null });
+          commitRun(run, p, latest => { latest.bugFindings.outcomes = result.outcomes; latest.bugFindings.completed = !result.outcomes.some(outcome => outcome.status === 'unknown'); });
+        } else if (!bound.input.reproduced && !bound.completed) commitRun(run, p, latest => { latest.bugFindings.completed = true; });
+      }
+    } catch (error) {
+      return fail(error.code === 'bug-findings-invalid' || error.code === 'bug-findings-unavailable' ? error.message : 'bug-findings-unavailable: could not persist or process findings');
+    } finally { releaseFindings?.(); }
+  }
   const observedQuestion=run.question, observedGate=run.gate;
   const reason = skipped === undefined ? null : keepLines(skipped) || 'no reason given';
   const record = { at: p.now(), summary: keepLines(reason === null ? summary : [`skipped: ${reason}`, summary].filter(Boolean).join('\n')), area: area.name,
@@ -2692,7 +2722,7 @@ async function startNextChat(run, p, packageRoot) {
     if (latest?.runId === run.runId && ended(latest)) throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`), { code: 'workflow_progress_refused' });
   };
   try {
-    const chat = await startChat({ run, area: area.name, message: await areaMessage(run, run.area, p, packageRoot) }, { ...p, checkpoint });
+    const chat = await startChat({ run, area: area.name, message: await areaMessage(run, run.area, p, packageRoot) }, { ...p, checkpoint, relationClaim: validSavedAutomaticOrigin(run) ? { coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim } : null });
     run.chats.push(chat);
     // Cancel closes the saved starting chat; a late launch reply cannot report a started chat in an ended run.
     const saved = saveChatObservations(original, prior, chat, p);
@@ -4040,7 +4070,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
         });
         Object.assign(replacementRun, run);
       };
-      chat = await restartChat({ run: replacementRun, chat, message, pending: recovering ? pending : undefined }, { ...p, checkpoint });
+      chat = await restartChat({ run: replacementRun, chat, message, pending: recovering ? pending : undefined }, { ...p, checkpoint, relationClaim: validSavedAutomaticOrigin(run) ? { coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim } : null });
       const replacementResult = message => done([...(chat.namingError ? [`Herdr name is not bound (${chat.namingError.code}); inspect the saved pane.`] : []), message].join('\n'));
       if (run.chatReplacement?.phase === 'ended') return replacementResult(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
       if (run.chatReplacement?.phase === 'rolledBack') return replacementResult(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
