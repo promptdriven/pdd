@@ -355,3 +355,57 @@ for (const parked of [false, true]) test(`#3099 registered ${parked ? 'parked' :
   assert.equal(f.prs.length, 1);
   assert.equal(f.record().decisions.length, decisions);
 });
+
+for (const change of ['Story', 'expected']) test(`#3099 registered parked ${change} revision replaces check guidance across ticks`, async t => {
+  const f = await setup(t, {registered: true});
+  f.herdr.idle();
+  await f.status();
+  assert.ok(f.record().chats.every(chat => chat.session), 'status must register native sessions');
+  saveCheck(f, {criteria: {passed: 2, total: 3}});
+  await f.scan();
+  const before = f.record();
+  assert.equal(before.parking.phase, 'parked');
+  assert.equal(before.parking.blocker.kind, 'person');
+  assert.equal(before.parking.personWait.gate.id, before.gate.id);
+  assert.match(before.gate.automaticHold, /check.*full pass/i);
+  const calls = f.herdr.calls.length;
+  f.tick();
+  if (change === 'Story') writeFileSync(join(f.run.root, STORY), readFileSync(join(f.run.root, STORY), 'utf8') + '\nAn added product rule.\n');
+  else {
+    const path = join(f.run.root, TEST), scenario = JSON.parse(readFileSync(path));
+    scenario.steps[0].checks[0].value = 'changed expectation';
+    writeFileSync(path, JSON.stringify(scenario));
+  }
+  saveCheck(f);
+  let reopened;
+  for (let tick = 0; tick < 3; tick++) {
+    f.tick();
+    await f.scan();
+    const after = f.record();
+    assert.equal(after.state, 'waiting');
+    assert.equal(after.gate.kind, 'approve-pr');
+    assert.ok(after.gate.storyChanges.length, 'the revised contract must reopen Story approval');
+    assert.notEqual(after.gate.id, before.gate.id, 'the old approval identity must not cover the revision');
+    assert.match(after.gate.automaticHold, /Story.*approval/i, 'the revised Story must replace the obsolete check hold');
+    assert.notEqual(after.gate.automaticHold, before.gate.automaticHold);
+    assert.equal(after.parking.phase, 'parked');
+    assert.equal(after.parking.at, before.parking.at);
+    assert.deepEqual(after.parking.blocker, before.parking.blocker);
+    assert.equal(after.parking.personWait.gate.id, after.gate.id, 'the reservation must bind the revised gate');
+    assert.deepEqual(after.chats, before.chats, 'the saved chats must stay closed with the same sessions');
+    assert.deepEqual(after.done, before.done);
+    assert.deepEqual(after.decisions, before.decisions);
+    assert.deepEqual(after.automaticOrigin, before.automaticOrigin);
+    assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+    if (reopened) assert.equal(after.gate.id, reopened.id, 'later ticks must retain the revised gate');
+    reopened = after.gate;
+    const status = await runStatus({ref: '17', cwd: f.source}, f.automaticPorts);
+    assert.equal(status.exitCode, 0, status.message);
+    const next = status.message.split('\n').find(line => line.startsWith('Next:'));
+    assert.match(next, /Story.*approval/i, 'public guidance must ask for the revised Story approval');
+    assert.ok(!next.includes(before.gate.automaticHold), 'public guidance must drop the obsolete check failure');
+  }
+  const effects = f.herdr.calls.slice(calls).filter(args => args[0] === 'pane' && args[1] === 'run' || args[0] === 'agent' && args[1] === 'prompt');
+  assert.deepEqual(effects, [], 'the held gate must not wake or message a worker');
+  assert.deepEqual(f.warnings, []);
+});
