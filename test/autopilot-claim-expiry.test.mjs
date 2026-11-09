@@ -386,7 +386,7 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
   f.cwd = cwd;
   f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
   f.state = () => { try { return JSON.parse(readFileSync(f.stateFile(), 'utf8')); } catch { return {}; } };
-  f.start = () => launcher.runAutopilotLauncher({ command: 'start', cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: resolve('.'), issues: [] }, f.ports);
+  f.start = () => launcher.runAutopilotLauncher({ command: 'start', cwd, env: { HOME: home, PATH: process.env.PATH, PDD_INTERPRETER_QUEUE: join(home, 'interpreter-queue') }, packageRoot: resolve('.'), issues: [] }, f.ports);
   f.tick = () => launcher.tickAutopilot(f.stateFile(), f.ports);
   f.packet = () => JSON.parse(f.prompts.at(-1).trim().split('\n').at(-1));
   // The claim comment names this launcher's coordinator, known after start.
