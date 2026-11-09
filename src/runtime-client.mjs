@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 13970975f7482af747201cbedcdb1f6621be17ec1b1efe18160b1b08e3c65701).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 41a60d47f0b5689894ba732bc944070dcb921ca02bf5a10da786152be8649435).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -3486,7 +3486,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session);
     }
     if (stepTimeLimit(done.answer, { steps: row.steps, secrets: context.secrets })) { applyAnswer(row, done.answer, context); return printTryProblem(context, row); }
-    if (done.answer?.state === 'unknown') throw tryRecovery(context, test, request.requestId);
+    if (done.answer?.state === 'unknown' || (done.answer?.state === 'passed'
+      && ['unknown', 'stopped', 'stopping'].includes(done.answer.result?.session?.state))) throw tryRecovery(context, test, request.requestId);
     if (done.unknownWhy || done.open || !done.answer) {
       throw new Stop(3, `The Try setup is not finished after ${TRY_MS / 60_000} min${done.answer?.state ? ` (last state: ${cleanText(done.answer.state)})` : ''}. Run pdd simulate ${test.story} again later; it reads this Try first and makes no second one.`);
     }

@@ -14,9 +14,11 @@ const record=setup=>{
  const path=join(setup.state,'repos',readdirSync(join(setup.state,'repos'))[0]);
  const bytes=readFileSync(path,'utf8');return{bytes,try:JSON.parse(bytes).tries['tests/place-order.json']};
 };
-const server=(t,initial='running')=>fakeRuntime(t,(e,f)=>{
+const server=(t,initial='running',direct=false)=>fakeRuntime(t,(e,f)=>{
  if(e.command==='lint')return{status:200,json:f.lint(e.request.requestId)};
- if(e.command==='try')return{status:202,json:f.job(e.request.requestId,'try','queued')};
+ if(e.command==='try')return direct
+  ?{status:200,json:f.tryJob(e.request.requestId,undefined,(f.mode??initial)==='unknown-session'?'unknown':f.mode??initial)}
+  :{status:202,json:f.job(e.request.requestId,'try','queued')};
  if(e.method==='DELETE')return{status:404,json:{error:{code:'not-found'}}};
  if(!e.url.startsWith('/v1/runs/'))return{status:404,json:{}};
  const mode=f.mode??initial,id=e.url.split('/').at(-1);
@@ -69,4 +71,28 @@ test('RECOVERY721: a confirmed stopped setup still requires deliberate replaceme
  const result=await invoke(setup,fake);
  assert.equal(result.code,3,result.err);assert.equal(record(setup).bytes,saved.bytes);
  assert.equal(fake.posts.filter(p=>p.command==='try').length,1);
+});
+
+
+for(const mode of ['unknown-session','stopped','stopping'])for(const direct of [false,true])test(`RECOVERY721: initial ${mode} session via ${direct?'setup reply':'status read'} retains its receipt`,async t=>{
+ const setup=harbor(t),fake=await server(t,mode,direct);
+ const first=await invoke(setup,fake);
+ assert.equal(first.code,3,first.err);
+ const saved=record(setup),id=fake.posts.find(p=>p.command==='try').request.requestId;
+ assert.equal(saved.try.id,id);
+ assert.ok(first.err.includes(id));assert.ok(first.err.includes(`/v1/runs/${id}`));
+ assert.equal(fake.posts.filter(p=>p.command==='lint').length,1);
+ assert.equal(fake.posts.filter(p=>p.command==='try').length,1);
+ for(let n=0;n<2;n++){
+  const reads=fake.gets.length,result=await invoke(setup,fake);
+  assert.equal(result.code,3,result.err);assert.equal(result.clock.uuids,0);
+  assert.equal(record(setup).bytes,saved.bytes);
+  assert.equal(fake.posts.length,2,'a plain repeat cannot submit lint or setup');
+  assert.equal(fake.deletes.length,0);assert.equal(fake.jsonPosts.length,0);
+  assert.deepEqual(fake.gets.slice(reads).map(e=>e.url),[`/v1/runs/${id}`]);
+  assert.ok(result.err.includes(id));assert.ok(result.err.includes(`/v1/runs/${id}`));
+ }
+ fake.mode='running';
+ assert.equal((await invoke(setup,fake)).code,0);
+ assert.equal(record(setup).try.id,id);assert.equal(fake.posts.length,2);
 });
