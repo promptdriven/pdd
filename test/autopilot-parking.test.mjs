@@ -270,10 +270,9 @@ async function setup(t, agent = 'claude', name = 'small-change') {
   const run = f.record();
   run.automaticOrigin = {repository: run.repo, coordinatorId: 'park-owner', machine: 'park-machine', claim: {commentId: '11', labelEventId: '12'}};
   save(f, run);
-  const nativeOwners = createDependencyReadPorts({cwd: f.source}, f.ports).owners;
-  f.ports.owners = {read: async input => input.issues.length ? {json: JSON.stringify({localOwner: 'park-owner',
+  f.ports.owners = {read: async input => ({json: JSON.stringify({localOwner: 'park-owner',
     claims: input.issues.map(issue => ({issue, active: true, owner: 'park-owner', coordinatorId: 'park-owner',
-      machine: 'park-machine', commentId: '11', labelEventId: '12'}))})} : nativeOwners.read(input)};
+      machine: 'park-machine', commentId: '11', labelEventId: '12'}))})})};
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   const stateFile = join(f.state, 'launcher.json');
   writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main', stateFile,
@@ -313,7 +312,7 @@ test('3091 confirmed parked occupancy backfills native admission and refuses a d
   const {f, tick} = await setup(t);
   const held = f.record(); held.state = 'paused'; held.runtimeWait = {at: f.clock, reason: 'no verdict', cause: 'service'}; save(f, held);
   await tick();
-  const owners = JSON.parse((await createDependencyReadPorts({cwd: f.source}, {...f.ports}).owners.read({repository: held.repo, issues: []})).json);
+  const owners = JSON.parse((await createDependencyReadPorts({cwd: f.source}, {...f.ports, owners: undefined}).owners.read({repository: held.repo, issues: []})).json);
   const old = owners.runs.find(row => row.runId === held.runId);
   assert.equal(old?.occupied, false, '3091: parked claims must free capped capacity');
   const repository = held.repo, issue = `https://github.com/${repository}/issues/18`, revision = 'a'.repeat(64);
@@ -778,7 +777,7 @@ for (const custody of ['native-running', 'suite-waiting', 'interpreter-unavailab
   }
   // Read admission before the next tick can save a check reservation.
   const owners = JSON.parse((await createDependencyReadPorts({cwd: f.source}, {...f.ports,
-    readSuiteProgress: ports.readSuiteProgress, readInterpreterProgress: ports.readInterpreterProgress}).owners.read({repository: run.repo, issues: []})).json);
+    owners: undefined, readSuiteProgress: ports.readSuiteProgress, readInterpreterProgress: ports.readInterpreterProgress}).owners.read({repository: run.repo, issues: []})).json);
   assert.equal(owners.runs.find(row => row.runId === run.runId)?.occupied, true, 'post-park check must block native admission');
   await tick();
   assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 1, 'post-park check consumes working capacity');

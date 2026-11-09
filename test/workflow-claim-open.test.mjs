@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {existsSync, writeFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {openRun, resumeStoppedRun, parkBlockedRun, wakeParkedRun, runStatus, stepDone} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
