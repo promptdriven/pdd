@@ -1,7 +1,8 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {existsSync, writeFileSync} from 'node:fs';
 import {openRun, resumeStoppedRun, parkBlockedRun, wakeParkedRun, runStatus, stepDone} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
@@ -22,6 +23,10 @@ async function ready(t, route) {
   run.automaticOrigin = structuredClone(origin);
   if (route === 'historical') run.area = 1;
   writeRun(run);
+  f.ports.autopilotStateRoot = f.state;
+  const stateId = createHash('sha256').update(f.source).digest('hex').slice(0, 20);
+  writeFileSync(join(f.state, `${stateId}.json`), JSON.stringify({enabled: true, cwd: f.source,
+    repo: run.repo, coordinatorId: origin.coordinatorId, machine: origin.machine}));
   f.observation = {localOwner: origin.coordinatorId, claims: [winner(run)]};
   f.ports.owners = {read: async () => {
     if (f.observation instanceof Error) throw f.observation;

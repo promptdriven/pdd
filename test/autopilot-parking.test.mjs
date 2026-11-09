@@ -270,6 +270,10 @@ async function setup(t, agent = 'claude', name = 'small-change') {
   const run = f.record();
   run.automaticOrigin = {repository: run.repo, coordinatorId: 'park-owner', machine: 'park-machine', claim: {commentId: '11', labelEventId: '12'}};
   save(f, run);
+  const nativeOwners = createDependencyReadPorts({cwd: f.source}, f.ports).owners;
+  f.ports.owners = {read: async input => input.issues.length ? {json: JSON.stringify({localOwner: 'park-owner',
+    claims: input.issues.map(issue => ({issue, active: true, owner: 'park-owner', coordinatorId: 'park-owner',
+      machine: 'park-machine', commentId: '11', labelEventId: '12'}))})} : nativeOwners.read(input)};
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   const stateFile = join(f.state, 'launcher.json');
   writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main', stateFile,

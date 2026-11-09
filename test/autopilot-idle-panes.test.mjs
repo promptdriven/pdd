@@ -22,6 +22,9 @@ async function setup(t, stateName) {
   const run = f.record();
   run.automaticOrigin = {repository: run.repo, coordinatorId: 'idle-owner', machine: 'idle-machine', claim: {commentId: '11', labelEventId: '12'}};
   save(run);
+  f.ports.owners = {read: async ({issues}) => ({json: JSON.stringify({localOwner: 'idle-owner',
+    claims: issues.map(issue => ({issue, active: true, owner: 'idle-owner', coordinatorId: 'idle-owner',
+      machine: 'idle-machine', commentId: '11', labelEventId: '12'}))})})};
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   f.ports.autopilotStateRoot = f.state;
   const stateFile = join(f.state, stateName ?? createHash('sha256').update(f.source).digest('hex').slice(0, 20) + '.json');
