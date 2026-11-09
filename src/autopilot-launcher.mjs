@@ -8,7 +8,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 764036bea52b7df13c48cda3d25e128d08447c2ad6bd92a3626a8cc45f7e1746).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2a8a38864221c12e00ce08b9257b65d8f67df4238b9b3548d8cb851f525b7dd9).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -30,7 +30,7 @@ import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, releaseParkedClaim, recoverCoordinatorClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
-import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
+import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, advanceAutomaticPr1, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
 import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict, savedLostCheck, savedCheckCause } from './workflow-results.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -495,6 +495,28 @@ async function parkingTick(state, p, config, options = {}) {
     state.parkedNumbers = (await ports.list()).filter(run => run.parking && !['completed', 'cancelled'].includes(run.state)).map(run => run.number);
     await p.scanGuard(latest => {latest.parking = state.parking; latest.parkedNumbers = state.parkedNumbers; latest.parkingAlerts = state.parkingAlerts;});
   } catch (error) { p.warn(`Parking reconciliation held: ${line(error.message)}`); }
+}
+
+async function advanceWaitingPr1Gates(state, p) {
+  const execFile = p.execFile ?? (async (file, args, options) => {
+    const result = await p.execute(file, args, options);
+    if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
+    return result;
+  });
+  const workerPorts = {...p, execFile, isTTY: false};
+  let runs;
+  try { runs = await listRuns({cwd: state.cwd}, workerPorts); }
+  catch (error) { p.warn(`PR 1 gate inspection unavailable: ${line(error.message)}`); return; }
+  for (const run of runs) {
+    if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
+      || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine
+      || run.state !== 'waiting' || run.gate?.kind !== 'approve-pr') continue;
+    try {
+      const result = await p.scanAction(() => advanceAutomaticPr1({ref: String(run.number), cwd: state.cwd,
+        packageRoot: state.packageRoot, coordinatorId: state.coordinatorId, machine: state.machine}, workerPorts));
+      if (result.exitCode !== 0) p.warn(`PR 1 gate held for #${run.number}: ${line(result.message)}`);
+    } catch (error) { p.warn(`PR 1 gate held for #${run.number}: ${line(error.message)}`); }
+  }
 }
 
 async function resumeStoppedWorkers(state, p, recoveredRuns = null) {
@@ -1591,6 +1613,7 @@ async function runTick(stateFile, ports, completion) {
       if (!(Number.isFinite(restLeft) && restLeft < 2 * claims.length)) await sendHeartbeats(claims, true);
       return await outcome('unknown', `GitHub limit low: ${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor}; Autopilot waits until ${new Date(budget.resetAt).toISOString()}, except the heartbeats of this machine's claims.`);
     }
+    if (config.mode === 'auto') await advanceWaitingPr1Gates(state, p);
     // A due relaunch wakes even without new work; the fresh chat starts with the recipe.
     const relaunch = relaunchTarget(state, p);
     if (relaunch && relaunchHeld(state, relaunch)) {

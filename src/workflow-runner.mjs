@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1d9cde3c169d42c4a73d10f4f06492623587c47d593a32030ca739f026d3c7bd).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 35e50840cb98b243f4bf203c92504d2035bd122900c1bd35599c6d7b32c75f3d).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -199,7 +199,7 @@ function commitRun(run, p, update) {
   return run;
 }
 // Revalidate command authority at local commits and before consequential effects.
-function protectProgress(run,p,{approval=false}={}) {
+function protectProgress(run,p,{approval=false,validate}={}) {
   const selectedState=run.state,selectedGate=structuredClone(run.gate ?? null),selectedArea=run.area;
   const check=latest=>{
     if (latest.parking?.phase === 'releasing') throw Object.assign(Error('This parked run is releasing its claim. Wait for release to finish.'), {code: 'workflow_progress_refused'});
@@ -207,6 +207,7 @@ function protectProgress(run,p,{approval=false}={}) {
       throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`),{code:'workflow_progress_refused'});
     if(approval && (latest.area!==selectedArea || Boolean(latest.gate)!==Boolean(selectedGate) || (selectedGate?.id && latest.gate?.id!==selectedGate.id) || ['area','kind','at'].some(key=>latest.gate?.[key]!==selectedGate?.[key])))
       throw Object.assign(Error('The gate changed, look again.'),{code:'workflow_progress_refused'});
+    validate?.(latest);
   };
   p.progressGuard=check;
   const inspect=()=>{const latest=readRun(run.runDir);if(!latest||runIdentity(latest)!==runIdentity(run))throw Object.assign(Error('The selected workflow run is missing or was replaced'),{code:'workflow_progress_refused'});check(latest);};
@@ -218,7 +219,7 @@ function protectProgress(run,p,{approval=false}={}) {
   };
   p.commandPorts={...p.commandPorts,execFile:p.execFile};
   p.herdr=async args=>{if(['create','run','prompt'].includes(args[1]))inspect();return herdr(args);};
-  return ()=>{approval=false;};
+  return ()=>{approval=false;validate=undefined;};
 }
 const sameGate = (current, selected) => (!current || !selected) ? current === selected : ['area','kind','at'].every(key=>current[key]===selected[key]) && (!selected.id || current.id===selected.id);
 const equalFact = (a,b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -617,6 +618,7 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (chat === 'stopped' && run.state === 'running') return `the chat stopped. Run pdd workflow open ${run.number} to start it again.`;
   if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). ${codeLater(run)}`;
   if (run.state === 'completed') return 'complete: the PR is merged';
+  if (run.gate?.automaticHold) return `PR 1 waits: ${run.gate.automaticHold}`;
   if (run.gate && chat === 'working') return revising(run) ? `the agent works on your changes to the ${run.gate.area} area` : `the agent writes the gate message for the ${run.gate.area} area`;
   if (normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run)) return 'the agent must finish the prompt check before PR 1';
   if (normal && run.storyApproval && run.gate?.kind === 'ask-code' && !drafts.length) return run.through === 'code'
@@ -2253,7 +2255,69 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
       : `Do not ask the person to approve. Repair and check again, then run: ${p.pdd} workflow done check --summary "one line". After 2 fix rounds for the same ✗, stop with the evidence. When the fix needs a Story or expected-value change, propose it and run done again: pdd then shows the Story card with the change, for the person.`,
     ].join('\n'));
 }
-async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
+// The coordinator supplies custody, never approval words or a model verdict.
+function automaticPr1Scope(run, p, packageRoot) {
+  try {
+    if (readApprovalPolicy({root: run.sourceRoot}, p).strictApprovals) return 'strict approval policy requires a person terminal';
+    if (JSON.parse(readFileSync(join(run.sourceRoot, 'pdd.json'), 'utf8'))?.autopilot?.mode !== 'auto'
+      || !automaticHandoff(run, p, packageRoot)) return 'current automatic operator scope is unavailable';
+  } catch { return 'current automatic approval policy or operator scope is unavailable'; }
+  return null;
+}
+function automaticPr1Eligible(run, {cwd, coordinatorId, machine}, published = null) {
+  const area = run.areas[run.area];
+  return validSavedAutomaticOrigin(run) && run.automaticOrigin.coordinatorId === coordinatorId
+    && run.automaticOrigin.machine === machine && samePath(run.sourceRoot, cwd)
+    && ['pdd-bug', 'pdd-feature'].includes(run.skill) && run.state === 'waiting'
+    && !run.parking && !openQuestion(run) && !run.repairLimit
+    && (!run.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
+    && run.gate?.kind === 'approve-pr' && run.gate.area === area?.name
+    && area.gate === 'pr' && area.before === 'approve'
+    && (!prOf(run, area.name) || published && sameFact(prOf(run, area.name), published))
+    && area.steps.every(step => run.done[step]);
+}
+export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutation(args, ports, async ({ref, cwd, packageRoot = PACKAGE_ROOT, coordinatorId, machine}, ports) => {
+  const p = deps(ports); p.pdd = pddFor(p, packageRoot);
+  const found = await resolveRun(ref, {cwd}, p);
+  if (found.error) return fail(found.error);
+  const run = found.run, area = run.areas[run.area];
+  const owner = {cwd, coordinatorId, machine};
+  if (!automaticPr1Eligible(run, owner)) return done('Automatic PR 1 gate skipped.');
+  const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), area, index: run.area, branch: run.branch});
+  let publicationGate;
+  const progressRecorded = protectProgress(run, p, {validate: latest => {
+    // Only this invocation's durably saved PR may appear during its final transition.
+    if (!automaticPr1Eligible(latest, owner, prOf(run, area.name)) || !sameFact(latest.automaticOrigin, selected.origin)
+      || !sameFact(storyCoverage(latest), selected.coverage) || !sameFact(latest.areas[latest.area], selected.area)
+      || latest.area !== selected.index || latest.branch !== selected.branch
+      || publicationGate && (!sameGate(latest.gate, publicationGate) || latest.gate.storyChanges?.length))
+      throw Object.assign(Error('Automatic PR 1 eligibility changed. Preserve the current blocker and inspect the run.'), {code: 'workflow_progress_refused'});
+  }});
+  p.inspectProgress();
+  const hold = reason => {
+    const gateId = run.gate.id;
+    commitRun(run, p, latest => { if (latest.gate?.id === gateId) latest.gate.automaticHold = reason; });
+    return done(`PR 1 waits: ${reason}.`);
+  };
+  const scope = automaticPr1Scope(run, p, packageRoot);
+  if (scope) return hold(scope);
+  if (run.gate.storyChanges?.length) return hold('Story changes require a person approval');
+  if (!storyCoverage(run)?.fingerprint) return hold('saved Story approval coverage is missing');
+  const ownership = await continuationOwnership(run, run.root, p);
+  if (ownership) return hold(ownership);
+  const snapshot = await gatePromptSnapshot(run, p);
+  const changed = await changedStoryGate(run, area, 'check', p, [], snapshot);
+  if (changed) return hold('Story changes require a person approval');
+  const contents = await worktreeContents(run, p);
+  const check = fullCheckPass({root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0,
+    tests: contents.tests, stories: (storyCoverage(run).fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
+    prompts: snapshot.map(row => row.path)}, p);
+  if (!check.pass) return hold(`prompt check is not a full pass: ${check.problems.slice(0, 20).map(problem => `${problem.kind}: ${problem.path}: ${problem.detail}`).join('; ')}`);
+  publicationGate = structuredClone(run.gate);
+  p.inspectProgress();
+  return automaticPr1(run, area, 'check', p, [], check, packageRoot, progressRecorded);
+}));
+async function automaticPr1(run, area, step, p, lines, check, packageRoot, progressRecorded = () => {}) {
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
   let snapshot, edits = [], approvalRecorded = false;
@@ -2268,6 +2332,8 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
   const automatic = {
     head: null,
     async prepare() {
+      const scope = Object.hasOwn(run, 'automaticOrigin') && automaticPr1Scope(run, p, packageRoot);
+      if (scope) return fail(scope);
       const checkedHead = await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}');
       snapshot = await gatePromptSnapshot(run, p);
       const changed = await changedStoryGate(run, area, step, p, lines, snapshot);
@@ -2305,6 +2371,7 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
       }
     },
     async validate() {
+      p.inspectProgress?.();
       const head = await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}');
       const dirty = await rawGit(p, run.root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
       if (head !== automatic.head || dirty || await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}') !== automatic.head) {
@@ -2315,26 +2382,35 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
     },
     async authorize() {
       const invalid = await automatic.validate(); if (invalid) return invalid;
+      if (Object.hasOwn(run, 'automaticOrigin')) {
+        const refusal = automaticPr1Scope(run, p, packageRoot) || await continuationOwnership(run, run.root, p);
+        if (refusal) return fail(refusal);
+      }
       const record = { via: 'automatic-check-pass', basis: { storyEvidenceId: storyCoverage(run).evidenceId ?? null,
-        batches: [...new Set(check.tests.map(item => item.batch))], headSha: automatic.head } };
+        batches: [...new Set(check.tests.map(item => item.batch))], headSha: automatic.head,
+        ...(Object.hasOwn(run, 'automaticOrigin') ? {origin: 'automatic', automaticOrigin: run.automaticOrigin} : {}) } };
       try { await saveGateApproval(run, area, record, [], p, snapshot); approvalRecorded = true; }
       catch (error) { return fail(`Approval failed: ${error.message}`); }
       return null;
     }
   };
   const selectedArea = run.area, selectedGate = structuredClone(run.gate), selectedQuestion = run.question, published = [];
-  const failed = await publishAreaPr(run, area, p, published, `run done ${step} again`, automatic);
-  if (failed) { if (!approvalRecorded) restoreApprovalEdits(); return failed; }
+  let failed;
+  try { failed = await publishAreaPr(run, area, p, published, `run done ${step} again`, automatic); }
+  finally { if (!approvalRecorded) restoreApprovalEdits(); }
+  if (failed) return failed;
   const askCode = area.then === 'ask-code', at = p.now();
   commitRun(run, p, latest => {
     if (latest.area === selectedArea && sameGate(latest.gate, selectedGate)) { latest.state = 'waiting'; latest.gate = askCode ? { id: p.randomUUID(), area: area.name, at, kind: 'ask-code' } : null; }
     if (equalFact(latest.question, selectedQuestion)) latest.question = null;
   });
+  progressRecorded();
   const label = prLabel(run, area), url = prOf(run, area.name).url;
   const head = [...lines, ...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256} (full check pass under the Story approval)`),
     `pdd recorded ${step}. The prompt check passed in full on the current prompts (${check.tests.length} test${check.tests.length === 1 ? '' : 's'}), so pdd opened ${label === 'the PR' ? 'the PR' : label} with no approval question (route automatic-check-pass).`, ...published];
   if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
   const shownGate = run.gate ? await showGate(run, p) : [];
+  if (Object.hasOwn(run, 'automaticOrigin')) return done([...head, ...shownGate, `PR 1: ${url}`, automaticHandoff(run, p, packageRoot), 'PR 1 is open. Continue through the scoped automatic code gate.'].filter(Boolean).join('\n'));
   return afterPr1(run, area, p, [...head, ...shownGate], packageRoot);
 }
 // After PR 1 opens in a normal run: follow the code-or-stop choice saved with the Story approval; ask nothing.
@@ -3026,7 +3102,7 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   const fs = p.fs ?? { writeFileSync }, changed = [];
   try {
     for (const edit of edits) { changed.push(edit); fs.writeFileSync(join(run.root, edit.path), edit.next); }
-    await recordPromptApproval({ ...await promptApprovalContext(run, p), evidence }, p);
+    await recordPromptApproval({ ...await promptApprovalContext(run, p), evidence }, { ...p, beforeApprovalCommit: p.inspectProgress });
   } catch (error) {
     const left = [];
     for (const edit of changed.reverse()) { try { fs.writeFileSync(join(run.root, edit.path), edit.text); } catch { left.push(edit.path); } }
@@ -3976,7 +4052,7 @@ function detail(run, chat = null, facts = {}) {
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
-  const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
+  const next = run.gate?.automaticHold ? `Resolve the PR 1 hold: ${run.gate.automaticHold}.` : pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
     : chat === 'cannot-work' && facts.health && run.state === 'running' ? cannotWorkWords(run, facts.health).next
     : environmentRecovery(run) ? (environmentRecovery(run).attempts >= ENVIRONMENT_BACKOFF.length
       ? 'Environment retries are exhausted. Inspect the environment alert in pdd autopilot status before resuming the failed validation.'
@@ -4035,6 +4111,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : cannotWork ? cannotWorkWords(run, cannotWork).short
     : !run.gate && running && chat === 'blocked' ? `waiting for you: the chat asks a question in its window`
     : !run.gate && running && chat === 'stopped' ? `the chat stopped: run pdd workflow open ${run.number}`
+    : run.gate?.automaticHold ? `PR 1 waits: ${run.gate.automaticHold}`
     : writing ? (revising(run) ? 'agent working on your changes' : 'agent writing the gate message')
     : run.gate?.kind === 'ask-code' && drafts.length ? `waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''}, then the code PR (PR 1 open)`
     : run.gate?.kind === 'ask-code' && cardRun ? run.through === 'code' ? 'code PR requested; code entry waits' : 'stopped after PR 1; code can start when requested'

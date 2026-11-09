@@ -13,6 +13,21 @@ shared queue machine/filesystem ports independently of the launcher process port
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
 
+## Waiting PR 1 gates
+
+In auto mode, every tick and completion reconciliation handles saved waiting
+PR 1 gates before dependency intake or dependency review delivery. Read this
+checkout's runs with `listRuns`, filter to its repository, source checkout and
+current automatic coordinator/machine, and call the workflow runner's
+`advanceAutomaticPr1` boundary under the existing scan admission guard. Forward
+injected process, filesystem, clock and workflow ports; adapt the launcher process
+port to runner `execFile` when needed. This deterministic decision makes no AI
+or interpreter call. A held, busy or failed run does not prevent another run or
+remaining intake work. Preserve GitHub budget waits; perform this reconciliation
+after those waits and before intake. Observe and off modes never advance gates.
+The runner owns eligibility, full-pass evidence, custody, publication and hold
+reasons. This caller supplies no approval words and no invented decisions.
+
 ## Stopped workflow chats
 
 In auto mode, every tick and completion reconciliation inspects this checkout's saved
@@ -1250,7 +1265,7 @@ Persist runtime.lostDecision with the sorted number/batch identities so unchange
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage, run discovery and guarded custody updates.
 
-- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock, run mutation lock and stopped-chat recovery boundary.
+- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock, run mutation lock, automatic PR 1 full-pass gate and stopped-chat recovery boundary.
 
 - [GitHub dependency reader](issue-dependencies-github.prompt.md#coordinator-recovery): required native generation and verification context for guarded claim recovery and its current-claim proof.
 - [Dependency intake](issue-dependencies-intake.prompt.md): required generation, runtime and verification context for reconciliation and structured coordinator context. The [pure model](issue-dependencies.prompt.md) owns review and readiness, and its `issueKey` is the canonical issue identity for matching `eligible` keys.
