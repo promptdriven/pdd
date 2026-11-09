@@ -1635,7 +1635,7 @@ async function runTick(stateFile, ports, completion) {
         if (!remoteAllowed()) continue;
         let hold; try { hold = await observe(run); } catch { hold = {known:false}; }
         if (!hold.known || hold.held) p.manualHolds.add(run.number); else p.manualHolds.delete(run.number);
-        if (hold.known && hold.held) confirmed.add(run.number); else confirmed.delete(run.number);
+        if (hold.known) { if (hold.held) confirmed.add(run.number); else confirmed.delete(run.number); }
         const args = {ref:String(run.number), cwd:state.cwd, packageRoot:state.packageRoot, coordinatorId:state.coordinatorId, machine:state.machine};
         const parking = parkingPorts(state, p);
         if (!hold.known || await parking.checkProgress(run)) continue;
@@ -1660,7 +1660,8 @@ async function runTick(stateFile, ports, completion) {
       state.manualIssues = [...confirmed].sort((a, b) => a - b);
       await scanGuard(latest => { latest.manualIssues = state.manualIssues; });
       let reconsider;
-      if (!(state.retryAt > p.now()) && !(budget.state === 'reserve' && budget.resetAt > p.now()))
+      const gateBudget = readBudget().budget;
+      if (!(state.retryAt > p.now()) && !(gateBudget.state === 'reserve' && gateBudget.resetAt > p.now()))
         reconsider = await advanceWaitingPr1Gates(state, p);
       await parkingTick(state, p, config, {localOnly: true});
       if (reconsider?.size) {
@@ -1842,8 +1843,8 @@ async function runTick(stateFile, ports, completion) {
       const currentBudget = readBudget().budget;
       if (state.retryAt > p.now() || currentBudget.state === 'reserve' && currentBudget.resetAt > p.now()) { p.manualHolds.add(issue.number); continue; }
       let hold; try { hold = await (p.readManualHold ?? readManualHold)({repository:state.repo, issue:issue.number, cwd:state.cwd}, createDependencyReadPorts({cwd:state.cwd}, {...p, execFile:async (file,args,options) => p.execute(file,args,{...options,purpose:'dependencies'})})); } catch {hold = {known:false};}
-      if (!hold.known || hold.held) p.manualHolds.add(issue.number);
-      if (hold.known && hold.held) confirmed.add(issue.number);
+      if (!hold.known || hold.held) p.manualHolds.add(issue.number); else p.manualHolds.delete(issue.number);
+      if (hold.known) { if (hold.held) confirmed.add(issue.number); else confirmed.delete(issue.number); }
     }
     state.manualIssues = [...confirmed].sort((a,b) => a-b);
     await scanGuard(latest => {latest.manualIssues = state.manualIssues;});
