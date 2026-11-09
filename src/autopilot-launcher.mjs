@@ -8,7 +8,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2a8a38864221c12e00ce08b9257b65d8f67df4238b9b3548d8cb851f525b7dd9).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d0c3c8217ca9442cd882ddd5ef0d59126750f86f7b86337d3714a842d3e81622).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1558,7 +1558,16 @@ async function runTick(stateFile, ports, completion) {
         hostname: () => state.machine };
       await (p.sendDigest ?? runAutopilotAlerts)(input, alertPorts);
     } catch { /* Digest failures never stop feasible work. */ }
+    // The GitHub budget of the tick on this machine, from the local ledgers and the newest limit that GitHub reported.
+    let budget = { state: 'normal' }, restLeft;
+    try {
+      const usage = githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now());
+      restLeft = usage.rate.core?.remaining;
+      budget = githubBudget({ usage, ...githubBudgetSettings(config.github) });
+    } catch { /* An unreadable ledger leaves the budget normal. */ }
     if (config.mode === 'auto') {
+      if (!(state.retryAt > p.now()) && !(budget.state === 'reserve' && budget.resetAt > p.now()))
+        await advanceWaitingPr1Gates(state, p);
       await parkingTick(state, p, config, {localOnly: true});
       deferredWakes = async () => {
         deferredWakes = null;
@@ -1578,13 +1587,6 @@ async function runTick(stateFile, ports, completion) {
       await resumeStoppedWorkers(state, p);
     }
     if (state.retryAt > p.now()) return await outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
-    // The GitHub budget of the tick on this machine, from the local ledgers and the newest limit that GitHub reported.
-    let budget = { state: 'normal' }, restLeft;
-    try {
-      const usage = githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now());
-      restLeft = usage.rate.core?.remaining;
-      budget = githubBudget({ usage, ...githubBudgetSettings(config.github) });
-    } catch { /* An unreadable ledger leaves the budget normal. */ }
     // Heartbeats of this coordinator's own live claims (no AI call). A saved claim can have expired since it was
     // observed: expiry is final, so it gets no heartbeat.
     const ownClaimsOf = claims => claims.filter(claim => claim && typeof claim.issue === 'string' && claim.active === true && claim.coordinatorId === state.coordinatorId
@@ -1613,7 +1615,6 @@ async function runTick(stateFile, ports, completion) {
       if (!(Number.isFinite(restLeft) && restLeft < 2 * claims.length)) await sendHeartbeats(claims, true);
       return await outcome('unknown', `GitHub limit low: ${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor}; Autopilot waits until ${new Date(budget.resetAt).toISOString()}, except the heartbeats of this machine's claims.`);
     }
-    if (config.mode === 'auto') await advanceWaitingPr1Gates(state, p);
     // A due relaunch wakes even without new work; the fresh chat starts with the recipe.
     const relaunch = relaunchTarget(state, p);
     if (relaunch && relaunchHeld(state, relaunch)) {

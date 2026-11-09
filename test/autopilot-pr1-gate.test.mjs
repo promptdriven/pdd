@@ -28,7 +28,7 @@ function saveCheck(f, {state = 'passed', criteria = {passed: 3, total: 3}} = {})
     exitCode: state === 'passed' ? 0 : 1, rows: [{test: TEST, story: STORY, state, criteria}], summaryLine: 'synthetic check'})));
   return batch;
 }
-async function setup(t) {
+async function setup(t, {registered = false} = {}) {
   const f = await automaticFixture(t);
   assert.equal((await f.begin()).exitCode, 0);
   f.run = f.record();
@@ -36,6 +36,7 @@ async function setup(t) {
   f.automaticPorts.env.PDD_STATE_DIR = f.ports.env.PDD_STATE_DIR;
   f.done = async (step, extra = {}) => {
     f.tick();
+    if (registered) await runStatus({ref: '17', cwd: f.source}, f.automaticPorts);
     const result = await stepDone({step, summary: `synthetic ${step}`, cwd: f.run.root, ...extra}, f.automaticPorts);
     assert.equal(result.exitCode, 0, result.message);
     return result;
@@ -319,4 +320,38 @@ for (const kind of ['strict', 'scope', 'custody']) test(`#3099 ${kind} authority
   assert.equal(readFileSync(path, 'utf8'), checkedPrompt, 'unrecorded prompt approval edits must be restored');
   assert.equal(nativeFs.existsSync(lock), false, 'refusal must release journal custody');
   assert.deepEqual(nativeFs.readdirSync(dir).filter(name => /^\.approvals\..*\.tmp$/.test(name)), [], 'refusal must remove its temporary journal');
+});
+
+for (const parked of [false, true]) test(`#3099 registered ${parked ? 'parked' : 'waiting'} full-pass gate reconciles before parking`, async t => {
+  const f = await setup(t, {registered: true});
+  f.herdr.idle();
+  await f.status();
+  const before = f.record();
+  assert.ok(before.chats.every(chat => chat.session), 'ordinary status must register native sessions');
+  assert.equal(before.parking, undefined);
+  if (parked) {
+    saveCheck(f, {criteria: {passed: 2, total: 3}});
+    await f.scan();
+    const held = f.record();
+    assert.equal(f.prs.length, 0);
+    assert.equal(held.parking.phase, 'parked');
+    assert.equal(held.parking.blocker.kind, 'person');
+    assert.equal(held.parking.personWait.gate.id, before.gate.id);
+  }
+  saveCheck(f);
+  f.onIntake = () => assert.equal(f.prs.length, 1, 'full-pass reconciliation must precede intake');
+  await f.scan();
+  const after = f.record();
+  assert.equal(f.prs.length, 1, 'registered full-pass gate must publish PR 1');
+  assert.equal(after.gate.kind, 'ask-code');
+  assert.equal(after.parking.phase, 'parked');
+  assert.equal(after.parking.personWait.gate.kind, 'ask-code', 'parking must bind the remaining code gate');
+  assert.deepEqual(after.chats.map(chat => chat.session), before.chats.map(chat => chat.session));
+  assert.deepEqual(after.done, before.done);
+  assert.equal(after.area, before.area);
+  assert.equal(after.decisions.at(-1).via, 'automatic-check-pass');
+  const decisions = after.decisions.length;
+  await f.scan();
+  assert.equal(f.prs.length, 1);
+  assert.equal(f.record().decisions.length, decisions);
 });

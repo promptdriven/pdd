@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 81ce65598c95d86132b0f25cc28c24848936e2288e09982b815bce150c6399e1).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d8853af519f6a0188127d5afd7ca11bf04ee23a46d4097d082a7a73189dcbdbb).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2264,12 +2264,19 @@ function automaticPr1Scope(run, p, packageRoot) {
   } catch { return 'current automatic approval policy or operator scope is unavailable'; }
   return null;
 }
-function automaticPr1Eligible(run, {cwd, coordinatorId, machine}, published = null) {
+function automaticPr1ParkingEligible(run, p) {
+  const park = run.parking;
+  return !park || park.phase === 'parked' && park.blocker?.kind === 'person'
+    && sameGate(park.personWait?.gate, run.gate) && !park.personWait?.question
+    && !run.blockedOn && !run.runtimeWait && !park.checkHeld
+    && blockerFor({...run, parking: null})?.kind === 'person' && !continuationCheckHeld(run, p);
+}
+function automaticPr1Eligible(run, {cwd, coordinatorId, machine}, p, published = null) {
   const area = run.areas[run.area];
   return validSavedAutomaticOrigin(run) && run.automaticOrigin.coordinatorId === coordinatorId
     && run.automaticOrigin.machine === machine && samePath(run.sourceRoot, cwd)
     && ['pdd-bug', 'pdd-feature'].includes(run.skill) && run.state === 'waiting'
-    && !run.parking && !openQuestion(run) && !run.repairLimit
+    && automaticPr1ParkingEligible(run, p) && !openQuestion(run) && !run.repairLimit
     && (!run.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
     && run.gate?.kind === 'approve-pr' && run.gate.area === area?.name
     && area.gate === 'pr' && area.before === 'approve'
@@ -2282,12 +2289,12 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area];
   const owner = {cwd, coordinatorId, machine};
-  if (!automaticPr1Eligible(run, owner)) return done('Automatic PR 1 gate skipped.');
+  if (!automaticPr1Eligible(run, owner, p)) return done('Automatic PR 1 gate skipped.');
   const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), area, index: run.area, branch: run.branch});
   let publicationGate;
   const progressRecorded = protectProgress(run, p, {validate: latest => {
     // Only this invocation's durably saved PR may appear during its final transition.
-    if (!automaticPr1Eligible(latest, owner, prOf(run, area.name)) || !sameFact(latest.automaticOrigin, selected.origin)
+    if (!automaticPr1Eligible(latest, owner, p, prOf(run, area.name)) || !sameFact(latest.automaticOrigin, selected.origin)
       || !sameFact(storyCoverage(latest), selected.coverage) || !sameFact(latest.areas[latest.area], selected.area)
       || latest.area !== selected.index || latest.branch !== selected.branch
       || publicationGate && (!sameGate(latest.gate, publicationGate) || latest.gate.storyChanges?.length))
@@ -2415,7 +2422,11 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot, progr
   if (failed) return failed;
   const askCode = area.then === 'ask-code', at = p.now();
   commitRun(run, p, latest => {
-    if (latest.area === selectedArea && sameGate(latest.gate, selectedGate)) { latest.state = 'waiting'; latest.gate = askCode ? { id: p.randomUUID(), area: area.name, at, kind: 'ask-code' } : null; }
+    if (latest.area === selectedArea && sameGate(latest.gate, selectedGate)) {
+      const parkedApproval = latest.parking?.blocker?.kind === 'person' && sameGate(latest.parking.personWait?.gate, selectedGate);
+      latest.state = 'waiting'; latest.gate = askCode ? { id: p.randomUUID(), area: area.name, at, kind: 'ask-code' } : null;
+      if (parkedApproval) latest.parking.personWait = {gate: latest.gate, question: latest.question ?? null};
+    }
     if (equalFact(latest.question, selectedQuestion)) latest.question = null;
   });
   progressRecorded();

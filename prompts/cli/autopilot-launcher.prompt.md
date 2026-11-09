@@ -24,7 +24,10 @@ injected process, filesystem, clock and workflow ports; adapt the launcher proce
 port to runner `execFile` when needed. This deterministic decision makes no AI
 or interpreter call. A held, busy or failed run does not prevent another run or
 remaining intake work. Preserve GitHub budget waits; perform this reconciliation
-after those waits and before intake. Observe and off modes never advance gates.
+only when those waits permit it, before local parking and before intake. Budget
+waits still permit local parking and stopped-chat maintenance but no PR 1
+publication. Reconcile already parked approval waits through the same runner
+boundary. Observe and off modes never advance gates.
 The runner owns eligibility, full-pass evidence, custody, publication and hold
 reasons. This caller supplies no approval words and no invented decisions.
 
