@@ -3,7 +3,7 @@
 Own `src/autopilot-audit.mjs`. `auditMerge({run, pr}, ports={})` returns
 `{exitCode,message}`. `pendingAudits({run}, ports={})` returns PR numbers needing
 an audit or a known unsent follow-up. Preserve workflow gates and merge policy.
-This is new behavior authorized by issue #3111 and the build task. No prompt
+This behavior is authorized by issues #3111 and #3138 and the build task. No prompt
 approval is implied. Files, programs, clock, limits and alert delivery use ports.
 
 Only automatic runs in a repository with current `autopilot.mode: auto` qualify.
@@ -52,13 +52,28 @@ Save this result, session, merge/parent identity and time before any follow-up.
 Do not accept other verdicts or a reused session identity from the run's saved
 chats, abandoned chats or earlier audits. Missing/invalid output is unknown.
 
-Post the saved verdict and evidence once on the original issue. BAD opens one
-revert PR against the saved base and sends one decision alert identifying the
-merge and revert result. Clone into private scratch, start a unique revert
+Keep `result.verdict` and Boolean `result.revert` as separate saved fields;
+BAD alone does not recommend a revert. Post the saved verdict, recommendation,
+summary and evidence once on the original issue. For BAD with `revert: false`,
+reopen or keep that issue open once, and use the same comment to list the missing
+parts from the auditor's summary and evidence. Keep the merge; create no revert
+branch, push, PR or follow-up issue. For BAD with `revert: true`, open one
+revert PR against the saved base. Clone into private scratch, start a unique revert
 branch from the current base, revert the pinned merge (mainline 1 for a merge
 commit), push only that branch and create a PR; never push to the base, force
 push or merge the revert. Conflicts are a saved failure with one alert for human
-help. Repeated CONCERNs of the same kind from two distinct audited PRs in the
+help. Both BAD forms send one decision alert identifying the merge and explicitly
+stating the auditor's Boolean revert recommendation. Request a material update
+for every PR's ordinary BAD decision, so an open decision incident on the same
+issue cannot suppress a later PR's recommendation. Keep the PR and pinned merge
+in the alert and retain each audit's own publication reservation; successful or
+uncertain delivery must still suppress repeats of that audit. With false, name keeping
+the merge and finishing the rest as the default choice, report the issue reopen
+outcome, and offer reverting as the other choice with `git revert -m 1 MERGE_SHA`
+on a review branch and a PR against the saved base. With true, report the revert
+PR or saved failure and ask for review. Preserve earlier revert and alert
+reservations from legacy false-recommendation records without repeating them;
+an existing revert is never a reason to create another. Repeated CONCERNs of the same kind from two distinct audited PRs in the
 repository create one process issue in that repository. Serialize repository
 concern bookkeeping; retain a stable marker and all contributing identities.
 
@@ -94,7 +109,36 @@ present publication reservation, including its state, time and successful value
 (or concern kind). Invalid local or shared authority is audit-evidence-invalid;
 unreadable authority is audit-evidence-unreadable. Retain its bytes and
 reservations. It authorizes no follow-up effects and no additional auditor
-launch, including for another PR in the same evidence inventory. Supply shared auditor chats to cost refresh by runId;
+launch, including for another PR in the same evidence inventory. One narrow
+exception is a person-decision alert for a recorded BAD result whose recommendation
+is absent or non-Boolean, with all other record and filename identity checks valid
+for the selected repository, run attempt and merged PR. This is a diagnostic hold,
+not an accepted verdict or permission for a follow-up publication. Never infer
+false, import, repair or rewrite that evidence or its effect reservations. Keep the
+command nonzero with audit-evidence-invalid; create no revert, issue update,
+comment or auditor. Identify the recommendation as missing or unavailable, ask the
+person to inspect the evidence, and name both choices: keep the merge and finish
+the rest, or revert on a review branch with `git revert -m 1 MERGE_SHA` and a PR
+against the saved base. Share this alert route between held discovery and the
+audit command. Under repository audit custody, journal the alert separately in
+`decisions/IDENTITY.json` with schema (`pdd.audit-decision.v1`), repository
+(lowercase), runId, pr, merge, state (sending/sent/failed/unknown) and at. Reserve
+sending before delivery; sent and recovered sending/unknown suppress repeats.
+Only a confirmed failed send may retry. A damaged/unreadable decision journal
+holds without sending. Its identity is the audit identity below, independent of
+the damaged recommendation and source bytes, so repeats and independent clones
+cannot duplicate a successful or uncertain alert. The alert port returns
+`{exitCode,message}`: zero means the incident was saved, not that it was delivered.
+Mark sent only when its message confirms an Alert or Update was sent. A message
+reporting delivery failed or no destination leaves the decision failed and eligible
+for the alert module's retry rule. Unconfirmed delivery or any other missing
+confirmation remains unknown. Request material updates so two PR decisions on the
+same issue can each reach the destination. Inspect all local and shared records
+despite individual validation failures. Select the diagnostic record for the
+requested PR independently of record order, with its own filename, repository,
+run attempt and pinned merge checks. Keep each PR's hold and alert independent;
+another damaged record cannot hide it. The complete inventory still fails closed
+for launches and ordinary follow-ups. Supply shared auditor chats to cost refresh by runId;
 a shared attempt absent from discovery leaves cost admission unknown. Use the native dead-owner recovery lock through an
 injected acquireAuditLock port; it is not the workflow mutation lock. A second
 caller waits for a later tick, never sends an early BAD alert. The concern file
@@ -111,8 +155,11 @@ conditional fields below. `pr` is an integer; merge/parent are commit SHAs;
 or unknown. `chat` has agent, configDir (string or null), startedAt, optional
 root (the private checkout) and optional session `{id}`. A recorded result adds
 `result` with the auditor shape above and `completedAt`. Publication fields
-`comment`, `revert`, `alert` each have state (sending/sent/unknown), at, and
+`comment`, `reopen`, `revert`, `alert` each have state (sending/sent/unknown), at, and
 `value` on success (command stdout, revert URL or recorded alert marker).
+`reopen` is present only for BAD with `result.revert: false`; it reserves the
+original issue's state=open update. Reopen failures remain unknown and appear
+in the decision alert. Never retry uncertain reopen or other publications.
 `concern` has state (sent/unknown) and kind. Absent publication fields are unsent.
 
 The shared concern file has repository, kind, records and optional issue.
@@ -123,7 +170,8 @@ when confirmed. Once reserved it never creates another issue automatically.
 `pendingAudits` considers only saved automatic PRs with state merged. Return
 absent audits and recorded verdicts with absent required follow-ups, in saved
 PR order. Reserved/unknown auditors and uncertain publications never cause a
-new paid launch. Separate run attempts cannot reuse an audit record.
+new paid launch. BAD requires comment and alert, plus revert when recommended
+or reopen otherwise. Separate run attempts cannot reuse an audit record.
 Discovery isolates each audit's evidence failures. A malformed JSON value, invalid
 record or mismatched attempt is a hold, never an absent audit. An unreadable file
 or folder also holds. Omit held PRs from the returned numbers and call optional
@@ -136,14 +184,20 @@ means no evidence yet. Preserve all evidence and reservations. Continue ordinary
 inventory holds every otherwise pending audit that could use that inventory;
 an invalid audit cannot admit a launch for another PR. A local folder failure
 holds its merged PRs only.
-Discovery makes no paid call or publication.
+Discovery makes no paid call or publication. Its caller routes invalid-evidence
+holds through auditMerge for the narrow decision-alert exception above; the hold
+and empty audit offer remain unchanged.
+
+Port `auditHoldOnly: true` restricts a discovery-triggered auditMerge call to
+inspection and this diagnostic alert. If the evidence is repaired between the
+scan and the call, leave ordinary follow-ups and launches for the next scan.
 
 Ports may supply fs, env, now, execFile, readConfig, agentDefinitions,
 codexLimits, refreshCosts (the identity-guarded updateRunCosts boundary), dailyUsage (`{known,total}` in tokens), runAuditor, sendAlert,
 alertPorts and acquireAuditLock; defaults use the declared native dependencies.
 `auditStateRoot` optionally selects this repository's private bookkeeping folder;
 otherwise use stateDirFor(ports)/autopilot-audits/ plus the first 20 hex characters
-of SHA-256 of the lowercase repository. This folder owns operation.lock, concerns/KIND.json and
+of SHA-256 of the lowercase repository. This folder owns operation.lock, concerns/KIND.json, decisions/IDENTITY.json and
 records/IDENTITY.json, where IDENTITY is SHA-256 of the JSON tuple
 [runId, integer PR, merge SHA]. Shared records retain the lowercase repository.
 Run evidence copies stay under the run's audits folder. A damaged authority is a
@@ -162,6 +216,6 @@ hold, never absence. Legacy local reservation files also prevent resend.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"approved","prose_sha256":"af5461a253428814cf910ea8f4fed93fcd5d074f89bdf455255bfb8ef8f99c3c","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"f82e617ca2b2db48af082ed1a98f484e5d53f111580c2c2047a9838da5601202","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

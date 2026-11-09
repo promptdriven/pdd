@@ -61,6 +61,11 @@ export function factoryGithub(w) {
       endpoint=endpoint?.replace('https://api.github.com/','');
       let value,handled=true;
       if(endpoint===`repos/${f.repo}`)value={full_name:f.repo,owner:{login:f.owner},default_branch:'main'};
+      else if(a.includes('PATCH') && /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(endpoint??'')) {
+        assert.ok(a.includes('state=open'),'factory issue PATCH must reopen the issue');
+        const issue=f.issues.get(Number(endpoint.split('/').at(-1)));assert.ok(issue);
+        issue.state='open';issue.state_reason=null;value={number:issue.number,state:issue.state};
+      }
       else if(endpoint?.includes('/commits/')) {const commit=endpoint.split('/commits/')[1];value={sha:commit,parents:w.git(w.remote,'rev-list','--parents','-n','1',commit).split(/\s+/).slice(1).map(sha=>({sha}))};}
       else if(endpoint?.includes('/releases'))value=[];
       else if(/\/issues\/\d+\/timeline/.test(endpoint??'') && f.issues.get(Number(endpoint.match(/issues\/(\d+)/)[1]))?.timeline.some(e=>e.source)) {

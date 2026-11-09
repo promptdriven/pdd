@@ -2152,6 +2152,59 @@ for (const [name, root] of [['absent', undefined], ['null', null], ['number', 42
   });
 
 
+for(const damage of ['missing','non-boolean'])test(`3138 repair 1: discovery alerts once for ${damage} recommendation and keeps intake`,async t=>{
+  const f=await fixture(t);assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(),runDir=join(f.dir,'audit-run'),folder=join(runDir,'audits'),file=join(folder,'23.json');
+  mkdirSync(folder,{recursive:true});
+  const record={schema:'pdd.audit.v1',runId:'audit-run',pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),at:f.time,state:'recorded',completedAt:f.time,
+    chat:{agent:'codex',configDir:null,startedAt:f.time,session:{id:'11111111-1111-4111-8111-111111111111'}},
+    result:{verdict:'BAD',kind:'',summary:'Synthetic gap',evidence:'Missing scope',...(damage==='non-boolean'?{revert:'false'}:{})},
+    comment:{state:'unknown',at:f.time},revert:{state:'unknown',at:f.time}};
+  const bytes=JSON.stringify(record);writeFileSync(file,bytes);writeFileSync(`${file}.revert`,'');
+  const run={number:17,repo:state.repo,commonDir:join(f.cwd,'.git'),sourceRoot:f.cwd,root:f.cwd,baseBranch:'trunk',runDir,runId:record.runId,
+    state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:state.coordinatorId},pr:[{number:23,state:'merged'}]};
+  f.ports.listRuns=async()=>[run];f.ports.auditStateRoot=join(f.dir,'audit-state');
+  const alerts=[];f.ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0,message:`Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`};};
+  f.issues=[issue(18)];f.time+=1000;
+  for(let n=0;n<2;n++)assert.equal((await f.tick()).exitCode,0);
+  assert.equal(alerts.length,1,'DISCOVERY_MUST_SEND_ONE_RECOMMENDATION_DECISION_ALERT');
+  assert.equal(alerts[0].kind,'decision');
+  const alert=JSON.parse(alerts[0].text);assert.match(alert.cause,/recommendation.*(missing|unavailable)/i);
+  assert.match(alert.need,/keep.*merge.*finish/i);assert.ok(alert.need.includes(`git revert -m 1 ${record.merge}`));assert.ok(alert.need.includes(run.baseBranch));
+  assert.deepEqual(f.state().auditHolds,[{number:17,pr:23,cause:'audit-evidence-invalid'}]);
+  const packets=f.prompts.map(text=>JSON.parse(text.trim().split('\n').at(-1)));
+  assert.ok(packets.some(p=>p.issues?.some(i=>i.number===18&&i.eligible)));
+  assert.equal(packets.some(p=>p.timeRules?.some(r=>r.kind==='post-merge-audit')),false);
+  assert.equal(readFileSync(file,'utf8'),bytes);assert.deepEqual(readdirSync(folder).sort(),['23.json','23.json.revert']);
+  assert.equal(f.runs.filter(([command,args])=>command==='git'&&args.includes('revert')||command==='gh'&&args.includes('create')).length,0);
+});
+
+test('3138 repair 2: discovery retains each damaged PR hold and sends each decision once',async t=>{
+  const f=await fixture(t);assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(),runDir=join(f.dir,'audit-run'),folder=join(runDir,'audits');mkdirSync(folder,{recursive:true});
+  const run={number:17,repo:state.repo,commonDir:join(f.cwd,'.git'),sourceRoot:f.cwd,root:f.cwd,baseBranch:'trunk',runDir,runId:'audit-run',
+    state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:state.coordinatorId},
+    pr:[23,24].map(number=>({number,state:'merged',mergeSha:String(number===23?'a':'c').repeat(40)}))};
+  const originals=run.pr.map(pr=>{
+    const record={schema:'pdd.audit.v1',runId:run.runId,pr:pr.number,merge:pr.mergeSha,parent:'b'.repeat(40),at:f.time,state:'recorded',completedAt:f.time,
+      chat:{agent:'codex',configDir:null,startedAt:f.time,session:{id:'11111111-1111-4111-8111-111111111111'}},
+      result:{verdict:'BAD',kind:'',summary:'Synthetic gap',evidence:'Missing scope'}};
+    const file=join(folder,`${pr.number}.json`),bytes=JSON.stringify(record);writeFileSync(file,bytes);writeFileSync(`${file}.revert`,'');return {file,bytes};
+  });
+  f.ports.listRuns=async()=>[run];f.ports.auditStateRoot=join(f.dir,'audit-state');
+  const alerts=[];f.ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0,message:`Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`};};
+  f.issues=[issue(18)];f.time+=1000;
+  for(let n=0;n<2;n++)assert.equal((await f.tick()).exitCode,0);
+  assert.equal(alerts.length,2,'DISCOVERY_NEEDS_EACH_PR_DECISION_ALERT');
+  for(const pr of run.pr)assert.equal(alerts.filter(a=>JSON.parse(a.text).cause.includes(`PR #${pr.number} (${pr.mergeSha})`)).length,1);
+  assert.deepEqual(f.state().auditHolds,run.pr.map(pr=>({number:17,pr:pr.number,cause:'audit-evidence-invalid'})));
+  const packets=f.prompts.map(text=>JSON.parse(text.trim().split('\n').at(-1)));
+  assert.ok(packets.some(p=>p.issues?.some(i=>i.number===18&&i.eligible)));
+  assert.equal(packets.some(p=>p.timeRules?.some(r=>r.kind==='post-merge-audit')),false);
+  for(const {file,bytes} of originals){assert.equal(readFileSync(file,'utf8'),bytes);assert.equal(readFileSync(`${file}.revert`,'utf8'),'');}
+  assert.equal(f.runs.filter(([command,args])=>command==='git'&&args.includes('revert')||command==='gh'&&args.includes('create')).length,0);
+});
+
 for (const damage of ['json','schema','attempt','file','folder']) test(`3111 repair 2: ${damage} audit evidence holds without blocking tick delivery`, async t => {
   const f = await fixture(t);await f.invoke('start');
   const state=f.state(),runDir=join(f.dir,'audit-run'),folder=join(runDir,'audits'),file=join(folder,'23.json');

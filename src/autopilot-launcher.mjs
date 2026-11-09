@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d33acf942acfe0a6b2625d53deb659bb767567d26d1cbc6637785408f876b9dc).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: f62e9c62f22b85421c5931d1bb74cbe79c9a584eb0e7b58de64f438109a2b0a2).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1774,7 +1774,12 @@ async function runTick(stateFile, ports, completion) {
       if(auditConfig.autopilot?.audit !== false) for(const run of await (p.listRuns ?? listRuns)({cwd:state.cwd,cancelled:true},workflowCleanupPorts(p, ports))) {
         if(run.repo?.toLowerCase()!==state.repo.toLowerCase() || run.automaticOrigin?.repository?.toLowerCase()!==state.repo.toLowerCase()
           || run.automaticOrigin?.machine!==state.machine || !samePath(run.sourceRoot,state.cwd)) continue;
-        for(const pr of pendingAudits({run}, {...p,onAuditHold: hold => state.auditHolds.push({number:run.number,...hold})})) timeRules.push({kind:'post-merge-audit',number:run.number,pr,reason:`Run pdd autopilot audit ${run.number} ${pr}; retain the saved verdict and do not launch an auditor by hand.`});
+        const holds=[];
+        for(const pr of pendingAudits({run}, {...p,onAuditHold: hold => {
+          holds.push(hold);state.auditHolds.push({number:run.number,...hold});
+        }})) timeRules.push({kind:'post-merge-audit',number:run.number,pr,reason:`Run pdd autopilot audit ${run.number} ${pr}; retain the saved verdict and do not launch an auditor by hand.`});
+        for(const hold of holds) if(hold.cause==='audit-evidence-invalid')
+          await auditMerge({run,pr:hold.pr},{...p,auditHoldOnly:true,execFile:(file,args,options)=>p.execute(file,args,{...options,purpose:'audit'})});
       }
     }
     for (const claim of ownClaims) {

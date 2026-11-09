@@ -5,7 +5,7 @@ import * as nativeFs from 'node:fs';
 import {readFileSync,writeFileSync,mkdirSync,readdirSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {pendingAudits} from '../src/autopilot-audit.mjs';
+import {auditMerge,pendingAudits} from '../src/autopilot-audit.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {captureCosts} from '../src/cost-ledger.mjs';
 import {updateRunCosts} from '../src/workflow-runs.mjs';
@@ -13,13 +13,19 @@ import {fixture} from './helpers/workflow-runner-fixture.mjs';
 
 const merge='a'.repeat(40),parent='b'.repeat(40);
 const result = (verdict='OK') => ({verdict,kind:verdict==='CONCERN'?'missing-reproduction':'',summary:'Synthetic audit observation',evidence:'1. Parent fails and merge passes.\n2. Scope retained.\n3. Observable cases.\n4. Old test fails.\n5. Native evidence.\n6. Checks retained.\n7. Gates confirmed.',revert:verdict==='BAD'});
+// runAutopilotAlerts saves incidents with exitCode 0 even when delivery fails.
+const alertReply=(w,input)=>({exitCode:0,message:w.alertFailure
+  ? `Alert recorded for #${input.issue} ${input.kind}; delivery failed (HTTP 503). pdd autopilot status shows it. Continue other work.`
+  : w.uncertain==='alert'
+    ? `Alert recorded for #${input.issue} ${input.kind}; delivery unconfirmed (no reply). It may have arrived, so it is not sent again. pdd autopilot status shows it. Continue other work.`
+    : `Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`});
 async function world(t) {
   const f=await fixture(t);f.ports.skipMetricsDelivery=true;assert.equal((await f.run()).exitCode,0);
   const run=f.record();run.agent='codex';delete run.launchProfile;run.configDir=join(f.ports.env.HOME,'.codex');run.runId??=randomUUID();run.baseBranch='main';run.automaticOrigin={coordinatorId:'factory',machine:'test'};
   run.pr=[{number:23,state:'merged',stage:'change'}];
   writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
   writeFileSync(join(f.source,'pdd.json'),JSON.stringify({autopilot:{mode:'auto'}}));
-  const w={...f,run,agent:'codex',calls:[],launches:[],alerts:[],answer:result(),session:randomUUID(),limit:'healthy',usage:{known:true,total:0},merged:true};
+  const w={...f,run,agent:'codex',calls:[],launches:[],alerts:[],answer:result(),session:randomUUID(),limit:'healthy',usage:{known:true,total:0},merged:true,issueState:'closed'};
   w.concernFolder=()=>join(w.ports.stateDir,'autopilot-audits',createHash('sha256').update(w.run.repo.toLowerCase()).digest('hex').slice(0,20),'concerns');
   w.file=n=>join(run.runDir,'audits',`${n??23}.json`);
   w.audit=n=>JSON.parse(readFileSync(w.file(n),'utf8'));
@@ -27,6 +33,11 @@ async function world(t) {
     w.calls.push({file,args,options});
     if(file==='gh' && args[0]==='api') {
       const path=args.find(a=>a.startsWith('repos/'));
+      if(args.includes('PATCH') && path===`repos/${run.repo}/issues/${run.number}`) {
+        assert.ok(args.includes('state=open'));w.issueState='open';
+        if(w.uncertain==='reopen')throw Error('unconfirmed issue reopen');
+        return {code:0,stdout:JSON.stringify({state:w.issueState})};
+      }
       if(args.includes('POST')) {
         if(w.writeFailure) throw Error('synthetic uncertain write');
         return {code:0,stdout:JSON.stringify({html_url:'https://github.com/example/project/issues/99'})};
@@ -47,7 +58,7 @@ async function world(t) {
     const code=await runPdd(['autopilot','audit','17',String(pr)],{cwd:f.source,env:f.ports.env,stdout,stderr,autopilotLauncherPorts:{...f.ports,...(w.fs?{fs:w.fs}:{}),run:execute,
       agentDefinitions:()=>[{kind:w.agent,name:w.agent,command:'configured-codex',env:{}}],codexLimits:async()=>({state:w.limit}),...(w.nativeUsage?{}:{dailyUsage:async()=>w.usage}),...(w.refreshCosts?{refreshCosts:w.refreshCosts}:{}),
       runAuditor:async(command,args,options)=>{w.launches.push({command,args,options});await w.delay?.();if(w.agent==='claude') return {code:0,stdout:JSON.stringify({session_id:w.session,result:JSON.stringify(w.answer)})};return {code:w.providerExit??0,stdout:JSON.stringify({type:'thread.started',thread_id:w.session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:w.raw??JSON.stringify(w.answer)}})+'\n'};},
-      sendAlert:async input=>{w.alerts.push(input);return {exitCode:w.uncertain==='alert'?1:0};},
+      sendAlert:async input=>{w.alerts.push(input);return alertReply(w,input);},
     }});
     return {code,text:stdout.text+stderr.text};
   };
@@ -58,6 +69,212 @@ async function atLaunch(ready,pending) {
   assert.equal(await Promise.race([ready.then(()=>true),pending.then(()=>false)]),true,'an automatic merge must start its auditor');
 }
 const comments = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.some(a=>a.endsWith('/comments')));
+const reopens = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('PATCH')&&c.args.includes('state=open'));
+const newPrs = w=>w.calls.filter(c=>c.file==='gh'&&c.args[0]==='pr'&&c.args[1]==='create');
+
+const checkHeldAudit=(w,pr=23,ports={})=>auditMerge({run:w.run,pr},{...w.ports,fs:w.fs??nativeFs,
+  execFile:async(file,args)=>{w.calls.push({file,args});throw Error('held audit must not execute a program');},
+  sendAlert:async input=>{w.alerts.push(input);return alertReply(w,input);},...ports,
+});
+
+// The recommendation is the only damaged field. No saved effect may run.
+for(const custody of ['local','shared']) for(const damage of ['missing','non-boolean'])
+  test(`3138 repair 1: ${custody} ${damage} recommendation holds and alerts once`,async t=>{
+    const w=await world(t),record={schema:'pdd.audit.v1',repository:w.run.repo.toLowerCase(),runId:w.run.runId,pr:23,
+      merge,parent,at:1,state:'recorded',completedAt:2,chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},
+      result:result('BAD'),comment:{state:'unknown',at:2},revert:{state:'unknown',at:2}};
+    if(damage==='missing')delete record.result.revert;else record.result.revert='false';
+    const folder=custody==='local'?join(w.run.runDir,'audits'):join(w.concernFolder(),'..','records');
+    mkdirSync(folder,{recursive:true});
+    const identity=createHash('sha256').update(JSON.stringify([record.runId,record.pr,record.merge])).digest('hex');
+    const file=custody==='local'?w.file():join(folder,`${identity}.json`);
+    writeFileSync(file,JSON.stringify(record));writeFileSync(`${file}.revert`,'');
+    const bytes=readFileSync(file,'utf8'),reservations=readdirSync(folder).sort(),holds=[];
+    for(let n=0;n<2;n++) {
+      assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[]);
+      const out=await checkHeldAudit(w);assert.equal(out.exitCode,1);assert.match(out.message,/audit-evidence-invalid/);
+    }
+    assert.equal(w.alerts.length,1,'MISSING_RECOMMENDATION_NEEDS_ONE_DECISION_ALERT');
+    const alert=JSON.parse(w.alerts[0].text);
+    assert.equal(w.alerts[0].kind,'decision');assert.match(alert.cause,/recommendation.*(missing|unavailable)/i);
+    assert.match(alert.need,/inspect/i);assert.match(alert.need,/keep.*merge.*finish/i);
+    assert.ok(alert.need.includes(`git revert -m 1 ${merge}`));assert.ok(alert.need.includes(w.run.baseBranch));
+    assert.deepEqual(holds.map(h=>h.cause),['audit-evidence-invalid','audit-evidence-invalid']);
+    assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+    assert.equal(readFileSync(file,'utf8'),bytes);assert.deepEqual(readdirSync(folder).sort(),reservations);
+    assert.equal(readFileSync(`${file}.revert`,'utf8'),'');
+  });
+
+for(const failure of ['failed','uncertain'])test(`3138 repair 1: recommendation alert ${failure} custody survives restart`,async t=>{
+  const w=await world(t),record={schema:'pdd.audit.v1',runId:w.run.runId,pr:23,merge,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:result('BAD')};
+  delete record.result.revert;mkdirSync(join(w.run.runDir,'audits'),{recursive:true});writeFileSync(w.file(),JSON.stringify(record));
+  const bytes=readFileSync(w.file(),'utf8');
+  // The first response either confirms failure or leaves delivery uncertain.
+  w.alertFailure=true;
+  if(failure==='uncertain')w.fs={...nativeFs,renameSync(from,to) {
+    if(String(to).includes('/decisions/') && JSON.parse(readFileSync(from,'utf8')).state==='failed')throw Error('crash before final journal');
+    return nativeFs.renameSync(from,to);
+  }};
+  assert.equal((await checkHeldAudit(w)).exitCode,1);assert.equal(w.alerts.length,1);
+  delete w.fs;delete w.alertFailure;
+  assert.equal((await checkHeldAudit(w)).exitCode,1);assert.equal((await checkHeldAudit(w)).exitCode,1);
+  assert.equal(w.alerts.length,failure==='failed'?2:1);
+  assert.equal(readFileSync(w.file(),'utf8'),bytes);assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+});
+
+function seedRecommendationHold(w,pr=23,custody='local',change=()=>{}) {
+  const record={schema:'pdd.audit.v1',repository:w.run.repo.toLowerCase(),runId:w.run.runId,pr,merge,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:result('BAD'),
+    comment:{state:'unknown',at:2},revert:{state:'unknown',at:2}};
+  delete record.result.revert;change(record);
+  const folder=custody==='local'?join(w.run.runDir,'audits'):join(w.concernFolder(),'..','records');
+  mkdirSync(folder,{recursive:true});
+  const identity=createHash('sha256').update(JSON.stringify([record.runId,record.pr,record.merge])).digest('hex');
+  const file=custody==='local'?w.file(pr):join(folder,`${identity}.json`),bytes=JSON.stringify(record);
+  writeFileSync(file,bytes);writeFileSync(`${file}.revert`,'');
+  return {file,bytes,record};
+}
+const decisionStates=w=>readdirSync(join(w.concernFolder(),'..','decisions')).map(name=>
+  JSON.parse(readFileSync(join(w.concernFolder(),'..','decisions',name),'utf8'))).sort((a,b)=>a.pr-b.pr);
+function assertHeldEvidence(w,entries) {
+  for(const {file,bytes} of entries) {
+    assert.equal(readFileSync(file,'utf8'),bytes);assert.equal(readFileSync(`${file}.revert`,'utf8'),'');
+  }
+  assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+}
+function realAlertPorts(w,http) {
+  const config=join(w.ports.env.XDG_CONFIG_HOME,'pdd');mkdirSync(config,{recursive:true});
+  const file=join(config,'autopilot-alerts.json');
+  const configure=()=>writeFileSync(file,JSON.stringify({v:1,service:'slack',url:'https://hooks.slack.com/services/synthetic/test/fixture'}));
+  return {configure,ports:{sendAlert:undefined,alertPorts:{stateRoot:join(w.base,'alert-state'),hostname:()=> 'test-machine',http}}};
+}
+for(const failure of ['http','not-configured'])test(`3138 repair 2: real alert ${failure} failure retries before journaling sent`,async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let requests=0;
+  const alert=realAlertPorts(w,async()=>({status:++requests===1&&failure==='http'?503:200,text:'ok'}));
+  if(failure==='http')alert.configure();
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'failed','UNDELIVERED_ALERT_MUST_REMAIN_RETRYABLE');
+  alert.configure();
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'sent');
+  assert.equal(requests,failure==='http'?2:1);
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(requests,failure==='http'?2:1);
+  assertHeldEvidence(w,[entry]);
+});
+test('3138 repair 2: real unconfirmed delivery stays unknown without another HTTP request',async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let requests=0;
+  const alert=realAlertPorts(w,async()=>{requests++;return {status:200,text:''};});alert.configure();
+  for(let n=0;n<2;n++)assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'unknown');assert.equal(requests,1);assertHeldEvidence(w,[entry]);
+});
+test('3138 repair 2: exitCode alone cannot confirm alert delivery',async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let sends=0;
+  for(let n=0;n<2;n++)assert.equal((await checkHeldAudit(w,23,{sendAlert:async()=>{sends++;return {exitCode:0};}})).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'unknown');assert.equal(sends,1);assertHeldEvidence(w,[entry]);
+});
+for(const custody of ['local','shared','mixed'])test(`3138 repair 2: ${custody} damaged PR records each alert once through the real alert module`,async t=>{
+  const w=await world(t);w.run.pr.push({number:24,state:'merged',mergeSha:'c'.repeat(40)});
+  w.run.pr[0].mergeSha=merge;
+  const entries=[seedRecommendationHold(w,23,custody==='shared'?'shared':'local'),
+    seedRecommendationHold(w,24,custody==='local'?'local':'shared',a=>{a.merge='c'.repeat(40);})];
+  const messages=[],alert=realAlertPorts(w,async input=>{messages.push(input.body.text);return {status:200,text:'ok'};});alert.configure();
+  for(let n=0;n<2;n++) {
+    const holds=[];assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[]);
+    assert.deepEqual(holds,[{pr:23,cause:'audit-evidence-invalid'},{pr:24,cause:'audit-evidence-invalid'}]);
+    for(const pr of [24,23])assert.equal((await checkHeldAudit(w,pr,alert.ports)).exitCode,1);
+  }
+  assert.equal(messages.length,2,'EACH_HELD_PR_NEEDS_ITS_OWN_ALERT');
+  for(const entry of entries)assert.equal(messages.filter(text=>text.includes(`PR #${entry.record.pr} (${entry.record.merge})`)).length,1);
+  assert.deepEqual(decisionStates(w).map(a=>[a.pr,a.state]),[[23,'sent'],[24,'sent']]);assertHeldEvidence(w,entries);
+});
+for(const damage of ['repository','run','merge','filename'])test(`3138 repair 2: another damaged record cannot bypass selected ${damage} identity`,async t=>{
+  const w=await world(t);w.run.pr.push({number:24,state:'merged',mergeSha:merge},{number:25,state:'merged',mergeSha:merge});
+  const entries=[seedRecommendationHold(w),seedRecommendationHold(w,24,'shared',a=>{
+    if(damage==='repository')a.repository='other/repo';
+    if(damage==='run')a.runId='other-run';
+    if(damage==='merge')a.merge='c'.repeat(40);
+  })];
+  if(damage==='filename') {
+    const entry=entries[1],file=join(w.concernFolder(),'..','records','invalid.json');
+    nativeFs.renameSync(entry.file,file);nativeFs.renameSync(`${entry.file}.revert`,`${file}.revert`);entry.file=file;
+  }
+  entries.push(seedRecommendationHold(w,25));
+  assert.equal((await checkHeldAudit(w,24)).exitCode,1);assert.equal(w.alerts.length,0);
+  assert.equal((await checkHeldAudit(w,23)).exitCode,1);assert.equal(w.alerts.length,1);
+  assert.equal((await checkHeldAudit(w,25)).exitCode,1);assert.equal(w.alerts.length,2,'VALID_PR_ALERT_MUST_SURVIVE_OTHER_RECORD_DAMAGE');
+  assertHeldEvidence(w,entries);
+});
+
+for(const recommendations of [[false,false],[false,true],[true,false]])test(`3138 integration: two valid BAD PRs on one issue deliver ${recommendations} recommendations once`,async t=>{
+  const w=await world(t);
+  w.run.pr=[23,24].map((number,i)=>({number,state:'merged',mergeSha:(i?'c':'a').repeat(40)}));
+  mkdirSync(join(w.run.runDir,'audits'),{recursive:true});
+  for(const [i,pr] of w.run.pr.entries())writeFileSync(w.file(pr.number),JSON.stringify({
+    schema:'pdd.audit.v1',runId:w.run.runId,pr:pr.number,merge:pr.mergeSha,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:{...result('BAD'),revert:recommendations[i]},
+  }));
+  const messages=[],alert=realAlertPorts(w,async input=>{messages.push(input.body.text);return {status:200,text:'ok'};});alert.configure();
+  const ports={...w.ports,...alert.ports,execFile:async(file,args)=>{
+    w.calls.push({file,args});
+    if(file==='git'&&args[0]==='rev-list')return {code:0,stdout:merge+' '+parent+' '+'d'.repeat(40)};
+    if(file==='gh'&&args[0]==='pr')return {code:0,stdout:'https://github.com/example/project/pull/99'};
+    return {code:0,stdout:'{}'};
+  }};
+  const outcomes=[];
+  for(const pr of w.run.pr)outcomes.push(await auditMerge({run:w.run,pr:pr.number},ports));
+  assert.equal(messages.length,2,'EACH_VALID_BAD_PR_MUST_DELIVER_ITS_RECOMMENDATION');
+  assert.deepEqual(outcomes.map(out=>out.exitCode),[0,0]);
+  for(const [i,pr] of w.run.pr.entries()) {
+    const delivered=messages.filter(text=>text.includes(`PR #${pr.number} (${pr.mergeSha})`));
+    assert.equal(delivered.length,1);assert.match(delivered[0],new RegExp(`recommendation: ${recommendations[i]}`,'i'));
+    assert.equal(w.audit(pr.number).alert.state,'sent');
+  }
+  const effects=w.calls.length;
+  for(let n=0;n<2;n++)for(const pr of [...w.run.pr].reverse())assert.equal((await auditMerge({run:w.run,pr:pr.number},ports)).exitCode,0);
+  assert.equal(messages.length,2);assert.equal(w.calls.length,effects);assert.equal(w.launches.length,0);
+});
+
+for(const recommendation of [false,true])test(`3138 BAD revert=${recommendation} saves the recommendation and alerts once`,async t=>{
+  const w=await world(t);w.answer={...result('BAD'),revert:recommendation};
+  assert.equal((await w.check()).code,0);
+  assert.equal(w.audit().result.verdict,'BAD');assert.equal(w.audit().result.revert,recommendation);
+  assert.equal(newPrs(w).length,recommendation?1:0);
+  assert.equal(w.alerts.length,1);assert.match(w.alerts[0].text,new RegExp(`recommendation: ${recommendation}`,'i'));
+  assert.equal((await w.check()).code,0);
+  assert.equal(newPrs(w).length,recommendation?1:0);assert.equal(w.alerts.length,1);assert.equal(comments(w).length,1);assert.equal(w.launches.length,1);
+  assert.deepEqual(pendingAudits({run:w.run},w.ports),[]);
+});
+for(const state of ['closed','open'])test(`3138 BAD without revert keeps the merge and leaves a ${state} issue open with its missing parts`,async t=>{
+  const w=await world(t);w.issueState=state;w.answer={...result('BAD'),revert:false,summary:'Synthetic remaining work',evidence:'- Missing export coverage\n- Missing scope validation'};
+  assert.equal((await w.check()).code,0);assert.equal(w.issueState,'open');assert.equal(w.audit().reopen?.state,'sent');
+  assert.equal(w.audit().revert,undefined);assert.equal(w.calls.filter(c=>c.file==='git'&&(c.args.includes('revert')||c.args[0]==='push'||c.args[0]==='switch')).length,0);
+  const comment=comments(w)[0].args.find(a=>a.startsWith('body='));
+  assert.ok(comment.includes(w.answer.summary));assert.ok(comment.includes(w.answer.evidence));assert.ok(comment.includes(merge));assert.match(comment,/recommendation: false/i);
+  const alert=JSON.parse(w.alerts[0].text);assert.match(alert.need,/default.*keep.*merge.*finish/i);assert.match(alert.need,/git revert -m 1 [a-f0-9]{40}/);assert.ok(alert.need.includes(merge));
+  assert.equal(w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.includes(`repos/${w.run.repo}/issues`)).length,0);
+  assert.equal((await w.check()).code,0);assert.equal(reopens(w).length,1);assert.equal(comments(w).length,1);assert.equal(w.alerts.length,1);
+});
+for(const uncertain of ['reopen','alert'])test(`3138 BAD without revert retains an uncertain ${uncertain} without repeating effects`,async t=>{
+  const w=await world(t);w.answer={...result('BAD'),revert:false};w.uncertain=uncertain;
+  assert.equal((await w.check()).code,1);assert.equal(w.audit()[uncertain].state,'unknown');
+  assert.equal((await w.check()).code,1);assert.equal(reopens(w).length,1);assert.equal(newPrs(w).length,0);assert.equal(w.alerts.length,1);assert.equal(comments(w).length,1);assert.equal(w.launches.length,1);
+  if(uncertain==='reopen')assert.match(w.alerts[0].text,/unknown/);
+  assert.deepEqual(pendingAudits({run:w.run},w.ports),[]);
+});
+for(const state of ['sent','unknown'])test(`3138 legacy no-revert audit preserves ${state} revert and alert reservations`,async t=>{
+  const w=await world(t);w.answer=result('BAD');assert.equal((await w.check()).code,0);
+  const saved=w.audit();saved.result.revert=false;
+  for(const key of ['revert','alert']) {saved[key].state=state;if(state==='unknown')delete saved[key].value;}
+  const identity=createHash('sha256').update(JSON.stringify([saved.runId,saved.pr,saved.merge])).digest('hex');
+  for(const file of [w.file(),join(w.concernFolder(),'..','records',`${identity}.json`)])writeFileSync(file,JSON.stringify(saved));
+  assert.deepEqual(pendingAudits({run:w.run},w.ports),[23]);
+  assert.equal((await w.check()).code,state==='sent'?0:1);assert.equal(w.issueState,'open');assert.equal(w.audit().reopen?.state,'sent');
+  assert.deepEqual(w.audit().revert,saved.revert);assert.deepEqual(w.audit().alert,saved.alert);
+  assert.equal((await w.check()).code,state==='sent'?0:1);assert.equal(reopens(w).length,1);assert.equal(newPrs(w).length,1);
+  assert.equal(w.alerts.length,1);assert.equal(comments(w).length,1);assert.equal(w.launches.length,1);assert.deepEqual(pendingAudits({run:w.run},w.ports),[]);
+});
 
 test('3111 automatic merged PR launches one fresh auditor, saves pinned evidence and comments once',async t=>{
   const w=await world(t),out=await w.check();assert.equal(out.code,0,out.text);
@@ -311,6 +528,8 @@ const auditDamage = {
   reservation:a=>{a.comment={state:'sent'};}, reservationState:a=>{a.comment.state='retry';},
   reservationTime:a=>{a.comment.at='yesterday';}, reservationValue:a=>{delete a.comment.value;},
   revertReservation:a=>{a.revert={state:'sent',at:a.at,value:'url'};},
+  reopenReservation:a=>{a.reopen={state:'sent',at:a.at,value:'open'};},
+  reopenState:a=>{a.result.verdict='BAD';a.result.revert=false;a.reopen={state:'retry',at:a.at};},
   concernReservation:a=>{a.concern={state:'sending',kind:'bad'};},
 };
 for(const custody of ['local','shared']) for(const [damage,corrupt] of Object.entries(auditDamage)) {

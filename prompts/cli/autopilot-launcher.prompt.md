@@ -1293,7 +1293,10 @@ array of `{repository,cwd,holds}` for matching saved ledgers with nonempty holds
 is that ledger's `state.auditHolds` array. With --all include all ledgers;
 otherwise match the requested cwd. Preserve the other status fields.
 Replace the holds on the next audit scan, clearing repaired or disabled holds.
-A held audit has no post-merge-audit time rule. Its evidence failure never aborts
+A held audit has no post-merge-audit time rule. Route each invalid-evidence hold
+through auditMerge with the same run and PR and auditHoldOnly set, so the audit owner can send its
+missing-recommendation decision alert under shared custody. Keep the hold even
+when that alert succeeds; no auditor is launched for invalid evidence. Its evidence failure never aborts
 issue selection, other audit offers or coordinator delivery.
 Load [audit policy](autopilot-audit.prompt.md) as required context.
 
