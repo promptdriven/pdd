@@ -1265,7 +1265,19 @@ without requiring a live coordinator or issue claim (the merge can close both).
 On auto ticks with audit enabled, offer pendingAudits for saved automatic runs as
 `post-merge-audit` time rules naming RUN and PR, even for completed runs and closed
 issues. The coordinator runs `pdd autopilot audit RUN PR`. Ticks make no model
-calls. Load [audit policy](autopilot-audit.prompt.md) as required context.
+calls. Pass injected filesystem ports to discovery. Collect its per-PR holds
+as `state.auditHolds`, an array of `{number,pr,cause}` where `number` is the run
+number, `pr` is the PR number and `cause` is the audit owner's named cause.
+Persist this observation with tick state. Local status and status --all show
+each held run number, PR number and cause. JSON status adds `auditHolds`, an
+array of `{repository,cwd,holds}` for matching saved ledgers with nonempty holds;
+`repository` and `cwd` identify the saved repository and checkout, and `holds`
+is that ledger's `state.auditHolds` array. With --all include all ledgers;
+otherwise match the requested cwd. Preserve the other status fields.
+Replace the holds on the next audit scan, clearing repaired or disabled holds.
+A held audit has no post-merge-audit time rule. Its evidence failure never aborts
+issue selection, other audit offers or coordinator delivery.
+Load [audit policy](autopilot-audit.prompt.md) as required context.
 
 ## Dependencies
 

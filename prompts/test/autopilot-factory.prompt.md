@@ -55,6 +55,11 @@ real gh, agent, system timer or live Herdr process may run. Never touch another
 process or its state. Use the repository fakes as the starting point. Keep
 execution reports outside source.
 
+After a real merge and completed audit, damage its local audit JSON. Repeated
+ticks must still select and deliver a new eligible issue. Status names the held
+run, PR and cause. No auditor, repeated audit publication or audit time rule is
+permitted for the damaged record. Keep the shared audit authority intact.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

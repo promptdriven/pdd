@@ -2,6 +2,7 @@ import './helpers/test-home.mjs';
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
+import * as nativeFs from 'node:fs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -2120,3 +2121,41 @@ for (const [name, root] of [['absent', undefined], ['null', null], ['number', 42
     assert.equal(f.state().interpreterPattern.verdictAt, undefined);
     assert.equal(readFileSync(file, 'utf8'), bytes);
   });
+
+
+for (const damage of ['json','schema','attempt','file','folder']) test(`3111 repair 2: ${damage} audit evidence holds without blocking tick delivery`, async t => {
+  const f = await fixture(t);await f.invoke('start');
+  const state=f.state(),runDir=join(f.dir,'audit-run'),folder=join(runDir,'audits'),file=join(folder,'23.json');
+  mkdirSync(folder,{recursive:true});
+  const record={schema:'pdd.audit.v1',runId:'audit-run',pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),state:'recorded',chat:{},result:{verdict:'OK',kind:'',summary:'Observed',evidence:'Synthetic evidence',revert:false},comment:{state:'sent'}};
+  writeFileSync(file,JSON.stringify(record));
+  if(damage==='json')writeFileSync(file,'{');
+  if(damage==='schema')writeFileSync(file,'null');
+  if(damage==='attempt')writeFileSync(file,JSON.stringify({...record,runId:'other-attempt'}));
+  f.ports.fs={...nativeFs,
+    readFileSync:(path,...args)=>{if(damage==='file' && path===file)throw Object.assign(Error('synthetic denied'),{code:'EACCES'});return nativeFs.readFileSync(path,...args);},
+    readdirSync:(path,...args)=>{if(damage==='folder' && path===folder)throw Object.assign(Error('synthetic denied'),{code:'EACCES'});return nativeFs.readdirSync(path,...args);},
+  };
+  f.ports.listRuns=async()=>[{number:17,repo:state.repo,sourceRoot:f.cwd,runDir,runId:'audit-run',state:'completed',automaticOrigin:{coordinatorId:state.coordinatorId},pr:[{number:23,state:'merged'},{number:24,state:'merged'}]}];
+  const cause=damage==='file'?'audit-evidence-unreadable':damage==='folder'?'audit-folder-unreadable':damage==='attempt'?'audit-attempt-mismatch':'audit-evidence-invalid';
+  const expected=[{number:17,pr:23,cause},...(damage==='folder'?[{number:17,pr:24,cause}]:[])];
+  f.issues=[issue(18)];f.time+=1000;
+  for(let n=0;n<2;n++) {
+    const tick=await f.tick().catch(error=>({exitCode:1,message:error.message}));
+    assert.equal(tick.exitCode,0,'AUDIT_SCAN_INTAKE: evidence damage must not abort the tick');
+    assert.deepEqual(f.state().auditHolds,expected);
+  }
+  const packets=f.prompts.flatMap(text=>{try{return [JSON.parse(text.trim().split('\n').at(-1))];}catch{return [];}});
+  assert.ok(packets.some(p=>p.issues?.some(i=>i.number===18 && i.eligible)));
+  const rules=packets.flatMap(p=>p.timeRules??[]).filter(r=>r.kind==='post-merge-audit');
+  assert.ok(rules.every(r=>r.pr!==23));
+  assert.equal(rules.some(r=>r.pr===24),damage!=='folder');
+  for(const options of [{},{all:true}]) {
+    const status=await f.invoke('status',options);assert.equal(status.exitCode,0);assert.ok(status.message.includes(cause));
+  }
+  const json=await f.invoke('status',{json:true});
+  assert.deepEqual(JSON.parse(json.message).auditHolds,[{repository:state.repo,cwd:f.cwd,holds:expected}]);
+  assert.equal(readFileSync(file,'utf8'),damage==='json'?'{':damage==='schema'?'null':JSON.stringify({...record,...(damage==='attempt'?{runId:'other-attempt'}:{})}));
+  f.ports.fs=nativeFs;writeFileSync(file,JSON.stringify(record));
+  await f.tick();assert.deepEqual(f.state().auditHolds,[]);
+});

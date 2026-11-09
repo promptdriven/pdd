@@ -113,6 +113,17 @@ when confirmed. Once reserved it never creates another issue automatically.
 absent audits and recorded verdicts with absent required follow-ups, in saved
 PR order. Reserved/unknown auditors and uncertain publications never cause a
 new paid launch. Separate run attempts cannot reuse an audit record.
+Discovery isolates each audit's evidence failures. A malformed JSON value, invalid
+record or mismatched attempt is a hold, never an absent audit. An unreadable file
+or folder also holds. Omit held PRs from the returned numbers and call optional
+port `onAuditHold({pr,cause})` once for each held merged PR. `pr` is its saved
+integer number. `cause` is `audit-evidence-invalid` for damaged JSON/schema or
+PR identity, `audit-attempt-mismatch` for a different run attempt,
+`audit-evidence-unreadable` for a file read failure, or
+`audit-folder-unreadable` for a folder read failure. A missing folder or file
+means no evidence yet. Preserve all evidence and reservations. Continue scanning
+other PRs after a record failure; a folder failure holds its merged PRs only.
+Discovery makes no paid call or publication.
 
 Ports may supply fs, env, now, execFile, readConfig, agentDefinitions,
 codexLimits, refreshCosts (the identity-guarded updateRunCosts boundary), dailyUsage (`{known,total}` in tokens), runAuditor, sendAlert,

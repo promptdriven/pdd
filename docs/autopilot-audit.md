@@ -42,3 +42,8 @@ CONCERN means an acceptable change with a named process weakness. Use CONCERN
 for unavailable reproduction; never call it OK. BAD means unsolved, wrong or
 harmful behavior or a fake gate. Explain the revert recommendation. The native
 coordinator opens a revert PR for BAD and never pushes directly to the base.
+
+Audit discovery holds a damaged or unreadable evidence record with a named cause.
+`pdd autopilot status` shows the run, PR and cause. Other issue selection and
+coordinator delivery continue. The held audit is not offered for another launch.
+The next scan clears the hold after the evidence is repaired or audits are disabled.

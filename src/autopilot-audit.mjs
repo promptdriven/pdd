@@ -39,9 +39,31 @@ const finished = a => a?.result && a.comment && (a.result.verdict !== 'BAD' || a
 export function pendingAudits({run}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   if (!run?.automaticOrigin || !run.runDir) return [];
-  return (run.pr ?? []).filter(pr => pr.state === 'merged').filter(pr => {
-    const a = read(fs, fileFor(run, pr.number));
-    return !a || a.runId === run.runId && a.result && !finished(a);
+  const merged = (run.pr ?? []).filter(pr => pr.state === 'merged');
+  const hold = (pr, cause) => ports.onAuditHold?.({pr: pr.number, cause});
+  try { fs.readdirSync(join(run.runDir, 'audits')); }
+  catch (error) {
+    if (error.code !== 'ENOENT') {
+      for (const pr of merged) hold(pr, 'audit-folder-unreadable');
+      return [];
+    }
+  }
+  const missing = Symbol('missing');
+  return merged.filter(pr => {
+    let a;
+    try { a = read(fs, fileFor(run, pr.number), missing); }
+    catch (error) {
+      hold(pr, error instanceof SyntaxError ? 'audit-evidence-invalid' : 'audit-evidence-unreadable');
+      return false;
+    }
+    if (a === missing) return true;
+    if (!validAudit(a) || a.pr !== pr.number || !['starting','recorded','unknown'].includes(a.state)
+      || a.state === 'recorded' && !validResult(a.result)) {
+      hold(pr, 'audit-evidence-invalid');
+      return false;
+    }
+    if (a.runId !== run.runId) { hold(pr, 'audit-attempt-mismatch'); return false; }
+    return a.result && !finished(a);
   }).map(pr => pr.number);
 }
 function save(fs, file, value) {
