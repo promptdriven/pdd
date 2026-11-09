@@ -1252,6 +1252,28 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
   return { runs, runsKnown };
 }
 
+// A live label batch avoids one REST call per unclaimed review subject. Only a
+// complete negative is useful; everything else still takes the full winner read.
+async function liveUnclaimed(cwd, repository, issues, ports) {
+  const unclaimed = new Set(), s = service(cwd, ports), [owner, name] = repository.split('/');
+  for (let offset = 0; offset < issues.length; offset += 25) {
+    const batch = issues.slice(offset, offset + 25);
+    const query = `query($owner:String!,$name:String!${batch.map((_, i) => `,$n${i}:Int!`).join('')}) { repository(owner:$owner,name:$name) { ${batch.map((_, i) => `i${i}:issue(number:$n${i}) { url labels(first:100) { nodes { name } pageInfo { hasNextPage } } }`).join(' ')} } }`;
+    try {
+      const reply = (await s.api('graphql', 'POST', JSON.stringify({ query, variables: { owner, name,
+        ...Object.fromEntries(batch.map((key, i) => [`n${i}`, info(key).issue])) } }), 'claims', repository, true)).value;
+      if (reply.errors?.length || !object(reply.data?.repository)) continue;
+      batch.forEach((key, i) => {
+        const row = reply.data.repository[`i${i}`], labels = row?.labels;
+        if (canonical(row?.url) === canonical(key) && Array.isArray(labels?.nodes) && labels.pageInfo?.hasNextPage === false
+          && labels.nodes.every(label => object(label) && typeof label.name === 'string' && label.name)
+          && !labels.nodes.some(label => label.name === 'pdd:working')) unclaimed.add(key);
+      });
+    } catch { /* The ordinary live winner read supplies the fallback. */ }
+  }
+  return unclaimed;
+}
+
 // The default owners port is live: each claim check asks GitHub (a 304 is a live answer). Only the claim scan inside one
 // snapshot (live false) reads through that snapshot's reads.
 function nativeOwners(cwd, ports, { live = true } = {}) {
@@ -1260,7 +1282,8 @@ function nativeOwners(cwd, ports, { live = true } = {}) {
       const github = live ? ports.github[LIVE_GITHUB] ?? ports.github : ports.github;
       const state = await launcherState(cwd, repository, ports), claims = [];
       let now = NaN; try { now = time((await ports.clock.now({})).iso); } catch { /* An unknown clock expires no claim. */ }
-      for (const key of issues) { const claim = await winningClaim(repository, key, github, ports.authority, now, live && !!ports.github[LIVE_GITHUB]); if (claim) claims.push(claim); }
+      const unclaimed = live && issues.length > 1 && ports.github[NATIVE_GITHUB] ? await liveUnclaimed(cwd, repository, issues, ports) : new Set();
+      for (const key of issues) { if (unclaimed.has(key)) continue; const claim = await winningClaim(repository, key, github, ports.authority, now, live && !!ports.github[LIVE_GITHUB]); if (claim) claims.push(claim); }
       return { json: JSON.stringify({ localOwner: state?.coordinatorId ?? '', localMachine: state?.machine ?? '', claims, ...await readLocalOccupied({ cwd, repository }, ports) }) };
     } finally { if (live) flushCache(ports); }
   } };
