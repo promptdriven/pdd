@@ -1225,3 +1225,5 @@ For named Runtime Story `lint --local`, keep the SVG-only advisory: captured dep
 Local lint findings use a local heading; server findings retain interpreter attribution. Intentional native-only omissions count separately from malformed unsent tests in lint summaries. Native omissions never supply a pass.
 
 User diagnostics name the PDD interpreter as the service; Runtime interface names the declaration. Preserve machine identifiers and server gate text.
+
+When a generic refusal does not identify a field, explain that the PDD interpreter did not identify the Runtime interface field. Preserve the supplied rule, null field and local findings without guessing a field.
