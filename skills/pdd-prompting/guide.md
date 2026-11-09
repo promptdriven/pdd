@@ -196,8 +196,11 @@ relationship to the overview; it must not duplicate behavioral policy.
 
 ## Readable organization without duplicate rules
 
-Each rule has one authoritative expression. Operation references contain the
-boundaries that qualify domain decisions, without repeating the normal route.
+Each rule has one authoritative expression. Reduce repeated explanation while
+retaining every required fact within the selected preservation promise. Operation
+references retain the consequential evaluation and effect boundaries that qualify
+domain decisions, including read order and count where consequential, without
+repeating the normal route.
 Signature lists contain declarations, without parallel behavior descriptions.
 Shared errors, returns and output shapes have one definition with local links.
 Where native semantics matter, one readable ordered expression states the guards
@@ -209,16 +212,17 @@ Disclosures organize necessary detail; they do not hide duplicate explanations.
 Labels and prose remain readable at their intended display size, including narrow
 layouts. Additional space is appropriate for necessary meaning and legibility.
 
-The contract states exact defaults, boundaries, payloads and failure precedence
-without word caps, diagram quotas, opaque shorthand or hidden sidecars. Dependency
-declarations name required context and facilities without absent-package lists or
-repeated independence claims. Links and image paths are relative to the prompt
-that contains them.
+The contract retains exact interfaces, schemas, matching rules, defaults, payloads,
+error boundaries and failure precedence without word caps, diagram quotas, opaque
+shorthand or hidden sidecars. Dependency declarations name required context and
+facilities without absent-package lists or repeated independence claims. Links and
+image paths are relative to the prompt that contains them.
 
 Required meaning is complete within the declared, permitted context. Access to
 other source does not make it part of that context. Missing evidence and unresolved
-requirements are explicit gaps; clear wording alone is not a claim of correct
-execution or human understanding.
+requirements are explicit gaps. Passing a finite set of tests establishes only the
+checked cases; it does not prove full preservation. Clear wording alone is not a
+claim of correct execution or human understanding.
 
 <a id="preservation"></a>
 <details>
