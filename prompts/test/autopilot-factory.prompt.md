@@ -98,6 +98,10 @@ run, PR and cause. No auditor, repeated audit publication or audit time rule is
 permitted for the damaged record. Keep the shared audit authority intact.
 
 
+## Manual issue factory (#3129)
+
+Exercise an issue labeled `pdd:manual` before intake: no claim, sorting or dependency review is allowed. Remove the label and claim it through the normal coordinator path. Add the label while the run owns work, then tick until the saved idle work is released. Its run folder, branch, commits and PRs survive. Removing the label makes it eligible again. A separate run parked for missing #3129 wakes through installed capability evidence, retaining its saved work and independent decisions. Apply labels through the fake GitHub writer and use native commands and workflow state. Replace the coordinator identity after saving a worker native session, remove its stopped panes, add the manual label and tick: no worker resumes, the saved work and safe custody survive, and the hold is reported. Cover saved pending dependency effects and a hold arriving after preparation with real snapshot, graph, intake and effect code. A table over resume, wake, claim, dependency mutation, sort and ordinary comment effects must show zero automatic effects for held issues. Keep guarded custody release separate from ordinary comments.
+
 ## Stopped-pane factory (#3123)
 
 Include a complete pane budget held by several stopped runs. Each has several area chats in one worktree, no saved session IDs, an old layout without createdWorkspaceId and an older coordinator ID for the same machine and folder. Hide Herdr IDs so bounded native discovery must prove the correct sessions. Start a second repository's coordinator and its first workflow run against the shared Herdr service; both must obtain panes through native reclamation. Verify the first run has a live area chat before waking the held runs. Later clear the blockers and resume every held run with its own current-area UUID. Assert screens exist before closes, saved sessions match each area, claim recovery preserves each admitted claim era, and foreign workspaces and busy agents survive. Use only disposable homes, config, queues and service fakes; select a unique throwaway session name for the harness.
@@ -151,6 +155,22 @@ validation; the failed attempt stays available. Use only the factory's private
 home, config and queues. Retain this scenario as a failing assertion on the base.
 
 Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr and interpreter fakes. An executable stale pdd earlier on PATH and missing Codex sign-in must produce a PATH warning and an agent failure line with concrete commands; start returns the identical diagnostics and creates no state, timers, panes, claims, GitHub writes or interpreter jobs. Run the real doctor for existing factory starts with the factory program, file, profile and health ports. Do not replace selected-profile observations with a separately healthy account. A restart with an unrelated signed-out caller must retain the healthy saved profile and coordinator identity. No real machine/account read escapes.
+
+## Manual hold effect coverage
+
+Repair #3129 effect coverage runs the native closed-run audit offer and public
+audit command under a writer hold, the busy older-owner admission sweep with
+confirmed and unknown authority, held running group membership updates and both
+environment-exhaustion and resource alerts. A table executes every effect kind
+against a held issue and counts zero effects after all rows execute. The same
+unchanged tests must detect the repair base at assertions, not startup failures.
+Use repository fakes and real native workflow/Git paths; no live service calls.
+
+The manual hold regression matrix spies on the GitHub execution and worker
+submission ports. A factory tick over open, running, parked, closed audit, group
+member, umbrella and dependency-node subjects makes zero automatic issue writes
+and worker deliveries while held. Native regressions also add a hold during
+post-admission fetch and route cached group work to a held retained run.
 
 ## Dependencies
 

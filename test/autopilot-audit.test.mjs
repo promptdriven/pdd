@@ -554,3 +554,19 @@ for(const custody of ['local','shared']) for(const [damage,corrupt] of Object.en
     assert.deepEqual(readdirSync(join(w.concernFolder(),'..','records')).sort(),reservations);
   });
 }
+
+test('3129 a hold after the audit verdict leaves publication pending until clearance', async t => {
+  const w = await world(t);
+  let held = false;
+  w.ports.readManualHold = async () => ({known:true,held});
+  w.delay = async () => {held = true;};
+  assert.equal((await w.check()).code,1);
+  assert.equal(w.launches.length,1);
+  assert.equal(w.audit().state,'recorded');
+  assert.equal(w.audit().comment,undefined);
+  assert.equal(comments(w).length,0);
+  held = false;
+  assert.equal((await w.check()).code,0);
+  assert.equal(w.launches.length,1);
+  assert.equal(comments(w).length,1);
+});

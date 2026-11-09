@@ -1,5 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: d098606e91907fb1c461bb31a880cb4f1ed316f6ecbca17460e9ee61781061ca).
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: afa3039824e6c6b2b7acd0b9add33044c006a107cf7e0cbe6d9f1c783701414c).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -10,9 +10,29 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { gitContext } from './workflow-runs.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange, issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges, commandGithubFloor } from './issue-dependencies-github.mjs';
+import { issueEffectAllowed, createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges, commandGithubFloor } from './issue-dependencies-github.mjs';
 
-const snapshotRead = (ports, args) => ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports);
+const snapshotRead = async (ports, args) => {
+  const result = await (ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports));
+  if (!ports.manualHold) return result;
+  // Intake can discover nodes outside the selected review subjects. Observe all
+  // of them before completion recovery, sorting or pending dependency effects.
+  const snapshot = structuredClone(result.snapshot);
+  for (const issue of snapshot.issues) {
+    if (!root(issue.key, args.repository)) continue;
+    let hold;
+    const coverage = snapshot.coverage?.issues.find(row => row.key === issue.key);
+    const observation = {held:issue.holds.includes('pdd:manual'), known:coverage?.issue !== false && !(issue.labels?.includes('pdd:manual') && coverage?.timeline === false) && !(coverage?.missing ?? []).some(text => /manual hold/i.test(text))};
+    try { hold = await ports.manualHold.read({repository:args.repository, issue:Number(issue.key.split('/').pop()), observation}); }
+    catch { hold = {known:false}; }
+    if (hold.held && !issue.holds.includes('pdd:manual')) issue.holds.push('pdd:manual');
+    if (!hold.known) {
+      if (coverage) { coverage.timeline = false; coverage.missing.push('Manual hold evidence unavailable'); }
+      else snapshot.complete = false;
+    }
+  }
+  return {...result, snapshot};
+};
 const root = (key, repository) => key.toLowerCase().startsWith(`https://github.com/${repository.toLowerCase()}/issues/`);
 const json = value => typeof value === 'string' ? JSON.parse(value) : value;
 const rows = snapshot => new Map([...snapshot.issues.map(x => [x.key, x.revision]), ...snapshot.inputs.map(x => [x.key, x.revision])]);
@@ -159,6 +179,7 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
       try { await ports.checkPaneCapacity(); }
       catch (error) { return {allowed:false,reason:error.code === 'herdr_pane_budget' ? 'panes' : 'unknown'}; }
     }
+    if (node.eligible && !await issueEffectAllowed({repository,issue:subjectNumber,cwd},ports)) return {allowed:false,reason:'dependency'};
     return node.eligible ? { allowed: true, reason: 'ok' } : { allowed: false, reason: 'dependency' };
   } catch { return { allowed: false, reason: 'unknown' }; }
 }
@@ -180,7 +201,7 @@ function headIds(snapshot, graph = projectIssueGraph({ snapshot })) {
 function selectSubjects(graph, snapshot, repository, issue) {
   const number = key => Number(key.split('/').pop());
   const outsider = new Set(snapshot.issues.filter(i => i.authority === 'untrusted').map(i => issueKey(i.key)));
-  return graph.nodes.filter(x => root(x.key, repository) && x.nativeState === 'open' && !outsider.has(x.key) && (issue ? x.key === issue || x.key.endsWith(`/issues/${issue}`) : (['unchecked', 'stale'].includes(x.reviewState) || sortSubjects(snapshot).includes(x.key))))
+  return graph.nodes.filter(x => root(x.key, repository) && x.nativeState === 'open' && !outsider.has(x.key) && !snapshot.issues.find(i => i.key === x.key)?.holds?.includes('pdd:manual') && (issue ? x.key === issue || x.key.endsWith(`/issues/${issue}`) : (['unchecked', 'stale'].includes(x.reviewState) || sortSubjects(snapshot).includes(x.key))))
     .sort((a, b) => (a.reviewState === 'unchecked' ? 0 : 1) - (b.reviewState === 'unchecked' ? 0 : 1) || number(b.key) - number(a.key));
 }
 
@@ -250,6 +271,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
     if (saved) savedIds.set(review.issue, saved.id);
   }
   const subjects = request.issues.filter(key => !savedIds.has(key)), remaining = analysis.reviews.filter(r => !savedIds.has(r.issue));
+  if (request.issues.some(key => snapshot.issues.find(i => i.key === key)?.holds?.includes('pdd:manual'))) return finish(pendingResult('input-changed'));
   if (request.issues.length && !subjects.length && analysis.reviews.length === request.issues.length
     && analysis.reviews.every(r => r.effects !== 'pending' || !r.dependencies.length)) {
     const questions = analysis.reviews.flatMap(r => r.questions);
@@ -390,14 +412,14 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
     catch { /* Unconfirmed effects wait; graph holds routed issues. */ }
   }
   let graph = projectIssueGraph({ snapshot });
-  const subjects = graph.nodes.filter(n => root(n.key, repository) && n.nativeState === 'open').map(n => n.key);
+  const subjects = graph.nodes.filter(n => root(n.key, repository) && n.nativeState === 'open' && !snapshot.issues.find(i => i.key === n.key)?.holds?.includes('pdd:manual')).map(n => n.key);
   // The claim scan of the snapshot gives the claims: the open issues are not read again.
   const owners = subjects.length ? json((await ownersFor(ports, repository, subjects)).json) : { claims: [] };
   const skipped = subjects.filter(x => ownedElsewhere(owners, x));
   let recovered = false;
   for (const node of graph.nodes) {
     const review = snapshot.reviews.find(r => r.id === node.review);
-    if (!skipped.includes(node.key) && !node.reasons.includes('Incomplete relevant observations') && node.reviewState === 'pending' && review?.effects === 'pending') {
+    if (subjects.includes(node.key) && !skipped.includes(node.key) && !node.reasons.includes('Incomplete relevant observations') && node.reviewState === 'pending' && review?.effects === 'pending') {
       await (ports.reviews?.apply ?? applyDependencyChanges)({ cwd, repository, issue: node.key, reviewId: review.id }, ports); recovered = true;
     }
   }
@@ -421,6 +443,8 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   // One delivery through the existing route. `redelivery` marks a repeated request
   // while it is sent, so the launcher can name it and refuse it under uncertain custody.
   const send = async again => {
+    for (const key of prepared.queued)
+      if (!await issueEffectAllowed({repository, issue:Number(key.split('/').pop()), cwd}, ports)) return false;
     // Snapshot ownership can predate a restart or takeover. Check before AI work.
     try {
       const live = json((await ports.owners.read({ repository, issues: prepared.queued })).json);

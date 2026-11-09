@@ -115,6 +115,7 @@ async function launcherHarness(f) {
       return {...doctor, agentDefinitions: () => [fixtureAgent],
         run: (file, args, options) => run(file === fixtureAgent.command ? 'codex' : file, args, options)};
     },
+    readManualHold:async () => ({known:true,held:false}),
     env: {HOME: home, PATH: process.env.PATH},
     stateRoot,
     now: () => now,

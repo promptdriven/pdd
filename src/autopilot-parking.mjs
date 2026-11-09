@@ -126,6 +126,7 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
   const list = async () => (await ports.list()).filter(owned);
   let runs = await list();
   for (const run of runs) {
+    if (ports.held?.(run)) continue;
     if (['waking', 'releasing'].includes(run.parking?.phase)) continue;
     const chat = [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
     if (!run.parking && ['area-end', 'run-end', 'budget', 'cancel'].includes(chat?.closed?.reason)) continue;
@@ -154,7 +155,7 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
   const oldest = runs.filter(run => run.parking).sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
   const ready = [];
   if (wake) for (const run of oldest) {
-    if (!['parked', 'waking'].includes(run.parking.phase) || run.parking.checkHeld || await ports.checkProgress(run)) continue;
+    if (ports.held?.(run) || !['parked', 'waking'].includes(run.parking.phase) || run.parking.checkHeld || await ports.checkProgress(run)) continue;
     const rule = wakeRules.find(rule => rule.number === run.number && ['runtime-ready', 'environment-ready'].includes(rule.kind));
     if (run.parking.phase === 'waking' || await ports.blockerCleared(run, rule)) ready.push({run, rule});
   }
@@ -177,7 +178,7 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     const parked = (await list()).filter(run => ['parked', 'releasing'].includes(run.parking?.phase) && !run.parking.checkHeld).sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
     let excess = Math.max(0, parked.length - maxParked);
     for (const run of parked) if (run.parking.phase === 'releasing' || ports.now() - run.parking.at >= hours * 3600000 || excess > 0) {
-      if (await ports.checkProgress(run)) continue;
+      if (ports.held?.(run) || await ports.checkProgress(run)) continue;
       const released = await ports.release(run);
       if (released) excess = Math.max(0, excess - 1);
     }

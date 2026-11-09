@@ -203,7 +203,23 @@ records/IDENTITY.json, where IDENTITY is SHA-256 of the JSON tuple
 Run evidence copies stay under the run's audits folder. A damaged authority is a
 hold, never absence. Legacy local reservation files also prevent resend.
 
+Use the [shared issue effect gate](issue-dependencies-github.prompt.md#issue-effect-gate)
+for the original issue, including a closed issue of a completed run. Enforce it
+at public command entry, before audit reservation and auditor invocation, and
+before every follow-up reservation and external publication (comments, revert
+branch/PR, alerts and concern issues). Recheck after admission waits and long
+reads. Held or unknown authority launches nothing, publishes nothing and keeps
+evidence and known unsent work pending until clearance. A hold arriving after a
+verdict must not mark the unsent publication sending/unknown.
+
+Bind the shared GitHub write execution port to the audit run's repository and
+issue. Carry that issue through nested transports for audit comments and revert
+PR creation. Preserve the existing audit admission, pending verdict and unknown
+publication custody rules.
+
 ## Dependencies
+
+- [Shared issue effect gate](issue-dependencies-github.prompt.md#issue-effect-gate): required native generation and testing context for manual authority at audit admission and publication.
 
 - [Run records](workflow-runs.prompt.md): machine state root, indexed attempts and identity-guarded cost refresh.
 - [Cost ledger](cost-ledger.prompt.md): session attribution and daily measured usage.
@@ -216,6 +232,6 @@ hold, never absence. Legacy local reservation files also prevent resend.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"f82e617ca2b2db48af082ed1a98f484e5d53f111580c2c2047a9838da5601202","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"bbd01c84dd2c1e6c4386174220fd9f25eeb53cec4006fd6671794afa4a01a8da","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

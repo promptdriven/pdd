@@ -1,4 +1,5 @@
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: e57ff5b54c04160bfcc8290af7a2022460fe4bc06d5561342c3a814320695fb7).
+import {issueEffectAllowed, guardAutomaticGithubWrites} from './issue-dependencies-github.mjs';
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 398b444e72c08ed83a514be3eee257d55d28a179faaed2faed2d0d95c1da064e).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -183,6 +184,7 @@ async function alertUnavailableRecommendation(run, pr, audit, ports) {
 export async function auditMerge(input, ports = {}) {
   const fs=ports.fs ?? nativeFs, run=input?.run;
   if(!run?.commonDir || !run?.runDir) return {exitCode:1,message:'Post-merge audit: saved run is unavailable.'};
+  if (!await issueEffectAllowed({repository:run.repo,issue:run.number,cwd:run.sourceRoot ?? run.root},ports)) return {exitCode:1,message:'Post-merge audit: manual issue authority holds this audit.'};
   const folder=repositoryFolder(run,ports);
   let release;
   try {
@@ -199,14 +201,22 @@ async function auditMergeOwned({run, pr}, ports = {}) {
   if(!run?.automaticOrigin || !/^[\w.-]+\/[\w.-]+$/.test(run.repo ?? '') || !/^[1-9]\d*$/.test(String(pr))
     || !(run.pr ?? []).some(p => p.number === Number(pr)) || !named(run.baseBranch)
     || run.baseBranch.startsWith('-') || run.baseBranch.startsWith('refs/')) return fail('saved automatic run or PR is unavailable.');
+  const allowed = async () => {
+    if (!await issueEffectAllowed({repository:run.repo,issue:run.number,cwd:run.sourceRoot ?? run.root},ports))
+      throw Object.assign(Error('Manual issue authority holds this audit.'),{code:'manual_hold'});
+  };
+  await allowed();
   const cwd = run.sourceRoot ?? run.root, localFile = fileFor(run,pr), profile=launchProfile(run);
   const recordsFolder=join(repositoryFolder(run,ports),'records');
   profile.configDir=expandHome(profile.configDir,env);
   const config = await (ports.readConfig ?? (root => read(fs,join(root,'pdd.json'),{})))(cwd);
   if(config.autopilot?.audit === false) return {exitCode:0,message:'Post-merge audit disabled for this repository.'};
   if(config.autopilot?.mode !== 'auto') return fail('repository is not in auto mode.');
-  const execute = ports.execFile ?? runAgentProcess;
+  const execute = guardAutomaticGithubWrites(ports.execFile ?? runAgentProcess,ports,{repository:run.repo,issue:run.number,cwd});
+  let publications = 0, reservedHere = false, auditorStarted = false;
   const command = async (program,args,options={}) => {
+    const publication = program === 'git' && args[0] === 'push' || program === 'gh' && (args.includes('POST') || args.includes('PATCH') || args[0] === 'pr' && args[1] === 'create');
+    if (publication) {await allowed(); publications++;}
     if(program === 'gh') recordCostGithub(run.runDir,{at:now()},{fs});
     const result = await execute(program,args,{cwd,env,timeoutMs:120000,maxBytes:8*1024*1024,...options});
     if(result.code !== undefined && result.code !== 0) throw Error('External operation did not confirm success.');
@@ -265,11 +275,17 @@ async function auditMergeOwned({run, pr}, ports = {}) {
   const effect = async (key, action) => {
     audit=read(fs,file);
     if(audit[key]) return;
+    await allowed();
+    const before = publications;
     try {fs.writeFileSync(`${file}.${key}`, '', {flag:'wx',mode:0o600});}
     catch(e) {if(e.code === 'EEXIST') {audit=read(fs,file);if(!audit[key]) {audit[key]={state:'unknown',at:now()};persist();}return;}throw e;}
     audit[key] = {state:'sending',at:now()};persist();
     try {const value=await action();audit=read(fs,file);audit[key] = {state:'sent',at:now(),value};}
-    catch {audit=read(fs,file);audit[key] = {state:'unknown',at:now()};}
+    catch (error) {
+      audit=read(fs,file);
+      if (error.code === 'manual_hold' && publications === before) {delete audit[key];fs.unlinkSync(`${file}.${key}`);persist();throw error;}
+      audit[key] = {state:'unknown',at:now()};
+    }
     persist();
   };
   try {
@@ -315,11 +331,13 @@ async function auditMergeOwned({run, pr}, ports = {}) {
         }))();
         if(!usage.known || usage.total >= limit) return fail('daily cost limit holds the audit; no paid call was made.');
       }
+      await allowed();
       fs.mkdirSync(recordsFolder,{recursive:true,mode:0o700});
       fs.mkdirSync(dirname(localFile),{recursive:true,mode:0o700});
       audit = {schema:'pdd.audit.v1',repository:run.repo.toLowerCase(),runId:run.runId,pr:Number(pr),merge,parent,at:now(),state:'starting',chat:{agent:definition.kind,configDir:profile.configDir ?? env[definition.kind==='codex'?'CODEX_HOME':'CLAUDE_CONFIG_DIR'] ?? null,startedAt:now()}};
       try {fs.writeFileSync(file,JSON.stringify(audit),{flag:'wx',mode:0o600});}
       catch(e) {if(e.code==='EEXIST') return fail('audit already reserved.');throw e;}
+      reservedHere = true;
       persist();
       const scratch = join(run.runDir,'audits',`scratch-${pr}`), checkout = join(scratch,'repo');
       fs.mkdirSync(scratch,{recursive:true,mode:0o700});
@@ -333,6 +351,8 @@ async function auditMergeOwned({run, pr}, ports = {}) {
       else {const id=randomUUID();audit.chat.session={id};persist();args=['-p','--session-id',id,'--output-format','json','--permission-mode','bypassPermissions',...(profile.model?['--model',profile.model]:[])];}
       // No resume flag and no prior chat context. This invocation owns a new native session.
       const childEnv=Object.fromEntries(Object.entries(env).filter(([key])=>!/^(?:CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/.test(key)));
+      await allowed();
+      auditorStarted = true;
       const answer = await (ports.runAuditor ?? execute)(definition.command,args,{cwd:checkout,env:childEnv,input,timeoutMs:30*60*1000,maxBytes:8*1024*1024});
       let parsed;
       try {parsed=parseAnswer(answer,definition.kind,audit.chat.session?.id);}
@@ -363,6 +383,8 @@ async function auditMergeOwned({run, pr}, ports = {}) {
         return (await command('gh',['pr','create','--repo',run.repo,'--base',run.baseBranch,'--head',branch,'--title',`Revert #${pr}: post-merge audit BAD`,'--body',`${audit.result.summary}\n\nReverts ${audit.merge}. Audit for issue #${run.number}.\n\n<!-- pdd:audit-revert:${run.runId}:${pr} -->`],{cwd:checkout})).trim();
       });
       await effect('alert',async()=>{
+        await allowed();
+        publications++;
         const input={action:'alert',update:true,cwd,env,issue:String(run.number),kind:'decision',text:JSON.stringify({
           cause:`Post-merge audit BAD for PR #${pr} (${audit.merge}). Auditor revert recommendation: ${audit.result.revert}.`,
           tried:keepMerge
@@ -372,12 +394,13 @@ async function auditMergeOwned({run, pr}, ports = {}) {
             ? `Default: keep the merge and finish the rest on issue #${run.number}. Other option: revert on a review branch with git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.`
             : 'Review the revert PR or resolve the saved revert failure.',
         })};
-        const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
+        const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports,...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
         if(alertDeliveryState(result)!=='sent') throw Error('Alert unconfirmed');
         return 'recorded';
       });
     }
     if(audit.result.verdict === 'CONCERN' && !audit.concern) {
+      await allowed();
       const folder=join(repositoryFolder(run,ports),'concerns');fs.mkdirSync(folder,{recursive:true,mode:0o700});
       const kind=audit.result.kind, groupFile=join(folder,`${kind}.json`);
       { // Repository audit custody also serializes concern bookkeeping.
@@ -388,11 +411,16 @@ async function auditMergeOwned({run, pr}, ports = {}) {
         if(group.issue?.state==='sending') group.issue.state='unknown';
         save(fs,groupFile,group);
         if(new Set(group.records.map(r=>r.pr)).size>=2 && !group.issue) {
+          await allowed();
+          const before = publications;
           group.issue={state:'sending',at:now()};save(fs,groupFile,group);
           try {
             const value=await command('gh',['api','--method','POST',`repos/${run.repo}/issues`,'-f',`title=Autopilot audit process concern: ${kind}`,'-f',`body=${group.records.map(r=>`PR #${r.pr}, issue #${r.issue}: ${r.summary}`).join('\n')}\n\n<!-- pdd:audit-concern:${run.repo.toLowerCase()}:${kind} -->`]);
             const url=JSON.parse(value).html_url;if(!named(url)) throw Error('Issue unconfirmed');group.issue={state:'sent',url};
-          } catch {group.issue={state:'unknown'};}
+          } catch (error) {
+            if (error.code === 'manual_hold' && publications === before) {delete group.issue;save(fs,groupFile,group);throw error;}
+            group.issue={state:'unknown'};
+          }
           save(fs,groupFile,group);
         }
         audit=read(fs,file);audit.concern={state:group.issue?.state==='unknown'?'unknown':'sent',kind};persist();
@@ -400,5 +428,13 @@ async function auditMergeOwned({run, pr}, ports = {}) {
     }
     const uncertain = ['comment','reopen','revert','alert','concern'].some(k=>audit[k] && audit[k].state!=='sent');
     return {exitCode:uncertain?1:0,message:`Audit: ${audit.result.verdict}; PR #${pr}; saved ${file}${uncertain?'; follow-up outcome unknown, inspect before retry':''}.`};
-  } catch {if(audit && !audit.result) {audit.state='unknown';persist();}return fail('operation failed; retained evidence needs inspection.');}
+  } catch (error) {
+    if (error.code === 'manual_hold') {
+      if (reservedHere && !auditorStarted) {
+        fs.unlinkSync(file);fs.unlinkSync(localFile);
+        fs.rmSync(join(run.runDir,'audits',`scratch-${pr}`),{recursive:true,force:true});
+      }
+      return fail('manual issue authority holds this audit; pending work is retained.');
+    }
+    if(audit && !audit.result) {audit.state='unknown';persist();}return fail('operation failed; retained evidence needs inspection.');}
 }

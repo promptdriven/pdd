@@ -80,3 +80,12 @@ for (const observation of ['done','absent']) test(`3132 ten working slots includ
   f.owners.runs = owners.runs;
   assert.deepEqual(await checkDependencyStart(f,f.ports),{allowed:false,reason:'runs'});
 });
+
+test('3129 a hold during pane admission refuses the native automatic start', async t => {
+  const f = await setup(t);
+  let held = false;
+  f.ports.readManualHold = async () => ({known:true,held});
+  f.ports.checkPaneCapacity = async () => {held = true;};
+  assert.deepEqual(await checkDependencyStart(f,f.ports),{allowed:false,reason:'dependency'});
+  assert.equal(held,true);
+});

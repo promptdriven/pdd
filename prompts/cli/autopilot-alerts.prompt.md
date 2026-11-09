@@ -328,7 +328,16 @@ of an older failed or unconfirmed send, for example of that recovery. An open
 incident that is not delivered still counts, and the next call for it sends it
 again.
 
+Issue alerts, including the public alert command and recovery messages, use the
+GitHub reader's shared issue effect gate before incident changes and immediately
+before delivery. Refuse held or unknown authority without changing the saved
+incident or delivery history. Repository digests remain observational. With an
+existing retry/reserve wait, signal-free local alert maintenance retains its
+current behavior under that same gate's local-only rule.
+
 ## Dependencies
+
+- [Issue effect gate](issue-dependencies-github.prompt.md#issue-effect-gate): required generation and testing context for current manual authority at alert admission.
 
 - [Prompting guide](../../docs/prompting-guide.md): authoring.
 - [CLI](pdd-cli.prompt.md): generation and testing of dispatch, stdin and streams.

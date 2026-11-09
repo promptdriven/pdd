@@ -29,6 +29,7 @@ function setup(t) {
   mkdirSync(home); mkdirSync(cwd);
   const f = { dir, home, cwd, requests: [], replies: [], outputs: [], time: Date.parse('2026-11-06T10:00:00Z') };
   f.ports = {
+    readManualHold: async () => ({known:true,held:false}),
     stateRoot: join(home, 'state'), now: () => f.time, hostname: () => 'test-host',
     repository: async () => ({ nameWithOwner: 'owner/repo' }),
     http: async request => {
@@ -902,6 +903,7 @@ test('two native processes share incident custody and post the same alert once',
     import { acquireRunLock } from ${JSON.stringify(new URL('../src/workflow-runner.mjs', import.meta.url).href)};
     const result = await runAutopilotAlerts({ action: 'alert', cwd: ${JSON.stringify(f.cwd)}, env: process.env,
       issue: '41', kind: 'stuck', text: JSON.stringify({ cause: 'Required check unavailable', tried: 'Read checks', need: 'Restore check' }) }, {
+      readManualHold: async () => ({known:true,held:false}),
       stateRoot: ${JSON.stringify(f.ports.stateRoot)}, hostname: () => 'test-host', repository: async () => ({ nameWithOwner: 'owner/repo' }),
       recordLock: (...args) => { try { return acquireRunLock(...args); } catch (error) { process.send({ type: 'contended' }); throw error; } },
       http: async request => { process.send({ type: 'send' }); await new Promise(resolve => process.once('message', resolve));
@@ -931,4 +933,15 @@ test('two native processes share incident custody and post the same alert once',
     'separate processes must not both post the same open incident');
   assert.equal(Object.keys(f.record().incidents).length, 1);
   assert.deepEqual(f.record().log.map(row => row.action), ['alert', 'repeat']);
+});
+
+test('3129 public alerts keep held and unknown issues out of delivery and incident state', async t => {
+  for (const hold of [{known:true,held:true},{known:false,held:false}]) {
+    const f = setup(t);
+    await f.pdd(['autopilot','alerts','set'], DISCORD);
+    f.ports.readManualHold = async () => hold;
+    await f.alert(41,'stuck',{cause:'Held validation',tried:'Read the saved check',need:'Review the saved work'});
+    assert.equal(f.requests.length,0);
+    assert.equal(existsSync(f.recordFile()),false);
+  }
 });

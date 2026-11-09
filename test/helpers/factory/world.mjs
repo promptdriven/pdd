@@ -133,7 +133,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     const child=fork(fileURLToPath(new URL('./worker.mjs',import.meta.url)),[],{cwd:base,env:{...w.env,...env,GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:`url.${w.remote}.insteadOf`,GIT_CONFIG_VALUE_0:`https://github.com/${repository}.git`},execArgv:[],stdio:['ignore','pipe','pipe','ipc'],serialization:'advanced'});
     w.children.add(child);
     let processOut='',processErr='';child.stdout.on('data',s=>{processOut+=s;});child.stderr.on('data',s=>{processErr+=s;});
-    const request={base,cwd,packageRoot,stateRoot:w.stateRoot,stateDir:w.stateDir,layoutDirectory:w.layoutDirectory,env:{...w.env,PDD_RUNTIME_URL:w.interpreter.origin,...env},argv,stdin,operation,stateFile:w.stateFile,now:w.time};
+    const request={base,cwd,packageRoot,stateRoot:w.stateRoot,stateDir:w.stateDir,layoutDirectory:w.layoutDirectory,env:{...w.env,PDD_RUNTIME_URL:w.interpreter.origin,...env},argv,stdin,operation,stateFile:w.stateFile,now:w.time,installedPddCapabilities:w.installedPddCapabilities,suiteProgress:w.suiteProgress};
     const result=await new Promise((done,reject)=>{
       let settled=false;
       const timer=setTimeout(()=>{child.kill('SIGTERM');reject(Error(`factory command deadline: ${argv?.join(' ')??operation}`));},25000);

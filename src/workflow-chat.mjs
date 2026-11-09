@@ -1,5 +1,6 @@
+import {issueEffectAllowed} from './issue-dependencies-github.mjs';
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 9f10f4ddd37a28826f1b02b240fd3060df7e3f5d702f12e2e0f7aa774fae2161).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 6a9398f9c590010f6e2290f1ec2dec593ba9ea4166ab03c858f25f6cdd527541).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -224,13 +225,21 @@ async function bindAgentName(herdr, paneId, name) {
   await herdr(['agent', 'rename', paneId, name]);
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
+// Every worker submission crosses this boundary after all waits and hooks.
+export async function submitWorker(run, ports, action) {
+  if (ports.personDirected !== true && (run?.automaticOrigin || ports.manualHold)
+      && !await issueEffectAllowed({repository:run?.repo,issue:run?.number,cwd:run?.sourceRoot ?? run?.root,localOnly:true},ports))
+    throw problem('workflow_progress_refused','Manual issue authority holds worker delivery.');
+  return action();
+}
+
 async function launchInPane(herdr, paneId, options, { run, env, ports = {}, beforeLaunch }) {
   removeStaleLoginFiles(run.runDir);
   const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
   try {
     const command = chatCommand({ ...options, ...launch });
     await beforeLaunch?.();
-    const reply = await herdr(['pane', 'run', paneId, command]);
+    const reply = await submitWorker(run, ports, () => herdr(['pane', 'run', paneId, command]));
     if (options.namingChat) {
       const live = await chatSession(options.namingChat, {...ports, run, env, herdr});
       if (options.retainNaming !== false) {
@@ -302,7 +311,8 @@ export async function startChat({ run, area, message }, ports = {}) {
   try { await launchInPane(herdr, layout.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir, ...launchSettings(run, chat) }, { run, env, ports }); }
   catch (error) {
     const failed = problem(error.code ?? 'herdr_failed', error.message);
-    failed.chat = { ...chat, startUnconfirmed: true };
+    failed.chat = error.code === 'workflow_progress_refused'
+      ? {...chat,state:'failed',endedAt:now(),code:error.code} : {...chat,startUnconfirmed:true};
     throw failed;
   }
   return chat;
@@ -385,13 +395,14 @@ export async function sendToChat(chat, text, ports = {}) {
     } catch { return { ok: false, code: 'chat_target_changed' }; }
     if (retry && remaining() <= 0) return { ok: false, code: 'chat_still_starting' };
     const withinStartup = remaining() > 0;
-    try { await herdr(['agent', 'prompt', chat.paneId, text]); return { ok: true }; }
+    try { await submitWorker(ports.run, ports, () => herdr(['agent', 'prompt', chat.paneId, text])); return { ok: true }; }
     catch (error) {
       const code = error.code ?? 'herdr_failed';
       if (code === 'agent_not_found') {
         if (!await wait()) return { ok: false, code: withinStartup || retry ? 'chat_still_starting' : code };
         retry = true; continue;
       }
+      if (code === 'workflow_progress_refused') return {ok:false,code};
       return { ok: false, code, ...(code === 'agent_blocked' ? { reason: dialogReason() } : { uncertain: true }) };
     }
   }
@@ -783,9 +794,14 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
     // A missing agents.json entry refuses before the resume request.
     savedAgentEntry(run, run.agent, env);
     // Herdr sees the agent only after it starts; the shared grace counts from this resume request.
+    const beforeResume = structuredClone(chat);
     chat.resumedAt = now(); applyLifecycle(chat, { state: 'starting' });
     try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir, ...launchSettings(run, chat), ...resumeInput(run, chat, resumeMessage) }, { run, env, ports, beforeLaunch: ports.beforeLaunch }); }
-    catch (error) { chat.startUnconfirmed = true; throw error; }
+    catch (error) {
+      if (error.code === 'workflow_progress_refused') {for(const key of Object.keys(chat)) delete chat[key]; Object.assign(chat,beforeResume);}
+      else chat.startUnconfirmed = true;
+      throw error;
+    }
     resumed = true;
   }
   if (!ports.background) await herdr(['tab', 'focus', chat.tabId]);
