@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 3f6fecd07a8071c6c60e8b5547ddd53a8b85f653582db120764986953182dc4b).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: ecbcb6e63811219e850b41ab4927f843a2fb3325996f50f43c80ba8701dee107).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -242,8 +242,16 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
   const iface = prompt.interface, current = iface.prose_sha256 === hash;
   if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
   const {contractCoverage,coverageView}=await import('./interface-draft.mjs');
-  const coverage=contractCoverage({root,path,text,iface});
-  for (const row of [...describeInterface(path, iface), ...coverageView(coverage), ...(coverage.some(row=>row.status!=='mapped') ? ['Coverage decision: amend the prose, amend the declaration, or accept the authored contract as written. Answer yes below only to accept all quoted sentences as written.'] : []), ...interfaceView(root,path,text), ...proseView(root, path, text)]) line(stdout, row);
+  let coverageLines;
+  try {
+    const coverage=contractCoverage({root,path,text,iface});
+    coverageLines=[...coverageView(coverage), ...(coverage.some(row=>row.status!=='mapped') ? ['Coverage decision: amend the prose, amend the declaration, or accept the authored contract as written. Answer yes below only to accept all quoted sentences as written.'] : [])];
+  } catch (error) {
+    if (error.code !== 'interface-contract-invalid' || error.pointer !== '/dependencies') throw error;
+    coverageLines=[`coverage-context-unavailable: ${error.message}`,
+      'Coverage decision: repair the declared context, or accept the authored declaration and prose with incomplete coverage evidence. Answer yes below only to accept this coverage gap.'];
+  }
+  for (const row of [...describeInterface(path, iface), ...coverageLines, ...interfaceView(root,path,text), ...proseView(root, path, text)]) line(stdout, row);
   if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
   if (said === undefined) stdout.write(`Approve ${path}? y/n `);
   const answer = said === undefined ? await answers.ask() : "yes";

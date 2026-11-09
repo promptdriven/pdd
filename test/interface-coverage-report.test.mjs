@@ -167,3 +167,23 @@ test('3130 integration: a scalar type requirement cannot borrow the first of sev
   assert.equal(r.code,0);const row=r.row.prose_coverage.find(row=>row.sentence===claim);
   assert.deepEqual(row.pointers,[],'AMBIGUOUS_TYPE_REQUIREMENT_BORROWS_FIRST_TRANSPORT');assert.equal(row.status,'unmapped');
 });
+
+
+for (const context of ['fragment', 'cycle']) test('integration 013: person approval exposes unavailable coverage context: '+context, async t => {
+  const dependency='[Meaning](../contracts/meaning.md'+(context==='fragment'?'#rules':'')+').';
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n'+dependency)+block(value);
+  const meaning='# Meaning\n\n## Rules\n\nRetain the exact formatter contract.\n'
+    +(context==='cycle'?'\n## Dependencies\n\n[Formatter](../'+PLACE+').\n':'');
+  const f=setup(t,text,{'contracts/meaning.md':meaning});
+  const stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage gap.'},
+    {stdout,stderr,interactive:false});
+  assert.equal(code,0,stderr.text);
+  assert.ok(stdout.text.includes('coverage-context-unavailable'));
+  assert.ok(stdout.text.includes('/dependencies'));
+  const after=JSON.parse(interfaceBlocks(readFileSync(join(f.repo,PLACE),'utf8'))[0][1]);
+  assert.equal(after.status,'approved');
+  assert.deepEqual(after.entries,value.entries);
+  assert.equal(JSON.parse(readFileSync(join(f.repo,'.git/pdd/approvals.json'),'utf8')).approvals.length,1);
+});
