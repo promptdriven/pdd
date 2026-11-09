@@ -1,0 +1,55 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/bug-findings-record.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A successful reproduction retains the exact cause, flaw and class and each discovered relation with its actual quote and source in the run and PR 1, including after refresh."
+    },
+    {
+      "id": "AC2",
+      "text": "An empty relation search is recorded honestly; a failed reproduction never invents a cause."
+    },
+    {
+      "id": "AC3",
+      "text": "Agent findings remain inert in PR text and never become check results."
+    }
+  ],
+  "cases": [
+    {
+      "id": "record",
+      "given": "A successful reproduction and two discovered issues with actual source quotes",
+      "required_observation": "Both requested lines and both classifications survive run storage and PR 1 refresh."
+    },
+    {
+      "id": "empty",
+      "given": "A successful reproduction found no other issues",
+      "required_observation": "The record and PR 1 distinguish an empty search from an unavailable search."
+    },
+    {
+      "id": "failure",
+      "given": "Reproduction fails",
+      "required_observation": "No guessed cause is recorded."
+    },
+    {
+      "id": "inert",
+      "given": "Findings contain Markdown, mentions, closing words and ownership markers",
+      "required_observation": "Rendering does not notify, forge ownership or close an issue; check results remain unchanged."
+    },
+    {
+      "id": "intake",
+      "given": "A valid bound findings file on successful bug reproduction with a needs effect",
+      "required_observation": "Done invokes the relation boundary once, saves the finding and receipt, and PR 1 retains both after refresh."
+    },
+    {
+      "id": "malformed",
+      "given": "A malformed, mismatched or unsafe findings file",
+      "required_observation": "Done refuses before effects and retains prior observations."
+    },
+    {
+      "id": "legacy",
+      "given": "A bug run has no findings input",
+      "required_observation": "Legacy completion is unchanged."
+    }
+  ]
+}
