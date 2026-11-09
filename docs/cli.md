@@ -1118,6 +1118,10 @@ preview uses that same selection and shows native omissions with their reasons.
 M includes missing, stale and invalid blocks. Checkable means a valid current full
 or partial declaration; it does not mean that all module behavior has passed.
 
+The installed interface drafting capability clears a saved Autopilot wait for
+`capability:route-interface-drafting`. It wakes the saved session through the
+ordinary continuation route. It does not approve a prompt or a person gate.
+
 `pdd interface draft --all` selects workspace prompts and excludes nested fixture
 projects. Existing blocks stay unchanged. Each result includes local lint findings.
 A clean local lint is not a server lint or a prompt check. Setup offers this command

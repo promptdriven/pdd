@@ -98,12 +98,13 @@ test('3112 explicit route record preserves its identity and rejects mixed park m
   }
 });
 
-test('3112 installed capability wakes once; package versions and issue closure do not wake', async t => {
+for (const native of [false, true]) test(`3112 installed capability wakes once; package versions and issue closure do not wake (native=${native})`, async t => {
   const {f, tick, ports, state, warnings} = await setup(t);
   ask(f, drafting); const original = f.record(); await tick();
   ports.packageVersion = '999.0.0'; ports.blockerCleared = async () => true;
   await tick(); assert.equal(f.record().parking.phase, 'parked');
-  ports.installedPddCapabilities = ['route-interface-drafting'];
+  if (native) delete ports.installedPddCapabilities;
+  else ports.installedPddCapabilities = ['route-interface-drafting'];
   await tick();
   assert.equal(f.record().parking, undefined);
   assert.equal(f.record().question, undefined);

@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 63966eab496da71baf5527e3ea2d87bee48f8f6327586e42da7ee58045852190).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1fdebeaf1286e33b43acafbb13b558159e666cf8634495089553ff49ced6e979).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -47,7 +47,7 @@ import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from '
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
-export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry']);
+export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry', 'route-interface-drafting']);
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
