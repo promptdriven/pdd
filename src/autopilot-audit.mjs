@@ -118,6 +118,16 @@ async function auditMergeOwned({run, pr}, ports = {}) {
         const limit = config.autopilot.auditTokenLimit;
         if(!Number.isFinite(limit) || limit < 0) return fail('invalid auditTokenLimit.');
         const usage = await (ports.dailyUsage ?? (async () => {
+          const unknown={known:false,total:0};
+          let index;
+          try {index=read(fs,join(stateDirFor(ports),'runs.json'));} catch {return unknown;}
+          if(!Array.isArray(index?.runs) || index.runs.length>=200
+            || !index.runs.some(row=>row?.runDir===run.runDir)) return unknown;
+          for(const row of index.runs.filter(r=>r?.repo?.toLowerCase()===run.repo.toLowerCase())) {
+            if(!named(row.runDir)) return unknown;
+            let record;try {record=read(fs,join(row.runDir,'status.json'));} catch {return unknown;}
+            if(!record || record.repo?.toLowerCase()!==run.repo.toLowerCase()) return unknown;
+          }
           const runs = (await allRuns({cancelled:true},ports)).filter(r=>r.repo?.toLowerCase()===run.repo.toLowerCase());
           const measured = runs.map(r => {try {return updateRunCosts(r.runDir,latest => {
             if(latest.runId!==r.runId || latest.startedAt!==r.startedAt) throw Error('Cost attempt changed');

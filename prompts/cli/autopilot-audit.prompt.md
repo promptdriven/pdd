@@ -67,7 +67,11 @@ lock, including across PRs and independent local clones. Key this custody and
 concern records by lowercase repository under the machine workflow state root,
 not by Git common directory. Discover cap costs with allRuns in that state root
 and filter by repository; verify runId/startedAt before refreshing a live record.
-Retain archived snapshots when a path has another attempt. Use the native dead-owner recovery lock through an
+Retain archived snapshots when a path has another attempt. A missing, malformed
+or saturated (200 entries) machine run index cannot establish complete cost
+coverage and holds a capped audit. Missing indexed records for this repository
+or absence of the current run in the index also hold; never treat missing
+discovery as measured zero. Use the native dead-owner recovery lock through an
 injected acquireAuditLock port; it is not the workflow mutation lock. A second
 caller waits for a later tick, never sends an early BAD alert. The concern file
 uses that same custody, so a crash cannot leave a separate permanent lock. Separate

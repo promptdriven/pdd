@@ -1151,7 +1151,9 @@ The default is on. Codex and Claude auditors start a fresh native session using
 the run's configured account and model. Unsupported agents remain pending.
 Auditor sessions count in the issue cost ledger and the provider's account
 limits. Optional `autopilot.auditTokenLimit` sets a nonnegative measured token
-cap for this repository's last day; unavailable usage holds a capped audit.
+cap for this repository's last day; unavailable usage holds a capped audit. A
+missing, damaged or full machine run index also holds it because cost coverage
+is unknown.
 Codex limit reads that are unknown or reached hold without a paid call.
 
 BAD creates a unique revert branch and a PR against the saved base. It never

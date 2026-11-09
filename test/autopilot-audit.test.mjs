@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync,writeFileSync,mkdirSync,readdirSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,readdirSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {runPdd} from '../src/pdd-cli.mjs';
@@ -35,12 +35,12 @@ async function world(t) {
     if(file==='git' && ['clone','checkout','switch','push'].includes(args[0]))return {code:0,stdout:''};
     if(file==='git' && args[0]==='rev-list')return {code:0,stdout:merge+' '+parent+(w.squash?'':' '+'c'.repeat(40))};
     if(file==='git' && args.includes('revert')) {if(w.conflict) return {code:1,stdout:'',stderr:'conflict'};return {code:0,stdout:''};}
-    return f.ports.execFile(file,args,options);
+    const reply=await f.ports.execFile(file,args,options);return {code:reply.code??0,...reply};
   };
   w.check=async(pr=23)=>{
     const stdout={text:'',write(s){this.text+=s;}},stderr={text:'',write(s){this.text+=s;}};
     const code=await runPdd(['autopilot','audit','17',String(pr)],{cwd:f.source,env:f.ports.env,stdout,stderr,autopilotLauncherPorts:{...f.ports,run:execute,
-      agentDefinitions:()=>[{kind:w.agent,name:w.agent,command:'configured-codex',env:{}}],codexLimits:async()=>({state:w.limit}),dailyUsage:async()=>w.usage,
+      agentDefinitions:()=>[{kind:w.agent,name:w.agent,command:'configured-codex',env:{}}],codexLimits:async()=>({state:w.limit}),...(w.nativeUsage?{}:{dailyUsage:async()=>w.usage}),
       runAuditor:async(command,args,options)=>{w.launches.push({command,args,options});await w.delay?.();if(w.agent==='claude') return {code:0,stdout:JSON.stringify({session_id:w.session,result:JSON.stringify(w.answer)})};return {code:w.providerExit??0,stdout:JSON.stringify({type:'thread.started',thread_id:w.session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:w.raw??JSON.stringify(w.answer)}})+'\n'};},
       sendAlert:async input=>{w.alerts.push(input);return {exitCode:0};},
     }});
@@ -48,6 +48,9 @@ async function world(t) {
   };
   w.config=value=>writeFileSync(join(f.source,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',...value}}));
   return w;
+}
+async function atLaunch(ready,pending) {
+  assert.equal(await Promise.race([ready.then(()=>true),pending.then(()=>false)]),true,'an automatic merge must start its auditor');
 }
 const comments = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.some(a=>a.endsWith('/comments')));
 
@@ -60,7 +63,7 @@ test('3111 automatic merged PR launches one fresh auditor, saves pinned evidence
 });
 test('3111 concurrent calls cannot start a second auditor',async t=>{
   const w=await world(t);let release,started;const ready=new Promise(r=>{started=r;});w.delay=()=>new Promise(r=>{release=r;started();});
-  const first=w.check();await ready;const second=await w.check();assert.equal(second.code,1);release();assert.equal((await first).code,0);assert.equal(w.launches.length,1);
+  const first=w.check();await atLaunch(ready,first);const second=await w.check();assert.equal(second.code,1);release();assert.equal((await first).code,0);assert.equal(w.launches.length,1);
 });
 for(const [name,configure] of [
   ['unmerged',w=>{w.merged=false;}],['foreign target',w=>{w.repo='other/repo';}],['wrong base',w=>{w.targetBase='other';}],
@@ -124,7 +127,7 @@ test('3111 auditor native token usage enters the cost ledger once',async t=>{
 test('3111 repository custody serializes admission of distinct PR audits',async t=>{
   const w=await world(t);w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
   w.config({auditTokenLimit:1000});let release,started;const ready=new Promise(r=>{started=r;});w.delay=()=>new Promise(r=>{release=r;started();});
-  const first=w.check();await ready;assert.equal((await w.check(24)).code,1);assert.equal(w.launches.length,1);release();assert.equal((await first).code,0);
+  const first=w.check();await atLaunch(ready,first);assert.equal((await w.check(24)).code,1);assert.equal(w.launches.length,1);release();assert.equal((await first).code,0);
 });
 test('3111 saved merge mismatch refuses before a paid auditor',async t=>{
   const w=await world(t);w.run.pr[0].mergeCommit='c'.repeat(40);writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
@@ -161,5 +164,14 @@ test('3111 auditor keeps the saved model and removes caller session markers',asy
 test('3111 independent clones of one repository share audit admission custody',async t=>{
   const first=await world(t),second=await world(t);second.ports.stateDir=first.ports.stateDir;
   assert.notEqual(first.run.commonDir,second.run.commonDir);let release,started;const ready=new Promise(r=>{started=r;});first.delay=()=>new Promise(r=>{release=r;started();});
-  const pending=first.check();await ready;assert.equal((await second.check()).code,1);assert.equal(second.launches.length,0);release();assert.equal((await pending).code,0);
+  const pending=first.check();await atLaunch(ready,pending);assert.equal((await second.check()).code,1);assert.equal(second.launches.length,0);release();assert.equal((await pending).code,0);
+});
+
+
+for(const kind of ['missing','malformed','saturated'])test(`3111 ${kind} cost index cannot admit an audit as zero cost`,async t=>{
+  const w=await world(t);w.config({auditTokenLimit:1000});w.nativeUsage=true;const file=join(w.ports.stateDir,'runs.json');
+  if(kind==='missing')unlinkSync(file);
+  else if(kind==='malformed')writeFileSync(file,'{');
+  else writeFileSync(file,JSON.stringify({version:1,runs:Array.from({length:200},(_,n)=>({number:n+1,repo:w.run.repo,runDir:join(w.base,`absent-${n}`,'pdd/runs/17')}))}));
+  const out=await w.check();assert.equal(out.code,1,out.text);assert.equal(w.launches.length,0);
 });
