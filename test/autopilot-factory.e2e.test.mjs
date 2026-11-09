@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {proseSha256} from '../src/runtime-preflight.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
-import {existsSync,readdirSync,readFileSync} from 'node:fs';
+import {existsSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {factoryWorld,put,readJson,valuePrompt} from './helpers/factory/world.mjs';
 
@@ -190,4 +190,61 @@ test('factory interpreter: a refused check remains a refusal and sends nothing o
   await w.command(['workflow','park','--interpreter','--reason','Interpreter refused the request; no verdict.'],{cwd:w.record().root});
   const posts=w.interpreter.posts.length;await w.tick();await w.tick();
   assert.equal(w.interpreter.posts.length,posts);assert.equal(w.github.prs.length,0);assert.equal(w.record().parking?.blocker?.kind,'interpreter');assert.deepEqual(w.leadActions,[]);
+});
+
+
+test('factory 9: automatic merge starts a fresh audit and saves its verdict once',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
+  const pr=w.github.prs[0];
+  await w.tick();w.messages();
+  assert.ok(w.packets.some(p=>p.timeRules?.some(r=>r.kind==='post-merge-audit' && r.number===17 && r.pr===pr.number)),'closed issue merge must remain offered for audit');
+  await w.command(['autopilot','audit','17',String(pr.number)],{actor:'coordinator'});
+  const saved=readJson(join(w.record().runDir,'audits',`${pr.number}.json`));
+  assert.equal(saved.result.verdict,'OK');assert.equal(saved.merge,pr.mergeCommit.oid);assert.equal(saved.comment.state,'sent');
+  assert.equal(w.auditCalls.length,1);assert.equal(w.auditCalls[0].observations[0].code,1);assert.equal(w.auditCalls[0].observations[1].code,0);
+  assert.ok(!w.record().chats.some(c=>c.session?.id===saved.chat.session.id));
+  const before=w.github.issues.get(17).comments.length;
+  await w.command(['autopilot','audit','17',String(pr.number)],{actor:'coordinator'});
+  assert.equal(w.auditCalls.length,1);assert.equal(w.github.issues.get(17).comments.length,before);assert.deepEqual(w.leadActions,[]);
+});
+
+
+test('factory 10: BAD audit creates a real revert PR and never changes the base',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
+  const merged=w.git(w.remote,'rev-parse','main');w.auditVerdict='BAD';
+  await w.command(['autopilot','audit','17',String(w.github.prs[0].number)],{actor:'coordinator'});
+  const saved=readJson(join(w.record().runDir,'audits',`${w.github.prs[0].number}.json`)),revert=w.github.prs[1];
+  assert.equal(saved.result.verdict,'BAD');assert.equal(saved.revert.state,'sent');assert.equal(revert.state,'OPEN');assert.equal(revert.baseRefName,'main');
+  assert.match(revert.headRefName,/^pdd\/revert-/);assert.equal(w.git(w.remote,'rev-parse','main'),merged);
+  assert.equal(w.git(w.remote,'show',`${revert.headRefName}:value.mjs`),'export const value = 1;');assert.equal(w.alerts.filter(a=>a.kind==='decision').length,1);
+  await w.command(['autopilot','audit','17',String(w.github.prs[0].number)],{actor:'coordinator'});
+  assert.equal(w.github.prs.length,2);assert.equal(w.auditCalls.length,1);assert.equal(w.alerts.filter(a=>a.kind==='decision').length,1);assert.deepEqual(w.leadActions,[]);
+});
+
+
+test('factory 11: damaged audit evidence holds while new work is delivered',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
+  const pr=w.github.prs[0];
+  await w.command(['autopilot','audit','17',String(pr.number)],{actor:'coordinator'});
+  const comments=w.github.issues.get(17).comments.length;
+  writeFileSync(join(w.record().runDir,'audits',`${pr.number}.json`),'{');
+  const held=await w.command(['autopilot','audit','17',String(pr.number)],{actor:'coordinator',allowFailure:true});
+  assert.equal(held.code,1);assert.equal(w.auditCalls.length,1);
+  w.messages();const before=w.packets.length;
+  w.github.add(18,{title:'Next value task',body:'Inspect the value.',created:w.time,updated:w.time});
+  for(let attempt=0;attempt<2;attempt++) {
+    const tick=await w.command(undefined,{operation:'tick',actor:'timer',allowFailure:true})
+      .catch(error=>({code:1,stderr:error.message}));
+    assert.equal(tick.code,0,'AUDIT_SCAN_INTAKE: damaged audit must allow the tick to complete');
+    await w.reviewDependencies();
+  }
+  w.messages();const packets=w.packets.slice(before);
+  assert.ok(packets.some(p=>p.issues.some(i=>i.number===18 && i.eligible)),
+    'AUDIT_SCAN_INTAKE: damaged audit must allow selection and coordinator delivery');
+  assert.ok(packets.every(p=>!p.timeRules?.some(r=>r.kind==='post-merge-audit' && r.number===17 && r.pr===pr.number)));
+  assert.deepEqual(w.state().auditHolds,[{number:17,pr:pr.number,cause:'audit-evidence-invalid'}]);
+  const status=await w.command(['autopilot','status'],{actor:'operator'});
+  assert.match(status.stdout,/audit-evidence-invalid/);
+  assert.equal(w.auditCalls.length,1);assert.equal(w.github.issues.get(17).comments.length,comments);
+  assert.deepEqual(w.leadActions,[]);
 });

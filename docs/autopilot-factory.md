@@ -42,6 +42,7 @@ the same merge.
 
 | Group | Required result |
 |---|---|
+| Post-merge audit | A closed issue still offers its pending audit. One fresh scripted auditor reproduces parent failure and merge success; its saved OK and issue comment survive a repeated command. BAD creates a real revert branch and open PR, with one alert and an unchanged base. |
 | Small change, bug, feature | One or two PRs reach merge; PR 2 starts stacked on PR 1. |
 | Restart | Claim, allocation, completed steps and chat session survive; no duplicate publication. |
 | Lost verdict | Timer ticks send nothing again; one explicit synthetic person decision permits one resend. |

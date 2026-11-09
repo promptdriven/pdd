@@ -98,6 +98,17 @@ Merge only when all of these are true:
 After a PR target change, and right before each merge, require exit 0 from `pdd autopilot check-base RUN PR` (see pdd-merge). Then run `pdd workflow status N`: pdd refreshes the top of both PRs (status line, checks and merge order).
 
 
+## Post-merge audit
+
+After each confirmed automatic merge, run `pdd autopilot audit RUN PR` from the
+source checkout, including after PR 1. The native command launches one fresh
+auditor using [the fixed brief](../../../docs/autopilot-audit.md), saves
+OK/CONCERN/BAD, posts once and owns revert PRs, alerts and repeated process
+concerns. Do not launch another auditor or repeat an uncertain external effect
+by hand. A disabled audit makes no call. A held audit stays pending for a later
+tick. Merge and claim completion must not erase it. Follow `post-merge-audit`
+tick rules with that command even for a completed run or closed issue.
+
 ## Outcomes and retries
 
 Outcomes: merged, dropped, stuck, or one question. Retry a call at most 3 times, only for HTTP 408, 429, 5xx or a network error. Never send a failed check again. Keep `--max-calls` and strict mode. Write each decision on the issue or PR. After a restart, read the issue and PR first and do not redo finished steps.

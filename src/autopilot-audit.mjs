@@ -1,0 +1,284 @@
+// Generated from prompts/cli/autopilot-audit.prompt.md.
+import * as nativeFs from 'node:fs';
+import {join, dirname} from 'node:path';
+import {createHash, randomUUID} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+import {runAgentProcess} from './agent-adapters.mjs';
+import {loadAgentDefinitions} from './agent-config.mjs';
+import {readCodexLimits} from './codex-limits.mjs';
+import {runAutopilotAlerts} from './autopilot-alerts.mjs';
+import {recordCostGithub, costReport} from './cost-ledger.mjs';
+import {allRuns, readRun, stateDirFor, updateRunCosts} from './workflow-runs.mjs';
+import {launchProfile} from './workflow-launch-profile.mjs';
+import {expandHome} from './workflow-chat.mjs';
+import {acquireRunLock} from './workflow-runner.mjs';
+
+const sha = v => typeof v === 'string' && /^[0-9a-f]{40,64}$/i.test(v);
+const named = v => typeof v === 'string' && v.trim().length > 0;
+const read = (fs, path, fallback = null) => {
+  try {return JSON.parse(fs.readFileSync(path, 'utf8'));}
+  catch (e) {if(e.code === 'ENOENT') return fallback; throw e;}
+};
+const repositoryFolder=(run,ports)=>ports.auditStateRoot ?? join(stateDirFor(ports),'autopilot-audits',createHash('sha256').update(run.repo.toLowerCase()).digest('hex').slice(0,20));
+const fileFor = (run, pr) => join(run.runDir, 'audits', `${pr}.json`);
+const auditIdentity = audit => createHash('sha256').update(JSON.stringify([audit.runId,audit.pr,audit.merge])).digest('hex');
+const validAudit = audit => audit?.schema === 'pdd.audit.v1' && named(audit.runId)
+  && Number.isSafeInteger(audit.pr) && audit.pr > 0 && sha(audit.merge) && sha(audit.parent)
+  && audit.chat && typeof audit.chat === 'object' && !Array.isArray(audit.chat);
+function auditRecords(fs, folder, local = false) {
+  let names;
+  try {names=fs.readdirSync(folder);} catch(e) {if(e.code==='ENOENT') return [];throw e;}
+  return names.filter(n=>local ? /^\d+\.json$/.test(n) : n.endsWith('.json')).map(name=>{
+    const audit=read(fs,join(folder,name));
+    if(!validAudit(audit) || local && audit.pr!==Number(name.slice(0,-5))) throw Error('Audit evidence unavailable');
+    return audit;
+  });
+}
+const finished = a => a?.result && a.comment && (a.result.verdict !== 'BAD' || a.revert && a.alert)
+  && (a.result.verdict !== 'CONCERN' || a.concern);
+export function pendingAudits({run}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  if (!run?.automaticOrigin || !run.runDir) return [];
+  const merged = (run.pr ?? []).filter(pr => pr.state === 'merged');
+  const hold = (pr, cause) => ports.onAuditHold?.({pr: pr.number, cause});
+  try { fs.readdirSync(join(run.runDir, 'audits')); }
+  catch (error) {
+    if (error.code !== 'ENOENT') {
+      for (const pr of merged) hold(pr, 'audit-folder-unreadable');
+      return [];
+    }
+  }
+  const missing = Symbol('missing');
+  return merged.filter(pr => {
+    let a;
+    try { a = read(fs, fileFor(run, pr.number), missing); }
+    catch (error) {
+      hold(pr, error instanceof SyntaxError ? 'audit-evidence-invalid' : 'audit-evidence-unreadable');
+      return false;
+    }
+    if (a === missing) return true;
+    if (!validAudit(a) || a.pr !== pr.number || !['starting','recorded','unknown'].includes(a.state)
+      || a.state === 'recorded' && !validResult(a.result)) {
+      hold(pr, 'audit-evidence-invalid');
+      return false;
+    }
+    if (a.runId !== run.runId) { hold(pr, 'audit-attempt-mismatch'); return false; }
+    return a.result && !finished(a);
+  }).map(pr => pr.number);
+}
+function save(fs, file, value) {
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {fs.writeFileSync(tmp, JSON.stringify(value, null, 2)+'\n', {mode:0o600});fs.renameSync(tmp,file);}
+  finally {try {fs.unlinkSync(tmp);} catch {}}
+}
+function parseAnswer(answer, kind, sessionId) {
+  if(kind === 'claude') {
+    const envelope = JSON.parse(answer.stdout);
+    return {sessionId: envelope.session_id ?? sessionId, result: envelope.is_error ? null : JSON.parse(envelope.result)};
+  }
+  const rows = answer.stdout.trim().split('\n').map(line => JSON.parse(line));
+  return {sessionId: rows.find(r => r.type === 'thread.started')?.thread_id,
+    result: JSON.parse(rows.filter(r => r.type === 'item.completed' && r.item?.type === 'agent_message').at(-1)?.item.text ?? 'null')};
+}
+function validResult(r) {
+  return r && ['OK','CONCERN','BAD'].includes(r.verdict) && named(r.summary) && named(r.evidence)
+    && typeof r.revert === 'boolean' && typeof r.kind === 'string'
+    && (r.verdict !== 'CONCERN' || /^[a-z][a-z0-9-]{0,79}$/.test(r.kind));
+}
+export async function auditMerge(input, ports = {}) {
+  const fs=ports.fs ?? nativeFs, run=input?.run;
+  if(!run?.commonDir || !run?.runDir) return {exitCode:1,message:'Post-merge audit: saved run is unavailable.'};
+  const folder=repositoryFolder(run,ports);
+  let release;
+  try {
+    fs.mkdirSync(folder,{recursive:true,mode:0o700});
+    release=(ports.acquireAuditLock ?? acquireRunLock)(folder,'operation.lock');
+  } catch {return {exitCode:1,message:'Post-merge audit: audit custody is busy or unavailable; retry later.'};}
+  try {return await auditMergeOwned(input,ports);}
+  catch {return {exitCode:1,message:'Post-merge audit: saved settings or evidence are unavailable; inspect before retry.'};}
+  finally {release();}
+}
+async function auditMergeOwned({run, pr}, ports = {}) {
+  const fs = ports.fs ?? nativeFs, now = ports.now ?? Date.now, env = {...(ports.env ?? process.env)};
+  const fail = message => ({exitCode:1,message:`Post-merge audit: ${message}`});
+  if(!run?.automaticOrigin || !/^[\w.-]+\/[\w.-]+$/.test(run.repo ?? '') || !/^[1-9]\d*$/.test(String(pr))
+    || !(run.pr ?? []).some(p => p.number === Number(pr)) || !named(run.baseBranch)
+    || run.baseBranch.startsWith('-') || run.baseBranch.startsWith('refs/')) return fail('saved automatic run or PR is unavailable.');
+  const cwd = run.sourceRoot ?? run.root, localFile = fileFor(run,pr), profile=launchProfile(run);
+  const recordsFolder=join(repositoryFolder(run,ports),'records');
+  profile.configDir=expandHome(profile.configDir,env);
+  const config = await (ports.readConfig ?? (root => read(fs,join(root,'pdd.json'),{})))(cwd);
+  if(config.autopilot?.audit === false) return {exitCode:0,message:'Post-merge audit disabled for this repository.'};
+  if(config.autopilot?.mode !== 'auto') return fail('repository is not in auto mode.');
+  const execute = ports.execFile ?? runAgentProcess;
+  const command = async (program,args,options={}) => {
+    if(program === 'gh') recordCostGithub(run.runDir,{at:now()},{fs});
+    const result = await execute(program,args,{cwd,env,timeoutMs:120000,maxBytes:8*1024*1024,...options});
+    if(result.code !== undefined && result.code !== 0) throw Error('External operation did not confirm success.');
+    return result.stdout;
+  };
+  // Validate all earlier evidence before a launch, including the session-reuse inventory.
+  const localRecords=auditRecords(fs,dirname(localFile),true);
+  const sharedRecords=auditRecords(fs,recordsFolder);
+  if(sharedRecords.some(a=>a.repository!==run.repo.toLowerCase())) return fail('shared audit repository differs.');
+  let audit=read(fs,localFile);
+  if(audit && audit.runId !== run.runId) return fail('audit belongs to another run attempt.');
+  const saved=run.pr.find(p=>p.number===Number(pr));
+  const savedMerge=saved.mergeCommit?.oid ?? saved.mergeCommit ?? saved.mergeSha;
+  let merge=audit?.merge;
+  if(!audit) {
+    const pull = JSON.parse(await command('gh',['api',`repos/${run.repo}/pulls/${pr}`]));
+    if(pull.number !== Number(pr) || pull.merged !== true || pull.base?.ref !== run.baseBranch
+      || pull.base?.repo?.full_name?.toLowerCase() !== run.repo.toLowerCase() || !sha(pull.merge_commit_sha)) return fail('the merged PR and saved base could not be verified.');
+    merge=pull.merge_commit_sha;
+  }
+  if(savedMerge && savedMerge!==merge) return fail('saved merge identity differs from GitHub.');
+  const file=join(recordsFolder,`${auditIdentity({runId:run.runId,pr:Number(pr),merge})}.json`);
+  const shared=read(fs,file);
+  if(shared) audit=shared;
+  const persist = () => {
+    // Shared authority is committed first. Local copies cannot authorize effects.
+    save(fs,file,audit);
+    fs.mkdirSync(dirname(localFile),{recursive:true,mode:0o700});save(fs,localFile,audit);
+  };
+  if(audit) {
+    if(!validAudit(audit) || audit.runId!==run.runId || audit.pr!==Number(pr) || audit.merge!==merge) return fail('audit identity differs.');
+    fs.mkdirSync(recordsFolder,{recursive:true,mode:0o700});
+    audit.repository=run.repo.toLowerCase();
+    if(!shared) for(const key of ['comment','revert','alert']) {
+      try {fs.statSync(`${localFile}.${key}`);if(!audit[key])audit[key]={state:'unknown',at:now()};}
+      catch(e) {if(e.code!=='ENOENT')throw e;}
+    }
+    persist();
+    if(!audit.result) return fail('auditor outcome is unknown; inspect saved evidence before any retry.');
+  }
+  // Each effect owns an exclusive reservation. An uncertain external reply is never retried.
+  const effect = async (key, action) => {
+    audit=read(fs,file);
+    if(audit[key]) return;
+    try {fs.writeFileSync(`${file}.${key}`, '', {flag:'wx',mode:0o600});}
+    catch(e) {if(e.code === 'EEXIST') {audit=read(fs,file);if(!audit[key]) {audit[key]={state:'unknown',at:now()};persist();}return;}throw e;}
+    audit[key] = {state:'sending',at:now()};persist();
+    try {const value=await action();audit=read(fs,file);audit[key] = {state:'sent',at:now(),value};}
+    catch {audit=read(fs,file);audit[key] = {state:'unknown',at:now()};}
+    persist();
+  };
+  try {
+    if(!audit) {
+      const commit = JSON.parse(await command('gh',['api',`repos/${run.repo}/commits/${merge}`]));
+      const parent = commit.parents?.[0]?.sha;
+      if(commit.sha !== merge || !sha(parent)) return fail('first parent is unavailable.');
+      const definitions = await (ports.agentDefinitions ?? loadAgentDefinitions)({cwd,env});
+      const definition = definitions.find(d => d.kind === run.agent && (!run.agentDefinition?.name || d.name === run.agentDefinition.name));
+      if(!definition || !['codex','claude'].includes(definition.kind)) return fail('configured auditor agent is unavailable; audit remains pending.');
+      Object.assign(env,definition.env);
+      if(profile.configDir) env[definition.kind === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = profile.configDir;
+      if(definition.kind === 'codex' && (await (ports.codexLimits ?? readCodexLimits)({command:definition.command,cwd,env})).state !== 'healthy') return fail('account limits hold the audit; no paid call was made.');
+      if(config.autopilot.auditTokenLimit !== undefined) {
+        const limit = config.autopilot.auditTokenLimit;
+        if(!Number.isFinite(limit) || limit < 0) return fail('invalid auditTokenLimit.');
+        const usage = await (ports.dailyUsage ?? (async () => {
+          const unknown={known:false,total:0};
+          let index;
+          try {index=read(fs,join(stateDirFor(ports),'runs.json'));} catch {return unknown;}
+          if(!Array.isArray(index?.runs) || index.runs.length>=200
+            || !index.runs.some(row=>row?.runDir===run.runDir)) return unknown;
+          if(index.runs.some(row=>!named(row?.repo) || !named(row?.runDir) || !Number.isSafeInteger(row?.number))) return unknown;
+          for(const row of index.runs.filter(r=>r?.repo?.toLowerCase()===run.repo.toLowerCase())) {
+            if(!named(row.runDir)) return unknown;
+            const record=readRun(row.runDir);
+            if(!record || record.repo?.toLowerCase()!==run.repo.toLowerCase() || record.number!==row.number
+              || record.runDir!==row.runDir || !named(record.runId) || !Number.isFinite(record.startedAt)) return unknown;
+          }
+          const runs = (await allRuns({cancelled:true},ports)).filter(r=>r.repo?.toLowerCase()===run.repo.toLowerCase());
+          for(const row of index.runs.filter(r=>r?.repo?.toLowerCase()===run.repo.toLowerCase())) {
+            const record=readRun(row.runDir);
+            if(!runs.some(r=>r.runDir===row.runDir && r.number===row.number && r.runId===record?.runId && r.startedAt===record?.startedAt)) return unknown;
+          }
+          if(sharedRecords.some(a=>!runs.some(r=>r.runId===a.runId))) return unknown;
+          let refreshFailed=false;
+          const measured = runs.map(r => {try {return (ports.refreshCosts ?? updateRunCosts)(r.runDir,latest => {
+            if(latest.runId!==r.runId || latest.startedAt!==r.startedAt) throw Error('Cost attempt changed');
+            return latest;
+          },{...ports,env,auditRecords:sharedRecords.filter(a=>a.runId===r.runId)});} catch {refreshFailed=true;return r;}});
+          const report = costReport(measured,now());
+          return {total:report.day.totals.totalTokens ?? 0,known:!refreshFailed && !report.day.coverage.some(c => ['session-unavailable','audit-session-unavailable','usage-unavailable','session-capture-deferred','session-backlog','session-truncated','usage-identity-missing','capture-failed','not-captured'].includes(c))};
+        }))();
+        if(!usage.known || usage.total >= limit) return fail('daily cost limit holds the audit; no paid call was made.');
+      }
+      fs.mkdirSync(recordsFolder,{recursive:true,mode:0o700});
+      fs.mkdirSync(dirname(localFile),{recursive:true,mode:0o700});
+      audit = {schema:'pdd.audit.v1',repository:run.repo.toLowerCase(),runId:run.runId,pr:Number(pr),merge,parent,at:now(),state:'starting',chat:{agent:definition.kind,configDir:profile.configDir ?? env[definition.kind==='codex'?'CODEX_HOME':'CLAUDE_CONFIG_DIR'] ?? null,startedAt:now()}};
+      try {fs.writeFileSync(file,JSON.stringify(audit),{flag:'wx',mode:0o600});}
+      catch(e) {if(e.code==='EEXIST') return fail('audit already reserved.');throw e;}
+      persist();
+      const scratch = join(run.runDir,'audits',`scratch-${pr}`), checkout = join(scratch,'repo');
+      fs.mkdirSync(scratch,{recursive:true,mode:0o700});
+      await command('git',['clone','--no-checkout','--',`https://github.com/${run.repo}.git`,checkout]);
+      await command('git',['checkout','--detach',merge],{cwd:checkout});
+      audit.chat.root=checkout;persist();
+      const brief = fs.readFileSync(fileURLToPath(new URL('../docs/autopilot-audit.md',import.meta.url)),'utf8');
+      const input = brief+'\n\nTask input:\n'+JSON.stringify({repository:run.repo,issue:run.number,prs:run.pr,merge,parent,runDir:run.runDir,scratch,checkout});
+      let args;
+      if(definition.kind === 'codex') args=['exec','--json','--dangerously-bypass-approvals-and-sandbox','-c','features.multi_agent=false',...(profile.model?['--model',profile.model]:[]),'-'];
+      else {const id=randomUUID();audit.chat.session={id};persist();args=['-p','--session-id',id,'--output-format','json','--permission-mode','bypassPermissions',...(profile.model?['--model',profile.model]:[])];}
+      // No resume flag and no prior chat context. This invocation owns a new native session.
+      const childEnv=Object.fromEntries(Object.entries(env).filter(([key])=>!/^(?:CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/.test(key)));
+      const answer = await (ports.runAuditor ?? execute)(definition.command,args,{cwd:checkout,env:childEnv,input,timeoutMs:30*60*1000,maxBytes:8*1024*1024});
+      let parsed;
+      try {parsed=parseAnswer(answer,definition.kind,audit.chat.session?.id);}
+      catch { // Still retain Codex's session identity if its final answer was invalid.
+        for(const line of String(answer.stdout??'').split('\n')) {try {const r=JSON.parse(line);if(r.type==='thread.started') audit.chat.session={id:r.thread_id};}catch {}}
+        audit.state='unknown';persist();return fail('auditor returned no valid verdict.');
+      }
+      audit.chat.session = {id:parsed.sessionId};
+      const previous = [...(run.chats??[]),...(run.abandonedChats??[]),run.chatReplacement?.original,run.chatReplacement?.replacement].filter(Boolean).map(c=>c.session?.id);
+      for(const earlier of [...localRecords,...sharedRecords]) previous.push(earlier.chat?.session?.id);
+      if(answer.code !== 0 || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(parsed.sessionId??'') || previous.includes(parsed.sessionId) || !validResult(parsed.result)) {
+        audit.state='unknown';persist();return fail('auditor session or verdict is invalid.');
+      }
+      audit.result=parsed.result;audit.state='recorded';audit.completedAt=now();persist();
+    }
+    await effect('comment',()=>command('gh',['api','--method','POST',`repos/${run.repo}/issues/${run.number}/comments`,'-f',`body=Audit: ${audit.result.verdict}\n\nPR #${pr}, merge ${audit.merge}\n\n${audit.result.summary}\n\n${audit.result.evidence}\n\n<!-- pdd:audit:${run.runId}:${pr} -->`]));
+    if(audit.result.verdict === 'BAD') {
+      await effect('revert',async()=>{
+        const checkout=join(run.runDir,'audits',`revert-${pr}`), branch=`pdd/revert-${pr}-${randomUUID()}`;
+        await command('git',['clone','--single-branch','--branch',run.baseBranch,'--',`https://github.com/${run.repo}.git`,checkout]);
+        await command('git',['switch','-c',branch],{cwd:checkout});
+        const parents=(await command('git',['rev-list','--parents','-n','1',audit.merge],{cwd:checkout})).trim().split(/\s+/);
+        await command('git',['-c','core.hooksPath=/dev/null','-c','commit.gpgsign=false','-c','user.name=PDD Autopilot','-c','user.email=pdd@noreply.invalid','revert','--no-edit',...(parents.length>2?['-m','1']:[]),audit.merge],{cwd:checkout});
+        await command('git',['push','origin',`HEAD:refs/heads/${branch}`],{cwd:checkout});
+        return (await command('gh',['pr','create','--repo',run.repo,'--base',run.baseBranch,'--head',branch,'--title',`Revert #${pr}: post-merge audit BAD`,'--body',`${audit.result.summary}\n\nReverts ${audit.merge}. Audit for issue #${run.number}.\n\n<!-- pdd:audit-revert:${run.runId}:${pr} -->`],{cwd:checkout})).trim();
+      });
+      await effect('alert',async()=>{
+        const input={action:'alert',cwd,env,issue:String(run.number),kind:'decision',text:JSON.stringify({cause:`Post-merge audit BAD for PR #${pr} (${audit.merge})`,tried:`Saved audit. Revert PR: ${audit.revert?.value ?? audit.revert?.state ?? 'unknown'}.`,need:'Review the revert PR or resolve the saved revert failure.'})};
+        const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
+        if(result?.exitCode !== 0) throw Error('Alert unconfirmed');
+        return 'recorded';
+      });
+    }
+    if(audit.result.verdict === 'CONCERN' && !audit.concern) {
+      const folder=join(repositoryFolder(run,ports),'concerns');fs.mkdirSync(folder,{recursive:true,mode:0o700});
+      const kind=audit.result.kind, groupFile=join(folder,`${kind}.json`);
+      { // Repository audit custody also serializes concern bookkeeping.
+        const group=read(fs,groupFile,{repository:run.repo,kind,records:[]});
+        if(group.repository.toLowerCase()!==run.repo.toLowerCase()) throw Error('Concern repository mismatch');
+        const identity=`${run.runId}:${pr}`;
+        if(!group.records.some(r=>r.identity===identity)) group.records.push({identity,pr:Number(pr),issue:run.number,summary:audit.result.summary});
+        if(group.issue?.state==='sending') group.issue.state='unknown';
+        save(fs,groupFile,group);
+        if(new Set(group.records.map(r=>r.pr)).size>=2 && !group.issue) {
+          group.issue={state:'sending',at:now()};save(fs,groupFile,group);
+          try {
+            const value=await command('gh',['api','--method','POST',`repos/${run.repo}/issues`,'-f',`title=Autopilot audit process concern: ${kind}`,'-f',`body=${group.records.map(r=>`PR #${r.pr}, issue #${r.issue}: ${r.summary}`).join('\n')}\n\n<!-- pdd:audit-concern:${run.repo.toLowerCase()}:${kind} -->`]);
+            const url=JSON.parse(value).html_url;if(!named(url)) throw Error('Issue unconfirmed');group.issue={state:'sent',url};
+          } catch {group.issue={state:'unknown'};}
+          save(fs,groupFile,group);
+        }
+        audit=read(fs,file);audit.concern={state:group.issue?.state==='unknown'?'unknown':'sent',kind};persist();
+      }
+    }
+    const uncertain = ['comment','revert','alert','concern'].some(k=>audit[k] && audit[k].state!=='sent');
+    return {exitCode:uncertain?1:0,message:`Audit: ${audit.result.verdict}; PR #${pr}; saved ${file}${uncertain?'; follow-up outcome unknown, inspect before retry':''}.`};
+  } catch {if(audit && !audit.result) {audit.state='unknown';persist();}return fail('operation failed; retained evidence needs inspection.');}
+}

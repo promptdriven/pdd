@@ -1,3 +1,4 @@
+import {auditMerge, pendingAudits} from './autopilot-audit.mjs';
 import {collectRouteQuestions, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession} from './workflow-chat.mjs';
@@ -1789,6 +1790,14 @@ async function runTick(stateFile, ports, completion) {
     cachePullRequests(state);
     const work = [], pending = {}, warnings = [], selections = [], held = new Set();
     const timeRules = [], pendingTimes = {};
+    state.auditHolds = [];
+    if(config.mode === 'auto') {
+      const auditConfig = p.readConfig ? await p.readConfig(state.cwd) : read(join(state.cwd,'pdd.json'),{});
+      if(auditConfig.autopilot?.audit !== false) for(const run of await (p.listRuns ?? listRuns)({cwd:state.cwd,cancelled:true},p)) {
+        if(run.repo?.toLowerCase()!==state.repo.toLowerCase() || run.automaticOrigin?.coordinatorId!==state.coordinatorId) continue;
+        for(const pr of pendingAudits({run}, {...p,onAuditHold: hold => state.auditHolds.push({number:run.number,...hold})})) timeRules.push({kind:'post-merge-audit',number:run.number,pr,reason:`Run pdd autopilot audit ${run.number} ${pr}; retain the saved verdict and do not launch an auditor by hand.`});
+      }
+    }
     for (const claim of ownClaims) {
       const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]), key = `stuck:${number}`;
       if (!state.parkedNumbers?.includes(number) && !environmentNumbers.has(number) && Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
@@ -2056,7 +2065,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','interpreterPattern']) {
+        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','interpreterPattern','auditHolds']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
@@ -2204,6 +2213,8 @@ async function savedMode(state, ports, env) {
     return (await settings(state, p)).mode;
   } catch { return 'unknown (settings unreadable)'; }
 }
+const auditHoldLines = state => (state.auditHolds ?? []).map(hold =>
+  `Audit held: run ${hold.number}, PR ${hold.pr}: ${hold.cause}`).join('\n');
 const GONE = Symbol('gone');
 // Every saved launcher state on this machine, read-only: local files, timer status and Herdr only.
 // Each line is independent. Timer and Herdr reads run from the caller's folder, never from a saved folder.
@@ -2227,7 +2238,7 @@ async function machineStatus(folder, ports, env, cwd) {
     try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
     let coordinator = { state: 'unavailable', reason: 'Herdr is not running' };
     if (serverRunning) { try { coordinator = await coordinatorHealth(state, p); } catch { coordinator = { state: 'unavailable', reason: 'status unreadable' }; } }
-    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state} · ${healthLine(state.health)} · ${parkingWords(state.parking, state.interpreterPattern)}`);
+    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state} · ${healthLine(state.health)} · ${parkingWords(state.parking, state.interpreterPattern)}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
   }
   return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
 }
@@ -2249,6 +2260,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
   let p = portsFor(state, { ...ports, env: input.env });
   let controlLock, releaseAdmission;
   try {
+    if (command === 'audit') {
+      const found = await resolveRun(issues[0], {cwd:input.cwd}, {...ports,env:p.env,execFile:async(file,args,options)=>({stdout:await p.checked(file,args,options)})});
+      if(found.error) return bad(found.error);
+      state.repo=found.run.repo;
+      return auditMerge({run:found.run,pr:issues[1]},{...ports,env:p.env,execFile:(file,args,options)=>p.execute(file,args,{...options,purpose:'audit'})});
+    }
     if (command === 'check-base') {
       const found = await resolveRun(issues[0], { cwd: input.cwd }, { ...ports, env: p.env, execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
       if (found.error) return bad(found.error);
@@ -2256,14 +2273,16 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
     }
     if (command === 'status' && input.json) {
-      const folder = stateFolder(ports, p.env), routeQuestions = [];
+      const folder = stateFolder(ports, p.env), routeQuestions = [], auditHolds = [];
       for (const name of existsSync(folder) ? readdirSync(folder) : []) {
         if (!name.endsWith('.json')) continue;
         const saved = read(join(folder, name));
+        if (saved?.auditHolds?.length && (input.all || samePath(saved.cwd, input.cwd)))
+          auditHolds.push({repository:saved.repo,cwd:saved.cwd,holds:saved.auditHolds});
         if (saved?.routeQuestions && (input.all || samePath(saved.cwd, input.cwd)))
           routeQuestions.push({repository: saved.repo, cwd: saved.cwd, ...saved.routeQuestions});
       }
-      return ok(JSON.stringify({...await localCosts(input, ports), routeQuestions}, null, 2));
+      return ok(JSON.stringify({...await localCosts(input, ports), routeQuestions, auditHolds}, null, 2));
     }
     if (command === 'status' && input.all) {
       const status = await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);
@@ -2324,7 +2343,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const observed = await Promise.all(runs.map(async run => ({...run, checkHeld: await local.checkProgress(run)})));
       const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1), state.interpreterPattern);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}`);
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }

@@ -276,6 +276,12 @@ In PDD, prompts are the source. Code follows the prompts.
 ```
 
 
+## Post-merge audit route
+
+Catalog `autopilot.audit` with prefix `autopilot audit`, local `autopilot-audit`,
+required text operands RUN and PR, no options. Form: `pdd autopilot audit RUN PR`.
+Description: Audit an automatic merge once with a fresh agent and save its verdict.
+
 ## Finished chat maintenance
 
 Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands, optional flag `--dry-run`, and help form `pdd workflow tidy [--dry-run]`. It closes safely finished chats or reports eligible tabs without changes.
