@@ -1,5 +1,5 @@
 import {issueEffectAllowed, guardAutomaticGithubWrites} from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 398b444e72c08ed83a514be3eee257d55d28a179faaed2faed2d0d95c1da064e).
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: c4ecbfb35ac72a834477d0d9afb6c25f01a5f95a890dcace1ffbb5b77010338f).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -176,7 +176,7 @@ async function alertUnavailableRecommendation(run, pr, audit, ports) {
         tried:'Held the audit without a revert or another auditor. Saved evidence and effect reservations are unchanged.',
         need:`Inspect the saved audit evidence and decide: keep the merge and finish the rest on issue #${run.number}, or revert on a review branch with git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.`,
       })};
-    const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
+    const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports,...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
     reservation.state=alertDeliveryState(result);
   } catch {reservation.state='unknown';}
   reservation.at=now();save(fs,file,reservation);

@@ -215,7 +215,11 @@ verdict must not mark the unsent publication sending/unknown.
 Bind the shared GitHub write execution port to the audit run's repository and
 issue. Carry that issue through nested transports for audit comments and revert
 PR creation. Preserve the existing audit admission, pending verdict and unknown
-publication custody rules.
+publication custody rules. Both ordinary decision alerts and unavailable-recommendation
+diagnostic alerts inherit the audit caller's shared issue authority and execution
+ports before applying explicit alertPorts overrides. A confirmed-clear audit
+observation must reach the alert owner; alert delivery must still recheck that
+authority and suppress held or unknown issues.
 
 ## Dependencies
 
