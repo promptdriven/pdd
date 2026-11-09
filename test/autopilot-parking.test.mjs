@@ -1275,4 +1275,10 @@ for (const hold of ['paused', 'idle', 'resume']) test(`3091 integration: preserv
   assert.equal(f.herdr.calls.filter(a => ['tab', 'workspace'].includes(a[0]) && a[1] === 'close').length, 0);
   if (hold === 'paused') assert.equal(alerts.length, 0);
   assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+  // A separate observed limit still uses the existing named-blocker route.
+  const until = f.clock + 3600000;
+  ports.chatHealth = async () => ({kind: 'usage-limit', until});
+  await tick();
+  assert.equal(f.record().parking?.phase, 'parked');
+  assert.deepEqual(f.record().parking.blocker, {kind: 'account', until: new Date(until).toISOString()});
 });

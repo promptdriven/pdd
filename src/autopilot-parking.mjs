@@ -72,12 +72,12 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     // Classify current facts before consulting the park's cached inference.
     // A finished check can change its saved result at an unchanged gate.
     const saved = blockerFor({...run, parking: undefined});
-    // Recovery ceilings retain their own alert/retry custody. A bare pause is
-    // deliberate; neither state alone establishes another parking incident.
-    if (!saved && !run.parking && (run.chatIdleLimit || run.chatResumeLimit
-      || run.state === 'paused' && !run.parkReason && !run.stuckCause)) continue;
     // Native check/limit evidence can refine a generic gate; explicit named waits win.
     const observed = !saved || saved.kind === 'person' ? await ports.observeBlocker?.(run) : null;
+    // Recovery ceilings retain their own alert/retry custody. A bare pause is
+    // deliberate; neither state alone establishes another parking incident.
+    if (!saved && !observed && !run.parking && (run.chatIdleLimit || run.chatResumeLimit
+      || run.state === 'paused' && !run.parkReason && !run.stuckCause)) continue;
     const blocker = observed ?? saved ?? run.parking?.blocker ?? (stopped(run) ? {kind: 'unknown', until: null} : null);
     if (!blocker && !run.parking) continue;
     const progress = await ports.checkProgress(run);
