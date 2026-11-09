@@ -4,6 +4,37 @@ import {environmentRecovery} from './autopilot-environment.mjs';
 const ended = run => ['completed', 'cancelled'].includes(run.state);
 const stopped = run => ['stuck', 'waiting', 'paused'].includes(run.state);
 const reasonFor = run => [run.parkReason, run.question && !run.question.answeredAt ? run.question.text : ''].filter(Boolean).join(' ');
+// Route reports are facts from the worker, not decisions made by a model in a tick.
+export function routeQuestionFor(run) {
+  if (ended(run)) return null;
+  if (run.routeWait) return run.routeWait;
+  const q = run.question;
+  if (!q || q.answeredAt || !/^which supported\b/i.test(q.text ?? '')
+    || !/\b(?:native|PDD|verification|replay)\b/i.test(q.text)) return null;
+  const absent = /no established [^.]*Runtime operation|no (?:supported |native |PDD |drafting )*(?:command|tool|route)|(?:installed PDD|installed CLI).*(?:no |cannot|missing)|(?:route|command|tool).*(?:does not exist|is missing|is unavailable)/i.test(q.text);
+  const kind = /supported native recovery/i.test(q.text) && /PR\s*1/i.test(q.text) ? 'prompt-reentry'
+    : /native.*PDD/i.test(q.text) && /draft.*interface|interface.*draft/i.test(q.text) && absent ? 'interface-drafting'
+    : /native[- ]only verification/i.test(q.text) && /approved[- ]case replay/i.test(q.text) && /route/i.test(q.text) && absent ? 'native-replay'
+    : /native.*PDD/i.test(q.text) && /route|command|tool/i.test(q.text) && absent ? 'supported-route' : null;
+  if (!kind) return null;
+  const area = run.areas?.[run.area];
+  return {kind, step: area?.steps?.find(step => !run.done?.[step]) ?? area?.name ?? '',
+    question: q.text, at: q.at, until: kind === 'prompt-reentry' ? '#2897' : `capability:route-${kind}`};
+}
+export function collectRouteQuestions(ledger = {records: [], groups: []}, runs) {
+  const result = structuredClone(ledger);
+  for (const run of runs) {
+    for (const route of [...(run.routeReports ?? []), routeQuestionFor(run)].filter(Boolean)) {
+      const id = JSON.stringify([run.runId, route.kind, route.step, route.question, route.at]);
+      if (result.records.some(row => row.id === id)) continue;
+      result.records.push({id, ...route, runId: run.runId, run: run.number, issue: run.issue?.url});
+      let group = result.groups.find(row => row.kind === route.kind);
+      if (!group) {group = {kind: route.kind, count: 0, recordIds: []}; result.groups.push(group);}
+      group.recordIds.push(id); group.count = group.recordIds.length;
+    }
+  }
+  return result;
+}
 export function interpreterWaitFor(run) {
   if (ended(run)) return null;
   if (run.runtimeWait) return run.runtimeWait;
@@ -31,6 +62,8 @@ export function blockerFor(run) {
     || /supported native recovery.*PR\s*1/i.test(reason)) return {kind: 'pdd', until: '#2897'};
   const fix = /missing PDD (?:feature|bug|fix).*?#([1-9][0-9]*)/i.exec(reason);
   if (fix) return {kind: 'pdd', until: `#${fix[1]}`};
+  const route = routeQuestionFor(run);
+  if (route) return {kind: 'pdd-route', until: route.until};
   if (question) return {kind: 'person', until: null};
   if (interpreterWaitFor(run)) return {kind: 'interpreter', until: null};
   if (/github.*(?:rate|limit)|(?:account|usage)[- ]limit/i.test(reason)) return {
@@ -43,7 +76,7 @@ export function blockerFor(run) {
   if (run.state === 'waiting' && run.pr?.length) return {kind: 'ci', until: run.pr.at(-1).url};
   return null;
 }
-const label = blocker => blocker?.kind === 'dependency' ? `needs #${blocker.until}`
+const label = blocker => blocker?.kind === 'pdd-route' ? 'missing PDD route' : blocker?.kind === 'dependency' ? `needs #${blocker.until}`
   : blocker?.kind === 'pdd' ? `needs ${blocker.until}` : blocker?.kind ?? 'unknown';
 export function parkingSummary(runs, limit) {
   const live = runs.filter(run => !ended(run)), parked = live.filter(run => run.parking?.phase === 'parked' && !run.parking.checkHeld && !run.checkHeld);

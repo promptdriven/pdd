@@ -284,6 +284,9 @@ Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands,
 
 Add workflow.resend, prefix workflow resend, local workflow-resend, required repeated issue operands, optional text --said. Help form: `pdd workflow resend ISSUE... [--said WORDS]`. Description: Record one person decision and resend each lost check once; --said - reads exact words from stdin; strict mode requires a person terminal. Preserve all other routes.
 
+Catalog text --route on workflow park and show `pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` for recording a missing supported PDD route without asking a person. The runner owns route validation and installed-fix clearing.
+
+
 ## Dependencies
 
 [Workflow scope](workflow-scope.prompt.md) is required authoring, generation, runtime, verification and testing context for the scope route meanings.

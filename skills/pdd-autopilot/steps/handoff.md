@@ -101,3 +101,13 @@ After a PR target change, and right before each merge, require exit 0 from `pdd 
 ## Outcomes and retries
 
 Outcomes: merged, dropped, stuck, or one question. Retry a call at most 3 times, only for HTTP 408, 429, 5xx or a network error. Never send a failed check again. Keep `--max-calls` and strict mode. Write each decision on the issue or PR. After a restart, read the issue and PR first and do not redo finished steps.
+
+## Missing PDD route
+
+When no supported PDD command or tool covers a required step, record the gap in its run worktree:
+
+```sh
+pdd workflow park --route KIND --reason "QUESTION" --step STEP
+```
+
+Use `interface-drafting`, `native-replay` or `prompt-reentry` for those gaps, or another lowercase kind for a distinct route. Supply the actual question and current step. Use `--until capability:NAME` or `--until commit:HEX` when the required installed fix is known. Do not ask a person which supported route to use when none exists. Do not invent an interface, approved cases, a verdict or an approval. End the turn. The native tick records and counts questions, opens one PDD issue for a repeated kind, and parks through the normal custody path. It wakes the saved session only when installed fix evidence proves the route exists. Product decisions still use the ordinary person gate.
