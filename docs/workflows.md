@@ -15,12 +15,14 @@ Each workflow has areas. Each area has steps and ends at a gate. `?` marks an op
 
 | Workflow | Area 1 | Area 2 | Area 3 (only when you ask) |
 |---|---|---|---|
-| `feature` | story: understand, visual?, prompt-story. Gate **approve** | prompt PR: check, try?. Gate **try it and approve**. pdd opens **PR 1**. Then **code now or stop?** | code: build, verify, formal, review. pdd opens **PR 2** |
-| `bug` | story: reproduce, prompt-story. Gate **approve** | prompt PR: check, try?. Gate **try it and approve**. pdd opens **PR 1**. Then **code now or stop?** | code: build, verify, formal, review. pdd opens **PR 2** |
+| `feature` | story: understand, visual?, prompt-story. Gate **approve** | prompt PR: check, try?. pdd opens **PR 1** at the applicable gate | code: build, verify, formal, review. pdd opens **PR 2** |
+| `bug` | story: reproduce, prompt-story. Gate **approve** | prompt PR: check, try?. pdd opens **PR 1** at the applicable gate | code: build, verify, formal, review. pdd opens **PR 2** |
 | `small-change` | plan: scope. Gate **approve** | build: change, verify, formal. pdd opens **one PR** | |
 | `product` | map: understand, map. Gate **approve** | plan: parts, contracts, plan. pdd opens **one PR** | |
 
 PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests that fail on today's code go to PR 2, so merging PR 1 never breaks the main branch. PR 2 holds the code. You can stop at PR 1, merge it, and make PR 2 later.
+
+In a normal feature or bug run, the Story card includes the code-or-stop choice. A valid Story approval and full saved check pass open PR 1, then pdd follows that choice. In strict mode, you can try the result when available and approve before PR 1, then choose whether to make the code PR.
 
 ### A big request: a plan and many Stories
 
@@ -291,8 +293,8 @@ pdd-mybug/
 
 - Each area has a `name`, its `steps` in order, the `optional` steps and a `gate`.
 - `gate` is `approve` (the person approves, then a new chat starts) or `pr` (pdd opens a PR).
-- `"before":"approve"` on a `pr` area makes the person try and approve before pdd opens that PR.
-- `"then":"ask-code"` on a `pr` area makes it PR 1. pdd then asks the person before the next area, which makes PR 2. Leave it out for a workflow with one PR, like `small-change`.
+- `"before":"approve"` on a `pr` area provides an approval gate before the PR. In a normal run with Story approval, a full saved check pass can open PR 1 automatically; strict and other routes retain the person gate.
+- `"then":"ask-code"` on a `pr` area makes it PR 1; the next area makes PR 2. A normal run follows the choice saved on the Story card; strict and other routes ask about the code PR. Leave it out for a workflow with one PR, like `small-change`.
 - `replay_evidence` may declare `pdd.replay-evidence.v1` on a PR area.
 - Each step has a file `steps/STEP.md`.
 - The last area ends with `pr`. It should have a `verify` step, so that the PR body has the test output.

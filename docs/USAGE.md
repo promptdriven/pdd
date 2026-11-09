@@ -258,12 +258,12 @@ The areas of the four bundled workflows (you act at the **bold** ones):
 
 | Workflow | Areas and steps |
 |---|---|
-| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal, review) opens PR 2, **merge** |
-| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal, review) opens PR 2, **merge** |
+| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?), PR 1 opens at the applicable gate, code (build, verify, formal, review) opens PR 2 if chosen, **merge** |
+| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?), PR 1 opens at the applicable gate, code (build, verify, formal, review) opens PR 2 if chosen, **merge** |
 | `small-change` | plan (scope), **approve**, build (change, verify, formal) opens one PR, **merge** |
 | `product` | map (understand, map), **approve**, plan (parts, contracts, plan) opens one PR, **merge** |
 
-`?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
+`?` marks an optional step. Each area is one chat. In a normal feature or bug run, the Story card includes the code-or-stop choice; a valid Story approval and full saved check pass open PR 1, then pdd follows that choice. In strict mode, you can try the result when available and approve before PR 1, then choose whether to make the code PR. [workflows.md](workflows.md) tells what each step does.
 
 **A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat gives the paths of the Story files and the plan, shows the plan, and asks for approval or changes. You can answer, for example:
 
