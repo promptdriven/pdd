@@ -47,3 +47,14 @@ Audit discovery holds a damaged or unreadable evidence record with a named cause
 `pdd autopilot status` shows the run, PR and cause. Other issue selection and
 coordinator delivery continue. The held audit is not offered for another launch.
 The next scan clears the hold after the evidence is repaired or audits are disabled.
+
+Saved audit evidence is checked before import, cost measurement, launch or
+follow-up publication. Invalid result fields, chat metadata, state or publication
+reservations cause an `audit-evidence-invalid` hold. The hold preserves the saved
+evidence and reservations. The public audit command applies the same checks as
+discovery. Damaged evidence cannot admit another PR's auditor.
+
+Completed automatic runs remain eligible after coordinator replacement. Discovery
+matches the repository, source checkout and machine. It includes absent audits
+and saved verdicts with unsent follow-ups. Shared reservations still prevent a
+second auditor. `autopilot.audit: false` disables audits and follow-up effects.

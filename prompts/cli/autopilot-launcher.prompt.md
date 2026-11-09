@@ -1265,7 +1265,10 @@ Dispatch `audit` with RUN and PR through the audit owner. Resolve the saved run
 without requiring a live coordinator or issue claim (the merge can close both).
 On auto ticks with audit enabled, offer pendingAudits for saved automatic runs as
 `post-merge-audit` time rules naming RUN and PR, even for completed runs and closed
-issues. The coordinator runs `pdd autopilot audit RUN PR`. Ticks make no model
+issues. Match repository, source checkout and machine independently of the
+origin coordinator ID. Completed runs need no worker custody recovery or live
+claim. Include both absent audits and saved verdicts with unsent follow-ups;
+retain the audit owner's shared reservations and disable policy. The coordinator runs `pdd autopilot audit RUN PR`. Ticks make no model
 calls. Pass injected filesystem ports to discovery. Collect its per-PR holds
 as `state.auditHolds`, an array of `{number,pr,cause}` where `number` is the run
 number, `pr` is the PR number and `cause` is the audit owner's named cause.

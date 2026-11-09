@@ -584,3 +584,35 @@ test('base integration: a saved defect repair refusal cannot be bypassed by merg
   assert.deepEqual(f.record().repairLimit, before.repairLimit);
   assert.equal(f.record().integrationRounds, undefined); assert.deepEqual(f.record().done, before.done);
 });
+
+test('review: first formal after base advance requires fresh verification', async t=>{
+  const {f,run,done,edit}=await publishingRun(t);
+  writeFileSync(join(f.source,'ready.mjs'),'export const ready = true;\n');
+  f.git(f.source,'add','ready.mjs');f.git(f.source,'commit','-qm','Base initially passes');
+  f.git(f.source,'update-ref','refs/remotes/origin/main','HEAD');
+  f.git(run.root,'merge','--no-edit','refs/remotes/origin/main');
+  const validate=()=>exec(process.execPath,['--input-type=module','-e',"import {ready} from './ready.mjs';import assert from 'node:assert/strict';assert.equal(ready,true,'REVIEW_FIRST_FORMAL_READY');"],{cwd:run.root,env:{...process.env,...f.ports.env},encoding:'utf8'});
+  edit();await done('change');await validate();await done('verify');
+  const before=f.record();
+  writeFileSync(join(f.source,'ready.mjs'),'export const ready = false;\n');advanceBase(f,run,1);
+  await assert.rejects(validate,e=>e.code===1&&e.stderr.includes('REVIEW_FIRST_FORMAL_READY'));
+  const out=await done('formal','formal on changed base');
+  assert.equal(f.prs.length,0,'FIRST_FORMAL_MUST_NOT_PUBLISH_STALE_VERIFY');
+  assert.equal(f.pushes.length,0,'stale verification must be caught before the push');
+  const current=f.record();
+  assert.equal(current.done.verify,undefined);assert.equal(current.done.change,undefined);
+  assert.ok(current.stepHistory.some(row=>row.step==='verify' && JSON.stringify(row.record)===JSON.stringify(before.done.verify)));
+  assert.deepEqual(current.integrationRounds,{build:1});assert.equal(current.repairRounds,undefined);
+  assert.equal(out.exitCode,0);assert.match(out.message,/Next step: change\b/);
+  await done('change');
+  assert.equal(f.prs.length,0);assert.equal(f.record().done.verify,undefined);
+  writeFileSync(join(f.source,'ready.mjs'),'export const ready = true;\n');advanceBase(f,run,2);
+  await validate();await done('verify');
+  assert.equal(f.prs.length,0,'formal is stale after the second integration');
+  assert.deepEqual(f.record().integrationRounds,{build:2});
+  await done('change');await done('verify');
+  advanceBase(f,run,3);
+  assert.equal((await done('formal')).exitCode,1,'the third integration is refused even through formal');
+  assert.equal(f.prs.length,0);assert.deepEqual(f.record().integrationRounds,{build:2});
+  assert.equal(f.record().repairRounds,undefined);
+});

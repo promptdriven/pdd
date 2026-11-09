@@ -2130,7 +2130,7 @@ for (const damage of ['json','schema','attempt','file','folder']) test(`3111 rep
   const f = await fixture(t);await f.invoke('start');
   const state=f.state(),runDir=join(f.dir,'audit-run'),folder=join(runDir,'audits'),file=join(folder,'23.json');
   mkdirSync(folder,{recursive:true});
-  const record={schema:'pdd.audit.v1',runId:'audit-run',pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),state:'recorded',chat:{},result:{verdict:'OK',kind:'',summary:'Observed',evidence:'Synthetic evidence',revert:false},comment:{state:'sent'}};
+  const record={schema:'pdd.audit.v1',runId:'audit-run',pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),at:f.time,state:'recorded',completedAt:f.time,chat:{agent:'codex',configDir:null,startedAt:f.time,session:{id:'11111111-1111-4111-8111-111111111111'}},result:{verdict:'OK',kind:'',summary:'Observed',evidence:'Synthetic evidence',revert:false},comment:{state:'sent',at:f.time,value:'confirmed'}};
   writeFileSync(file,JSON.stringify(record));
   if(damage==='json')writeFileSync(file,'{');
   if(damage==='schema')writeFileSync(file,'null');
@@ -2139,9 +2139,9 @@ for (const damage of ['json','schema','attempt','file','folder']) test(`3111 rep
     readFileSync:(path,...args)=>{if(damage==='file' && path===file)throw Object.assign(Error('synthetic denied'),{code:'EACCES'});return nativeFs.readFileSync(path,...args);},
     readdirSync:(path,...args)=>{if(damage==='folder' && path===folder)throw Object.assign(Error('synthetic denied'),{code:'EACCES'});return nativeFs.readdirSync(path,...args);},
   };
-  f.ports.listRuns=async()=>[{number:17,repo:state.repo,sourceRoot:f.cwd,runDir,runId:'audit-run',state:'completed',automaticOrigin:{coordinatorId:state.coordinatorId},pr:[{number:23,state:'merged'},{number:24,state:'merged'}]}];
+  f.ports.listRuns=async()=>[{number:17,repo:state.repo,sourceRoot:f.cwd,runDir,runId:'audit-run',state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:state.coordinatorId},pr:[{number:23,state:'merged'},{number:24,state:'merged'}]}];
   const cause=damage==='file'?'audit-evidence-unreadable':damage==='folder'?'audit-folder-unreadable':damage==='attempt'?'audit-attempt-mismatch':'audit-evidence-invalid';
-  const expected=[{number:17,pr:23,cause},...(damage==='folder'?[{number:17,pr:24,cause}]:[])];
+  const expected=[{number:17,pr:23,cause},...(damage!=='attempt'?[{number:17,pr:24,cause}]:[])];
   f.issues=[issue(18)];f.time+=1000;
   for(let n=0;n<2;n++) {
     const tick=await f.tick().catch(error=>({exitCode:1,message:error.message}));
@@ -2152,7 +2152,7 @@ for (const damage of ['json','schema','attempt','file','folder']) test(`3111 rep
   assert.ok(packets.some(p=>p.issues?.some(i=>i.number===18 && i.eligible)));
   const rules=packets.flatMap(p=>p.timeRules??[]).filter(r=>r.kind==='post-merge-audit');
   assert.ok(rules.every(r=>r.pr!==23));
-  assert.equal(rules.some(r=>r.pr===24),damage!=='folder');
+  assert.equal(rules.some(r=>r.pr===24),damage==='attempt');
   for(const options of [{},{all:true}]) {
     const status=await f.invoke('status',options);assert.equal(status.exitCode,0);assert.ok(status.message.includes(cause));
   }
@@ -2161,4 +2161,42 @@ for (const damage of ['json','schema','attempt','file','folder']) test(`3111 rep
   assert.equal(readFileSync(file,'utf8'),damage==='json'?'{':damage==='schema'?'null':JSON.stringify({...record,...(damage==='attempt'?{runId:'other-attempt'}:{})}));
   f.ports.fs=nativeFs;writeFileSync(file,JSON.stringify(record));
   await f.tick();assert.deepEqual(f.state().auditHolds,[]);
+});
+
+for (const owner of ['current','previous']) for(const saved of [false,true]) test(`review: pending completed audit survives ${owner} coordinator with saved verdict ${saved}`,async t=>{
+  const f=await fixture(t);assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(),runDir=join(f.dir,'completed-run');mkdirSync(runDir);
+  f.ports.listRuns=async()=>[{number:17,repo:state.repo,sourceRoot:f.cwd,root:f.cwd,runDir,runId:'previous-completed-run',state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:owner==='current'?state.coordinatorId:'previous-coordinator'},pr:[{number:23,state:'merged'}]}];
+  if(saved) {
+    mkdirSync(join(runDir,'audits'));
+    writeFileSync(join(runDir,'audits','23.json'),JSON.stringify({schema:'pdd.audit.v1',repository:state.repo.toLowerCase(),runId:'previous-completed-run',pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),at:f.time,state:'recorded',completedAt:f.time,chat:{agent:'codex',configDir:null,startedAt:f.time,session:{id:'11111111-1111-4111-8111-111111111111'}},result:{verdict:'BAD',kind:'',summary:'Synthetic defect',evidence:'Native assertion fails',revert:true},comment:{state:'sent',at:f.time,value:'confirmed'}}));
+  }
+  f.issues=[issue(18)];f.time+=1000;
+  assert.equal((await f.tick()).exitCode,0);
+  const packets=f.prompts.flatMap(text=>{try{return [JSON.parse(text.trim().split('\n').at(-1))];}catch{return [];}});
+  const rules=packets.flatMap(p=>p.timeRules??[]).filter(r=>r.kind==='post-merge-audit');
+  assert.ok(rules.some(r=>r.number===17&&r.pr===23),'PREVIOUS_COORDINATOR_MUST_NOT_LOSE_COMPLETED_AUDIT');
+});
+
+for(const boundary of ['disabled','foreign-repository','foreign-checkout','foreign-machine','shared-reservation']) test(`completed audit replacement retains ${boundary} guard`,async t=>{
+  const f=await fixture(t);assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(),runDir=join(f.dir,'completed-run');mkdirSync(runDir);
+  const run={number:17,repo:state.repo,sourceRoot:f.cwd,root:f.cwd,runDir,runId:'previous-completed-run',state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:'previous-coordinator'},pr:[{number:23,state:'merged'}]};
+  if(boundary==='disabled')writeFileSync(join(f.cwd,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',audit:false}}));
+  if(boundary==='foreign-repository')run.automaticOrigin.repository='other/repo';
+  if(boundary==='foreign-checkout')run.sourceRoot=join(f.dir,'other-checkout');
+  if(boundary==='foreign-machine')run.automaticOrigin.machine='other-machine';
+  let authority;
+  if(boundary==='shared-reservation') {
+    const record={schema:'pdd.audit.v1',repository:state.repo.toLowerCase(),runId:run.runId,pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),at:f.time,state:'unknown',chat:{agent:'codex',configDir:null,startedAt:f.time}};
+    const folder=join(f.dir,'shared-audits');f.ports.auditStateRoot=folder;mkdirSync(join(folder,'records'),{recursive:true});
+    authority=join(folder,'records',createHash('sha256').update(JSON.stringify([record.runId,record.pr,record.merge])).digest('hex')+'.json');
+    writeFileSync(authority,JSON.stringify(record));
+  }
+  const before=authority?readFileSync(authority,'utf8'):null;
+  f.ports.listRuns=async()=>[run];f.issues=[issue(18)];f.time+=1000;
+  assert.equal((await f.tick()).exitCode,0);
+  const packets=f.prompts.flatMap(text=>{try{return [JSON.parse(text.trim().split('\n').at(-1))];}catch{return [];}});
+  assert.equal(packets.flatMap(p=>p.timeRules??[]).some(r=>r.kind==='post-merge-audit'),false);
+  if(authority)assert.equal(readFileSync(authority,'utf8'),before);
 });

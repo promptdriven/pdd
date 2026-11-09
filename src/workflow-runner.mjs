@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3cf75c9446fd8a4292a7ce3913137819a0c448729e6f848e98bb797f1f6a0330).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2980aa1ee8f73228b60ebf6b979503072f968cf6a47d94c4a3ad5bbe1fba8820).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2685,8 +2685,19 @@ function accountingStep(run, area, step) {
   return run.done[step] ?? (run.integrationSources?.[area.name]?.length
     ? run.stepHistory?.findLast(row => row.step === step && row.record.area === area.name)?.record : null);
 }
+function integrationBaseline(run, area, step) {
+  // Preserve the legacy unknown-snapshot guard for an already recorded step.
+  const previous = accountingStep(run, area, step);
+  if (previous && !previous.integrationSource) return null;
+  const records = [...(run.stepHistory ?? []).filter(row => row.record.area === area.name).map(row => row.record),
+    ...Object.values(run.done).filter(record => record.area === area.name)];
+  const newest = records.filter(record => record.integrationSource
+    && [record.integrationSource.head, record.integrationSource.base, record.integrationSource.tree].every(commitSha))
+    .sort((a, b) => a.at - b.at).at(-1)?.integrationSource;
+  return newest ?? run.integrationSources?.[area.name]?.at(-1) ?? null;
+}
 async function baseIntegration(run, area, step, source, p) {
-  const from = accountingStep(run, area, step)?.integrationSource;
+  const from = integrationBaseline(run, area, step);
   if (!source || !from || ![from.head, from.base, from.tree].every(commitSha)
     || from.base === source.base || !area.steps.includes(step)) return null;
   try {
@@ -2764,7 +2775,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const chargeIntegration = integration && integration.from.tree !== source.tree && !accounted;
   if (chargeIntegration && (run.integrationRounds?.[area.name] ?? 0) >= INTEGRATION_ROUNDS) {
     commitRun(run, p, latest => {
-      if (ended(latest) || latest.area !== run.area || gitFingerprint(run.root) !== worktree || !equalFact(accountingStep(latest, area, step)?.integrationSource, integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+      if (ended(latest) || latest.area !== run.area || gitFingerprint(run.root) !== worktree || !equalFact(integrationBaseline(latest, area, step), integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
       latest.state = 'stuck'; latest.parkReason = integrationLimitReason(area.name); latest.integrationLimit = { area: area.name, step, at: p.now() };
     });
     return fail(integrationRefusal(area.name, step, run.number));
@@ -2803,7 +2814,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const applyDone=latest=>{
     if (integration || accounted) {
       if (gitFingerprint(run.root) !== worktree || accountedIntegration(latest, area, source) !== accounted
-        || integration && !equalFact(accountingStep(latest, area, step)?.integrationSource, integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+        || integration && !equalFact(integrationBaseline(latest, area, step), integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
     }
     if (chargeIntegration) {
       const used = latest.integrationRounds?.[area.name] ?? 0;

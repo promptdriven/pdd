@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-audit.prompt.md.
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 0bbc74592a5146cafcf4cf5eec84a3d08650870716ef19e124d370a4643f5e19).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -15,6 +15,7 @@ import {acquireRunLock} from './workflow-runner.mjs';
 
 const sha = v => typeof v === 'string' && /^[0-9a-f]{40,64}$/i.test(v);
 const named = v => typeof v === 'string' && v.trim().length > 0;
+const sessionIdentity = value => typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 const read = (fs, path, fallback = null) => {
   try {return JSON.parse(fs.readFileSync(path, 'utf8'));}
   catch (e) {if(e.code === 'ENOENT') return fallback; throw e;}
@@ -22,15 +23,40 @@ const read = (fs, path, fallback = null) => {
 const repositoryFolder=(run,ports)=>ports.auditStateRoot ?? join(stateDirFor(ports),'autopilot-audits',createHash('sha256').update(run.repo.toLowerCase()).digest('hex').slice(0,20));
 const fileFor = (run, pr) => join(run.runDir, 'audits', `${pr}.json`);
 const auditIdentity = audit => createHash('sha256').update(JSON.stringify([audit.runId,audit.pr,audit.merge])).digest('hex');
-const validAudit = audit => audit?.schema === 'pdd.audit.v1' && named(audit.runId)
-  && Number.isSafeInteger(audit.pr) && audit.pr > 0 && sha(audit.merge) && sha(audit.parent)
-  && audit.chat && typeof audit.chat === 'object' && !Array.isArray(audit.chat);
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const time = value => Number.isFinite(value) && value >= 0;
+const invalidEvidence = () => Object.assign(Error('audit-evidence-invalid'), {code:'audit-evidence-invalid'});
+function validAudit(audit) {
+  if (!object(audit) || audit.schema !== 'pdd.audit.v1' || !named(audit.runId)
+    || !Number.isSafeInteger(audit.pr) || audit.pr <= 0 || !sha(audit.merge) || !sha(audit.parent)
+    || !time(audit.at) || !['starting','recorded','unknown'].includes(audit.state)
+    || !object(audit.chat) || !['codex','claude'].includes(audit.chat.agent)
+    || !(audit.chat.configDir === null || named(audit.chat.configDir)) || !time(audit.chat.startedAt)
+    || Object.hasOwn(audit.chat,'root') && !named(audit.chat.root)
+    || Object.hasOwn(audit.chat,'session') && (!object(audit.chat.session) || !named(audit.chat.session.id))
+    || Object.hasOwn(audit,'repository') && !/^[\w.-]+\/[\w.-]+$/.test(audit.repository)) return false;
+  if (audit.state === 'recorded') {
+    if (!validResult(audit.result) || !time(audit.completedAt) || !sessionIdentity(audit.chat.session?.id)) return false;
+  } else if (['result','completedAt','comment','revert','alert','concern'].some(key => Object.hasOwn(audit,key))) return false;
+  for (const key of ['comment','revert','alert']) if (Object.hasOwn(audit,key)) {
+    const effect = audit[key];
+    if (!object(effect) || !['sending','sent','unknown'].includes(effect.state) || !time(effect.at)
+      || effect.state === 'sent' && typeof effect.value !== 'string'
+      || Object.hasOwn(effect,'value') && typeof effect.value !== 'string'
+      || key !== 'comment' && audit.result?.verdict !== 'BAD') return false;
+  }
+  if (Object.hasOwn(audit,'concern') && (!object(audit.concern)
+    || !['sent','unknown'].includes(audit.concern.state) || audit.result?.verdict !== 'CONCERN'
+    || audit.concern.kind !== audit.result.kind)) return false;
+  return true;
+}
 function auditRecords(fs, folder, local = false) {
   let names;
   try {names=fs.readdirSync(folder);} catch(e) {if(e.code==='ENOENT') return [];throw e;}
   return names.filter(n=>local ? /^\d+\.json$/.test(n) : n.endsWith('.json')).map(name=>{
     const audit=read(fs,join(folder,name));
-    if(!validAudit(audit) || local && audit.pr!==Number(name.slice(0,-5))) throw Error('Audit evidence unavailable');
+    if(!validAudit(audit) || (local ? audit.pr!==Number(name.slice(0,-5))
+      : !named(audit.repository) || name!==`${auditIdentity(audit)}.json`)) throw invalidEvidence();
     return audit;
   });
 }
@@ -41,6 +67,7 @@ export function pendingAudits({run}, ports = {}) {
   if (!run?.automaticOrigin || !run.runDir) return [];
   const merged = (run.pr ?? []).filter(pr => pr.state === 'merged');
   const hold = (pr, cause) => ports.onAuditHold?.({pr: pr.number, cause});
+  let local, shared;
   try { fs.readdirSync(join(run.runDir, 'audits')); }
   catch (error) {
     if (error.code !== 'ENOENT') {
@@ -48,22 +75,26 @@ export function pendingAudits({run}, ports = {}) {
       return [];
     }
   }
-  const missing = Symbol('missing');
+  try {
+    local = auditRecords(fs,join(run.runDir,'audits'),true);
+    shared = auditRecords(fs,join(repositoryFolder(run,ports),'records'));
+    if(shared.some(a=>a.repository!==run.repo.toLowerCase())
+      || local.some(a=>a.repository!==undefined && a.repository.toLowerCase()!==run.repo.toLowerCase())) throw invalidEvidence();
+  } catch (error) {
+    const cause=error instanceof SyntaxError || error.code==='audit-evidence-invalid'
+      ? 'audit-evidence-invalid' : 'audit-evidence-unreadable';
+    for(const pr of merged) hold(pr,cause);
+    return [];
+  }
   return merged.filter(pr => {
-    let a;
-    try { a = read(fs, fileFor(run, pr.number), missing); }
-    catch (error) {
-      hold(pr, error instanceof SyntaxError ? 'audit-evidence-invalid' : 'audit-evidence-unreadable');
-      return false;
-    }
-    if (a === missing) return true;
-    if (!validAudit(a) || a.pr !== pr.number || !['starting','recorded','unknown'].includes(a.state)
-      || a.state === 'recorded' && !validResult(a.result)) {
-      hold(pr, 'audit-evidence-invalid');
-      return false;
-    }
-    if (a.runId !== run.runId) { hold(pr, 'audit-attempt-mismatch'); return false; }
-    return a.result && !finished(a);
+    const copy=local.find(a=>a.pr===pr.number);
+    if(copy && copy.runId!==run.runId) {hold(pr,'audit-attempt-mismatch');return false;}
+    const authority=shared.filter(a=>a.runId===run.runId && a.pr===pr.number);
+    const savedMerge=pr.mergeCommit?.oid ?? pr.mergeCommit ?? pr.mergeSha;
+    const a=authority[0] ?? copy;
+    if(authority.length>1 || savedMerge && a && a.merge!==savedMerge
+      || copy && a && copy.merge!==a.merge) {hold(pr,'audit-evidence-invalid');return false;}
+    return !a || a.state==='recorded' && !finished(a);
   }).map(pr => pr.number);
 }
 function save(fs, file, value) {
@@ -118,11 +149,21 @@ async function auditMergeOwned({run, pr}, ports = {}) {
     return result.stdout;
   };
   // Validate all earlier evidence before a launch, including the session-reuse inventory.
-  const localRecords=auditRecords(fs,dirname(localFile),true);
-  const sharedRecords=auditRecords(fs,recordsFolder);
-  if(sharedRecords.some(a=>a.repository!==run.repo.toLowerCase())) return fail('shared audit repository differs.');
+  let localRecords, sharedRecords;
+  try {
+    localRecords=auditRecords(fs,dirname(localFile),true);
+    sharedRecords=auditRecords(fs,recordsFolder);
+  } catch(error) {
+    return fail(error instanceof SyntaxError || error.code==='audit-evidence-invalid'
+      ? 'audit-evidence-invalid; saved authority needs inspection.' : 'audit-evidence-unreadable; saved authority needs inspection.');
+  }
+  if(sharedRecords.some(a=>a.repository!==run.repo.toLowerCase())
+    || localRecords.some(a=>a.repository!==undefined && a.repository.toLowerCase()!==run.repo.toLowerCase()))
+    return fail('audit-evidence-invalid; saved audit repository differs.');
+  if(sharedRecords.filter(a=>a.runId===run.runId && a.pr===Number(pr)).length>1)
+    return fail('audit-evidence-invalid; conflicting saved merge identities.');
   let audit=read(fs,localFile);
-  if(audit && audit.runId !== run.runId) return fail('audit belongs to another run attempt.');
+  if(audit && audit.runId !== run.runId) return fail('audit-attempt-mismatch; audit belongs to another run attempt.');
   const saved=run.pr.find(p=>p.number===Number(pr));
   const savedMerge=saved.mergeCommit?.oid ?? saved.mergeCommit ?? saved.mergeSha;
   let merge=audit?.merge;
@@ -132,7 +173,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
       || pull.base?.repo?.full_name?.toLowerCase() !== run.repo.toLowerCase() || !sha(pull.merge_commit_sha)) return fail('the merged PR and saved base could not be verified.');
     merge=pull.merge_commit_sha;
   }
-  if(savedMerge && savedMerge!==merge) return fail('saved merge identity differs from GitHub.');
+  if(savedMerge && savedMerge!==merge) return fail('audit-evidence-invalid; saved merge identity differs from GitHub.');
   const file=join(recordsFolder,`${auditIdentity({runId:run.runId,pr:Number(pr),merge})}.json`);
   const shared=read(fs,file);
   if(shared) audit=shared;
@@ -142,7 +183,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
     fs.mkdirSync(dirname(localFile),{recursive:true,mode:0o700});save(fs,localFile,audit);
   };
   if(audit) {
-    if(!validAudit(audit) || audit.runId!==run.runId || audit.pr!==Number(pr) || audit.merge!==merge) return fail('audit identity differs.');
+    if(!validAudit(audit) || audit.runId!==run.runId || audit.pr!==Number(pr) || audit.merge!==merge) return fail('audit-evidence-invalid; audit identity differs.');
     fs.mkdirSync(recordsFolder,{recursive:true,mode:0o700});
     audit.repository=run.repo.toLowerCase();
     if(!shared) for(const key of ['comment','revert','alert']) {
@@ -231,10 +272,11 @@ async function auditMergeOwned({run, pr}, ports = {}) {
         for(const line of String(answer.stdout??'').split('\n')) {try {const r=JSON.parse(line);if(r.type==='thread.started') audit.chat.session={id:r.thread_id};}catch {}}
         audit.state='unknown';persist();return fail('auditor returned no valid verdict.');
       }
-      audit.chat.session = {id:parsed.sessionId};
+      if(named(parsed.sessionId)) audit.chat.session = {id:parsed.sessionId};
+      else delete audit.chat.session;
       const previous = [...(run.chats??[]),...(run.abandonedChats??[]),run.chatReplacement?.original,run.chatReplacement?.replacement].filter(Boolean).map(c=>c.session?.id);
       for(const earlier of [...localRecords,...sharedRecords]) previous.push(earlier.chat?.session?.id);
-      if(answer.code !== 0 || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(parsed.sessionId??'') || previous.includes(parsed.sessionId) || !validResult(parsed.result)) {
+      if(answer.code !== 0 || !sessionIdentity(parsed.sessionId) || previous.includes(parsed.sessionId) || !validResult(parsed.result)) {
         audit.state='unknown';persist();return fail('auditor session or verdict is invalid.');
       }
       audit.result=parsed.result;audit.state='recorded';audit.completedAt=now();persist();

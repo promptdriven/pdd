@@ -9,7 +9,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d9f5f4a1ccbf052ea9ceb88d905752071ada9b6cc610cdce035ff9c2e2e4dfc3).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c79bd4ee2f931f4db31cc9c86904940bd048e41d0eaacebd3b43ace5493e1ed8).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1788,7 +1788,8 @@ async function runTick(stateFile, ports, completion) {
     if(config.mode === 'auto') {
       const auditConfig = p.readConfig ? await p.readConfig(state.cwd) : read(join(state.cwd,'pdd.json'),{});
       if(auditConfig.autopilot?.audit !== false) for(const run of await (p.listRuns ?? listRuns)({cwd:state.cwd,cancelled:true},p)) {
-        if(run.repo?.toLowerCase()!==state.repo.toLowerCase() || run.automaticOrigin?.coordinatorId!==state.coordinatorId) continue;
+        if(run.repo?.toLowerCase()!==state.repo.toLowerCase() || run.automaticOrigin?.repository?.toLowerCase()!==state.repo.toLowerCase()
+          || run.automaticOrigin?.machine!==state.machine || !samePath(run.sourceRoot,state.cwd)) continue;
         for(const pr of pendingAudits({run}, {...p,onAuditHold: hold => state.auditHolds.push({number:run.number,...hold})})) timeRules.push({kind:'post-merge-audit',number:run.number,pr,reason:`Run pdd autopilot audit ${run.number} ${pr}; retain the saved verdict and do not launch an auditor by hand.`});
       }
     }

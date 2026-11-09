@@ -83,7 +83,18 @@ the discovery boundary, and reconcile its directory, issue, repository and attem
 with allRuns before measuring costs. Missing, malformed, unreadable or omitted
 records hold before launch. Read earlier local and shared audit evidence before
 launch, including the session-reuse inventory. An unreadable folder or damaged
-record holds before launch. Supply shared auditor chats to cost refresh by runId;
+record holds before launch. Use the same complete state-dependent saved-record
+validation in discovery and the public audit command, before import, cost
+measurement, launch or publication. Validate identity, state, times and chat
+metadata; recorded state requires a valid complete result, completion time and
+fresh native UUID session identity. Repository identities in local evidence,
+when present, and all shared evidence must match the selected repository.
+Starting/unknown states cannot carry a result or publications. Validate every
+present publication reservation, including its state, time and successful value
+(or concern kind). Invalid local or shared authority is audit-evidence-invalid;
+unreadable authority is audit-evidence-unreadable. Retain its bytes and
+reservations. It authorizes no follow-up effects and no additional auditor
+launch, including for another PR in the same evidence inventory. Supply shared auditor chats to cost refresh by runId;
 a shared attempt absent from discovery leaves cost admission unknown. Use the native dead-owner recovery lock through an
 injected acquireAuditLock port; it is not the workflow mutation lock. A second
 caller waits for a later tick, never sends an early BAD alert. The concern file
@@ -121,8 +132,10 @@ integer number. `cause` is `audit-evidence-invalid` for damaged JSON/schema or
 PR identity, `audit-attempt-mismatch` for a different run attempt,
 `audit-evidence-unreadable` for a file read failure, or
 `audit-folder-unreadable` for a folder read failure. A missing folder or file
-means no evidence yet. Preserve all evidence and reservations. Continue scanning
-other PRs after a record failure; a folder failure holds its merged PRs only.
+means no evidence yet. Preserve all evidence and reservations. Continue ordinary issue selection after a record failure. Damaged local or shared
+inventory holds every otherwise pending audit that could use that inventory;
+an invalid audit cannot admit a launch for another PR. A local folder failure
+holds its merged PRs only.
 Discovery makes no paid call or publication.
 
 Ports may supply fs, env, now, execFile, readConfig, agentDefinitions,
@@ -149,6 +162,6 @@ hold, never absence. Legacy local reservation files also prevent resend.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"df5bc560537b63d2896de1d0e8b403a4b375c1182b0e8d3f27be8f49222eb9aa","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","additionalProperties":true}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"approved","prose_sha256":"af5461a253428814cf910ea8f4fed93fcd5d074f89bdf455255bfb8ef8f99c3c","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

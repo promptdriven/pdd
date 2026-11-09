@@ -5,6 +5,7 @@ import * as nativeFs from 'node:fs';
 import {readFileSync,writeFileSync,mkdirSync,readdirSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
+import {pendingAudits} from '../src/autopilot-audit.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {captureCosts} from '../src/cost-ledger.mjs';
 import {updateRunCosts} from '../src/workflow-runs.mjs';
@@ -273,3 +274,64 @@ for(const kind of ['damaged','invalid-schema','unreadable-file','unreadable-fold
   const out=await w.check(24);assert.equal(w.launches.length,1);assert.equal(out.code,1);
   assert.ok(captured.coverage.includes('audit-session-unavailable'));
 });
+
+test('review: malformed saved verdict must not authorize BAD follow-ups',async t=>{
+  const w=await world(t); assert.equal((await w.check()).code,0);
+  const a=w.audit();a.result={verdict:'BAD'};
+  const identity=createHash('sha256').update(JSON.stringify([a.runId,a.pr,a.merge])).digest('hex');
+  writeFileSync(w.file(),JSON.stringify(a));
+  writeFileSync(join(w.concernFolder(),'..','records',`${identity}.json`),JSON.stringify(a));
+  const out=await w.check();
+  const pushes=w.calls.filter(c=>c.file==='git'&&c.args[0]==='push');
+  assert.equal(pushes.length,0,'DAMAGED_AUDIT_MUST_NOT_PUSH_REVERT');
+  assert.equal(w.alerts.length,0);assert.equal(out.code,1);assert.ok(out.text.includes('audit-evidence-invalid'));
+});
+test('review: malformed prior audit verdict must hold a new auditor launch',async t=>{
+  const w=await world(t); assert.equal((await w.check()).code,0);
+  const a=w.audit();a.result={verdict:'OK'};
+  const identity=createHash('sha256').update(JSON.stringify([a.runId,a.pr,a.merge])).digest('hex');
+  writeFileSync(w.file(),JSON.stringify(a));
+  writeFileSync(join(w.concernFolder(),'..','records',`${identity}.json`),JSON.stringify(a));
+  w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));w.session=randomUUID();
+  const out=await w.check(24);
+  assert.equal(w.launches.length,1,'DAMAGED_PRIOR_AUDIT_MUST_HOLD_LAUNCH');
+  assert.equal(out.code,1);assert.ok(out.text.includes('audit-evidence-invalid'));
+});
+
+// The saved schema guards both public command execution and tick discovery.
+const auditDamage = {
+  verdict:a=>{a.result.verdict='MAYBE';}, summary:a=>{delete a.result.summary;},
+  evidence:a=>{a.result.evidence=' ';}, kind:a=>{delete a.result.kind;},
+  recommendation:a=>{a.result.revert='yes';}, concernKind:a=>{a.result.verdict='CONCERN';a.result.kind='../bad';},
+  repository:a=>{a.repository='foreign/repo';}, at:a=>{a.at='yesterday';},
+  sessionId:a=>{a.chat.session.id='bad-session';}, startedAt:a=>{a.chat.startedAt=null;},
+  state:a=>{a.state='done';}, unrecordedResult:a=>{a.state='starting';},
+  missingResult:a=>{delete a.result;}, completion:a=>{delete a.completedAt;},
+  chat:a=>{a.chat.agent='other';}, session:a=>{a.chat.session={};},
+  reservation:a=>{a.comment={state:'sent'};}, reservationState:a=>{a.comment.state='retry';},
+  reservationTime:a=>{a.comment.at='yesterday';}, reservationValue:a=>{delete a.comment.value;},
+  revertReservation:a=>{a.revert={state:'sent',at:a.at,value:'url'};},
+  concernReservation:a=>{a.concern={state:'sending',kind:'bad'};},
+};
+for(const custody of ['local','shared']) for(const [damage,corrupt] of Object.entries(auditDamage)) {
+  test(`saved audit schema: ${custody} ${damage} holds discovery and public command`,async t=>{
+    const w=await world(t);assert.equal((await w.check()).code,0);
+    const a=w.audit();corrupt(a);
+    const shared=join(w.concernFolder(),'..','records',`${createHash('sha256').update(JSON.stringify([a.runId,a.pr,a.merge])).digest('hex')}.json`);
+    const file=custody==='local'?w.file():shared;
+    writeFileSync(file,JSON.stringify(a));
+    w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+    const before=readFileSync(file,'utf8'), reservations=readdirSync(join(w.concernFolder(),'..','records')).sort();
+    const holds=[];
+    assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[],'DAMAGED_INVENTORY_MUST_HOLD_DISCOVERY');
+    assert.deepEqual(holds.map(h=>h.cause),['audit-evidence-invalid','audit-evidence-invalid']);
+    const beforeEffects=effects([w]);
+    let measured=0;w.nativeUsage=true;w.config({auditTokenLimit:1000});
+    w.refreshCosts=()=>{measured++;throw Error('invalid authority must not reach measurement');};
+    const out=await w.check(24);
+    assert.equal(out.code,1);assert.ok(out.text.includes('audit-evidence-invalid'));
+    assert.equal(w.launches.length,1);assert.deepEqual(effects([w]),beforeEffects);assert.equal(measured,0);
+    assert.equal(readFileSync(file,'utf8'),before);
+    assert.deepEqual(readdirSync(join(w.concernFolder(),'..','records')).sort(),reservations);
+  });
+}
