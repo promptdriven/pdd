@@ -76,8 +76,13 @@ for (const frame of [null, [], 'synthetic-private', 0, false]) {
 const fs = require('node:fs');
 const reader = require('node:readline').createInterface({ input: process.stdin });
 const keepAlive = setInterval(() => {}, 1000);
+// A broken shutdown must fail the marker check without leaving an orphan.
+const lifetime = setTimeout(() => {
+  clearInterval(keepAlive); reader.close(); process.stdin.destroy();
+}, 10_000).unref();
 // EOF must not end the process before its SIGTERM handler can write the marker.
 process.on('SIGTERM', () => {
+  clearTimeout(lifetime);
   // Make shutdown asynchronous so a signal alone cannot prove completion.
   setTimeout(() => {
     fs.writeFileSync(${JSON.stringify(stopped)}, 'stopped');

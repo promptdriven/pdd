@@ -69,7 +69,9 @@ VM suite command fakes keep their scenario paths in the fake executable itself,
 not in inherited environment variables. Affinity regressions check the clean
 child environment and reserved CPU list together.
 Keep the health transport's asynchronous shutdown marker and bounded observation
-from #3089. Do not import operational captures as fixtures.
+from #3089. Bound the fake child lifetime if SIGTERM never arrives; its lifetime
+limit must not write the shutdown marker or satisfy the shutdown assertion.
+Do not import operational captures as fixtures.
 
 ## Dependencies
 
@@ -84,7 +86,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"d7579647f2992b9621912387f21e1feabc8febf61b5f1caa89c5c76ff628cce5","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"d7579647f2992b9621912387f21e1feabc8febf61b5f1caa89c5c76ff628cce5","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>

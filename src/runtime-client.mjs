@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1e835b5f96c50aa4a40dcc77ebf7414ed980b9dfa3874cfcab3e16fa2d662264).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 13970975f7482af747201cbedcdb1f6621be17ec1b1efe18160b1b08e3c65701).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -3274,6 +3274,11 @@ function tryLink(answer, origin) {
   return answer?.state === 'passed' && answer.result?.session?.state === 'running' ? validLink(answer.result?.url, origin, 'try') : null;
 }
 
+function tryRecovery(context, test, id) {
+  const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
+  return new Stop(3, `The original Try ${id} is not confirmed running. Its saved setup is kept; no replacement was sent.\nRead-only status: GET ${context.origin}/v1/runs/${id} (authenticated).\nRead it again with: pdd simulate ${target} --no-open --no-wait\nUse --new only after reconciling the original outcome to start a separate Try.`);
+}
+
 async function reopenTry(context, record, test) {
   const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
   const again = `pdd simulate ${target}`;
@@ -3398,10 +3403,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (requestedBudget !== null && !options['--new'] && !live) throw new Stop(3, 'This Try is not confirmed open. Its budget was not changed. Read the same Try again later; use --new only to replace it deliberately.');
       if (requestedBudget !== null && !options['--new'] && (!Number.isSafeInteger(answer?.result?.session?.max_calls) || answer.result.session.max_calls < 1)) throw new Stop(3, 'The interpreter did not confirm this Try’s current budget. No budget change or reopen was sent.');
       if (requestedBudget !== null && !options['--new'] && requestedBudget > answer.result.session.max_calls) throw new Stop(5, 'This interpreter does not support raising this Try’s budget yet. The same Try and saved data are kept.');
-      // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
-      // A Try the server lost (state unknown, for example after a restart) counts as ended too: a new Try costs no AI calls.
+      // An unavailable or ended record does not authorize a replacement setup.
       const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused', 'unknown'].includes(answer?.state)
         || (answer?.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state));
+      if (ended && !options['--new']) throw tryRecovery(context, test, record.id);
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd simulate ${test.story} --new (it stops the open Try first).`);
       }
@@ -3481,11 +3486,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session);
     }
     if (stepTimeLimit(done.answer, { steps: row.steps, secrets: context.secrets })) { applyAnswer(row, done.answer, context); return printTryProblem(context, row); }
-    if (done.answer?.state === 'unknown') {
-      delete repoState.tries[test.path];
-      store.saveRepo(root, repoState);
-      throw new Stop(3, `The Try setup did not finish on the server (its state is unknown; the server may have restarted). It used no AI calls. Run pdd simulate ${test.story} to make a new Try.`);
-    }
+    if (done.answer?.state === 'unknown') throw tryRecovery(context, test, request.requestId);
     if (done.unknownWhy || done.open || !done.answer) {
       throw new Stop(3, `The Try setup is not finished after ${TRY_MS / 60_000} min${done.answer?.state ? ` (last state: ${cleanText(done.answer.state)})` : ''}. Run pdd simulate ${test.story} again later; it reads this Try first and makes no second one.`);
     }
