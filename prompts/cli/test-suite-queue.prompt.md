@@ -1,7 +1,8 @@
 # Shared full-suite queue
 
 Own `src/test-suite-queue.mjs` and the compatibility entrypoint
-`scripts/vm-suite-lock.sh` and `src/test-suite-entry.mjs`. This queue bounds full-suite resource use for all
+`scripts/vm-suite-lock.sh`, `src/test-suite-entry.mjs` and the detached native
+recorder `src/test-suite-recorder.mjs`. This queue bounds full-suite resource use for all
 repositories and parallel workflow runs on one machine. It runs only an explicit
 operator or worker command; it does not schedule tests or approve publication.
 
@@ -13,8 +14,19 @@ path selected below, or throwing for a relative path. Export
 waiting with position, running, failure with reason, successful completion, or
 queue unavailable with its cause.
 
-Export native port adapter `executeSuite(command, {cwd, env, timeoutMs, onChild, cpuIds, taskset}, ports = {})`,
-which resolves `{exitCode, reason}` after child cleanup.
+Export native port adapter `executeSuite(command, {cwd, env, timeoutMs, onChild, onOutput, startGate = false, cpuIds, taskset}, ports = {})`,
+which resolves `{exitCode, reason, signal, ownershipConfirmed}` after child cleanup.
+`ownershipConfirmed` is Boolean: false if a bounded cleanup cannot establish that
+all owned group members have stopped. Such a receipt retains state running,
+outcome unknown, null exit/counts and its environment; it keeps its reservation.
+Native cleanup probes its own process group for up to two seconds after SIGKILL.
+Linux zombie members are stopped; unreadable observations are uncertain. Inject
+`groupAlive(pgid)` (Boolean or null for uncertain), `kill(pid, signal)`
+(negative owned process group), and `sleep(ms)` for this check. `signal` is null
+or the termination signal on a closed child, and absent on a spawn error.
+Optional `onOutput(stream, bytes)` receives raw stdout/stderr buffers; without it,
+output inherits the caller streams. `startGate` blocks command execution until
+`onChild(pid)` succeeds, then supplies EOF on command stdin.
 
 Export `runTestSuite({cwd, command, timeout = 30, env}, ports = {})`, returning
 `{exitCode, message}`, and synchronous `readSuiteProgress({cwd, since = 0, env},
@@ -78,6 +90,53 @@ directory names or secrets. Older tickets without the field remain readable.
 The compatibility entrypoint uses the same policy, so the same synthetic suite
 has the same result from a clean caller and an agent caller. Offline proof uses
 real CLI children, a controlled suite and fake machine capacity; no live agents.
+
+## Durable validation evidence
+
+Before native validation starts, save the exact `command`, `cwd`, `source`,
+`logPath`, `receiptPath` and recorder ownership on the ticket. `source` has
+`head` (Git commit or null), `fingerprint` (SHA-256 of Git-visible tracked changes and
+untracked file contents across the whole checkout, even from a nested cwd, or null), `runId` (matching workflow run identity or
+null), `issue` (matching issue number or null), and `error` (unavailable source
+reason or null). Source identity describes the start; it does not authorize a
+merge or prove the checkout stayed unchanged. Keep each attempt separately.
+The explicit command and its output can contain operator-supplied values; store
+receipts and logs with mode 0600 in the private queue directory.
+
+The detached recorder is the execution custodian. Save `recorderPid` and
+`recorderIdentity` (Linux process start ticks, or null when unavailable) before
+it receives permission to start. The recorder saves `childPid` before releasing
+the child command's start gate. No validation command may run if this save fails.
+Stream every stdout/stderr byte to `logPath` before forwarding it to the caller.
+A closed caller must not stop recording or cause a resend. On completion, stop
+owned descendants, drain output, remove the owned temporary environment, and
+atomically save the terminal receipt before returning or forwarding completion.
+
+Receipts and `readSuiteProgress` expose the added fields above plus `exitCode`
+(integer or null), `signal` (termination signal or null), `outcome` (`running`,
+`completed`, or `unknown`), and `counts` (null without a complete TAP summary,
+else `{tests, suites, pass, fail, cancelled, skipped, todo}`, each a nonnegative
+integer). Parse only a complete final top-level stdout TAP summary after a TAP 13 header
+and a top-level plan. Later non-summary output or an unfinished final line
+invalidates that count receipt; a duration line and blank lines may follow. Missing or
+incomplete counts stay null; exit zero alone is not a test-count receipt.
+Preserve nonzero output and status too. The native CLI announces receipt/log locations after registration and before
+completion, so terminal truncation cannot hide them. The compatibility entrypoint
+sets the `announceReceipt: false` port to preserve its lifecycle-only stdout; its
+receipts and logs remain available through the queue. Default this port to true.
+Older records without evidence fields remain readable and provide null values.
+
+A later process observes the same ticket and recorder through the shared queue.
+A live recorder keeps custody even after its original caller dies. An identity
+mismatch is not proof that the recorder still owns that PID. If neither recorder
+nor suite group is live, report `outcome: unknown`, `exitCode: null` and unknown
+counts unless a terminal receipt exists. Do not invent an exit, infer failure
+causes from output tails, repeat an uncertain command, or signal a recovered PID.
+Live or uncertain descendants retain their slot. Status remains read-only.
+Native timeout and explicit caller SIGINT/SIGTERM cancel through the recorder;
+unexpected caller loss leaves the recorder working to its original timeout.
+All process and source observations have injectable ports. Native process-group
+signaling applies only to a child started by that executor.
 
 ## Machine capacity
 
@@ -163,8 +222,9 @@ an unrelated process or reclaim a live or uncertain owner. Unknown or unreadable
 queue ownership fails closed; it cannot admit extra suites.
 
 Persist waiting, running and completed records atomically outside the checkout.
-Record only ticket, owner PID, child PID when known, cwd, state, timestamps,
-failure reason, assigned CPU IDs (`cpuIds`), share (`coresPerCheck`), taskset path and `environmentPolicy`, never the command, environment values or output. Report changed queue
+Retain the evidence fields owned by Durable validation evidence and the lifecycle
+fields: ticket, owner PID, child PID when known, cwd, state, timestamps,
+failure reason, assigned CPU IDs (`cpuIds`), share (`coresPerCheck`), taskset path and `environmentPolicy`. Never record inherited environment values. Report changed queue
 positions as `waiting for a check slot (position N)`, including full builds
 and waits on a busy machine. Autopilot reports the shared
 work as check slots. Retain completed intervals
@@ -191,7 +251,9 @@ come from the machine resource owner.
 - Native Node filesystem, OS, child process and clock facilities implement ports.
 - Inject `fs`, `now`, `sleep`, `alive(pid)`, `acquireLock(directory)`,
   `execute(command, {cwd, env, timeoutMs, onChild})`, `pid`, `uuid()` (temporary-file identity), `queueRoot`, and
-  `say(text)` to fake outside effects. Execute resolves `{exitCode, reason}` and
+  `say(text)`, `source(cwd)` (the source shape above), `git(args, cwd)` (a
+spawnSync-shaped local Git result), `processIdentity(pid)` (start ticks or null),
+and `stdout`/`stderr` write ports to fake outside effects. Execute resolves `{exitCode, reason}` and
   calls `onChild(pid)` before awaiting the suite. Native defaults handle signals
   and process-group termination. Status uses the same filesystem, clock and PID
   liveness ports; an unavailable queue read is explicit, never idle evidence.

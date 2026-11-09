@@ -855,6 +855,22 @@ Queue admission still uses the caller's queue selectors. Each ticket records
 If private folder setup fails before execution starts, the ticket finishes with
 the failure reason and releases its slot. Any allocated private folders are removed.
 
+The native CLI prints a receipt path and a full-output log path in the shared
+queue for each attempt. The compatibility runner keeps its lifecycle output; its
+receipts are in the same queue. The receipt stores the explicit command, cwd, starting Git head and
+worktree fingerprint, matching workflow run, owned recorder and child, terminal
+exit and signal, and complete TAP summary counts when available. Missing counts
+stay unknown. Logs and receipts use private file permissions. Explicit command
+values and command output are retained; inherited environment values are not.
+
+The recorder keeps the same validation running if its calling session disappears.
+A later `pdd workflow status` reads its saved progress without running the command
+again. Completion saves the log and terminal receipt before returning. Explicit
+SIGINT/SIGTERM cancels through the recorder; unexpected caller loss leaves the
+original timeout in force. If custody is lost before a terminal receipt exists,
+status reports an unknown outcome. A later validation has its own ticket and
+keeps earlier evidence. A receipt describes execution; it does not approve a merge.
+
 Full suites and full builds share machine capacity across repositories and
 worktrees. Run a full build through the same command. Additional
 runs show "waiting for a check slot (position N)". Workflow status also shows the

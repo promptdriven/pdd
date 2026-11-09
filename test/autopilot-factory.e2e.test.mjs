@@ -2,6 +2,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import {proseSha256} from '../src/runtime-preflight.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
 import {existsSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
@@ -350,4 +351,49 @@ test('factory 12: stopped legacy runs free a full shared budget for a second rep
   }
   assert.ok(w.herdr.panes.includes(busy),'foreign-busy-pane-survives-resume');
   assert.deepEqual(w.leadActions,[]);assert.deepEqual(second.leadActions,[]);
+});
+
+
+test('factory 2b: validation log and child custody survive a session change (#3117)',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.until(r=>Boolean(r.done.change));
+  await w.command(['workflow','status','17']);const run=w.record(),oldSession=run.chats.at(-1).session.id;
+  const started=join(w.base,'validation-started'),release=join(w.base,'validation-release'),calls=join(w.base,'validation-calls');
+  const summary='TAP version 13\n1..2\n# tests 2\n# suites 0\n# pass 1\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n';
+  const prefix='factory-before-session-change\n'+'x'.repeat(160000)+'\n';
+  put(w.base,'session-validation.cjs',`const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(calls)},'once\\n');process.stdout.write(${JSON.stringify(prefix)});fs.writeFileSync(${JSON.stringify(started)},'1');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);process.stderr.write('factory-after-session-change\\n');process.stdout.write(${JSON.stringify(summary)});process.exitCode=7;}},10);`);
+  let caller;
+  const command=`${JSON.stringify(process.execPath)} ${JSON.stringify(join(w.base,'session-validation.cjs'))}`;
+  const validation=w.command(['workflow','suite','--command',command],{actor:'worker',cwd:run.root,allowFailure:true,expectInterrupted:true,onSpawn:child=>{caller=child;}});
+  // Register after the world cleanup with a nested scope so release precedes removal.
+  try {
+    await eventually(()=>existsSync(started),'validation must reach its controlled hold');
+    const ticket=queueRows(w.env.PDD_SUITE_QUEUE).at(-1);
+    assert.ok(ticket.logPath,'GAP #3117: active validation must save a durable output path');
+    assert.equal(ticket.command,command);assert.equal(ticket.source.runId,run.runId);assert.equal(ticket.source.head,w.git(run.root,'rev-parse','HEAD'));
+    assert.ok(ticket.childPid);assert.ok(ticket.recorderPid);assert.ok(ticket.recorderIdentity);
+    await eventually(()=>readFileSync(ticket.logPath,'utf8').includes(prefix),'full prefix must be durable before caller loss');
+    // This handle belongs to this fixture command. Never recover a PID to signal it.
+    caller.kill('SIGKILL');const interrupted=await validation;assert.equal(interrupted.signal,'SIGKILL');
+    const pane=w.herdr.panes.find(p=>p.cwd===run.root&&p.agent);assert.ok(pane);
+    const newSession=randomUUID();pane.agent.agent_session={agent:'codex',kind:'id',value:newSession};
+    w.herdr.sessions.push({agent:'codex',id:newSession,root:run.root,at:w.time});
+    await w.command(['workflow','status','17']);
+    const observed=queueRows(w.env.PDD_SUITE_QUEUE).find(r=>r.ticket===ticket.ticket);
+    assert.equal(observed.state,'running');assert.equal(observed.childPid,ticket.childPid);assert.equal(observed.recorderPid,ticket.recorderPid);
+    assert.notEqual(newSession,oldSession);assert.equal(w.record().runId,run.runId);
+    put(w.base,'validation-release','1');
+    await eventually(()=>readJson(ticket.receiptPath).state==='finished','custodian must finish after caller loss');
+    const saved=readJson(ticket.receiptPath),receiptBytes=readFileSync(ticket.receiptPath);
+    assert.equal(saved.exitCode,7);assert.equal(saved.outcome,'completed');
+    assert.deepEqual(saved.counts,{tests:2,suites:0,pass:1,fail:1,cancelled:0,skipped:0,todo:0});
+    const output=readFileSync(saved.logPath,'utf8');assert.ok(output.includes(prefix));assert.ok(output.includes('factory-after-session-change'));
+    assert.equal(readFileSync(calls,'utf8'),'once\n');assert.equal(queueRows(w.env.PDD_SUITE_QUEUE).length,1);
+    await w.command(['workflow','status','17']);assert.deepEqual(readFileSync(ticket.receiptPath),receiptBytes);
+    await a.finish();await a.merge();assert.equal(readJson(ticket.receiptPath).exitCode,7);assert.deepEqual(w.leadActions,[]);
+  } finally {
+    put(w.base,'validation-release','1');
+    if(caller?.exitCode===null&&caller?.signalCode===null)caller.kill('SIGTERM');
+    await validation;
+    await eventually(()=>queueRows(w.env.PDD_SUITE_QUEUE).every(r=>r.state==='finished'),'owned factory validations must settle');
+  }
 });

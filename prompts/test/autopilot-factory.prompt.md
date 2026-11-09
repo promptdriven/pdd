@@ -69,6 +69,19 @@ permitted for the damaged record. Keep the shared audit authority intact.
 
 Include a complete pane budget held by several stopped runs. Each has several area chats in one worktree, no saved session IDs, an old layout without createdWorkspaceId and an older coordinator ID for the same machine and folder. Hide Herdr IDs so bounded native discovery must prove the correct sessions. Start a second repository's coordinator and its first workflow run against the shared Herdr service; both must obtain panes through native reclamation. Verify the first run has a live area chat before waking the held runs. Later clear the blockers and resume every held run with its own current-area UUID. Assert screens exist before closes, saved sessions match each area, claim recovery preserves each admitted claim era, and foreign workspaces and busy agents survive. Use only disposable homes, config, queues and service fakes; select a unique throwaway session name for the harness.
 
+## Validation session change (#3117)
+
+Start a controlled validation with the native suite queue in a real factory
+workflow. Hold it after it emits more than a terminal tail. End its calling
+process and change the fake chat session while validation is running. A fresh
+workflow status process must find the same ticket, source, log and owned child.
+Release the validation once. Its full stdout/stderr, nonzero exit and complete
+TAP counts must survive in the saved receipt. Assert one command invocation,
+no duplicate ticket, no signal to a recovered process, and unchanged receipt
+bytes after later observations. Finish the workflow with a fresh successful
+validation; the failed attempt stays available. Use only the factory's private
+home, config and queues. Retain this scenario as a failing assertion on the base.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.
