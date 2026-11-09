@@ -25,6 +25,14 @@ Load isolation before production code in focused test entrypoints or their
 shared fixtures. The npm test command also preloads isolation, so a new test gets
 a temporary HOME even if it omits the shared import. Each process owns its home;
 parallel test files cannot remove another file's home.
+Before test code runs, remove inherited suite-runner controls `PDD_SUITE_QUEUE`,
+`PDD_VM_SUITE_LOCK` and `SUITE`. These select the outer queue and command; they
+must not change a test's subprocess environment or queue selection. Apply this
+to focused helper imports and the npm preload. Tests may set explicit fixture
+selectors after isolation loads. Keep the assigned `PDD_CHECK_CPUS` execution
+hint. Cover both entry routes with synthetic caller controls, verify child
+processes cannot inherit them, and leave the caller's environment and queue
+files unchanged.
 Each isolated process also sets a private `PDD_INTERPRETER_QUEUE` under its
 allocated temporary home, replacing inherited selectors. Checks using a fresh
 injected environment or a native child must explicitly carry a fixture queue.

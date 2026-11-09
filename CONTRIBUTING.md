@@ -65,6 +65,9 @@ production modules, either
 in the entrypoint or through a shared fixture. It gives each test process a
 private temporary HOME and PDD_INTERPRETER_QUEUE and clears inherited state and agent config directory
 overrides. Explicit fixture homes still select their own default state paths.
+It also clears inherited `PDD_SUITE_QUEUE`, `PDD_VM_SUITE_LOCK` and `SUITE`
+before test code runs. Tests can then set their own fixture queue selectors.
+The assigned `PDD_CHECK_CPUS` hint stays available.
 Import the helper first when adding a test without a shared fixture. `npm test`
 also preloads it. The owning process removes its temporary home on exit. OS account-home lookup
 requires an injected `userInfo` fake; an un-injected lookup fails the process
