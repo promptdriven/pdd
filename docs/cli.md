@@ -1172,6 +1172,12 @@ The JSON row includes `prose_coverage`: each sentence has its draft field pointe
 Only supported whole sentences have mappings. Each unmapped sentence is quoted
 in its own question and keeps the draft partial. Recognized formatting rules stay
 in schema descriptions. Local lint alone cannot establish completeness.
+This gate applies to prose, embedded JSON, dependency JSON, `--contract`,
+`--refresh` and `--extend`. It reads prompt prose and declared context and checks
+each mapping against the final declaration after shared `$contract` expansion.
+Supplying JSON does not resolve an unmapped sentence. Such a draft stays partial
+with its quoted question and next step. Import, refresh and extension validate
+expanded schema copies and preserve authored references in the saved block.
 
 For complex prose, each incomplete result has `questions` with `pointer` and
 `question`, and `next_step`. Answer the questions in a Git-visible JSON contract
