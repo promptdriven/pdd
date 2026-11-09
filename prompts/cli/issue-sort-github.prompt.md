@@ -48,6 +48,9 @@ completion replaces pre-split source evidence for closure admission; verify both
 children again after waits. All label, comment and native update effects carry
 an ownership guard inside native mutation admission.
 
+
+Reject a sort batch if a subject is now manually held, including already saved records.
+
 ## Dependencies
 
 - [Mixed areas](issue-mixed.prompt.md): required part orchestration and trusted choices.

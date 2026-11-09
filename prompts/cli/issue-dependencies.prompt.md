@@ -244,6 +244,9 @@ same- or cross-repo cycle: `cycle`; otherwise `ok`. Use that precedence. This
 validation promises no atomic transaction across machines. Post-write projection
 must expose a concurrent cycle and stop affected starts.
 
+
+An effective `pdd:manual` hold prevents issue eligibility.
+
 ## Dependencies
 
 - [Sort](issue-sort.prompt.md): required generation, runtime and verification context for group waits and sort eligibility.

@@ -167,7 +167,7 @@ async function bulkRoots(cwd, repository, roots, ports) {
       if (!object(row) || info(row.url)?.key !== info(root.html_url)?.key || row.number !== root.number
         || !/^[1-9][0-9]*$/.test(String(row.fullDatabaseId ?? '')) || String(root.id ?? '') !== String(row.fullDatabaseId) || typeof row.title !== 'string' || typeof row.body !== 'string'
         || row.state !== 'OPEN' || !object(row.author) || typeof row.author.login !== 'string' || !fields.every(k => complete(row[k]))) return;
-      if (row.labels.nodes.some(x => !object(x) || typeof x.name !== 'string') || row.labels.nodes.some(x => ['pdd:working','pdd:owner-whole','pdd:owner-split'].includes(x.name))) return;
+      if (row.labels.nodes.some(x => !object(x) || typeof x.name !== 'string') || row.labels.nodes.some(x => ['pdd:working','pdd:owner-whole','pdd:owner-split','pdd:manual'].includes(x.name))) return;
       if (row.assignees.nodes.some(x => !object(x) || typeof x.login !== 'string' || !x.login.trim())) return;
       if (row.comments.nodes.some(x => !object(x) || !/^[1-9][0-9]*$/.test(String(x.fullDatabaseId ?? '')) || typeof x.body !== 'string'
         || typeof x.createdAt !== 'string' || typeof x.updatedAt !== 'string' || !object(x.author) || typeof x.author.login !== 'string')) return;
@@ -1305,6 +1305,17 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
     if (ports.githubCache === undefined) ports.githubCache = defaultEtagCache(ports);
   }
   ports.github ??= ports.dependencyReads ? sessionGithub(rawGithub(cwd, ports), ports.dependencyReads) : rawGithub(cwd, ports);
+  ports.manualAuthority ??= { read: async ({ repository, author }) => {
+    const api = service(cwd, { ...ports, githubCache: null }).api;
+    try {
+      const repo = (await api(`repos/${repository}`, 'GET', undefined, undefined, repository, true)).value;
+      if (typeof repo?.owner?.login !== 'string') return { known: false, allowed: false };
+      if (repo.owner.login.toLowerCase() === author.toLowerCase()) return { known: true, allowed: true };
+      const result = (await api(`repos/${repository}/collaborators/${encodeURIComponent(author)}/permission`, 'GET', undefined, undefined, repository, true)).value;
+      if (!['admin','maintain','write','read','triage','none'].includes(result?.permission)) return { known: false, allowed: false };
+      return { known: true, allowed: ['admin','maintain','write'].includes(result.permission) };
+    } catch { return { known: false, allowed: false }; }
+  } };
   ports.authority = supplied.authority?.[NATIVE_AUTHORITY] ? nativeAuthority(cwd, ports) : supplied.authority ?? nativeAuthority(cwd, ports);
   ports.context = supplied.context?.[NATIVE_CONTEXT] ? nativeContext(cwd, ports) : supplied.context ?? nativeContext(cwd, ports);
   ports.evidence = supplied.evidence?.[NATIVE_EVIDENCE] ? nativeEvidence(cwd, ports) : supplied.evidence ?? nativeEvidence(cwd, ports);
@@ -1356,6 +1367,32 @@ function normalizedRecord(comment, issue, authority) {
 export async function readDependencySnapshot(input = {}, supplied = {}) {
   const scope = nativeReadScope(), ports = createDependencyReadPorts({ cwd: input?.cwd ?? '' }, supplied, scope);
   try { return await observeSnapshot(input ?? {}, ports, scope, Boolean(supplied.sortContext || !supplied.github || supplied.github[NATIVE_GITHUB])); } finally { flushCache(ports); }
+}
+
+// A manual hold needs native repository permission, independently of configured trust.
+async function manualFromObservation({ repository, labels, timeline }, ports) {
+  if (!Array.isArray(labels)) return { held: false, known: false };
+  if (!labels.some(x => (typeof x === 'string' ? x : x?.name) === 'pdd:manual')) return { held: false, known: true };
+  const events = timeline.filter(x => ['labeled', 'unlabeled'].includes(x?.event) && x.label?.name === 'pdd:manual');
+  const last = events.at(-1);
+  if (!last || last.event !== 'labeled' || !last.actor?.login) return { held: false, known: false };
+  try {
+    const result = await ports.manualAuthority.read({ repository, author: last.actor.login });
+    return { held: result.known === true && result.allowed === true, known: result.known === true };
+  } catch { return { held: false, known: false }; }
+}
+
+export async function readManualHold({ repository, issue, cwd = '' }, supplied = {}) {
+  try {
+    const ports = createDependencyReadPorts({ cwd }, supplied);
+    // Safety reads must not use saved snapshot data or conditional cached responses.
+    if (ports.github[NATIVE_GITHUB]) ports.github = rawGithub(cwd, { ...ports, githubCache: null, dependencyReads: undefined });
+    const raw = parse((await ports.github.issue({ repository, issue, safety: true })).json);
+    if (raw.error || !Array.isArray(raw.labels)) return { held: false, known: false };
+    if (!raw.labels.some(x => (typeof x === 'string' ? x : x?.name) === 'pdd:manual')) return { held: false, known: true };
+    const timeline = await allPages(ports.github, repository, 'timeline', issue, undefined, true);
+    return manualFromObservation({ repository, labels: raw.labels, timeline }, ports);
+  } catch { return { held: false, known: false }; }
 }
 
 async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, scope, sorting) {
@@ -1482,6 +1519,11 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
         const edge = kind === 'blockedBy' ? { dependent: key, blocker: other } : { dependent: other, blocker: key };
         edges.push(edge); queue.push(other);
       }
+    }
+    if (labels.includes('pdd:manual')) {
+      const manual = observed.timeline ? await manualFromObservation({ repository: i.repository, labels, timeline: ownerTimeline }, ports) : { known: false, held: false };
+      if (manual.held) issue.holds.push('pdd:manual');
+      if (!manual.known && observed.timeline) missing('timeline', `Manual hold evidence unavailable: ${key}`);
     }
     issue.sortOwnerChoice = await readOwnerChoice({ labels, comments: ownerComments, timeline: ownerTimeline }, author => authorityFor(i.repository, author));
     if (splits.length) {

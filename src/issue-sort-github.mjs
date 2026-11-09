@@ -1,3 +1,4 @@
+import { readManualHold } from './issue-dependencies-github.mjs';
 // Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 7b10f3e6725b8945b62f7c7d0a5d766a3717a902eda351238a71df998507bcca).
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
@@ -50,6 +51,7 @@ export function validateSortBatch({ snapshot, prepared, issues, sorts }) {
   const current = new Map([...snapshot.issues, ...snapshot.inputs].map(x => [x.key, x.revision]));
   for (const record of sorts) {
     const issue = snapshot.issues.find(x => x.key === record.issue), old = prepared.issues.find(x => x.key === record.issue);
+    if (issue?.holds?.includes('pdd:manual')) throw Error('input-changed');
     if (JSON.stringify(selectedSort(snapshot, issue)) === JSON.stringify(record)) continue;
     const ids = (old?.sorts ?? []).filter(x => x.authority !== 'outsider');
     const superseded = new Set(ids.filter(x => x.intact && validSort(x.record)).flatMap(x => x.record.base));
@@ -137,6 +139,8 @@ export async function currentSortIssue({ cwd, repository, snapshot, route }, por
 async function sortOwnership({ repository, route, areas }, ports) {
   // Keep these observations after all potentially long evidence reads. The native
   // update calls this again inside its mutation guard, after any admission wait.
+  const manual = await readManualHold({ repository, issue: Number(route.issue.split('/').pop()), cwd: ports.cwd }, ports);
+  if (!manual.known || manual.held) return false;
   const owners = parse((await ports.owners.read({ repository, issues: [route.issue] })).json);
   const raw = parse((await ports.github.issue({ repository, issue: Number(route.issue.split('/').pop()) })).json);
   const labels = Array.isArray(raw.labels) ? raw.labels.map(x => typeof x === 'string' ? x : x.name) : null;

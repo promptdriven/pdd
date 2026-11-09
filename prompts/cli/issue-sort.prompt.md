@@ -61,6 +61,9 @@ Require the current projected graph's group-ready flag before adding these lines
 an invalid or unobserved group supplies no extra references.
 
 
+
+Do not queue or route manually held issues as sort subjects.
+
 ## Dependencies
 
 - [Mixed areas](issue-mixed.prompt.md): required mixed-area policy and part identity.

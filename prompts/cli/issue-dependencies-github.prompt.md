@@ -603,6 +603,9 @@ A local run with parking.phase parked and confirmed closed chat/shell custody re
 
 Export `releaseParkedClaim({cwd,repository,claim,coordinatorId,machine,runId,branch},ports)`. Reuse the live claim winner and writer ports; verify the exact current coordinator, machine, comment and label-event identity. Release only that claim's pdd:working label, preserving branch/worktree/files. Read comments for marker `<!-- pdd:park-release:RUNID -->` and post at most one short release comment naming the retained branch and blocker timeout. A retry after label removal still completes its own marked release without removing a newer owner's label. Return `{state: released|skipped}`; unknown ownership/failed writes never count as release. This is the native safety release route; no model call.
 
+
+A current `pdd:manual` label holds an issue only when its latest application in the complete timeline was made by the repository owner or a collaborator with write, maintain, or admin permission. Configured trust alone does not grant this authority. Missing history or permission evidence is unknown. `readManualHold({repository, issue}, ports)` returns `{held, known}` and reads current issue and full timeline. Snapshot issues expose effective holds as `pdd:manual`.
+
 ## Dependencies
 
 - [Parking policy](autopilot-parking.prompt.md): required native generation and verification context for shared owner-row working classification and retained check custody.

@@ -398,6 +398,9 @@ The workflow runner supplies the check and owns cleanup and allocation policy.
 
 A confirmed resource-free parked run (`occupied:false`, parking evidence from the canonical owner observation) does not use a working slot. Keep its same identity and claim. Refuse a second run for that issue even when parked; the existing run resumes. A ready parked wake takes capacity before a new issue. Preserve all current graph, trust, pane, owner and run-cap admission rules.
 
+
+Never select a manually held issue as a dependency-review subject. Reject a completed analysis if its subject became manually held before effects or completion.
+
 ## Dependencies
 
 - [Parking classification](autopilot-parking.prompt.md): required native generation and verification context for the shared working count.

@@ -180,7 +180,7 @@ function headIds(snapshot, graph = projectIssueGraph({ snapshot })) {
 function selectSubjects(graph, snapshot, repository, issue) {
   const number = key => Number(key.split('/').pop());
   const outsider = new Set(snapshot.issues.filter(i => i.authority === 'untrusted').map(i => issueKey(i.key)));
-  return graph.nodes.filter(x => root(x.key, repository) && x.nativeState === 'open' && !outsider.has(x.key) && (issue ? x.key === issue || x.key.endsWith(`/issues/${issue}`) : (['unchecked', 'stale'].includes(x.reviewState) || sortSubjects(snapshot).includes(x.key))))
+  return graph.nodes.filter(x => root(x.key, repository) && x.nativeState === 'open' && !outsider.has(x.key) && !snapshot.issues.find(i => i.key === x.key)?.holds?.includes('pdd:manual') && (issue ? x.key === issue || x.key.endsWith(`/issues/${issue}`) : (['unchecked', 'stale'].includes(x.reviewState) || sortSubjects(snapshot).includes(x.key))))
     .sort((a, b) => (a.reviewState === 'unchecked' ? 0 : 1) - (b.reviewState === 'unchecked' ? 0 : 1) || number(b.key) - number(a.key));
 }
 
@@ -250,6 +250,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
     if (saved) savedIds.set(review.issue, saved.id);
   }
   const subjects = request.issues.filter(key => !savedIds.has(key)), remaining = analysis.reviews.filter(r => !savedIds.has(r.issue));
+  if (request.issues.some(key => snapshot.issues.find(i => i.key === key)?.holds?.includes('pdd:manual'))) return finish(pendingResult('input-changed'));
   if (request.issues.length && !subjects.length && analysis.reviews.length === request.issues.length
     && analysis.reviews.every(r => r.effects !== 'pending' || !r.dependencies.length)) {
     const questions = analysis.reviews.flatMap(r => r.questions);
@@ -390,7 +391,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
     catch { /* Unconfirmed effects wait; graph holds routed issues. */ }
   }
   let graph = projectIssueGraph({ snapshot });
-  const subjects = graph.nodes.filter(n => root(n.key, repository) && n.nativeState === 'open').map(n => n.key);
+  const subjects = graph.nodes.filter(n => root(n.key, repository) && n.nativeState === 'open' && !snapshot.issues.find(i => i.key === n.key)?.holds?.includes('pdd:manual')).map(n => n.key);
   // The claim scan of the snapshot gives the claims: the open issues are not read again.
   const owners = subjects.length ? json((await ownersFor(ports, repository, subjects)).json) : { claims: [] };
   const skipped = subjects.filter(x => ownedElsewhere(owners, x));

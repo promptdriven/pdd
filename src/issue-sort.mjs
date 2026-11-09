@@ -48,6 +48,7 @@ export function sortPlan({ snapshot }) {
   if (!snapshot.sortContext) return { queued, routes, groups };
   const prefix = `https://github.com/${snapshot.repository.toLowerCase()}/issues/`;
   for (const issue of snapshot.issues.filter(x => x.key.startsWith(prefix) && x.state === 'open' && x.authority === 'trusted')) {
+    if (issue.holds?.includes('pdd:manual')) continue;
     const record = selectedSort(snapshot, issue), route = { issue: issue.key, action: 'hold', area: '', owner: '', reason: '', record, umbrella: '', members: [], evidence: record?.status.evidence ?? [] };
     routes.push(route);
     const live = issue.execution !== 'idle' || issue.sortOpenPr === true || issue.holds.some(x => /claim/i.test(x) && !/^Expired claim\b/.test(x));
