@@ -75,7 +75,7 @@ add a record, verdict, filesystem read or model call.
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "acb7d5970e4748999847d3673b04ffe92939bdd347d1617641e4662a9e9d38d3",
   "entries": [
     {
