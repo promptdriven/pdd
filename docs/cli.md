@@ -781,7 +781,7 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 
-`pdd dependencies prepare [--issue N]` prepares a coordinator packet. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
+`pdd dependencies prepare [--issue N]` prepares a coordinator packet. Review batches use the stable owner of this machine’s Autopilot for the repository. A replacement coordinator chat can finish the same batch. Ownership is checked before automatic review delivery and again before saving reviews. A different owner leaves the batch pending with `owner-changed`. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
 `pdd workflow park --reason TEXT --step STEP` records an environment failure of
 check, verify or formal in the current area. Environment parks require `--step`;

@@ -16,7 +16,10 @@ const root = (key, repository) => key.toLowerCase().startsWith(`https://github.c
 const json = value => typeof value === 'string' ? JSON.parse(value) : value;
 const rows = snapshot => new Map([...snapshot.issues.map(x => [x.key, x.revision]), ...snapshot.inputs.map(x => [x.key, x.revision])]);
 const sameRows = (a, b) => a.every(x => b.get(x.key) === x.revision);
-const ownedElsewhere = (owners, issue) => (owners.claims || []).some(x => x.issue === issue && x.active && (!x.owner || x.owner !== owners.localOwner));
+const ownedElsewhere = (owners, issue) => (owners.claims || []).some(x => x.issue === issue && x.active && (!x.owner || x.owner !== owners.localOwner || owners.localMachine && x.machine && x.machine !== owners.localMachine));
+// coordinatorId is the launcher's stable machine/repository owner, not its pane.
+const reviewOwner = owners => owners.localOwner ? { coordinatorId: owners.localOwner, machine: owners.localMachine ?? '' } : null;
+const sameReviewOwner = (bound, owners) => !bound || bound.coordinatorId === owners.localOwner && (!bound.machine || bound.machine === owners.localMachine);
 const exact = (obj, keys) => obj && typeof obj === 'object' && !Array.isArray(obj) && Object.keys(obj).sort().join(',') === keys.slice().sort().join(',');
 const strings = a => Array.isArray(a) && a.every(x => typeof x === 'string');
 const validRows = a => Array.isArray(a) && a.every(x => exact(x, ['key','revision']) && typeof x.key === 'string' && typeof x.revision === 'string' && x.key && x.revision) && new Set(a.map(x => x.key)).size === a.length;
@@ -185,7 +188,8 @@ export async function prepareDependencyIntake({ cwd = '', repository, issue }, p
   // Small batches: one new issue never waits for a large review.
   const queued = selected.filter(x => !skipped.includes(x.key)).map(x => x.key).slice(0, REVIEW_BATCH);
   let contextJson = queued.length ? (await ports.evidence.read({ cwd, repository, issues: queued })).json : JSON.stringify({ source: [], requirements: [] });
-  contextJson = JSON.stringify({ ...json(contextJson), ...prepareSortContext(snapshot) });
+  const bound = reviewOwner(owners);
+  contextJson = JSON.stringify({ ...json(contextJson), ...prepareSortContext(snapshot), ...(bound ? { reviewOwner: bound } : {}) });
   const evidence = json(contextJson);
   if (!Array.isArray(evidence.source) || !Array.isArray(evidence.requirements) || evidence.requirements.some(x => x.authority !== 'trusted')) throw Error('invalid-input');
   const current = rows(snapshot);
@@ -208,6 +212,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   for (const r of analysis.reviews) if (!exact(r, ['analysis','base','continuation','issue','inputs','candidates','outcome','dependencies','questions','effects']) || typeof r.analysis !== 'string' || !r.analysis || !strings(r.base) || typeof r.continuation !== 'string' || typeof r.issue !== 'string' || !validRows(r.inputs) || !validRows(r.candidates) || !Array.isArray(r.dependencies) || !r.dependencies.every(d => exact(d, ['key','reason','evidence']) && typeof d.key === 'string' && typeof d.reason === 'string' && strings(d.evidence)) || !strings(r.questions)) throw invalidAnalysis();
   const prepared = json(request.snapshotJson); const context = json(request.contextJson);
   if (prepared.repository.toLowerCase() !== request.repository.toLowerCase()) throw invalidAnalysis();
+  if (context.reviewOwner !== undefined && (!exact(context.reviewOwner, ['coordinatorId','machine']) || typeof context.reviewOwner.coordinatorId !== 'string' || !context.reviewOwner.coordinatorId || typeof context.reviewOwner.machine !== 'string')) throw invalidAnalysis();
   const original = analysis;
   // Code owns each subject's link row: drop a carried copy and add the current one before saving.
   const links = (snapshot, issue, dependencies) => { try { return dependencyLinks({ snapshot, issue, dependencies }); } catch { throw invalidAnalysis(); } };
@@ -269,10 +274,11 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
   // A link change to or from a subject after prepare means its analysis saw old links.
   const relinked = subjects.map(k => links(snapshot, k).row).filter((row, i) => links(prepared, subjects[i]).row.revision !== row.revision);
   if (relinked.length) return finish(pendingResult('input-changed', { rows: relinked }));
+  const ownershipSubjects = [...new Set([...subjects, ...analysis.reviews.filter(r => r.effects === 'pending' && r.dependencies.length).map(r => r.issue)])];
   let owners;
-  try { owners = subjects.length ? json((await ports.owners.read({ repository: request.repository, issues: subjects })).json) : { claims: [] }; }
+  try { owners = ownershipSubjects.length ? json((await ports.owners.read({ repository: request.repository, issues: ownershipSubjects })).json) : { claims: [] }; }
   catch { return finish(pendingResult('observations-incomplete')); }
-  if (subjects.some(k => ownedElsewhere(owners, k))) return finish(pendingResult('owner-changed'));
+  if (!sameReviewOwner(context.reviewOwner, owners) || ownershipSubjects.some(k => ownedElsewhere(owners, k))) return finish(pendingResult('owner-changed'));
   const impact = analysis.impactJson ? json(analysis.impactJson) : null;
   if (impact && (!exact(impact, ['inputs','reviews','affected','complete']) || !validRows(impact.inputs) || !strings(impact.reviews) || !strings(impact.affected) || typeof impact.complete !== 'boolean' || !sameRows(impact.inputs, current))) throw invalidAnalysis();
   if (impact && !request.issues.length) throw invalidAnalysis();
@@ -402,12 +408,17 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   const context = JSON.parse(prepared.request.contextJson);
   const relevant = new Set([...(context.source || []).filter(x => x.issues?.some(i => prepared.queued.includes(i))).map(x => x.key), ...(context.requirements || []).filter(x => prepared.queued.includes(x.issue)).map(x => x.key), ...selectedSnapshot.reviews.filter(r => prepared.queued.includes(r.issue)).flatMap(r => r.inputs.map(x => x.key))]);
   const linkRows = prepared.queued.map(issue => dependencyLinks({ snapshot: selectedSnapshot, issue }).row);
-  const fingerprint = JSON.stringify({ repository: repository.toLowerCase(), issues: prepared.queued.slice().sort(), inputs: order([...selectedSnapshot.inputs.filter(x => relevant.has(x.key)), ...selectedSnapshot.issues.filter(i => root(i.key, repository)).map(i => ({ key: i.key, revision: i.revision })), ...linkRows]), heads: headIds(selectedSnapshot), sort: sortRequestFingerprint(selectedSnapshot, prepared.queued) });
+  const fingerprint = JSON.stringify({ repository: repository.toLowerCase(), reviewOwner: context.reviewOwner ?? null, issues: prepared.queued.slice().sort(), inputs: order([...selectedSnapshot.inputs.filter(x => relevant.has(x.key)), ...selectedSnapshot.issues.filter(i => root(i.key, repository)).map(i => ({ key: i.key, revision: i.revision })), ...linkRows]), heads: headIds(selectedSnapshot), sort: sortRequestFingerprint(selectedSnapshot, prepared.queued) });
   const now = Date.parse((await ports.clock.now({})).iso), subjectSet = JSON.stringify(prepared.queued.slice().sort());
   const save = async () => (await ports.pending.save({ repository, json: JSON.stringify(pending) })).ok;
   // One delivery through the existing route. `redelivery` marks a repeated request
   // while it is sent, so the launcher can name it and refuse it under uncertain custody.
   const send = async again => {
+    // Snapshot ownership can predate a restart or takeover. Check before AI work.
+    try {
+      const live = json((await ports.owners.read({ repository, issues: prepared.queued })).json);
+      if (!sameReviewOwner(context.reviewOwner, live) || prepared.queued.some(key => ownedElsewhere(live, key))) return false;
+    } catch { return false; }
     pending.requested = fingerprint;
     if (again) pending.redelivery = again; else delete pending.redelivery;
     if (!await save()) return false;
@@ -419,7 +430,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
       if (again) pending.redelivered = again.attempt;
     }
     await save();
-    return true;
+    return delivered.state === 'delivered';
   };
   if (fingerprint !== pending.delivered || trigger === 'refresh') {
     if (!await send(null)) return { queued, eligible, skipped, pending: true, claims, groups: snapshot.sortContext ? sortPlan({ snapshot }).groups : [] };
@@ -432,7 +443,9 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
     // completion was pending, or it never came. Deliver the fresh request again.
     const last = await lastResult(ports, cwd, repository, pending.request);
     const count = pending.redelivered ?? 0;
-    if (count < AGAIN_CAP) await send({ attempt: count + 1, cap: AGAIN_CAP, ...last });
+    if (count < AGAIN_CAP) {
+      if (!await send({ attempt: count + 1, cap: AGAIN_CAP, ...last })) return { queued, eligible, skipped, pending: true, claims, groups: snapshot.sortContext ? sortPlan({ snapshot }).groups : [] };
+    }
     else if (await askAfterCap({ repository, request: prepared.request, snapshot: selectedSnapshot, context, last }, ports)) {
       for (const key of ['subjects', 'redelivered', 'deliveredAt']) delete pending[key];
       await save();
