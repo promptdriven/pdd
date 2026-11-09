@@ -51,14 +51,14 @@ pdd product status --json
 ```
 
 The first three coffee runs have the same needs and can run in parallel. You can
-also do them in order with one agent. Without `--agent`, product start uses Codex without a sign-in check. Start finds the exact run marker in an
+also do them in order with one agent. Start finds the exact run marker in an
 existing issue, including closed issues, before making one. `--no-run` only makes
 or finds that issue. Each started run keeps the normal feature gates and PRs.
 
 The marker search reads bounded pages, including closed issues. A run belongs
 to an issue by a repository owner, member or collaborator, or by you. An
 outsider's marker does not claim your run. If trusted duplicates exist, pdd uses
-the issue of a local run first, then the oldest issue, and warns. Long issue titles use a Story count; the
+the oldest issue and warns. Long issue titles use a Story count or range; the
 body keeps the full IDs and tells the agent how to name the Story files.
 
 Status counts current passing Stories per part and slice, shows stale results,

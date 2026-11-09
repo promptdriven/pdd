@@ -58,7 +58,7 @@ as not replayed, never success; counts must reflect that. Unsupported versions a
   outcome:assertion_failure|crash|survived|not_run,failed_checks:[{vector,step_id,check_index}],reason?}.
   Detection requires assertion_failure, nonzero exit and at least one unique known failed-check reference.
   A crash, empty failure list, unknown assertion, survived control or not-run control is never detection.
-  For not_run, command may be null and exit_code must be null and a nonblank reason is required; never invent an exit.
+  For not_run, command and exit_code may be null and a nonblank reason is required; never invent an exit.
 - formal: {result:proved_bounded|proved_solver|failed|not_run|not_applicable,scope:nonblank,reason:nonblank,
   control_outcome:assertion_failure|crash|survived|not_run,control_command?:nonblank,control_exit_code?:integer0..255,
   counterexample?}. failed requires a counterexample; proved results require assertion_failure control (see

@@ -1,6 +1,6 @@
 # Report a problem with pdd
 
-Use this guide to report a problem with pdd itself: the `pdd` command, the PDD skills, the PDD interpreter (`pdd test`, remote `pdd lint`, `pdd simulate` and the Try tools in `pdd mcp`) or these docs. The guide is for people and for their coding agents. Most issues come from agents, so each step is an instruction that an agent can follow.
+Use this guide to report a problem with pdd itself: the `pdd` command, the PDD skills, the PDD interpreter (`pdd test` and `pdd simulate`) or these docs. The guide is for people and for their coding agents. Most issues come from agents, so each step is an instruction that an agent can follow.
 
 For a bug in your own project, use the `pdd-bug` skill. For access to the interpreter, see [Access](../README.md#access).
 

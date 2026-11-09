@@ -17,7 +17,7 @@ PDD is the `pdd` command and a set of skills for your agent. Your agent writes t
 
 ## Install
 
-You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, you need a supported installed agent ready to use. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
+You need [Node.js](https://nodejs.org) 22.20 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. You also need an agent that can use skills, and access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
 ```sh
 npm install -g github:promptdriven/pdd
@@ -30,7 +30,7 @@ pdd setup
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
 3. `pdd --version` must print `0.1.26`. When your skills are older than pdd, it also prints the command that updates them.
-4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
+4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. A second run changes nothing.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
 
@@ -159,7 +159,7 @@ See [Record a chat approval](docs/cli.md#record-a-chat-approval) for safe comman
 
 ### 5. Code space
 
-Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code. In a `feature` or `bug` workflow run, pdd opens two pull requests:
+Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code. In a workflow run, pdd opens two pull requests:
 
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Prompt tests` lines and the report links.
 2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
@@ -182,7 +182,7 @@ The pdd CLI has no merge command. In manual workflows, ask your agent to merge u
 | `pdd simulate STORY --new --max-calls N` | Start a new simulation with a limit of N AI calls. |
 | `pdd simulate --stop STORY` | Stop the Simulator link of a Story. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
-| `pdd workflow run NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug`, `small-change`, `product` or your own workflow name. |
+| `pdd workflow run NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
 | `pdd workflow status [ISSUE]` | Show where each run is and what it waits for. |
 | `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Simulator links of a run. Changes nothing. |
 | `pdd workflow open ISSUE` | Open the chat of a run. |
@@ -210,9 +210,9 @@ The [CLI reference](docs/cli.md) has every command and option.
 
 ## Access
 
-`pdd test`, remote `pdd lint`, `pdd simulate` and the Try tools in `pdd mcp` use the hosted PDD interpreter. The interpreter lets you in when PDD Cloud approves your GitHub account. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses. After the approval, access starts within 1 minute. For questions about access, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Interpreter%20access%20for%20) with your GitHub login.
+`pdd test` and `pdd simulate` use the hosted PDD interpreter. The interpreter lets you in when PDD Cloud approves your GitHub account. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses. After the approval, access starts within 1 minute. For questions about access, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Interpreter%20access%20for%20) with your GitHub login.
 
-The skills and the other commands run on your computer; `pdd lint --local` is offline.
+The skills and the other commands run on your computer.
 
 ## When something goes wrong
 
@@ -228,7 +228,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 | `This Try session is busy.` | A simulation runs one command at a time. Wait for the first command to finish. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
 | `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
-| `pdd --version` does not print `0.1.26` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.26` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 
