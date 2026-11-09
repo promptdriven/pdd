@@ -627,7 +627,8 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
 | `pdd test --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI or interpreter call; missing/hidden parts, order or region differences fail |
-| `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks and lint locally, without AI or network calls. Uncertain schemas stay draft gaps. |
+| `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks from explicit prose or contracts and lint locally, without AI or network calls. Uncertain facts include field questions and a recovery command. |
+| `pdd interface draft PROMPT [--contract FILE] [--extend \| --refresh] [--json]` | Supply schemas and effect ports, extend an existing block, or reopen a stale block as draft. |
 | `pdd approve PROMPT --automatic --tests COMMAND` | Approve a complete draft of unchanged committed behavior after existing native tests and a complete current prompt check. Strict mode requires a person. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Open the Story in the PDD Simulator: make a Simulator link and open it in your browser. It ends in 24 hours. Short form: `pdd sim`. `--agent NAME` chooses a configured display name (quote spaces), or codex, claude or gemini. With terminal stdout or explicit `--agent`, it connects your agent and waits. Without either, it reads saved cases once and returns. `--no-wait` skips the connection. In a terminal, it adds each case saved in the Simulator to the Story's test file, and asks y/n when you click Approve on the page |
@@ -1147,9 +1148,61 @@ The installed interface drafting capability clears a saved Autopilot wait for
 ordinary continuation route. It does not approve a prompt or a person gate.
 
 `pdd interface draft --all` selects workspace prompts and excludes nested fixture
-projects. Existing blocks stay unchanged. Each result includes local lint findings.
+projects. Without extension or refresh, existing blocks stay unchanged. Each result includes local lint findings.
 A clean local lint is not a server lint or a prompt check. Setup offers this command
 when it finds missing blocks. It never approves them.
+
+
+Complete drafts omit the redundant `kind: full` field so the strict Runtime
+parser can read them; a missing kind means full. Partial local drafts retain
+`kind: partial` and their questions.
+
+The local prose drafter recognizes an explicit single-operation transport: a named
+operation, a required named input field with its type, and a required named result
+field with its type, in closed objects. It requires an explicit pure-behavior
+statement. Its draft execution ceilings are `max_steps: 4` and `max_model_calls: 2`.
+The result labels these as `command-default` draft budgets for review. A prose
+draft that uses them needs a person and cannot use automatic approval. To choose
+other ceilings, supply a contract with `--refresh --contract FILE`.
+Numeric inputs remain numbers even if the function rejects fractions. A contract
+that explicitly requests representative JSON rejection shapes can use a disjoint
+`oneOf` for number, string, boolean, null, arrays of numbers and empty objects.
+This transport does not cover arbitrary nested JavaScript objects.
+
+For complex prose, each incomplete result has `questions` with `pointer` and
+`question`, and `next_step`. Answer the questions in a Git-visible JSON contract
+file, with complete `entries`, `calls`, `resources`, `limits` and `conventions`.
+Use the resource declarations in [RUNBOOK §21](../RUNBOOK.md#21-fake-the-outside-world)
+for file, network and program ports. Then run:
+
+```sh
+pdd interface draft prompts/example.prompt.md --contract contracts/example.json
+pdd lint example
+```
+
+If the prompt already contains an incomplete block, add `--refresh` to the draft
+command. A supplied invalid schema is refused before the prompt changes, with its
+JSON pointer and rule. Local drafting does not contact the Runtime. Runtime lint
+must admit the draft before a check; admission alone does not prove behavior.
+
+To add operations to an approved interface, supply an additive contract fragment:
+
+```sh
+pdd interface draft prompts/example.prompt.md --extend --contract contracts/additions.json
+```
+
+The fragment can add entries, resources or prompt calls. Existing declarations and
+limits must remain equal; conflicts name their pointer and leave the prompt
+unchanged. The combined block is a draft and needs approval. To reopen a stale
+block without changing its declarations, use `--refresh`. To replace declarations
+for changed behavior, use `--refresh --contract FILE`. These routes keep prose
+bytes and never record approval. Extension and refresh cannot use automatic
+approval provenance for new behavior.
+
+Runtime refusals retain a reported field pointer and rule. If the server gives
+only `invalid-interface`, pdd reports any local schema findings separately. When
+there is no local finding, it says that the Runtime did not identify the field.
+No inferred cause is presented as a server diagnosis.
 
 The automatic approval route requires a complete draft from this command,
 unchanged committed prose, code and tests, passing existing native tests, and full

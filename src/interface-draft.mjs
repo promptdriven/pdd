@@ -1,7 +1,8 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 7741e4062edd0c8c7e06a97f545241fcf13c8b57d5060af6ad700aa32c69afb0).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: f2ba793bcaafd76eef32d07ea69a7b17226f82b6d05c4f787e064aa2de23d4a1).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
 import { gitFiles, findTests, readPrompt, promptRefusal, interfaceBlocks, interfaceSchemaProblems, proseSha256, sourceFilePort, sha256 } from './runtime-preflight.mjs';
 import { loadRuntimeWorkspace, allowsRuntimePath, nativeWorkspaceFiles } from './runtime-workspace.mjs';
 
@@ -43,6 +44,7 @@ const git = (root,args,bytes=false) => {
   return result.stdout;
 };
 function rootFor(cwd) { return git(cwd,['rev-parse','--show-toplevel']).trim(); }
+const shellWord = value => /^[A-Za-z0-9_./-]+$/.test(value) ? value : "'"+value.replaceAll("'","'\\''")+"'";
 const metadataFile = root => join(root,'.pdd/interface-drafts.json');
 function drafts(root) {
   try { return JSON.parse(readFileSync(metadataFile(root),'utf8')); }
@@ -61,6 +63,162 @@ function jsonDeclarations(text) {
     try {values.push(JSON.parse(match[1]));} catch { /* Examples with placeholders are not schemas. */ }
   }
   return values.filter(value => value && typeof value==='object' && !Array.isArray(value));
+}
+const objectSchema = properties => ({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
+const objectTransport = schema => object(schema) && (schema.type==='object' || Array.isArray(schema.oneOf) && schema.oneOf.length>0 && schema.oneOf.every(objectTransport));
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+function questionsFor(iface) {
+  const questions=[];
+  const ask=(pointer,question)=>questions.push({pointer,question});
+  if (!Array.isArray(iface.entries) || !iface.entries.length) ask('/entries','Which public operations must this interface expose?');
+  for (const [i,entry] of (Array.isArray(iface.entries) ? iface.entries : []).entries()) {
+    if (typeof entry?.operation!=='string' || !entry.operation.trim()) ask(`/entries/${i}/operation`,'What is the public operation name?');
+    for (const key of ['input_schema','result_schema']) if (!object(entry?.[key])) ask(`/entries/${i}/${key}`,`What are the complete ${key} fields, types, required fields and allowed alternatives for ${entry?.operation ?? i}?`);
+    if (!Array.isArray(entry?.errors)) ask(`/entries/${i}/errors`,`Which error codes can ${entry?.operation ?? i} return (or explicitly none)?`);
+  }
+  for (const key of ['calls','resources']) if (!Array.isArray(iface[key])) ask('/'+key,`Which ${key} are used, with their operation bindings and schemas (or explicitly none)?`);
+  if (!object(iface.limits)) ask('/limits','What max_steps and max_model_calls execution ceilings should this contract use?');
+  return questions;
+}
+function proseInterface(text) {
+  // This grammar requires explicit transport facts. Business-domain names and examples do not supply types.
+  const transport=/\boperation\s+`([\w$]+)`\s+takes an object with required\s+(?:(numeric|number|string|boolean|integer)\s+)?`([\w$]+)`(?: and no other properties)?,? and returns an object with required\s+(numeric|number|string|boolean|integer)\s+`([\w$]+)`(?:, the returned string; neither object has additional properties| and no other properties)\./i.exec(text);
+  const operation=transport && [transport[0],transport[1],transport[2],transport[3]];
+  const result=transport && [transport[0],transport[4],transport[5]];
+  const pure=/(?:no|neither) external resources, operating-system commands(?:,| or) (?:or )?(?:saved data|persistent state)/i.test(text);
+  const noDependencies=/^## Dependencies\s+None\.\s*$/m.test(text);
+  if (!operation || !result || !pure || !noDependencies || [...text.matchAll(/\boperation\s+`([\w$]+)`/g)].length!==1) return null;
+  let type=operation[2]?.toLowerCase();
+  const representative=/input schema admits representative JSON shapes for rejection/i.test(text) && /rejects every non-number/i.test(text);
+  if (!type && !representative) return null;
+  if(type==='numeric') type='number';
+  const input=representative ? {oneOf:[{type:'number'},{type:'string'},{type:'boolean'},{type:'null'},{type:'array',items:{type:'number'}},objectSchema({})]} : {type};
+  const errors=[...text.matchAll(/\bcode`?\s+equal to\s+`([^`]+)`/g)].map(match=>match[1]);
+  const iface={kind:'full',status:'draft',prose_sha256:'',entries:[{operation:operation[1],input_schema:objectSchema({[operation[3]]:input}),result_schema:objectSchema({[result[2]]:{type:result[1]==='numeric'?'number':result[1]}})}],calls:[],resources:[],limits:{max_steps:4,max_model_calls:2},conventions:[]};
+  if(!/\b(?:throw|throws|refuse|refused|reject|rejects|error|errors|exception)\b/i.test(text) || errors.length && [...text.matchAll(/\bcode\b/g)].length===errors.length) iface.entries[0].errors=[...new Set(errors)];
+  // A second transport claim or an effect contradicting the pure declaration needs author input.
+  const rest=text.replace(transport[0],'').replace(/Its input schema admits representative JSON shapes for rejection; the native function rejects every non-number, including arbitrary JavaScript objects\./i,'');
+  const sensitive=rest.replace(/(?:There are |This is pure behavior: )?(?:no|neither) external resources, operating-system commands(?:,| or) (?:or )?(?:saved data|persistent state)\./ig,'');
+  const supplementary=/\b(?:also|additionally|in addition|included|flag|flags)\b/i.test(sensitive);
+  if(supplementary || /\b(?:required|optional|properties|fields|schema)\b|\b(?:input|result|output)\s+(?:also\s+)?(?:has|includes|contains|requires|returns)\b/i.test(sensitive)) {
+    delete iface.entries[0].input_schema;delete iface.entries[0].result_schema;
+  }
+  if(supplementary || /\b(?:writes?|reads?|opens?|appends?|deletes?|executes?|spawns?|fetch(?:es)?|sends?|transmits?|telemetry|remote|service|network|database|callback|ports?)\b/i.test(sensitive) || /\b(?:It|The operation|The module|This module)\s+(?!(?:formats?|displays?|owns?|returns?|takes?|uses?)\b)[a-z]+/.test(sensitive)) {
+    delete iface.resources;delete iface.calls;
+  }
+  if(supplementary) iface.draft_gaps=['Resolve the supplementary contract claim: '+sensitive.split(/(?<=[.!?])\s+/).filter(sentence=>/\b(?:also|additionally|in addition|included|flag|flags)\b/i.test(sentence)).join(' ')];
+  return iface;
+}
+function declarationError(pointer,rule) {
+  return Object.assign(Error(`${pointer}: ${rule}`),{code:'interface-contract-invalid',pointer,rule});
+}
+function completeContract(value) {
+  if (!object(value)) throw declarationError('','Use one JSON interface object.');
+  if (Object.hasOwn(value,'kind') && value.kind!=='full') throw declarationError('/kind','Supply a full executable contract.');
+  const allowed=['kind','status','prose_sha256','entries','calls','resources','limits','conventions','schema_version','instance_types'];
+  for(const key of Object.keys(value)) if(!allowed.includes(key)) throw declarationError('/'+key,'Unknown interface field; declare effect ports in resources.');
+  const iface={...value,kind:'full',status:'draft',prose_sha256:''};
+  const fields=(item,names,pointer)=>{for(const key of Object.keys(item)) if(!names.includes(key)) throw declarationError(pointer+'/'+key,'Unknown declaration field.');};
+  const questions=questionsFor(iface);
+  if (questions.length) throw declarationError(questions[0].pointer,questions[0].question);
+  const unique=(items,key,pointer)=>{
+    if(!Array.isArray(items)) throw declarationError(pointer,'Must be an array.');
+    const seen=new Set();
+    for(const [i,item] of items.entries()) {
+      if(!object(item) || typeof item[key]!=='string' || !item[key].trim() || seen.has(item[key])) throw declarationError(`${pointer}/${i}/${key}`,'Use a unique nonblank name.');
+      seen.add(item[key]);
+    }
+  };
+  unique(iface.entries,'operation','/entries');unique(iface.calls,'operation','/calls');unique(iface.resources,'name','/resources');
+  for(const [i,entry] of iface.entries.entries()) {
+    fields(entry,['operation','input_schema','result_schema','errors','instance','resource_operations','copy_out'],`/entries/${i}`);
+    if(Object.hasOwn(entry,'instance')) {
+      const binding=entry.instance,pointer=`/entries/${i}/instance`;
+      if(!object(binding)) throw declarationError(pointer,'Declare a factory or method binding object.');
+      fields(binding,['kind','type','path'],pointer);
+      if(!['factory','method'].includes(binding.kind)) throw declarationError(pointer+'/kind','Use factory or method.');
+      if(typeof binding.type!=='string' || !binding.type.trim() || !Array.isArray(iface.instance_types) || !iface.instance_types.some(type=>type?.name===binding.type)) throw declarationError(pointer+'/type','Name the instance type.');
+      if(typeof binding.path!=='string' || !binding.path.startsWith('/')) throw declarationError(pointer+'/path','Use the handle JSON pointer.');
+    }
+    if(Object.hasOwn(entry,'copy_out')) {
+      if(!Array.isArray(entry.copy_out)) throw declarationError(`/entries/${i}/copy_out`,'Declare copy-out path/schema rows.');
+      for(const [j,row] of entry.copy_out.entries()) {
+        if(!object(row) || typeof row.path!=='string' || !row.path.startsWith('/') || !object(row.post_schema)) throw declarationError(`/entries/${i}/copy_out/${j}`,'Declare a JSON path and post_schema.');
+        fields(row,['path','post_schema'],`/entries/${i}/copy_out/${j}`);
+        const problems=interfaceSchemaProblems({limits:iface.limits,entries:[{input_schema:row.post_schema}]});
+        if(problems.length) throw declarationError(`/entries/${i}/copy_out/${j}/post_schema`,problems[0].rule);
+      }
+    }
+    if(Object.hasOwn(entry,'resource_operations') && (!Array.isArray(entry.resource_operations) || entry.resource_operations.some(name=>typeof name!=='string' || !name.trim()))) throw declarationError(`/entries/${i}/resource_operations`,'List the bound resource operations.');
+    if(entry.errors.some(code=>typeof code!=='string' || !code.trim()) || new Set(entry.errors).size!==entry.errors.length) throw declarationError(`/entries/${i}/errors`,'Use unique nonblank error codes.');
+  }
+  for(const [i,call] of iface.calls.entries()) {
+    fields(call,['operation','target','target_operation','max_calls'],`/calls/${i}`);
+    if(typeof call.target!=='string' || !/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$)).+\.prompt\.md$/.test(call.target)) throw declarationError(`/calls/${i}/target`,'Name a repository-relative target prompt.');
+    if(typeof call.target_operation!=='string' || !call.target_operation.trim()) throw declarationError(`/calls/${i}/target_operation`,'Name the target operation.');
+    if(!Number.isSafeInteger(call.max_calls) || call.max_calls<1) throw declarationError(`/calls/${i}/max_calls`,'Declare a positive safe integer call ceiling.');
+  }
+  for(const [i,resource] of iface.resources.entries()) {
+    const pointer=`/resources/${i}`;
+    fields(resource,['name','kind','access','operations'],pointer);
+    if(!['port','sql','blob','compute','collection'].includes(resource.kind)) throw declarationError(pointer+'/kind','Use port, sql, blob, compute or collection.');
+    if(!['read','write'].includes(resource.access)) throw declarationError(pointer+'/access','Declare read or write access.');
+    unique(resource.operations,'name',pointer+'/operations');
+    if(!resource.operations.length) throw declarationError(pointer+'/operations','Declare at least one bound operation.');
+    for(const [j,operation] of resource.operations.entries()) {
+      const opPointer=pointer+`/operations/${j}`;
+      fields(operation,['name','access','arguments_schema','result_schema'],opPointer);
+      if(!['read','write'].includes(operation.access)) throw declarationError(opPointer+'/access','Declare read or write access.');
+      if(resource.access==='read' && operation.access==='write') throw declarationError(opPointer+'/access','A read resource cannot bind a write operation.');
+      for(const key of ['arguments_schema','result_schema']) if(!objectTransport(operation[key])) throw declarationError(opPointer+'/'+key,'Declare a complete closed object schema.');
+    }
+  }
+  if(Object.hasOwn(iface,'schema_version') && !['prompt-runtime.interface.v1','prompt-runtime.interface.v2'].includes(iface.schema_version)) throw declarationError('/schema_version','Use a supported Runtime interface version.');
+  if(Object.hasOwn(iface,'instance_types')) {
+    if(iface.schema_version!=='prompt-runtime.interface.v2') throw declarationError('/schema_version','Instance bindings require prompt-runtime.interface.v2.');
+    unique(iface.instance_types,'name','/instance_types');
+    for(const [i,type] of iface.instance_types.entries()) {
+      fields(type,['name','resource'],`/instance_types/${i}`);
+      if(!iface.resources.some(resource=>resource.name===type.resource && resource.kind==='collection' && resource.access==='write')) throw declarationError(`/instance_types/${i}/resource`,'Bind a declared write collection.');
+    }
+  }
+  if(Object.hasOwn(iface,'conventions') && !Array.isArray(iface.conventions)) throw declarationError('/conventions','Must be an array.');
+  for(const [i,convention] of (iface.conventions ?? []).entries()) {
+    const pointer=`/conventions/${i}`;
+    if(!object(convention)) throw declarationError(pointer,'Declare a path and convention object.');
+    fields(convention,['path','convention'],pointer);
+    if(typeof convention.path!=='string' || !convention.path.startsWith('/') || /~(?:[^01]|$)/.test(convention.path)) throw declarationError(pointer+'/path','Use an existing interface JSON pointer.');
+    let selected=iface;
+    for(const part of convention.path.slice(1).split('/').map(part=>part.replaceAll('~1','/').replaceAll('~0','~'))) selected=object(selected)||Array.isArray(selected) ? selected[part] : undefined;
+    if(selected===undefined) throw declarationError(pointer+'/path','The interface pointer does not exist.');
+    if(typeof convention.convention!=='string' || !convention.convention.trim()) throw declarationError(pointer+'/convention','Name the convention.');
+  }
+  const problems=interfaceSchemaProblems(iface);
+  if (problems.length) throw declarationError(problems[0].pointer,problems[0].rule);
+  return iface;
+}
+function extendContract(previous, addition) {
+  if(!object(addition)) throw declarationError('','Use one additive JSON contract object.');
+  for(const key of Object.keys(addition)) if(!['entries','calls','resources','limits','conventions','kind','status','prose_sha256','schema_version','instance_types'].includes(key)) throw declarationError('/'+key,'Unknown extension field.');
+  const merged={...previous};
+  for (const [field,key] of [['entries','operation'],['calls','operation'],['resources','name'],['instance_types','name']]) {
+    if(field==='instance_types' && previous[field]===undefined && addition[field]===undefined) continue;
+    if(field==='instance_types' && previous[field]===undefined) merged[field]=[];
+    if (field!=='instance_types' && !Array.isArray(previous[field])) throw declarationError('/'+field,'Refresh the incomplete block with a complete contract first.');
+    merged[field]=[...(previous[field] ?? [])];
+    if(addition[field]!==undefined && !Array.isArray(addition[field])) throw declarationError('/'+field,'Must be an array.');
+    for (const item of addition[field] ?? []) {
+      const index=merged[field].findIndex(old=>old[key]===item?.[key]);
+      if(index<0) merged[field].push(item);
+      else if(!isDeepStrictEqual(merged[field][index],item)) throw declarationError(`/${field}/${index}`,'An extension cannot change an existing declaration.');
+    }
+  }
+  if(addition.schema_version!==undefined) {
+    if(previous.schema_version!==undefined && previous.schema_version!==addition.schema_version) throw declarationError('/schema_version','An extension must preserve the declared version.');
+    merged.schema_version=addition.schema_version;
+  }
+  for(const key of ['limits','conventions']) if(Object.hasOwn(addition,key) && !isDeepStrictEqual(previous[key],addition[key])) throw declarationError('/'+key,'An extension must preserve the existing value.');
+  return completeContract(merged);
 }
 function inferInterface(root,path,text) {
   const files=sourceFilePort(root), sources=[{path,text}];
@@ -86,7 +244,9 @@ function inferInterface(root,path,text) {
     }
     if(iface.kind==='native-only') throw Error('Drafting cannot choose native-only. Declare and review its reason.');
   } else {
-    const operations=[...text.matchAll(/\b(?:Export|export|exports)\s+(?:(?:async|module|function)\s+)*`?([A-Za-z_$][\w$]*)\s*\(/g)].map(match=>match[1]);
+    if (!candidates.length) { const inferred=proseInterface(text); if(inferred) return {iface:inferred,defaultBudget:true}; }
+    const named=[...text.matchAll(/\boperation\s+`([\w$]+)`/g)].map(match=>match[1]);
+    const operations=[...named,...[...text.matchAll(/\b(?:Export|export|exports)\s+(?:(?:async|module|function)\s+)*`?([A-Za-z_$][\w$]*)\s*\(/g)].map(match=>match[1])];
     // An explicitly owned source file can add clear exported function names, never schemas.
     const own=/`(src\/[\w./-]+\.[cm]js)`/.exec(text)?.[1];
     if(own) {
@@ -96,45 +256,72 @@ function inferInterface(root,path,text) {
     iface={kind:'partial',status:'draft',prose_sha256:'',entries:[...new Set(operations)].map(operation=>({operation})),
       draft_gaps:[candidates.length>1 ? 'More than one interface declaration is present; select the owning contract.' : 'Declare complete input_schema and result_schema for each public operation. Review calls, resources and limits against the prompt.']};
   }
-  return iface;
+  return {iface,defaultBudget:false};
 }
-export async function runInterfaceDraft({words=[],all=false,json=false,cwd=process.cwd()}={},ports={}) {
+export async function runInterfaceDraft({words=[],all=false,json=false,cwd=process.cwd(),contract,extend=false,refresh=false}={},ports={}) {
   const stdout=ports.stdout ?? process.stdout,stderr=ports.stderr ?? process.stderr;
   try {
     if(all && words.length || !all && !words.length) throw Error('Use pdd interface draft PROMPT... or pdd interface draft --all.');
+    if ((contract || extend || refresh) && (all || words.length!==1) || extend && (!contract || refresh)) throw Error('Use one prompt; --extend requires --contract and cannot combine with --refresh.');
     const root=rootFor(cwd),workspace=loadRuntimeWorkspace({root}),visible=new Set(gitFiles(root));
     const paths=all ? promptPaths(root) : [...new Set(words.map(word=>relative(root,resolve(cwd,word)).split('\\').join('/')))];
     const files=sourceFilePort(root,visible,workspace);
+    const recovery=path=>`pdd interface draft ${shellWord(relative(cwd,resolve(root,path)).split('\\').join('/'))} --refresh --contract FILE`;
     // Validate the entire selection before any mutation.
     for(const path of paths) {
       if(!path.endsWith('.prompt.md') || !visible.has(path) || !allowsRuntimePath(workspace,path)) throw Error(`Not a workspace prompt: ${path}`);
       nativeWorkspaceFiles(root).stat({path});
       files.read({path});
     }
+    let supplied;
+    if(contract) {
+      const target=relative(root,resolve(cwd,contract)).split('\\').join('/');
+      if (!visible.has(target) || !allowsRuntimePath(workspace,target)) throw Error('Contract must be a Git-visible workspace file.');
+      nativeWorkspaceFiles(root).stat({path:target});
+      supplied=JSON.parse(files.read({path:target}).content);
+    }
     const records=drafts(root),rows=[];
     for(const path of paths) {
       try {
-        const text=files.read({path}).content;
-        if(interfaceBlocks(text).length) {rows.push({path,state:'existing'});continue;}
-        if(/<summary[^>]*>\s*(?:<strong[^>]*>\s*)?Runtime\s+interface/i.test(text)) throw Error('The Runtime interface block is malformed. Fix it before drafting.');
-        const iface=inferInterface(root,path,text);
+        const text=files.read({path}).content,blocks=interfaceBlocks(text);
+        if(blocks.length>1) throw Error('Expected one Runtime interface block.');
+        const block=blocks[0];
+        if(block && !extend && !refresh) {
+          if(contract) throw Error('Use --extend to add declarations or --refresh to replace an existing block.');
+          rows.push({path,state:'existing'});continue;
+        }
+        if(!block && (extend || refresh)) throw Error('Draft the missing interface before extending or refreshing it.');
+        if(!block && /<summary[^>]*>\s*(?:<strong[^>]*>\s*)?Runtime\s+interface/i.test(text)) throw Error('The Runtime interface block is malformed. Fix it before drafting.');
+        const previous=block ? JSON.parse(block[1]) : null;
+        const inference=!extend && !supplied && !refresh ? inferInterface(root,path,text) : null;
+        const iface=extend ? extendContract(previous,supplied) : supplied ? completeContract(supplied) : refresh ? completeContract(previous) : inference.iface;
+        if(iface.kind==='full') delete iface.kind;
+        const inferredBudget=inference?.defaultBudget===true;
+        const questions=questionsFor(iface);
+        if(questions.length) {
+          iface.kind='partial';
+          iface.draft_gaps=[...new Set([...(iface.draft_gaps ?? []),...questions.map(item=>item.pointer+': '+item.question)])];
+        }
         // All whitespace outside the block is original prose, including its final newline.
-        const render=()=>text+'<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface,null,2)+'\n```\n</details>';
+        const render=()=>{const rendered='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface,null,2)+'\n```\n</details>';return block ? text.replace(block[0],()=>rendered) : text+rendered;};
         iface.prose_sha256=proseSha256(render());
         const next=render();
-        records[path]={head:git(root,['rev-parse','HEAD']).trim(),original_sha256:sha256(text),prose_sha256:iface.prose_sha256,interface_sha256:sha256(JSON.stringify(iface))};
+        records[path]={head:git(root,['rev-parse','HEAD']).trim(),original_sha256:sha256(text),prose_sha256:iface.prose_sha256,interface_sha256:sha256(JSON.stringify(iface)),...(block ? {mode:extend?'extend':'refresh'} : inferredBudget ? {mode:'prose'} : {})};
         writeFileSync(join(root,path),next);
-        rows.push({path,state:'drafted'});
-      } catch(error) {rows.push({path,state:'refused',problems:[{code:error.code ?? 'interface-draft-failed',message:error.message}]});}
+        rows.push({path,state:'drafted',...(inferredBudget ? {draft_budget:{source:'command-default',limits:iface.limits}} : {}),...(questions.length ? {questions,next_step:recovery(path)} : {})});
+      } catch(error) {rows.push({path,state:'refused',problems:[{code:error.code ?? 'interface-draft-failed',message:error.message,...(error.pointer!==undefined ? {section:error.pointer,rule:error.rule} : {})}]});}
     }
     if(rows.some(row=>row.state==='drafted')) saveDrafts(root,records);
     for(const row of rows) {
       row.problems ??= interfaceFindings({root,paths:[row.path]});
       row.lint_clean=row.problems.length===0;
+      if(row.state==='existing' && row.problems.some(item=>item.code==='interface-draft-incomplete')) {
+        const iface=readPrompt(root,visible,row.path).interface;row.questions=questionsFor(iface);row.next_step=recovery(row.path);
+      }
     }
     const summary={drafted:rows.filter(row=>row.state==='drafted').length,existing:rows.filter(row=>row.state==='existing').length,lint_clean:rows.filter(row=>row.lint_clean).length,refused:rows.filter(row=>row.problems.length).length,total:rows.length};
     const exit_code=summary.refused ? 4 : 0;
-    stdout.write(json ? JSON.stringify({exit_code,summary,rows})+'\n' : [...rows.map(row=>`${row.path}: ${row.state}; ${row.lint_clean ? 'lint clean' : row.problems.map(item=>`${item.code}: ${item.message}`).join('; ')}`),`Interfaces: ${summary.drafted} drafted, ${summary.existing} existing, ${summary.lint_clean} lint clean, ${summary.refused} refused. 0 AI calls.`].join('\n')+'\n');
+    stdout.write(json ? JSON.stringify({exit_code,summary,rows})+'\n' : [...rows.map(row=>`${row.path}: ${row.state}; ${row.lint_clean ? 'lint clean' : row.problems.map(item=>`${item.code}: ${item.message}`).join('; ')}`+(row.questions?.length ? '\n'+row.questions.map(item=>`Question ${item.pointer}: ${item.question}`).join('\n') : '')+(row.next_step ? `\nNext: ${row.next_step}` : '')+(row.draft_budget ? `\nDraft budget (command default, needs review): ${JSON.stringify(row.draft_budget.limits)}` : '')),`Interfaces: ${summary.drafted} drafted, ${summary.existing} existing, ${summary.lint_clean} lint clean, ${summary.refused} refused. 0 AI calls.`].join('\n')+'\n');
     return exit_code;
   } catch(error) {stderr.write(`${error.message}\n`);return 2;}
 }
@@ -169,7 +356,7 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     const file=join(root,path),text=readFileSync(file,'utf8'),blocks=interfaceBlocks(text);
     if(blocks.length!==1) throw Error('Draft a Runtime interface before automatic approval.');
     const records=drafts(root),iface=JSON.parse(blocks[0][1]),record=records[path];
-    if(!record || iface.status!=='draft' || iface.kind==='native-only' || interfaceFindings({root,paths:[path]}).length || !iface.entries?.length)
+    if(!record || record.mode || iface.status!=='draft' || iface.kind==='native-only' || interfaceFindings({root,paths:[path]}).length || !iface.entries?.length)
       throw Error('Automatic approval needs a complete draft made by pdd interface draft.');
     if(sha256(JSON.stringify(iface))!==record.interface_sha256 || proseSha256(text)!==record.prose_sha256 || record.original_sha256!==sha256(text.replace(blocks[0][0],'')))
       throw Error('The draft changed. Ask a person to approve the new contract.');

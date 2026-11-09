@@ -2,6 +2,10 @@
 
 Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
 
+## Runtime interface refusal diagnostics
+
+For Runtime interface refusals, preserve a server-provided field or JSON pointer and its rule in lint and check output, in text and JSON. If `invalid-interface` has no field or pointer, show any supported local schema findings for the named prompt as local advice, without claiming they caused the server refusal. If none are available, say the Runtime did not identify the field and ask the person to inspect the interface or request a detailed Runtime diagnostic. Never guess a rejected field.
+
 ## Native lint selection and display (draft)
 
 For explicit `pdd lint STORY` (including `--local` without `--timeout`,

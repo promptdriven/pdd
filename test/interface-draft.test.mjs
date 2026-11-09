@@ -29,7 +29,7 @@ test('draft from an explicit contract preserves prose, fills a current hash and 
   assert.deepEqual(summary.summary,{drafted:1,existing:0,lint_clean:1,refused:0,total:1});
   const next=readFileSync(join(setup.repo,PLACE),'utf8'),block=interfaceBlocks(next)[0],iface=JSON.parse(block[1]);
   assert.equal(next.replace(block[0],''),before);
-  assert.equal(iface.status,'draft');assert.equal(iface.kind,'full');
+  assert.equal(iface.status,'draft');assert.equal(Object.hasOwn(iface,'kind'),false,'full drafts use the Runtime-admitted implicit full spelling');
   assert.equal(iface.prose_sha256,proseSha256(next));
   assert.equal(iface.entries[0].operation,'place_order');
   assert.equal(iface.entries[0].input_schema.properties.customerName.type,'string');
