@@ -889,8 +889,8 @@ machine capacity with default limits. Another active repository's snapshot is
 retained when a different repository stops.
 
 Idle automatic runs release their chat process and panes through parking. This
-includes stuck runs, person waits, and stopped recovery attempts. Unclassified
-stops get a 60-second grace period. Saved sessions, worktrees and claims stay.
+includes stuck runs, person waits, and stopped recovery attempts. Bare pauses and recovery
+ceilings without a named blocker get a 60-second grace period. Saved sessions, worktrees and claims stay.
 A continuation uses the saved session in a new pane. Before pane admission fails,
 pdd tries the oldest idle automatic runs with zero grace. Active or uncertain
 checks and workspaces without a saved creation record prevent cleanup. Personal
