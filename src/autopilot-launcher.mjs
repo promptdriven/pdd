@@ -1639,7 +1639,7 @@ async function runTick(stateFile, ports, completion) {
         const args = {ref:String(run.number), cwd:state.cwd, packageRoot:state.packageRoot, coordinatorId:state.coordinatorId, machine:state.machine};
         const parking = parkingPorts(state, p);
         if (!hold.known || await parking.checkProgress(run)) continue;
-        if (!hold.held && !run.parking?.releaseAttempted) {
+        if (!hold.held && !(run.parking?.phase === 'releasing' && run.parking.releaseAttempted !== false)) {
           await p.scanAction(() => parkBlockedRun({...args, manualClear:true}, worker));
           continue;
         }

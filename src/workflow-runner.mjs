@@ -5144,7 +5144,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
   const skipped = reason => ({...done(''), recovery: 'skipped', ...(reason ? {reasonCounts:{[reason]:1}} : {})});
   if (input.manualClear && run?.parking?.blocker?.kind === 'manual' && !run.parking.releaseAttempted
-    && ['parked', 'releasing'].includes(run.parking.phase) && currentParkingOwner(run, p)) {
+    && (run.parking.phase === 'parked' || run.parking.phase === 'releasing' && run.parking.releaseAttempted === false) && currentParkingOwner(run, p)) {
     commitRun(run, p, fresh => {
       const previous = fresh.parking.manualPrevious;
       fresh.parking.phase = 'parked';
@@ -5241,9 +5241,10 @@ export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, 
     && !continuationCheckHeld(fresh, p);
   if (!current(run) || typeof p.releaseParkedClaim !== 'function') return skipped();
   const manual = input.manualHold || run.parking.manualHold === true || run.parking.blocker?.kind === 'manual';
-  if (manual && !run.parking.releaseAttempted && !await p.manualHoldConfirmed?.(run)) return skipped();
-  if (!conditionalCommit(run, p, current, fresh => {fresh.parking.phase = 'releasing'; if (manual) fresh.parking.manualHold = true;})) return skipped();
-  if (!current(readRun(run.runDir)) || manual && !readRun(run.runDir).parking.releaseAttempted && !await p.manualHoldConfirmed?.(readRun(run.runDir))) return skipped();
+  const attempted = row => row.parking.releaseAttempted === true || row.parking.phase === 'releasing' && row.parking.releaseAttempted !== false;
+  if (manual && !attempted(run) && !await p.manualHoldConfirmed?.(run)) return skipped();
+  if (!conditionalCommit(run, p, current, fresh => {if (manual && fresh.parking.phase === 'parked') fresh.parking.releaseAttempted = false; fresh.parking.phase = 'releasing'; if (manual) fresh.parking.manualHold = true;})) return skipped();
+  if (!current(readRun(run.runDir)) || manual && !attempted(readRun(run.runDir)) && !await p.manualHoldConfirmed?.(readRun(run.runDir))) return skipped();
   if (manual && p.manualReleaseReady && !await p.manualReleaseReady()) return skipped();
   if (manual && !conditionalCommit(run, p, current, fresh => {fresh.parking.releaseAttempted = true;})) return skipped();
   const remote = await p.releaseParkedClaim(readRun(run.runDir));
