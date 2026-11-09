@@ -47,8 +47,8 @@ async function produced(t) {
     const checks = seed.steps[0].checks.map(check => ({ ...check, expected: check.value, actual: check.value, passed: true }));
     return { status: 200, json: server.check(id, 'passed', checks) };
   });
-  const env = { ...process.env, HOME: f.home, PDD_STATE_DIR: f.state, PDD_RUNTIME_URL: fake.origin };
-  const { ports } = portsFor(env);
+  const env = { HOME: f.home, PATH: process.env.PATH, PDD_STATE_DIR: f.state, PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_QUEUE: join(f.sandbox, 'interpreter-queue') };
+  const { ports } = portsFor(env, { now: Date.now, sleep: ms => new Promise(done => setTimeout(done, ms)) });
   assert.equal(await runtime.runCheck({ words: selected, options: { '--json': true }, cwd: f.repo }, ports), 0, ports.stderr.text + ports.stdout.text);
   assert.equal(fake.posts.filter(entry => entry.command === 'check').length, 5);
   const batchName = readdirSync(join(f.state, 'batches'))[0], folder = join(f.state, 'batches', batchName);

@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 // #3029: a code PR said "Formal check (agent reported): not recorded." while its formal step had proved the Story's
 // rules. pdd read the formal block only after a full scenario replay, so an area with no scenario vectors (PR 1
 // changed no scenario file) lost it. These cases read real replay-evidence.json files in temporary Git

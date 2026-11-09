@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import assert from 'node:assert/strict';
 import { after } from 'node:test';
 import { spawnSync } from 'node:child_process';

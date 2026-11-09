@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 // #3042: a pdd workflow PR starts with a part a person can read: a status line, the user story, a short summary, the
 // cases, what changed, a check or proof table from pdd's own records and one approval, next or merge line. All machine
 // data stays in one closed Details section. Fixtures follow Serhan-Asad/pdd-autopilot-sandbox PRs #6 and #7.

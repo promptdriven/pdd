@@ -1,3 +1,4 @@
+import './test-home.mjs';
 // Synthetic local repositories and receipts. No hosted result or remote authority.
 import assert from 'node:assert/strict';
 import {execFileSync,execFile as callbackExec} from 'node:child_process';
