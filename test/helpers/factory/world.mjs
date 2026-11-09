@@ -10,6 +10,7 @@ import {fileURLToPath} from 'node:url';
 import {fakeHerdr} from '../fake-herdr.mjs';
 import {proseSha256} from '../../../src/runtime-preflight.mjs';
 import {analysisFor} from '../autopilot-github-world.mjs';
+import {runAutopilotAlerts} from '../../../src/autopilot-alerts.mjs';
 import {factoryGithub} from './github.mjs';
 import {factoryInterpreter} from './interpreter.mjs';
 
@@ -31,6 +32,8 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   writeFileSync(join(base,'bin/gh'),'#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = token ]; then echo factory-token; elif [ \"$1\" = api ] && [ \"$2\" = user ]; then echo \"example 1\"; else echo factory-native-gh-denied >&2; exit 97; fi\n',{mode:0o700});
   symlinkSync(join(packageRoot,'bin/pdd.mjs'),join(base,'bin/pdd'));
   w.env={CI:'1',HOME:w.home,USERPROFILE:w.home,PATH:join(base,'bin')+':'+dirname(process.execPath)+':/usr/bin:/bin',XDG_CONFIG_HOME:join(base,'config'),PDD_STATE_DIR:join(base,'runtime'),PDD_INTERPRETER_QUEUE:join(base,'interpreter-queue'),PDD_SUITE_QUEUE:join(base,'suite-queue'),PDD_INTERPRETER_CONCURRENCY:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_ALLOW_PROTOCOL:'file',LANG:'C.UTF-8'};
+  put(w.env.XDG_CONFIG_HOME,'pdd/autopilot-alerts.json',{v:1,service:'slack',url:'https://hooks.slack.com/services/synthetic/test/fixture'});
+  w.alertDeliveries=[];w.alertReplies=[];
   w.git=(cwd,...a)=>execFileSync('git',a,{cwd,env:w.env,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   w.git(w.cwd,'init','-q','-b','main');w.git(w.cwd,'config','user.email','factory@example.invalid');w.git(w.cwd,'config','user.name','Factory');
   put(w.cwd,'pdd.json',{autopilot:{mode:'auto',trust:['example'],base:'main',parking:{hours:24,maxParked:20}}});
@@ -166,7 +169,12 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
           else if(m.method==='runtimeHealth')value={state:w.interpreter.mode==='refused'?'unavailable':'healthy',detail:'factory interpreter program'};
           else if(m.method==='alert'){
             const input=m.args[0];w.alerts.push(input);
-            value={exitCode:0,message:`Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`};
+            value=await runAutopilotAlerts({...input,env:w.env},{
+              stateRoot:join(w.home,'.local/state/pdd/factory-alerts'),hostname:()=> 'factory-machine',now:()=>w.time,
+              repository:async()=>({nameWithOwner:w.repository}),
+              http:async request=>{w.alertDeliveries.push(request.body.text);return w.alertResponse??{status:200,text:'ok'};},
+            });
+            w.alertReplies.push(value);
           }
           else if(m.method==='sleep'){w.time+=Math.min(m.args[0],1000);await new Promise(r=>setTimeout(r,1));}
           else if(m.method==='fetch') {

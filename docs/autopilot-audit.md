@@ -49,6 +49,11 @@ the merge and finishing the rest as the default when you recommend no revert.
 It also gives a manual revert command as the other choice. It never pushes
 directly to the base.
 
+Each audited PR sends its own recommendation, including when several PRs belong
+to one issue. A later BAD decision uses a material alert update and identifies
+its PR and merge. Each audit keeps its own publication reservation. Repeated
+commands do not send again after successful or uncertain delivery.
+
 Audit discovery holds a damaged or unreadable evidence record with a named cause.
 `pdd autopilot status` shows the run, PR and cause. Other issue selection and
 coordinator delivery continue. The held audit is not offered for another launch.

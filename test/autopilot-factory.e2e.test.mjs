@@ -446,6 +446,22 @@ test('factory 10b: BAD without revert keeps the merge and reopens one issue once
   assert.equal(w.github.commands.filter(c=>c.args.includes('PATCH')&&c.args.includes('state=open')).length,1);assert.deepEqual(w.leadActions,[]);
 });
 
+for(const delivery of ['failed','unconfirmed'])test(`factory 3138 integration: BAD audit retains ${delivery} alert delivery without a repeat`,async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
+  const pr=w.github.prs[0];w.auditVerdict='BAD';w.auditRevert=false;
+  w.alertResponse=delivery==='failed'?{status:503,text:'unavailable'}:{status:200,text:''};
+  const argv=['autopilot','audit','17',String(pr.number)];
+  const first=await w.command(argv,{actor:'coordinator',allowFailure:true});
+  assert.equal(first.code,1,'FAILED_OR_UNCONFIRMED_DELIVERY_CANNOT_COMPLETE_AUDIT');
+  assert.equal(readJson(join(w.record().runDir,'audits',`${pr.number}.json`)).alert.state,'unknown');
+  assert.equal(w.alertReplies.at(-1).exitCode,0);assert.match(w.alertReplies.at(-1).message,new RegExp(`delivery ${delivery}`));
+  const attempts=w.alerts.length,deliveries=w.alertDeliveries.length;
+  w.alertResponse={status:200,text:'ok'};
+  const repeated=await w.command(argv,{actor:'coordinator',allowFailure:true});
+  assert.equal(repeated.code,1);assert.equal(w.alerts.length,attempts);assert.equal(w.alertDeliveries.length,deliveries);
+  assert.equal(w.auditCalls.length,1);assert.equal(w.github.prs.length,1);assert.deepEqual(w.leadActions,[]);
+});
+
 test('factory 11: damaged audit evidence holds while new work is delivered',async t=>{
   const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
   const pr=w.github.prs[0];

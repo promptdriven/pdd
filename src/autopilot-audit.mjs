@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 1eda7594528a6fbbf4a80475f95a0ff632aa9e12515a00f394f99390cb4acb09).
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: e57ff5b54c04160bfcc8290af7a2022460fe4bc06d5561342c3a814320695fb7).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -363,7 +363,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
         return (await command('gh',['pr','create','--repo',run.repo,'--base',run.baseBranch,'--head',branch,'--title',`Revert #${pr}: post-merge audit BAD`,'--body',`${audit.result.summary}\n\nReverts ${audit.merge}. Audit for issue #${run.number}.\n\n<!-- pdd:audit-revert:${run.runId}:${pr} -->`],{cwd:checkout})).trim();
       });
       await effect('alert',async()=>{
-        const input={action:'alert',cwd,env,issue:String(run.number),kind:'decision',text:JSON.stringify({
+        const input={action:'alert',update:true,cwd,env,issue:String(run.number),kind:'decision',text:JSON.stringify({
           cause:`Post-merge audit BAD for PR #${pr} (${audit.merge}). Auditor revert recommendation: ${audit.result.revert}.`,
           tried:keepMerge
             ? `Saved audit and missing parts on issue #${run.number}. Issue reopen: ${audit.reopen?.state ?? 'unknown'}. Audit comment: ${audit.comment?.state ?? 'unknown'}.`

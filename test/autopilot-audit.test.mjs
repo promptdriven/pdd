@@ -207,6 +207,35 @@ for(const damage of ['repository','run','merge','filename'])test(`3138 repair 2:
   assertHeldEvidence(w,entries);
 });
 
+for(const recommendations of [[false,false],[false,true],[true,false]])test(`3138 integration: two valid BAD PRs on one issue deliver ${recommendations} recommendations once`,async t=>{
+  const w=await world(t);
+  w.run.pr=[23,24].map((number,i)=>({number,state:'merged',mergeSha:(i?'c':'a').repeat(40)}));
+  mkdirSync(join(w.run.runDir,'audits'),{recursive:true});
+  for(const [i,pr] of w.run.pr.entries())writeFileSync(w.file(pr.number),JSON.stringify({
+    schema:'pdd.audit.v1',runId:w.run.runId,pr:pr.number,merge:pr.mergeSha,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:{...result('BAD'),revert:recommendations[i]},
+  }));
+  const messages=[],alert=realAlertPorts(w,async input=>{messages.push(input.body.text);return {status:200,text:'ok'};});alert.configure();
+  const ports={...w.ports,...alert.ports,execFile:async(file,args)=>{
+    w.calls.push({file,args});
+    if(file==='git'&&args[0]==='rev-list')return {code:0,stdout:merge+' '+parent+' '+'d'.repeat(40)};
+    if(file==='gh'&&args[0]==='pr')return {code:0,stdout:'https://github.com/example/project/pull/99'};
+    return {code:0,stdout:'{}'};
+  }};
+  const outcomes=[];
+  for(const pr of w.run.pr)outcomes.push(await auditMerge({run:w.run,pr:pr.number},ports));
+  assert.equal(messages.length,2,'EACH_VALID_BAD_PR_MUST_DELIVER_ITS_RECOMMENDATION');
+  assert.deepEqual(outcomes.map(out=>out.exitCode),[0,0]);
+  for(const [i,pr] of w.run.pr.entries()) {
+    const delivered=messages.filter(text=>text.includes(`PR #${pr.number} (${pr.mergeSha})`));
+    assert.equal(delivered.length,1);assert.match(delivered[0],new RegExp(`recommendation: ${recommendations[i]}`,'i'));
+    assert.equal(w.audit(pr.number).alert.state,'sent');
+  }
+  const effects=w.calls.length;
+  for(let n=0;n<2;n++)for(const pr of [...w.run.pr].reverse())assert.equal((await auditMerge({run:w.run,pr:pr.number},ports)).exitCode,0);
+  assert.equal(messages.length,2);assert.equal(w.calls.length,effects);assert.equal(w.launches.length,0);
+});
+
 for(const recommendation of [false,true])test(`3138 BAD revert=${recommendation} saves the recommendation and alerts once`,async t=>{
   const w=await world(t);w.answer={...result('BAD'),revert:recommendation};
   assert.equal((await w.check()).code,0);

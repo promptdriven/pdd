@@ -63,7 +63,11 @@ branch from the current base, revert the pinned merge (mainline 1 for a merge
 commit), push only that branch and create a PR; never push to the base, force
 push or merge the revert. Conflicts are a saved failure with one alert for human
 help. Both BAD forms send one decision alert identifying the merge and explicitly
-stating the auditor's Boolean revert recommendation. With false, name keeping
+stating the auditor's Boolean revert recommendation. Request a material update
+for every PR's ordinary BAD decision, so an open decision incident on the same
+issue cannot suppress a later PR's recommendation. Keep the PR and pinned merge
+in the alert and retain each audit's own publication reservation; successful or
+uncertain delivery must still suppress repeats of that audit. With false, name keeping
 the merge and finishing the rest as the default choice, report the issue reopen
 outcome, and offer reverting as the other choice with `git revert -m 1 MERGE_SHA`
 on a review branch and a PR against the saved base. With true, report the revert
@@ -212,6 +216,6 @@ hold, never absence. Legacy local reservation files also prevent resend.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"c497a1f54d6c82ca06282af95b0fa9f9d3d089a7fc10c43ebf1c9a41f3548da5","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"f82e617ca2b2db48af082ed1a98f484e5d53f111580c2c2047a9838da5601202","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

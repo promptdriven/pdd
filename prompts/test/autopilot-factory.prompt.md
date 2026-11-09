@@ -8,8 +8,10 @@ todo, catch-and-pass, or change an expected outcome to fit the candidate.
 Run the native CLI dispatch, launcher ticks, workflow runner and durable stores
 against a disposable project. Use real Git commits, branches, worktrees and a
 local bare origin. Only external services and agent reasoning are fake.
-Alert fakes return the real alert port's `{exitCode,message}` shape and delivery
-confirmation. Saving an incident can return zero even if delivery fails.
+Use the real alert owner with private state and injected HTTP delivery. Retain
+its `{exitCode,message}` result, including confirmed failure and unconfirmed
+delivery. Saving an incident can return zero even if delivery fails. Keep open
+incident suppression and material updates observable; never confirm every call.
 GitHub must retain mutations and answer REST, GraphQL, claims, PR head/check readback
 and merge requests. Reject unsupported service operations. The interpreter must
 support verdict, no verdict, refusal and delayed completion. Scripted workers
@@ -62,7 +64,8 @@ repairs the named declaration, a fresh check must reach a verdict.
    and records one alert stating the recommendation, default keep-and-finish
    choice and manual revert command. Repeated commands create no extra PR,
    issue, comment or alert for either form. Save verdict and recommendation
-   separately and retain the remote base for both.
+   separately and retain the remote base for both. A failed delivery cannot mark
+   an audit alert sent, and a repeat cannot resend an uncertain publication.
 
 Every scenario records its actual commands and useful structural observations.
 Include #3132: absent panes (including a starting chat), a done current chat,
@@ -142,6 +145,7 @@ Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.
 - [Workflow runner](../cli/workflow-runner.prompt.md): workflow and gates.
 - [Parking](../cli/autopilot-parking.prompt.md): park and wake policy.
+- [Alerts](../cli/autopilot-alerts.prompt.md): incident updates and delivery results.
 - [Interpreter queue](../cli/interpreter-queue.prompt.md): local admission boundary.
 - [Autopilot skill](../../skills/pdd-autopilot/SKILL.md),
   [check](../../skills/pdd-check/SKILL.md), and
