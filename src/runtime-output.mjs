@@ -1,4 +1,5 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 6f157c29e2941f8ba2569bea02e308bba39f5566bb0ab4f1e90af3045a9b64a1).
+import { bindingRefusals } from './runtime-binding-plan.mjs';
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 871efed15c483417a9e6a0732abaa808fd68c66b5d4198ba6d8b9612c9bea552).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -94,7 +95,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     : Array.isArray(value) ? value.map(item => safeCompatibility(item, key))
     : isObjectLike(value) ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, safeCompatibility(item, key)])) : value;
   const advice = reason => {
-    if (reason === 'binding-missing') return { owner: 'application/binding author', next_step: 'Supply the actual binding.' };
+    if (reason === 'binding-missing') return { owner: 'application/binding author', next_step: 'Run pdd test --explain-bindings STORY. Fix the fixture resource/operation name, add the named binding, or declare the Story Runtime boundary. If the exact fixture is selected, ask the compatibility owner to diagnose the refusal before retrying.' };
     if (['source-mismatch', 'source-admission-refused'].includes(reason)) return { owner: 'source/prompt author', next_step: 'Repair the reported source/admission problem.' };
     if (['retained-attachment-unsupported', 'retained-mutation-unsupported', 'runtime-mode-unsupported'].includes(reason))
       return { owner: 'interpreter owner', next_step: 'Review the unsupported capability or mode.' };
@@ -206,7 +207,7 @@ function criterionCoverage(row) {
 
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
-  return { story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only} : {}), ...resultOutcome(row), ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+  return { story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only} : {}), ...resultOutcome(row), ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.binding_plan ? {binding_plan:row.binding_plan,binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, ...(item.path ? { path: item.path } : {}), field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
@@ -456,6 +457,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   }
   for (const row of rows) for (const item of row.not_checked ?? []) out.push(
     `${row.test} ${item.criterion_id}: not checked: ${cleanText(item.reason,secrets)} (${cleanText(item.text,secrets)})`);
+  for (const row of rows.filter(row=>row.binding_plan)) for (const detail of bindingRefusals(row.binding_plan,row.compatibility)) out.push(cleanText(JSON.stringify(detail),secrets));
   for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.test, secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
     `  Client advice: ${JSON.stringify(row.client_advice)}`);
   if (coverage) out.push(coverageText(coverage, {busy: rows.some(row => row.busy_display || row.busy) && rows.every(row => row.state === 'passed' || row.busy_display || row.busy)}));

@@ -1328,6 +1328,16 @@ Keep the workflow Herdr binding for delegated workflow gate advancement and
 stopped-worker recovery and parking. The coordinator binding belongs to `pdd-autopilot`;
 workflow operations belong to `pdd`, including when both ports are injected.
 
+## Binding hold (#3135)
+
+Treat the binding blocker as a manual repair hold. Its clearing observation is
+the existing durably queued reply/retry for this parked wait, as for unknown.
+Interpreter availability alone cannot clear it. At a completed check's automatic
+approve-pr gate, inspect the current saved result before inferring interpreter
+unavailability. A binding-missing/missing-binding reason or refusal, or matched
+missing-binding compatibility state, parks as binding. Preserve independent
+person questions and explicit blockers.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.

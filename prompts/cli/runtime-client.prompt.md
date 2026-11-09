@@ -910,7 +910,23 @@ row returns exit 4; a valid native omission alone returns exit 5. Public results
 use the outcome owner vocabulary, including `not run` and `broken-test` for local
 refusals. Saved recovery states remain separate from public states.
 
+## Binding plan (#3135)
+
+`pdd test --explain-bindings [STORY...] [--json]` is a read-only mode. Use the
+binding-plan owner and the same safe source capture as Check. Print every edge,
+its step, prompt, resource/operation, candidates, causes and smallest repair.
+JSON returns `{schema_version:"pdd.binding-plans.v1",plans:[...]}`. Exit 4 for
+missing bindings, otherwise 0; syntax/source failures keep existing exits.
+Never authenticate, query capacity, send HTTP, create a queue ticket or save a
+batch in this mode. It is a local selection plan, not a service verdict.
+Before ordinary paid checks, retain this plan on each row as `binding_plan` and
+print missing-edge details. A service binding refusal must retain the local
+plan beside its authoritative compatibility evidence; a locally matched fixture
+is evidence of disagreement, never permission to turn a refusal into a pass.
+
 ## Dependencies
+
+- [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.
 
 - [Check planning](runtime-check-plan.prompt.md): required for affected Story
   selection, bounded work, saved scope and target/baseline recovery guidance.

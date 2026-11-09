@@ -297,6 +297,13 @@ Catalog `interface draft` with local `interface-draft`, repeat optional prompt o
 Catalog text --route on workflow park and show `pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` for recording a missing supported PDD route without asking a person. The runner owns route validation and installed-fix clearing.
 
 
+## Read-only binding explanation (#3135)
+
+The test route accepts flag `--explain-bindings` and publishes the form
+`pdd test --explain-bindings [STORY...] [--json]`. Its description states that it
+explains local edge and fixture selection before any paid call. Runtime-client
+owns mode compatibility and execution.
+
 ## Dependencies
 
 [Workflow scope](workflow-scope.prompt.md) is required authoring, generation, runtime, verification and testing context for the scope route meanings.

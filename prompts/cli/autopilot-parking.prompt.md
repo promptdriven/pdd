@@ -23,6 +23,15 @@ The central coordinator ledger is {records,groups}. Each record has id (JSON ide
 
 A missing saved UUID or old layout field does not reject the whole park. The workflow/chat owners prove each close and retain only unsafe chats with reasons. A closing reservation remains occupied until all required absence checks pass. Old-coordinator runs enter this policy only after the caller proves current same-machine claim ownership and adopts them; transferred claims use the normal handover path. Busy agents remain open.
 
+## Binding refusals (#3135)
+
+Recognize `binding-missing`, `missing-binding`, and an unresolved binding contract
+in a stopped run's current reason as `{kind:"binding",until:null}` before generic
+unknown/interpreter/gate inference. Do not override an explicit independent
+blockedOn or current unanswered person question. This is an application binding
+hold, with no timed retry. Retain it until a bound explicit reply/retry arrives;
+never wake it through interpreter health alone. Display binding in summaries.
+
 ## Dependencies
 
 - [Environment causes](autopilot-environment.prompt.md): required generation/runtime/testing context for eligible environmentRetry and its bounded backoff. No other dependency policy is copied here.

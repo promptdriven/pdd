@@ -395,8 +395,26 @@ freshness, and allow the approval owner to review and refill a stale prompt.
 Preflight validates the status and hash of each reachable native declaration
 before omission.
 
+## Story runtime boundary (#3135)
+
+A Story may declare one `## Runtime boundary` section containing Markdown links
+to the complete set of executable prompt paths, relative to that Story. This is
+an explicit check scope, not an operating-system workspace permission. The
+binding-plan owner parses it. Missing/empty/unsafe declarations refuse locally.
+Every entry and transitive Runtime call target must be within it; refuse a
+crossing rather than hide an actual call. Without this declaration keep existing
+source selection. Linked prompts outside the declared executable boundary remain
+required source context but their Runtime interface blocks are omitted from the
+effective upload. Their authored bytes are unchanged. This prevents context-only
+modules from adding resource requirements. The effective manifest, hashes and tar
+must describe these projected bytes. Refuse a combined selection whose executable
+requirements conflict with another selected Story's explicit boundary, with a
+hint to select these Stories separately. Never widen a Story boundary by union.
+
 ## Dependencies
 
+
+- [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in policy and permission outcomes.
 
 - [References](contract-refs.prompt.md): required generation and verification

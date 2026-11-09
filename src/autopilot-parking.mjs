@@ -67,6 +67,7 @@ export function blockerFor(run) {
   const route = routeQuestionFor(run);
   if (route) return {kind: 'pdd-route', until: route.until};
   if (question) return {kind: 'person', until: null};
+  if (/binding-missing|missing-binding|unresolved binding contract/i.test(reason)) return {kind:'binding',until:null};
   if (interpreterWaitFor(run)) return {kind: 'interpreter', until: null};
   if (/github.*(?:rate|limit)|(?:account|usage)[- ]limit/i.test(reason)) return {
     kind: /github/i.test(reason) ? 'github' : 'account',

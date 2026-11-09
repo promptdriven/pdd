@@ -1,4 +1,5 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: cfeff196d91c40e5f08880ff88a28d52931712a27df00b37478cd9297003e52c).
+import { buildBindingPlan } from './runtime-binding-plan.mjs';
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a2ecc8b8d45d06ef7dc537a31ba525e76dd775b76e1eeff479518c21d52b738c).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -1721,6 +1722,35 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
         markUnavailable(path,error);
       }
     }
+    // A Story boundary selects executable interfaces, while preserving context prose.
+    const bindingPrompts = new Map();
+    for (const [path,file] of footprintPayload) if (path.endsWith('.prompt.md')) {
+      try { bindingPrompts.set(path,JSON.parse(interfaceBlocks(bytes(file).toString('utf8'))[0][1])); } catch { /* Admission reports malformed interfaces. */ }
+    }
+    const bindingPlans = [];
+    for (const path of selected) {
+      const file = payload.get(path); if (!file) continue;
+      let doc; try { doc=JSON.parse(bytes(file).toString('utf8')); } catch { continue; }
+      if (!doc?.story_path || !Array.isArray(doc.steps)) continue;
+      try {
+        bindingPlans.push(buildBindingPlan({test:{path,storyPath:doc.story_path,doc},
+          storyText:bytes(inspect(doc.story_path,path)).toString('utf8'),prompts:bindingPrompts}));
+      } catch (error) { throw Object.assign(new PreflightError(4,error.message),{code:error.code}); }
+    }
+    const scoped = bindingPlans.filter(plan=>plan.boundary !== null);
+    for (const plan of scoped) {
+      for (const path of plan.boundary) inspect(path,plan.story);
+      const crossing=plan.problems[0];
+      if (crossing) throw Object.assign(new PreflightError(4,`${plan.story}: ${crossing.step_id}: ${crossing.prompt_path}: ${crossing.code}. Correct the Runtime boundary or call target.`),{code:'binding-boundary-invalid'});
+      if (bindingPlans.some(other=>other.steps.some(step=>step.closure.some(path=>!plan.boundary.includes(path)))))
+        throw Object.assign(new PreflightError(4,`${plan.story}: conflicting Runtime boundaries. Select these Stories separately.`),{code:'binding-boundary-conflict'});
+    }
+    if (scoped.length) for (const [path,file] of payload) {
+      if (!path.endsWith('.prompt.md') || scoped.every(plan=>plan.boundary.includes(path))) continue;
+      const projected=Buffer.from(bytes(file).toString('utf8').replace(INTERFACE,''),'utf8');
+      const next={...file,bytes:projected,size:projected.length};
+      payload.set(path,next); footprintPayload.set(path,next); effective.set(path,next);
+    }
     const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
     const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
     const rawFileHashes = Object.fromEntries([...footprintPayload.values()].flatMap(file=>{
@@ -1769,6 +1799,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       raw_file_hashes:rawFileHashes,
       raw_prompt_hashes:Object.fromEntries(Object.entries(rawFileHashes).filter(([path])=>path.endsWith('.prompt.md'))),
       reads:[...new Set([...onDisk.storyFiles,...snapshots.keys()])].filter(path=>path!==SOURCE_CONFIG&&!payload.has(path)&&(snapshots.get(path)?.bytes||onDisk.storyFiles.includes(path))).sort().map(path=>({path,roles:[...(onDisk.storyFiles.includes(path)?['discovery']:[]),...(referenceReads.has(path)?['reference']:[]),...(preparationReads.has(path)?['preparation']:[]),...(!onDisk.storyFiles.includes(path)&&!referenceReads.has(path)&&!preparationReads.has(path)?['footprint']:[])].sort()})),
+      bindingPlans,
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
 }

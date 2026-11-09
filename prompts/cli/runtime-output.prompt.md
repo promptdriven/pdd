@@ -130,7 +130,20 @@ code `native-only`. Local malformed rows retain their refusal details and
 
 The exported `coverageText(coverage, {busy = false} = {})` also accepts the busy display flag above. When module binding coverage carries `runtime`, print its own line: `Runtime coverage: N of M prompts checkable, K native-only` when native-only declarations exist, otherwise `Interpreter coverage: N of M prompts checkable, 0 native-only`. The interpreter name remains the service name for fully checkable selections. Retain this object in JSON coverage. For a valid native-only row preserve the internal not_run recovery state and show its declared reason with public state `not run`. If local validation refuses that row, keep internal refused recovery and public `not run (broken-test)`, with both its refusals and the native-only path/reason in text and JSON. It has no passing criteria or check count. A partial interface counts as checkable, not as proof that all module behavior passed.
 
+## Binding repair guidance (#3135)
+
+In JSON rows include `binding_diagnostics` from the binding-plan owner when
+there is a binding plan. Print the same step/path/key, cause, candidates and
+repair for every refused edge in text, without truncation.
+For binding-missing, name the read-only `pdd test --explain-bindings STORY`
+command and the possible smallest repairs: fix the fixture's resource/operation
+name, add the named binding, or declare the Story runtime boundary. A correctly
+selected existing fixture requires compatibility-owner diagnosis; never advise
+blind resubmission or invent the reason it was refused.
+
 ## Dependencies
+
+- [Binding plan](runtime-binding-plan.prompt.md): required local refusal explanation for generation and verification.
 
 - [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected evidence, progress, exits and public result vocabulary.
 

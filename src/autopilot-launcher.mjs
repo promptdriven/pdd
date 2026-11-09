@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 808124fcc087a04559c3a602881c2bb97cb443f415f1018a0c73ba83fa729641).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c5f9845424e8d62e01384b8bd0b79249e0aa3d3caf6c0d6bfc7bedee8e979a7b).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -372,6 +372,10 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         try {checks = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env});}
         catch {return {kind: 'interpreter', until: null};}
         const check = checks.find(row => row.kind === 'pdd test');
+        if (check?.states?.some(row=>['binding-missing','missing-binding'].includes(row.reason?.code)
+          || row.refusals?.some(refusal=>['binding-missing','missing-binding'].includes(refusal.code))
+          || row.compatibility?.association==='matched' && row.compatibility?.state==='missing-binding'))
+          return {kind:'binding',until:null};
         if (!check || ['none', 'unknown', 'service'].includes(checkCause(check.states)))
           return {kind: 'interpreter', until: null};
       }
@@ -404,7 +408,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       const blocker = run.parking.blocker;
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
       if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
-      if (blocker.kind === 'unknown') return hasParkedReply(run, worker);
+      if (['unknown','binding'].includes(blocker.kind)) return hasParkedReply(run, worker);
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (['pdd', 'pdd-route'].includes(blocker.kind)) {
         const required = blocker.until === '#2897' ? 'capability:prompt-reentry' : /^#[1-9][0-9]*$/.test(blocker.until) ? `capability:issue-${blocker.until.slice(1)}` : blocker.until;
