@@ -262,3 +262,61 @@ for (const kind of ['cancelled', 'question']) test(`#3099 ${kind} during journal
   assert.equal(nativeFs.existsSync(lock), false, 'refusal must release journal custody');
   assert.deepEqual(nativeFs.readdirSync(dir).filter(name => /^\.approvals\..*\.tmp$/.test(name)), [], 'refusal must remove its temporary journal');
 });
+
+for (const kind of ['strict', 'scope', 'custody']) test(`#3099 ${kind} authority withdrawn during journal contention prevents durable approval`, async t => {
+  const f = await setup(t), path = join(f.run.root, PROMPT);
+  const checkedPrompt = readFileSync(path, 'utf8').replace(/"status":\s*"approved"/, '"status":"draft"');
+  writeFileSync(path, checkedPrompt);
+  f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Synthetic checked draft');
+  saveCheck(f);
+  const before = f.record(), dir = join(before.commonDir, 'pdd'), journal = join(dir, 'approvals.json');
+  const initialJournal = readFileSync(journal, 'utf8'), lock = join(dir, 'approvals.lock'), token = randomUUID();
+  const holder = join(lock, `owner-${token}.json`);
+  mkdirSync(lock);
+  writeFileSync(holder, JSON.stringify({pid: process.pid, hostname: hostname(), token}));
+  const releaseHolder = () => {
+    if (nativeFs.existsSync(holder)) nativeFs.unlinkSync(holder);
+    if (nativeFs.existsSync(lock) && !nativeFs.readdirSync(lock).length) nativeFs.rmdirSync(lock);
+  };
+  t.after(releaseHolder);
+  let contended = false, blockerTask, blockerError, blocker, blockerJournal;
+  // Observe a real live owner inspection. Every filesystem operation still uses
+  // native fs. The public blocker runs while acquisition awaits its next retry.
+  f.tickPorts.fs = {...nativeFs, readFileSync(file, ...args) {
+    const value = nativeFs.readFileSync(file, ...args);
+    if (file === holder && !contended) {
+      contended = true;
+      blockerTask = Promise.resolve().then(async () => {
+        try {
+          f.tick();
+          if (kind === 'strict') writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto'}, strict_approvals: true}));
+          if (kind === 'scope') {const state = JSON.parse(readFileSync(f.stateFile)); delete state.startAction; writeFileSync(f.stateFile, JSON.stringify(state));}
+          if (kind === 'custody') {const file = join(f.base, 'reader.json'), doc = JSON.parse(readFileSync(file)); doc.comments = []; writeFileSync(file, JSON.stringify(doc));}
+          blocker = f.record();
+          blockerJournal = readFileSync(journal, 'utf8');
+        } finally { releaseHolder(); }
+      }).catch(error => { blockerError = error; });
+    }
+    return value;
+  }};
+  await f.scan();
+  await blockerTask;
+  if (blockerError) throw blockerError;
+  assert.equal(contended, true, 'the race must inspect the real journal holder');
+  assert.equal(readFileSync(journal, 'utf8'), initialJournal, 'withdrawn authority must prevent durable automatic approval');
+  assert.equal(f.prs.length, 0, 'withdrawn authority must prevent PR creation');
+  assert.equal(f.pushes.length, 0, 'a saved blocker must prevent pushes');
+  const after = f.record();
+  assert.deepEqual(blocker.decisions, before.decisions);
+  assert.deepEqual(after.decisions, blocker.decisions);
+  assert.deepEqual(after.approvalRecord, blocker.approvalRecord);
+  assert.equal(after.state, blocker.state);
+  assert.deepEqual(after.cancelled, blocker.cancelled);
+  assert.deepEqual(after.question, blocker.question);
+  assert.deepEqual(after.gate, blocker.gate);
+  assert.equal(blockerJournal, initialJournal);
+  assert.equal(readFileSync(journal, 'utf8'), blockerJournal, 'a saved blocker must prevent a later approval journal write');
+  assert.equal(readFileSync(path, 'utf8'), checkedPrompt, 'unrecorded prompt approval edits must be restored');
+  assert.equal(nativeFs.existsSync(lock), false, 'refusal must release journal custody');
+  assert.deepEqual(nativeFs.readdirSync(dir).filter(name => /^\.approvals\..*\.tmp$/.test(name)), [], 'refusal must remove its temporary journal');
+});

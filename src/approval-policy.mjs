@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-policy.prompt.md (sha256: 250bd819d9aa281860033b4e860d0c848ad19abfa5a653f8a4d2d8ab4bd2e278).
+// Generated from prompts/cli/approval-policy.prompt.md (sha256: 21f3514826e1a443885b5def9d34bed7af707fff8285f0a441843b2d5ee5ba4d).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -101,6 +101,7 @@ export async function recordPromptApproval({ commonDir, evidence }, ports = {}) 
   }
   const temporary = join(dir, `.approvals.${randomUUID()}.tmp`);
   try {
+    await ports.afterApprovalLock?.();
     const approvals = readPromptApprovals({ commonDir }, ports);
     fs.writeFileSync(temporary, JSON.stringify({ v: 1, approvals: [...approvals, evidence] }, null, 2) + '\n', { mode: 0o600 });
     ports.beforeApprovalCommit?.();

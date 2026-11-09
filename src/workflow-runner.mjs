@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 35e50840cb98b243f4bf203c92504d2035bd122900c1bd35599c6d7b32c75f3d).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2fdf7dc0e4844da8e9cdaba31b5e6a60edef2542372019337918bdfc0c7fff5e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2372,6 +2372,10 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot, progr
     },
     async validate() {
       p.inspectProgress?.();
+      if (Object.hasOwn(run, 'automaticOrigin')) {
+        const refusal = automaticPr1Scope(run, p, packageRoot) || await continuationOwnership(run, run.root, p);
+        if (refusal) return fail(refusal);
+      }
       const head = await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}');
       const dirty = await rawGit(p, run.root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
       if (head !== automatic.head || dirty || await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}') !== automatic.head) {
@@ -2389,7 +2393,17 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot, progr
       const record = { via: 'automatic-check-pass', basis: { storyEvidenceId: storyCoverage(run).evidenceId ?? null,
         batches: [...new Set(check.tests.map(item => item.batch))], headSha: automatic.head,
         ...(Object.hasOwn(run, 'automaticOrigin') ? {origin: 'automatic', automaticOrigin: run.automaticOrigin} : {}) } };
-      try { await saveGateApproval(run, area, record, [], p, snapshot); approvalRecorded = true; }
+      const authority = Object.hasOwn(run, 'automaticOrigin') ? {
+        async afterLock() {
+          const refusal = await continuationOwnership(run, run.root, p);
+          if (refusal) throw Error(refusal);
+        },
+        beforeCommit() {
+          const refusal = automaticPr1Scope(run, p, packageRoot);
+          if (refusal) throw Error(refusal);
+        }
+      } : null;
+      try { await saveGateApproval(run, area, record, [], p, snapshot, false, authority); approvalRecorded = true; }
       catch (error) { return fail(`Approval failed: ${error.message}`); }
       return null;
     }
@@ -3090,7 +3104,7 @@ async function codeEntryFailure(run,p) {
   if (dirty.length) return `Unpublished scenario edits remain: ${dirty.join(', ')}. Publish them in prompt space first.`;
   return null;
 }
-async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate?.promptSnapshot, deferDecision = false) {
+async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate?.promptSnapshot, deferDecision = false, authority = null) {
   // An id-less legacy gate gets a current identity only; timestamps never authorize reuse.
   if (run.gate && !run.gate.id) { const id=p.randomUUID(); commitRun(run,p,latest=>{if(latest.gate)latest.gate.id??=id;}); }
   const gateId = run.gate?.id ?? p.randomUUID(), gateAt = run.gate?.at;
@@ -3102,7 +3116,8 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   const fs = p.fs ?? { writeFileSync }, changed = [];
   try {
     for (const edit of edits) { changed.push(edit); fs.writeFileSync(join(run.root, edit.path), edit.next); }
-    await recordPromptApproval({ ...await promptApprovalContext(run, p), evidence }, { ...p, beforeApprovalCommit: p.inspectProgress });
+    await recordPromptApproval({ ...await promptApprovalContext(run, p), evidence }, { ...p, afterApprovalLock: authority?.afterLock,
+      beforeApprovalCommit: () => { p.inspectProgress?.(); authority?.beforeCommit(); } });
   } catch (error) {
     const left = [];
     for (const edit of changed.reverse()) { try { fs.writeFileSync(join(run.root, edit.path), edit.text); } catch { left.push(edit.path); } }
