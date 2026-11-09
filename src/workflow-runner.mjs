@@ -2199,12 +2199,11 @@ async function finishPr(run, area, step, p, lines, packageRoot = PACKAGE_ROOT) {
 const promptPathChanges = (approved, current) => !Array.isArray(approved) ? [] : [
   ...current.filter(path => !approved.includes(path)).map(path => `Prompt added: ${path}`),
   ...approved.filter(path => !current.includes(path)).map(path => `Prompt removed: ${path}`)];
-async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.promptSnapshot) {
-  const approval = storyCoverage(run);
+async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.promptSnapshot, approval = storyCoverage(run), extraChanges = []) {
   if (!approval?.fingerprint || !Array.isArray(snapshot)) return null;
   const paths = snapshot.map(row => row.path);
   const current = storyFingerprint({ root: run.root, changed: await changedFiles(run, p) });
-  const changes = [...fingerprintChanges(approval.fingerprint, current), ...promptPathChanges(approval.prompts, paths)];
+  const changes = [...extraChanges, ...fingerprintChanges(approval.fingerprint, current), ...promptPathChanges(approval.prompts, paths)];
   if (changes.length) {
     const contract=await storyContract(run,p),paths=await storyContractPaths(run,p);
     const gateId = run.gate.id;
@@ -2287,6 +2286,49 @@ function automaticPr1Eligible(run, {cwd, coordinatorId, machine}, p, published =
     && (!prOf(run, area.name) || published && sameFact(prOf(run, area.name), published))
     && area.steps.every(step => run.done[step]);
 }
+const recordedStoryDecision = run => [...run.decisions].reverse().find(decision =>
+  decision.stage === run.areas[storyGateIndex(run)]?.name && decision.decision === 'approve');
+
+async function deriveStoryCoverage(run, decision, p) {
+  const evidence = decision?.evidence;
+  if (!evidence?.id || !Array.isArray(evidence.prompts) || !readPromptApprovals({commonDir: run.commonDir}, p).some(row => sameFact(row, evidence)))
+    throw Error('recorded Story approval evidence is unavailable');
+  if (typeof decision.storyContract !== 'string' || !Array.isArray(decision.storyPaths))
+    throw Error('approval-bound Story contract is unavailable');
+  const paths = await storyContractPaths(run, p), changed = await changedFiles(run, p, true);
+  const inventory = [...new Set([...paths, ...changed.filter(path => path.endsWith('.json') || path.endsWith('.md') && path.split('/').includes('user_stories'))])].sort();
+  const folder = mkdtempSync(join(tmpdir(), 'pdd-story-coverage-'));
+  let recovered, changes = [];
+  try {
+    const texts = [];
+    // Freeze each file once. Contract and fingerprint then read the same bytes,
+    // without another asynchronous inventory or a read from the live worktree.
+    for (const path of inventory) {
+      const file = resolve(run.root, path);
+      if (!file.startsWith(resolve(run.root) + '/') || path.includes('\\') || path.split('/').includes('.git'))
+        throw Error('unsafe Story contract path');
+      let bytes;
+      try {
+        if (!lstatSync(file).isFile()) throw Error('Story contract files must be regular files');
+        bytes = readFileSync(file);
+      } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      texts.push([path, bytes.toString('utf8')]);
+      mkdirSync(dirname(join(folder, path)), {recursive: true});
+      writeFileSync(join(folder, path), bytes);
+    }
+    if (storyContractHash(run, texts) !== decision.storyContract)
+      changes = ['Story contract changed since its recorded approval'];
+    const fingerprint = storyFingerprint({root: folder, changed});
+    if (!changes.length && [...fingerprint.stories, ...fingerprint.tests].some(row => !decision.storyPaths.includes(row.path)))
+      changes = ['Story fingerprint contains files outside the approved contract'];
+    recovered = {fingerprint, derivedFrom: {storyContract: decision.storyContract}};
+  } finally { rmSync(folder, {recursive: true, force: true}); }
+  if (!changes.length && !recovered.fingerprint.stories.some(row => row.sha256 && row.criteria.length))
+    throw Error('recorded approval has no Story coverage');
+  return {coverage: {gateId: decision.gateId, evidenceId: evidence.id, at: decision.at,
+    fingerprint: recovered.fingerprint, prompts: evidence.prompts.map(row => row.path),
+    source: 'derived from the recorded approval', derivedFrom: recovered.derivedFrom}, changes};
+}
 export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutation(args, ports, async ({ref, cwd, packageRoot = PACKAGE_ROOT, coordinatorId, machine}, ports) => {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, {cwd}, p);
@@ -2294,12 +2336,13 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
   const run = found.run, area = run.areas[run.area];
   const owner = {cwd, coordinatorId, machine};
   if (!automaticPr1Eligible(run, owner, p)) return done('Automatic PR 1 gate skipped.');
-  const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), area, index: run.area, branch: run.branch});
+  const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), storyDecision: recordedStoryDecision(run), area, index: run.area, branch: run.branch});
   let publicationGate;
   const progressRecorded = protectProgress(run, p, {validate: latest => {
     // Only this invocation's durably saved PR may appear during its final transition.
     if (!automaticPr1Eligible(latest, owner, p, prOf(run, area.name)) || !sameFact(latest.automaticOrigin, selected.origin)
       || !sameFact(storyCoverage(latest), selected.coverage) || !sameFact(latest.areas[latest.area], selected.area)
+      || !sameFact(recordedStoryDecision(latest), selected.storyDecision)
       || latest.area !== selected.index || latest.branch !== selected.branch
       || publicationGate && (!sameGate(latest.gate, publicationGate) || latest.gate.storyChanges?.length))
       throw Object.assign(Error('Automatic PR 1 eligibility changed. Preserve the current blocker and inspect the run.'), {code: 'workflow_progress_refused'});
@@ -2313,10 +2356,29 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
   const scope = automaticPr1Scope(run, p, packageRoot);
   if (scope) return hold(scope);
   if (run.gate.storyChanges?.length) return hold('Story changes require a person approval');
-  if (!storyCoverage(run)?.fingerprint) return hold('saved Story approval coverage is missing');
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return hold(ownership);
-  const snapshot = await gatePromptSnapshot(run, p);
+  let snapshot = await gatePromptSnapshot(run, p);
+  if (!storyCoverage(run)?.fingerprint) {
+    let recovered;
+    try { recovered = await deriveStoryCoverage(run, selected.storyDecision, p); }
+    catch (error) { return hold(`saved Story approval coverage is missing: ${oneLine(error.message)}`); }
+    snapshot = await gatePromptSnapshot(run, p);
+    const changed = await changedStoryGate(run, area, 'check', p, [], snapshot, recovered.coverage, recovered.changes);
+    if (changed) return hold('Story changes require a person approval');
+    const scope = automaticPr1Scope(run, p, packageRoot), ownership = await continuationOwnership(run, run.root, p);
+    if (scope || ownership) return hold(scope || ownership);
+    snapshot = await gatePromptSnapshot(run, p);
+    const changedAgain = await changedStoryGate(run, area, 'check', p, [], snapshot, recovered.coverage, recovered.changes);
+    if (changedAgain) return hold('Story changes require a person approval');
+    commitRun(run, p, latest => {
+      if (automaticPr1Scope(latest, p, packageRoot)
+        || !readPromptApprovals({commonDir: latest.commonDir}, p).some(row => sameFact(row, selected.storyDecision.evidence)))
+        throw Object.assign(Error('Recorded Story coverage authority changed. Keep the current gate.'), {code: 'workflow_progress_refused'});
+      latest.storyApproval = recovered.coverage;
+    });
+    selected.coverage = structuredClone(recovered.coverage);
+  }
   const changed = await changedStoryGate(run, area, 'check', p, [], snapshot);
   if (changed) return hold('Story changes require a person approval');
   const contents = await worktreeContents(run, p);
@@ -4359,14 +4421,13 @@ async function storyContractPaths(run,p,reference) {
   return [...new Set([...approved,...paths])].filter(path=>isStoryPath(path)||path.endsWith('.json')).sort();
 }
 async function storyContract(run,p,reference) {
-  const facts=[];
+  const texts=[];
   const paths=await storyContractPaths(run,p,reference);
   // Only a successful tree inventory proves absence. A failed blob read must
   // remain unavailable source, including ENOENT from the Git program port.
   const treePaths=reference ? new Set((await rawGit(p,run.root,'ls-tree','-r','--name-only','-z',reference)).split('\0').filter(Boolean)) : null;
   for (const path of paths.sort()) {
-    const story=isStoryPath(path);
-    if(!story && !path.endsWith('.json'))continue;
+    if(!isStoryPath(path) && !path.endsWith('.json'))continue;
     let text;
     if (reference) {
       if (!treePaths.has(path)) continue;
@@ -4375,7 +4436,14 @@ async function storyContract(run,p,reference) {
       try {text=readFileSync(join(run.root,path),'utf8');}
       catch(error) {if(error.code==='ENOENT')continue;throw error;}
     }
-    if (story) facts.push([path,text]);
+    texts.push([path,text]);
+  }
+  return storyContractHash(run, texts);
+}
+function storyContractHash(run, texts) {
+  const facts=[];
+  for (const [path,text] of texts) {
+    if (isStoryPath(path)) facts.push([path,text]);
     else {
       try {if(isScenario(text))facts.push([path,canonical(JSON.parse(text))]);} catch {
         if(run.replayBaseline?.vectors?.some(v=>v.path===path))facts.push([path,text]);

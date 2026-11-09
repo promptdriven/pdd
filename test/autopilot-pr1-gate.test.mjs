@@ -28,7 +28,7 @@ function saveCheck(f, {state = 'passed', criteria = {passed: 3, total: 3}} = {})
     exitCode: state === 'passed' ? 0 : 1, rows: [{test: TEST, story: STORY, state, criteria}], summaryLine: 'synthetic check'})));
   return batch;
 }
-async function setup(t, {registered = false} = {}) {
+async function setup(t, {registered = false, beforeApproval} = {}) {
   const f = await automaticFixture(t);
   assert.equal((await f.begin()).exitCode, 0);
   f.run = f.record();
@@ -49,6 +49,7 @@ async function setup(t, {registered = false} = {}) {
   }
   f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Synthetic Story');
   await f.done('prompt-story');
+  beforeApproval?.(f);
   const approved = await approveRun({ref: '17', cwd: f.run.root, packageRoot}, f.automaticPorts);
   assert.equal(approved.exitCode, 0, approved.message);
   await f.done('check');
@@ -121,7 +122,10 @@ for (const kind of ['prompt-repair', 'no-coverage', 'observe', 'off', 'question'
     if (kind === 'prompt-repair') writeFileSync(join(f.run.root, PROMPT), readFileSync(join(f.run.root, PROMPT), 'utf8').replace('Return the order:', 'Return the priced order:'));
     saveCheck(f);
     const run = f.record(), before = run.decisions.length;
-    if (kind === 'no-coverage') for (const decision of run.decisions) delete decision.storyCoverage;
+    if (kind === 'no-coverage') {
+      for (const decision of run.decisions) { delete decision.storyCoverage; delete decision.storyContract; delete decision.storyPaths; }
+      for (const step of Object.values(run.done)) delete step.worktreeSha256;
+    }
     if (kind === 'question') run.question = {text: 'Which product scope?', at: f.clock};
     if (kind === 'unfinished') delete run.done.check;
     if (kind === 'foreign-owner') run.automaticOrigin.coordinatorId = 'another-coordinator';
@@ -133,6 +137,150 @@ for (const kind of ['prompt-repair', 'no-coverage', 'observe', 'off', 'question'
     if (kind === 'no-coverage') assert.match((await f.status()).words, /Story.*coverage/);
   });
 }
+
+// Synthetic saved records use only shapes from the pre-card workflow. They do
+// not copy operational run files or ask the CLI to approve a prompt.
+function preCardRecord(f, {contract = false} = {}) {
+  const run = f.record(), decision = run.decisions.at(-1);
+  const expected = structuredClone(decision.storyCoverage);
+  delete decision.storyCoverage;
+  if (!contract) { delete decision.storyContract; delete decision.storyPaths; }
+  delete run.storyApproval;
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  return {run, decision, expected};
+}
+
+test('#3103 derives missing automatic Story coverage from its recorded contract once', async t => {
+  const f = await setup(t), {run, decision, expected} = preCardRecord(f, {contract: true});
+  const journal = readPromptApprovals({commonDir: run.commonDir}, f.automaticPorts);
+  // First tick has no check. It may recover coverage, but cannot publish.
+  await f.scan();
+  const coverage = f.record().storyApproval;
+  assert.ok(coverage?.fingerprint, 'recorded automatic Story approval must recover coverage');
+  assert.deepEqual(coverage.fingerprint, expected.fingerprint);
+  assert.deepEqual(coverage.prompts, [PROMPT]);
+  assert.equal(coverage.evidenceId, decision.evidence.id);
+  assert.equal(coverage.gateId, decision.gateId);
+  assert.equal(coverage.at, decision.at);
+  assert.equal(coverage.source, 'derived from the recorded approval');
+  assert.deepEqual(coverage.derivedFrom, {storyContract: decision.storyContract});
+  assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+  assert.deepEqual(f.record().decisions, run.decisions);
+  assert.deepEqual(readPromptApprovals({commonDir: run.commonDir}, f.automaticPorts), journal);
+  // A prompt-only repair and fresh full pass use that same approval.
+  writeFileSync(join(run.root, PROMPT), readFileSync(join(run.root, PROMPT), 'utf8').replace('Return the order:', 'Return the priced order:'));
+  const batch = saveCheck(f);
+  await f.scan();
+  assert.equal(f.prs.length, 1, f.warnings.join('\n'));
+  assert.deepEqual(f.record().storyApproval, coverage);
+  assert.deepEqual(f.record().decisions[0], decision);
+  assert.equal(f.record().decisions.at(-1).evidence.basis.storyEvidenceId, decision.evidence.id);
+  assert.deepEqual(f.record().decisions.at(-1).evidence.basis.batches, [batch]);
+  const decisions = f.record().decisions.length, pushes = f.pushes.length;
+  await f.scan();
+  assert.equal(f.record().decisions.length, decisions); assert.equal(f.pushes.length, pushes);
+});
+
+for (const kind of ['Story', 'plan', 'expected', 'prompt-list']) test(`#3103 pre-card ${kind} change reopens Story approval despite a full check pass`, async t => {
+  const f = await setup(t), {run} = preCardRecord(f, {contract: true});
+  if (kind === 'Story') writeFileSync(join(run.root, STORY), readFileSync(join(run.root, STORY), 'utf8') + '\nAdded product rule.\n');
+  if (kind === 'plan') writeFileSync(join(run.root, 'user_stories/PLAN.md'), 'New scope\n');
+  if (kind === 'expected') {const doc = JSON.parse(readFileSync(join(run.root, TEST))); doc.steps[0].checks[0].value = 950; writeFileSync(join(run.root, TEST), JSON.stringify(doc));}
+  if (kind === 'prompt-list') cpSync(join(run.root, PROMPT), join(run.root, 'prompts/another.prompt.md'));
+  saveCheck(f);
+  await f.scan();
+  const after = f.record();
+  assert.ok(after.gate.storyChanges?.length, 'a changed pre-card Story must reopen its gate');
+  assert.notEqual(after.gate.id, run.gate.id);
+  assert.ok(after.gate.storySnapshot);
+  assert.equal(after.storyApproval, undefined);
+  assert.deepEqual(after.decisions, run.decisions);
+  assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+  await f.scan();
+  assert.equal(f.record().gate.id, after.gate.id);
+  assert.equal(f.prs.length, 0);
+});
+
+test('#3103 coverage recovery requires the recorded approval, source and current authority', async t => {
+  for (const kind of ['journal', 'wrong-stage', 'no-contract', 'git-unavailable', 'strict', 'scope', 'custody']) await t.test(kind, async t => {
+    const f = await setup(t), {run, decision} = preCardRecord(f, {contract: kind !== 'no-contract'});
+    if (kind === 'journal') writeFileSync(join(run.commonDir, 'pdd/approvals.json'), JSON.stringify({v: 1, approvals: []}));
+    if (kind === 'wrong-stage') decision.stage = 'prompt-pr';
+    writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+    if (kind === 'git-unavailable') {
+      const original = f.tickPorts.execFile;
+      let inventories = 0;
+      f.tickPorts.execFile = (file, args, opts) => file === 'git' && args[0] === 'ls-files' && ++inventories === 2
+        ? Promise.resolve({code: 1, stdout: '', stderr: 'synthetic unavailable tree'}) : original(file, args, opts);
+    }
+    if (kind === 'strict') writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto'}, strict_approvals: true}));
+    if (kind === 'scope') {const state = JSON.parse(readFileSync(f.stateFile)); delete state.startAction; writeFileSync(f.stateFile, JSON.stringify(state));}
+    if (kind === 'custody') {const file = join(f.base, 'reader.json'), doc = JSON.parse(readFileSync(file)); doc.comments = []; writeFileSync(file, JSON.stringify(doc));}
+    saveCheck(f);
+    await f.scan();
+    assert.equal(f.record().storyApproval, undefined);
+    assert.deepEqual(f.record().decisions, run.decisions);
+    assert.ok(f.record().gate.automaticHold);
+    assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+  });
+});
+
+test('#3103 repair 1 an earlier step cannot cover a different Story approved later', async t => {
+  let storyA;
+  const f = await setup(t, {beforeApproval(f) {
+    storyA = readFileSync(join(f.run.root, STORY), 'utf8');
+    writeFileSync(join(f.run.root, STORY), storyA + '\nStory B is the scope approved at the terminal.\n');
+  }});
+  const {run} = preCardRecord(f);
+  const journal = readPromptApprovals({commonDir: run.commonDir}, f.automaticPorts);
+  // The source hash belongs to A. The unchanged decision and journal approved B.
+  assert.ok(run.done['prompt-story'].worktreeSha256);
+  writeFileSync(join(run.root, STORY), storyA);
+  saveCheck(f);
+  await f.scan();
+  assert.equal(f.record().storyApproval, undefined, 'an earlier step must not supply approval-bound Story coverage');
+  await f.scan();
+  assert.equal(f.record().gate.kind, 'approve-pr');
+  assert.ok(f.record().gate.automaticHold);
+  assert.deepEqual(f.record().decisions, run.decisions);
+  assert.deepEqual(readPromptApprovals({commonDir: run.commonDir}, f.automaticPorts), journal);
+  assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+});
+
+for (const kind of ['Story', 'expected', 'prompt-list']) test(`#3103 repair 1 a ${kind} edit during contract recovery saves no coverage`, async t => {
+  const f = await setup(t);
+  preCardRecord(f, {contract: true});
+  await f.scan();
+  assert.ok(f.record().storyApproval?.fingerprint, 'contract-backed recovery must work before testing its concurrent edit');
+  const {run} = preCardRecord(f, {contract: true}), original = f.tickPorts.execFile;
+  const journal = readPromptApprovals({commonDir: run.commonDir}, f.automaticPorts);
+  let inventories = 0, changed = false;
+  f.tickPorts.execFile = async (file, args, opts) => {
+    const result = await original(file, args, opts);
+    // Gate prompt inventory, contract inventory, then fingerprint inventory.
+    // The old implementation has already read the approved contract here.
+    if (file === 'git' && args[0] === 'ls-files' && ++inventories === 3) {
+      changed = true;
+      if (kind === 'Story') writeFileSync(join(run.root, STORY), readFileSync(join(run.root, STORY), 'utf8') + '\nChanged during recovery.\n');
+      if (kind === 'expected') {const doc = JSON.parse(readFileSync(join(run.root, TEST))); doc.steps[0].checks[0].value = 950; writeFileSync(join(run.root, TEST), JSON.stringify(doc));}
+      if (kind === 'prompt-list') cpSync(join(run.root, PROMPT), join(run.root, 'prompts/another.prompt.md'));
+      // A current full pass cannot authorize the edit.
+      saveCheck(f);
+    }
+    return result;
+  };
+  saveCheck(f);
+  await f.scan();
+  assert.equal(changed, true);
+  assert.equal(f.record().storyApproval, undefined, 'a concurrent contract edit must not become approved Story coverage');
+  assert.ok(f.record().gate.storyChanges?.length);
+  await f.scan();
+  assert.equal(f.record().storyApproval, undefined);
+  assert.equal(f.record().gate.kind, 'approve-pr');
+  assert.deepEqual(f.record().decisions, run.decisions);
+  assert.deepEqual(readPromptApprovals({commonDir: run.commonDir}, f.automaticPorts), journal);
+  assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+});
 
 for (const kind of ['strict', 'scope', 'custody', 'Story']) test(`#3099 publication revalidates ${kind} after preparation`, async t => {
   const f = await setup(t);

@@ -575,7 +575,29 @@ unavailable or changed authority never supplies approval.
 Reuse the normal-run full-pass route below and its Story coverage, selected prompt
 paths, saved-batch freshness/completeness and pinned publication evidence rules.
 Automatic Story coverage is the latest saved decision's `storyCoverage`, falling
-back to `storyApproval`. Missing coverage keeps the person gate. A changed Story,
+back to `storyApproval`. If coverage is absent, derive it once from the latest
+recorded approval of the workflow's Story area. Require its identified evidence
+to match the approval journal, including the approved prompt paths and hashes.
+Require a saved Story contract and paths bound to that approval. An earlier
+Story-step source hash, even when matched by a local ancestor and unchanged
+prompt prose, cannot establish which Story the later approval covered. Missing
+approval-bound evidence keeps the person gate with a coverage hold reason.
+Capture the current Story contract and fingerprint from the same immutable file
+snapshot so an edit between contract validation and fingerprint capture cannot
+become approved coverage. Read source inventory through the program port; do
+not change the source worktree while recovering its fingerprint.
+Compare the snapshot contract with the approval's saved contract, and its Story,
+plan, expected values and prompt paths with the current selection before saving.
+Every fingerprinted Story and scenario must belong to that contract's file
+inventory. An unbound file keeps the person gate. A difference or intervening
+edit reopens the Story card and saves no derived coverage. Otherwise save
+`storyApproval` with `gateId`, `evidenceId`, original approval `at`, `fingerprint`,
+`prompts`, and `source: "derived from the recorded approval"`. Its `derivedFrom`
+records `storyContract` for the approval-bound snapshot. Preserve the original
+decision and journal; this is coverage recovery, not a new approval. Guard the save against changed run,
+decision, gate, scope and custody, and recheck current source before publication.
+Retries reuse saved coverage. Normal runs never derive coverage and retain their
+person gate when it is missing. A changed Story,
 plan, expected value or prompt list reopens the Story gate; an already reopened
 Story gate requires explicit approval and is never crossed by this boundary.
 When this command reopens a Story gate that owns an eligible parked person wait,
