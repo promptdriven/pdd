@@ -67,7 +67,9 @@ lock, including across PRs and independent local clones. Key this custody and
 concern records by lowercase repository under the machine workflow state root,
 not by Git common directory. Discover cap costs with allRuns in that state root
 and filter by repository; verify runId/startedAt before refreshing a live record.
-Retain archived snapshots when a path has another attempt. A missing, malformed
+Retain archived snapshots when a path has another attempt, but any cost refresh
+failure or attempt identity change makes this admission unknown; an earlier
+complete snapshot cannot establish current spending. A missing, malformed
 or saturated (200 entries) machine run index cannot establish complete cost
 coverage and holds a capped audit. Missing indexed records for this repository
 or absence of the current run in the index also hold; never treat missing
@@ -102,7 +104,7 @@ PR order. Reserved/unknown auditors and uncertain publications never cause a
 new paid launch. Separate run attempts cannot reuse an audit record.
 
 Ports may supply fs, env, now, execFile, readConfig, agentDefinitions,
-codexLimits, dailyUsage (`{known,total}` in tokens), runAuditor, sendAlert,
+codexLimits, refreshCosts (the identity-guarded updateRunCosts boundary), dailyUsage (`{known,total}` in tokens), runAuditor, sendAlert,
 alertPorts and acquireAuditLock; defaults use the declared native dependencies.
 `auditStateRoot` optionally selects this repository's private bookkeeping folder;
 otherwise use stateDirFor(ports)/autopilot-audits/ plus the first 20 hex characters

@@ -40,7 +40,7 @@ async function world(t) {
   w.check=async(pr=23)=>{
     const stdout={text:'',write(s){this.text+=s;}},stderr={text:'',write(s){this.text+=s;}};
     const code=await runPdd(['autopilot','audit','17',String(pr)],{cwd:f.source,env:f.ports.env,stdout,stderr,autopilotLauncherPorts:{...f.ports,run:execute,
-      agentDefinitions:()=>[{kind:w.agent,name:w.agent,command:'configured-codex',env:{}}],codexLimits:async()=>({state:w.limit}),...(w.nativeUsage?{}:{dailyUsage:async()=>w.usage}),
+      agentDefinitions:()=>[{kind:w.agent,name:w.agent,command:'configured-codex',env:{}}],codexLimits:async()=>({state:w.limit}),...(w.nativeUsage?{}:{dailyUsage:async()=>w.usage}),...(w.refreshCosts?{refreshCosts:w.refreshCosts}:{}),
       runAuditor:async(command,args,options)=>{w.launches.push({command,args,options});await w.delay?.();if(w.agent==='claude') return {code:0,stdout:JSON.stringify({session_id:w.session,result:JSON.stringify(w.answer)})};return {code:w.providerExit??0,stdout:JSON.stringify({type:'thread.started',thread_id:w.session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:w.raw??JSON.stringify(w.answer)}})+'\n'};},
       sendAlert:async input=>{w.alerts.push(input);return {exitCode:0};},
     }});
@@ -174,4 +174,12 @@ for(const kind of ['missing','malformed','saturated'])test(`3111 ${kind} cost in
   else if(kind==='malformed')writeFileSync(file,'{');
   else writeFileSync(file,JSON.stringify({version:1,runs:Array.from({length:200},(_,n)=>({number:n+1,repo:w.run.repo,runDir:join(w.base,`absent-${n}`,'pdd/runs/17')}))}));
   const out=await w.check();assert.equal(out.code,1,out.text);assert.equal(w.launches.length,0);
+});
+
+
+test('3111 a failed cost refresh cannot admit an audit from a stale complete snapshot',async t=>{
+  const w=await world(t);w.config({auditTokenLimit:1000});w.nativeUsage=true;let refreshes=0;
+  assert.ok(w.run.cost);w.run.cost.coverage=[];writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  w.refreshCosts=()=>{refreshes++;throw Error('synthetic attempt changed during refresh');};
+  const out=await w.check();assert.equal(out.code,1,out.text);assert.equal(refreshes,1);assert.equal(w.launches.length,0);
 });

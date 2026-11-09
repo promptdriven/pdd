@@ -129,12 +129,13 @@ async function auditMergeOwned({run, pr}, ports = {}) {
             if(!record || record.repo?.toLowerCase()!==run.repo.toLowerCase()) return unknown;
           }
           const runs = (await allRuns({cancelled:true},ports)).filter(r=>r.repo?.toLowerCase()===run.repo.toLowerCase());
-          const measured = runs.map(r => {try {return updateRunCosts(r.runDir,latest => {
+          let refreshFailed=false;
+          const measured = runs.map(r => {try {return (ports.refreshCosts ?? updateRunCosts)(r.runDir,latest => {
             if(latest.runId!==r.runId || latest.startedAt!==r.startedAt) throw Error('Cost attempt changed');
             return latest;
-          },{...ports,env});} catch {return r;}});
+          },{...ports,env});} catch {refreshFailed=true;return r;}});
           const report = costReport(measured,now());
-          return {total:report.day.totals.totalTokens ?? 0,known:!report.day.coverage.some(c => ['session-unavailable','audit-session-unavailable','usage-unavailable','session-capture-deferred','session-backlog','session-truncated','usage-identity-missing','capture-failed','not-captured'].includes(c))};
+          return {total:report.day.totals.totalTokens ?? 0,known:!refreshFailed && !report.day.coverage.some(c => ['session-unavailable','audit-session-unavailable','usage-unavailable','session-capture-deferred','session-backlog','session-truncated','usage-identity-missing','capture-failed','not-captured'].includes(c))};
         }))();
         if(!usage.known || usage.total >= limit) return fail('daily cost limit holds the audit; no paid call was made.');
       }
