@@ -357,7 +357,7 @@ pdd workflow status --all --json  # the same list as data
 
 ### 6.9 Close the terminal or restart
 
-The chats run in Herdr, not in your terminal. You can close the terminal at any time. Nothing has a time limit.
+The chats run in Herdr, not in your terminal. You can close the terminal at any time. Workflow chats have no overall time limit.
 
 After a restart, run `pdd workflow open 42`. pdd resumes the chat of the current area (using the selected agent’s resume command) in its tab.
 
@@ -669,7 +669,7 @@ exec claude "$@"
 
 Each chat also gets the login variables of the person who runs the pdd command, not the ones of the terminal that first started the Herdr session `pdd`. See [the CLI reference](cli.md).
 
-The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini Try checks `--help` for `--approval-mode`, `--admin-policy`, `--extensions`, `--allowed-mcp-server-names` and `--output-format` before applying its restricted configuration. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
+The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini Try checks `--help` for `--approval-mode`, `--admin-policy`, `--extensions`, `--allowed-mcp-server-names` and `--output-format` before applying its restricted configuration. If a flag is missing, pdd names it in the error and asks you to update Gemini CLI. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 
 If an agent cannot start, the chat shows its first error line with recognized secrets removed. Full sanitized diagnostics stay on your computer in `~/.pdd/runtime/agent-chat.log`; the chat shows that path when the log was saved.
 
