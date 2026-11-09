@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d8853af519f6a0188127d5afd7ca11bf04ee23a46d4097d082a7a73189dcbdbb).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2dc69fcdff539cff8706fe27ae79413ddc624aa32166ba13c559a08bf064d70e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2435,7 +2435,7 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot, progr
     `pdd recorded ${step}. The prompt check passed in full on the current prompts (${check.tests.length} test${check.tests.length === 1 ? '' : 's'}), so pdd opened ${label === 'the PR' ? 'the PR' : label} with no approval question (route automatic-check-pass).`, ...published];
   if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
   const shownGate = run.gate ? await showGate(run, p) : [];
-  if (Object.hasOwn(run, 'automaticOrigin')) return done([...head, ...shownGate, `PR 1: ${url}`, automaticHandoff(run, p, packageRoot), 'PR 1 is open. Continue through the scoped automatic code gate.'].filter(Boolean).join('\n'));
+  if (Object.hasOwn(run, 'automaticOrigin') && !automaticPromptReturn(run, p)) return done([...head, ...shownGate, `PR 1: ${url}`, automaticHandoff(run, p, packageRoot), 'PR 1 is open. Continue through the scoped automatic code gate.'].filter(Boolean).join('\n'));
   return afterPr1(run, area, p, [...head, ...shownGate], packageRoot);
 }
 // After PR 1 opens in a normal run: follow the code-or-stop choice saved with the Story approval; ask nothing.
