@@ -92,6 +92,11 @@ PDD_RUNTIME_URL report gives the HTTPS-origin or unset repair.
 A full pane budget can warn when local workflow records show potential room from
 reclamation. Start must still prove room through its guarded cleanup and admission.
 Doctor closes no panes. A reused coordinator needs no extra pane.
+Doctor verifies that coordinator in `pdd-autopilot`. A full `pdd` workflow
+session does not block reuse. Fresh allocation uses the native workflow pane
+admission rules. Unavailable saved-target evidence defers to guarded recovery.
+Interpreter readiness uses the runtime client's health check, including a JSON
+404 from an interpreter without the optional capacity endpoint.
 
 Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine.
 

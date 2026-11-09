@@ -2291,3 +2291,79 @@ test('start: an absent selected provider directory masks an unrelated ambient pr
   const r=await f.invoke('start');assert.equal(r.exitCode,0,r.message);
   assert.equal(f.state().environment.CODEX_HOME,undefined);
 });
+
+// Native-start outcomes are the preservation contract. An optional disposable
+// base checkout repeats the same states against its real public launcher too.
+const admissionStates=[
+  {name:'fresh with room',baseAdmitted:true},
+  {name:'fresh with full workflow session',panes:1,budget:'1',baseAdmitted:false},
+  {name:'fresh with unlimited workflow session',panes:2,budget:'0',baseAdmitted:true},
+  {name:'fresh with invalid budget',budget:'invalid',baseAdmitted:false},
+  {name:'fresh with malformed workflow inventory',invalidInventory:true,baseAdmitted:false},
+  {name:'fresh with unreadable status but native inventory available',statusUnavailable:true,baseAdmitted:true},
+  {name:'saved idle coordinator and full workflow session',restart:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'saved working coordinator and overfull workflow session',restart:true,status:'working',panes:2,budget:'1',baseAdmitted:true},
+  {name:'saved blocked coordinator and invalid budget',restart:true,status:'blocked',budget:'invalid',baseAdmitted:true},
+  {name:'saved coordinator and unreadable workflow inventory',restart:true,invalidInventory:true,baseAdmitted:true},
+  {name:'saved target observation unavailable',restart:true,unavailable:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'optional capacity endpoint returns JSON 404',runtime404:true,baseAdmitted:true},
+  {name:'saved coordinator with JSON 404 and full workflow session',restart:true,runtime404:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'missing sign-in is the new preflight refusal',signedOut:true,baseAdmitted:true},
+];
+for(const row of admissionStates)test(`start admission parity: ${row.name}`,async t=>{
+  const prepare=async module=>{
+    const f=await fixture(t);if(module)f.module=module;
+    f.ports.allRuns=()=>[];
+    f.ports.tidyRuns=async()=>({closed:0});
+    f.ports.workflowHerdr=async args=>{
+      if(args[0]==='status') {
+        if(row.statusUnavailable)throw Object.assign(Error('unreadable'),{code:'transport_error'});
+        return {running:true};
+      }
+      assert.deepEqual(args.filter(a=>a!=='--json'),['pane','list']);
+      return {result:{type:'pane_list',panes:f.workflowPanes??[]}};
+    };
+    const original=f.ports.doctorPorts;
+    f.ports.doctorPorts=input=>{
+      const p=original(input),run=p.run;
+      p.run=async(file,args,options)=>{
+        if(file==='herdr'&&args[0]==='--session') {
+          assert.ok(['pdd','pdd-autopilot'].includes(args[1]));
+          (f.sessionReads??=[]).push(args);
+          try {
+            const value=await (args[1]==='pdd'?f.ports.workflowHerdr:f.ports.herdr)(args.slice(2));
+            return {code:0,stdout:JSON.stringify(value),stderr:''};
+          } catch(error) {return {code:1,stdout:'',stderr:JSON.stringify({error:{code:error.code}})};}
+        }
+        return run(file,args,options);
+      };
+      if(row.runtime404)p.fetch=async()=>new Response('{"error":{"code":"not-found"}}',{status:404});
+      return p;
+    };
+    const env={HOME:f.home,PATH:'/synthetic/bin'};
+    if(row.restart)assert.equal((await f.invoke('start',{env})).exitCode,0);
+    const prior=row.restart?f.state():null;
+    f.agentStatus=row.status;
+    if(row.unavailable) {
+      const herdr=f.ports.herdr;
+      f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get')throw Object.assign(Error('unreadable'),{code:'transport_error'});return herdr(args);};
+    }
+    f.workflowPanes=row.invalidInventory?[{}]:Array.from({length:row.panes??0},(_,i)=>({pane_id:`personal-${i}`,workspace_id:'personal',tab_id:`tab-${i}`,terminal_id:`terminal-${i}`}));
+    if(row.signedOut)f.accountReady=()=>false;
+    const result=await f.invoke('start',{env:{...env,...(row.budget===undefined?{}:{PDD_HERDR_PANE_BUDGET:row.budget})}});
+    if(prior&&result.exitCode===0) {
+      assert.equal(f.state().paneId,prior.paneId);assert.equal(f.state().coordinatorId,prior.coordinatorId);
+    }
+    return result;
+  };
+  let baseAdmitted=row.baseAdmitted;
+  if(process.env.PDD_ADMISSION_BASE_ROOT) {
+    const {pathToFileURL}=await import('node:url');
+    const base=await import(pathToFileURL(join(process.env.PDD_ADMISSION_BASE_ROOT,'src/autopilot-launcher.mjs')));
+    const result=await prepare(base);
+    baseAdmitted=result.exitCode===0;
+    assert.equal(baseAdmitted,row.baseAdmitted,`native base: ${result.message}`);
+  }
+  const result=await prepare();
+  assert.equal(result.exitCode===0,baseAdmitted&&!row.signedOut,result.message);
+});

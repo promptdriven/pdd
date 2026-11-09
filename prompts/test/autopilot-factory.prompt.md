@@ -59,6 +59,13 @@ real gh, agent, system timer or live Herdr process may run. Never touch another
 process or its state. Use the repository fakes as the starting point. Keep
 execution reports outside source.
 
+Keep Herdr's --session argument through every fake transport boundary. Maintain
+separate `pdd` workflow and `pdd-autopilot` coordinator inventories and identities.
+A full workflow session must admit restart of its healthy saved coordinator in
+the other session without allocating, closing or charging a workflow pane.
+Test machine-state admission parity with native start, except the authorized
+missing-sign-in refusal; include the supported interpreter JSON 404 health reply.
+
 After a real merge and completed audit, damage its local audit JSON. Repeated
 ticks must still select and deliver a new eligible issue. Status names the held
 run, PR and cause. No auditor, repeated audit publication or audit time rule is

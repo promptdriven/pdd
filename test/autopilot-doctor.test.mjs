@@ -9,6 +9,7 @@ import {runAutopilotDoctor} from '../src/autopilot-doctor.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {runAutopilotLauncher} from '../src/autopilot-launcher.mjs';
 import {doctorFixture} from './helpers/doctor-fixture.mjs';
+import {checkRuntimeHealth} from '../src/runtime-client.mjs';
 
 const invoke=async(f,command='doctor')=>{
   let stdout='',stderr='';
@@ -150,10 +151,43 @@ test('doctor: saved profile overrides changed definition directories for sign-in
 });
 
 for (const reuse of [true,false]) test(`doctor: full pane budget ${reuse?'reuses the coordinator':'defers potential reclamation to guarded admission'}`,async()=>{
-  const f=doctorFixture();f.input.env.PDD_HERDR_PANE_BUDGET='1';f.panes=[{pane_id:'saved',workspace_id:'workspace'}];
-  if(reuse)f.input.coordinatorPaneId='saved';
+  const f=doctorFixture();f.input.env.PDD_HERDR_PANE_BUDGET='1';f.panes=[{pane_id:'personal',workspace_id:'workspace',tab_id:'tab',terminal_id:'terminal'}];
+  if(reuse){f.input.coordinatorPaneId='saved';f.coordinatorPanes=[{pane_id:'saved'}];f.ports.coordinatorHealth=async()=>({state:'idle'});}
   else f.ports.reclaimablePanes=async({env,panes})=>{assert.equal(env.HOME,f.input.env.HOME);assert.deepEqual(panes,f.panes);return 1;};
   const result=await runAutopilotDoctor(f.input,f.ports),capacity=result.checks.find(c=>c.id==='herdr-room');
   assert.equal(result.exitCode,0,result.message);assert.equal(capacity.status,reuse?'pass':'warn');
   assert.ok(f.calls.every(c=>!c.args || !c.args.includes('close')));
+  if(reuse)assert.ok(!f.calls.some(c=>c.file==='herdr'&&c.args[1]==='pdd'));
+});
+
+const healthCases=[
+  {name:'JSON 200',status:200,body:'{}',state:'healthy'},
+  {name:'optional endpoint JSON 404',status:404,body:'{"error":{"code":"not-found"}}',state:'healthy'},
+  {name:'HTML 404',status:404,body:'<html>missing</html>',state:'access'},
+  {name:'malformed JSON 200',status:200,body:'{',state:'access'},
+  {name:'array 200',status:200,body:'[]',state:'access'},
+  {name:'auth denied',status:401,body:'{}',state:'access'},
+  {name:'access denied',status:403,body:'{}',state:'access'},
+  {name:'redirect',status:302,body:'{}',state:'access'},
+  {name:'service down',status:503,body:'{}',state:'unavailable'},
+  {name:'maintenance',status:200,body:'{"maintenance":{"until":"2099-01-01T00:00:00Z"}}',state:'unavailable'},
+  {name:'network failure',state:'unavailable'},
+];
+for(const row of healthCases)test(`doctor: runtime admission uses native health for ${row.name}`,async()=>{
+  const f=doctorFixture();f.input.env.PDD_RUNTIME_URL='https://runtime.example.test';
+  f.ports.fetch=async()=>{if(!row.status)throw Error('network');return new Response(row.body,{status:row.status});};
+  const native=await checkRuntimeHealth({env:f.input.env},{gh:()=>({status:0,stdout:'synthetic-token'}),fetch:f.ports.fetch});
+  assert.equal(native.state,row.state);
+  const result=await runAutopilotDoctor(f.input,f.ports);
+  assert.equal(result.checks.find(c=>c.id==='interpreter').status,row.state==='healthy'?'pass':'fail');
+  assert.equal(result.exitCode,row.state==='healthy'?0:1,result.message);
+});
+
+test('doctor: successful repository checks print read-only inspection commands',async()=>{
+  const f=doctorFixture(),result=await runAutopilotDoctor(f.input,f.ports);
+  for(const id of ['github-permission','merge-method']) {
+    const line=result.checks.find(c=>c.id===id);
+    assert.equal(line.status,'pass');assert.match(line.fix,/gh repo view /);
+    assert.doesNotMatch(line.fix,/gh repo (?:fork|edit) /);
+  }
 });

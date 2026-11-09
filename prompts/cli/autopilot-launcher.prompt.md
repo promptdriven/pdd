@@ -1316,13 +1316,19 @@ home that selected the configuration. Revalidate saved profile/custody under exi
 guards before effects. On a required failure return the complete multi-line report
 unchanged. Doctor bypasses launcher writes and the GitHub ledger. Successful start retains existing readiness, saved
 profile/custody, base, admission and delegation checks. A doctor pass alone grants
-no approval or merge authority. Supply the saved coordinator pane identity and a
+no approval or merge authority. Supply the same read-only coordinatorHealth used
+by launcher status, bound to the saved target and `pdd-autopilot` session. Saved
+targets need no immediate workflow allocation; unavailable target evidence defers
+to guarded recovery. Supply the saved coordinator pane identity and a
 read-only potential-reclamation observation to doctor. Read the local workflow
 index and intersect saved finished chats, or idle blocked automatic-run chats,
 with live pane/workspace identities. Exclude known working panes. This is only
 potential room: doctor warns and the existing custody checks, bounded sweeps and
 final admission decide. Never run tidy, parking, claim recovery or a lock
 acquisition during doctor.
+Keep the workflow Herdr binding for delegated workflow gate advancement and
+stopped-worker recovery and parking. The coordinator binding belongs to `pdd-autopilot`;
+workflow operations belong to `pdd`, including when both ports are injected.
 
 ## Dependencies
 

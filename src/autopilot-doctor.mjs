@@ -7,7 +7,8 @@ import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
-import {runtimeOrigin} from './runtime-client.mjs';
+import {runtimeOrigin, checkRuntimeHealth} from './runtime-client.mjs';
+import {ensurePaneBudget} from './workflow-chat.mjs';
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
@@ -112,9 +113,10 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const origin = await run('git',['remote','get-url','origin']);
   const originRepo = githubOriginRepository(origin.stdout);
   const write = ['ADMIN','MAINTAIN','WRITE'].includes(metadata?.viewerPermission);
-  add('github-permission',named && originRepo?.toLowerCase()===repo.toLowerCase() && write ? 'pass':'fail',`${named?repo:'repository unavailable'}; permission ${['ADMIN','MAINTAIN','WRITE','TRIAGE','READ'].includes(metadata?.viewerPermission)?metadata.viewerPermission:'unknown'}; push and PR need write access`,named?`gh repo fork ${quote(repo)} --clone`:'gh auth setup-git');
+  const permission = named && originRepo?.toLowerCase()===repo.toLowerCase() && write;
+  add('github-permission',permission ? 'pass':'fail',`${named?repo:'repository unavailable'}; permission ${['ADMIN','MAINTAIN','WRITE','TRIAGE','READ'].includes(metadata?.viewerPermission)?metadata.viewerPermission:'unknown'}; push and PR need write access`,permission?`gh repo view ${quote(repo)} --json viewerPermission`:named?`gh repo fork ${quote(repo)} --clone`:'gh auth setup-git');
   const merge = [metadata?.mergeCommitAllowed,metadata?.squashMergeAllowed,metadata?.rebaseMergeAllowed].includes(true);
-  add('merge-method',merge?'pass':'fail','Repository must enable a merge method; permission alone does not bypass reviews',named?`gh repo edit ${quote(repo)} --enable-squash-merge`:'gh auth login');
+  add('merge-method',merge?'pass':'fail','Repository must enable a merge method; permission alone does not bypass reviews',merge?`gh repo view ${quote(repo)} --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`:named?`gh repo edit ${quote(repo)} --enable-squash-merge`:'gh auth login');
   const ruleReply = named && branch ? await run('gh',['api',`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`]) : null;
   const rules = ready(ruleReply)?json(ruleReply.stdout):null;
   add('merge-rules',Array.isArray(rules)?'pass':'warn',Array.isArray(rules)?`Branch rules: ${rules.map(r=>r.type).filter(x=>typeof x==='string').join(', ') || 'none'}; required reviews and checks still apply`:'Branch rules unavailable; merge eligibility is unproved',named&&branch?`${Array.isArray(rules)?'':'gh auth login && '}gh api ${quote(`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`)}`:'gh auth login');
@@ -136,25 +138,37 @@ export async function runAutopilotDoctor(input, ports = {}) {
 
   const herdr = await run('herdr',['--version']);
   add('herdr',ready(herdr)?'pass':'fail','Herdr installation','curl -fsSL https://herdr.dev/install.sh | sh');
-  const herdrRead = args => run('herdr',['--session','pdd',...args]);
-  const serverReply = await herdrRead(['status','server','--json']);
-  const server = ready(serverReply)?json(serverReply.stdout):null;
-  let count = server?.running===false?0:null, inventory=[];
-  if (server?.running===true) {
-    const reply = await herdrRead(['pane','list','--json']);
-    const panes = ready(reply)?json(reply.stdout)?.result?.panes:null;
-    if (Array.isArray(panes)) {count = panes.length;inventory=panes;}
+  if (input.coordinatorPaneId) {
+    let health;
+    try { health=await ports.coordinatorHealth?.({env}); } catch {}
+    const verified=['working','starting','idle','blocked','done'].includes(health?.state);
+    add('herdr-room',verified?'pass':'warn',verified?'Saved coordinator verified in pdd-autopilot; needs 0 workflow panes':'Saved coordinator recovery is unproved; guarded start decides allocation','pdd autopilot status');
+  } else {
+    let inventory=[];
+    const herdrRead=async args=>{
+      const reply=await run('herdr',['--session','pdd',...args]);
+      const body=json(ready(reply)?reply.stdout:reply.stderr||reply.stdout);
+      if (!ready(reply) || body?.error) throw Object.assign(Error('Herdr read failed'),{code:body?.error?.code});
+      return body;
+    };
+    try {
+      let server;
+      try { server=await herdrRead(['status','server','--json']); } catch { /* The native inventory read decides admission. */ }
+      const usage=await ensurePaneBudget(1,{env,onPaneUsage:panes=>{inventory=panes;},herdr:async args=>{
+        if (server?.running===false) throw Object.assign(Error('Herdr stopped'),{code:'server_not_running'});
+        return herdrRead(args);
+      }});
+      add('herdr-room','pass',`${usage.panes} panes; budget ${usage.budget}; needs 1`,'pdd workflow tidy --dry-run');
+    } catch (error) {
+      let potential=0;
+      if (error.code==='herdr_pane_budget' && ports.reclaimablePanes) {
+        try { potential=await ports.reclaimablePanes({env,panes:inventory}); } catch {}
+      }
+      // Potential cleanup is not permission to close a pane. Native start rechecks under its guards.
+      const pending=Number.isSafeInteger(potential) && potential>0;
+      add('herdr-room',pending?'warn':'fail',pending?'Potential workflow reclamation; guarded start admission must prove room':error.code==='herdr_pane_budget'?error.message.split('\n')[0]:`Workflow pane admission: ${error.code??'unavailable'}`,error.code==='invalid_pane_budget'?'unset PDD_HERDR_PANE_BUDGET':'pdd workflow tidy --dry-run && pdd workflow tidy');
+    }
   }
-  const budget = env.PDD_HERDR_PANE_BUDGET===undefined?56:/^\d+$/.test(env.PDD_HERDR_PANE_BUDGET)?Number(env.PDD_HERDR_PANE_BUDGET):NaN;
-  const need=input.coordinatorPaneId && inventory.some(p=>p.pane_id===input.coordinatorPaneId)?0:1;
-  const validBudget=Number.isSafeInteger(budget) && budget>=0;
-  const room=count!==null && validBudget && (budget===0 || count+need<=budget);
-  let potential=0;
-  if (!room && count!==null && validBudget && ports.reclaimablePanes) {
-    try {potential=await ports.reclaimablePanes({env,panes:inventory});} catch {}
-  }
-  const pending=!room && Number.isSafeInteger(potential) && potential>0 && count-potential+need<=budget;
-  add('herdr-room',room?'pass':pending?'warn':'fail',`${count??'unknown'} panes; budget ${Number.isSafeInteger(budget)?budget:'invalid'}; needs ${need}${pending?'; potential workflow reclamation; guarded start admission must prove room':''}`,validBudget?'pdd workflow tidy --dry-run && pdd workflow tidy':'unset PDD_HERDR_PANE_BUDGET');
 
   const block = ['CLAUDE.md','AGENTS.md'].some(name=>/<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/.test(read(join(cwd,name))??''));
   add('setup-block',block?'pass':'fail','PDD instructions in AGENTS.md or CLAUDE.md','pdd setup');
@@ -183,12 +197,8 @@ export async function runAutopilotDoctor(input, ports = {}) {
     else if (ports.runtimeHealth) health = await ports.runtimeHealth({env});
     else {
       const token = await run('gh',['auth','token']);
-      if (!ready(token)||!token.stdout.trim()) health = {state:'auth'};
-      else {
-        const reply = await (ports.fetch??globalThis.fetch)(`${runtimeOrigin(env)}/v1/capacity`,{method:'GET',headers:{Authorization:`Bearer ${token.stdout.trim()}`},signal:AbortSignal.timeout(10000),redirect:'error'});
-        const body = await reply.json();
-        health = {state:reply.status===200 && body && typeof body==='object' && !Array.isArray(body) && !(Date.parse(body.maintenance?.until)>(ports.now??Date.now)())?'healthy':[401,403].includes(reply.status)?'access':'unavailable'};
-      }
+      health=await checkRuntimeHealth({env},{gh:()=>({status:token.code,stdout:token.stdout}),fetch:ports.fetch,now:ports.now});
+      if (!ready(token)||!token.stdout.trim()) health={...health,state:'auth'};
     }
   } catch { health = {state:'unavailable'}; }
   add('interpreter',health?.state==='healthy'?'pass':'fail',health?.state==='healthy'?'Read-only interpreter access accepted':health?.state==='address'?'PDD_RUNTIME_URL must be an HTTPS origin; unset it to use the default':'Interpreter access is unproved; no check was submitted',health?.state==='address'?`unset PDD_RUNTIME_URL; ${retry}`:health?.state==='auth'?'gh auth login':health?.state==='access'?`${platform==='darwin'?'open':'xdg-open'} https://promptdriven.ai/login`:retry);

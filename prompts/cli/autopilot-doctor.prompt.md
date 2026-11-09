@@ -60,9 +60,16 @@ Check these boundaries in order and continue after failures:
   no generation call to discover allowance, and no credit/reset advice.
 - Herdr installed. Read the workflow session `pdd` server status and pane list without starting a server, matching the shared workflow pane budget.
   A stopped server has zero panes. Apply PDD_HERDR_PANE_BUDGET (default 56,
-  0 unlimited). Reusing the saved coordinator pane requires no new pane. If room
-  is short, a read-only reclaimablePanes({env,panes}) port may identify a count of
-  potential workflow panes. Enough potential room warns that capacity is unproved
+  0 unlimited), using the workflow owner's ensurePaneBudget with cleanup disabled,
+  rather than a second parser or inventory policy. Only charge the one pane that
+  openWorkspace actually allocates on a fresh start. For a saved coordinator, use
+  the launcher's coordinatorHealth in session `pdd-autopilot`; never search for
+  that pane in `pdd`. A verified coordinator needs no allocation or workflow room
+  read. An unavailable or mismatched saved target warns and defers to the existing
+  guarded start recovery; preflight must not refuse a start that native start
+  admits. Saved custody and pending delivery also defer allocation to their guards.
+  If room is short, a read-only reclaimablePanes({env,panes}) port may identify a count of
+  potential workflow panes. Potential room warns that capacity is unproved
   until start's existing guarded sweeps and admission run; doctor closes nothing
   and grants no cleanup authority. Otherwise insufficient room fails. Invalid
   budget or unreadable inventory fails. Recommend the native tidy command for capacity.
@@ -74,9 +81,10 @@ Check these boundaries in order and continue after failures:
 - Enumerate tracked *.prompt.md and report draft/missing interfaces as advisory
   paths that may need approval on first check. Malformed or unreadable prompts
   warn. Never approve them or block doctor solely for drafts.
-- Read interpreter access with gh auth token and authenticated GET /v1/capacity
-  at the shared runtime origin. No upload or job. Require HTTP 200 JSON to prove
-  access; missing auth, denial, maintenance, unsupported endpoint or unreachable
+- Read interpreter access through the runtime client's existing checkRuntimeHealth
+  with the selected environment and injected gh/fetch/clock ports. No upload or job.
+  Preserve its health rules, including a JSON 404 from an interpreter without the
+  optional capacity endpoint. Missing auth, denial, maintenance or unreachable
   access fail with gh auth login, the platform browser sign-up command or a doctor
   retry as appropriate. Validate the origin even with an injected health port. An
   invalid PDD_RUNTIME_URL names that setting and advises an HTTPS origin or unsetting
@@ -94,15 +102,20 @@ Check these boundaries in order and continue after failures:
 - [Workflow worktree](workflow-worktree.prompt.md): canonical GitHub origin normalization.
 - [Workflow agents](workflow-agents.prompt.md): read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
-- [Runtime client](runtime-client.prompt.md): runtimeOrigin is the one address setting.
+- [Runtime client](runtime-client.prompt.md#free-interpreter-health-check): required health classification and runtimeOrigin address rules.
+- [Workflow chat](workflow-chat.prompt.md): required ensurePaneBudget admission and pane inventory rules; doctor disables all cleanup.
 
 All program, file, network, environment/platform/version/uid and account reads
 have injected ports. Native defaults are adapter bindings only. Files provides
 readFileSync, realpathSync, accessSync and statSync; run accepts executable,
 argv and cwd/env options and returns code/stdout/stderr. agentDefinitions,
-selectAgent, codexLimits, runtimeHealth, fetch and spawn are independently
+selectAgent, codexLimits, coordinatorHealth, runtimeHealth, fetch and spawn are independently
 replaceable ports. onSelection observes the resolved selection before checks;
-the launcher uses its env and agent for startup after a passing report. Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays returned by definition ports.
+the launcher uses its env and agent for startup after a passing report.
+coordinatorHealth({env}) returns the launcher's {state, reason?} observation:
+working, starting, idle, blocked, done, or unavailable with a reason. Unknown
+or failed observations are advisory and leave recovery to start.
+Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays returned by definition ports.
 
 <details><summary>Runtime interface</summary>
 

@@ -23,7 +23,8 @@ test('factory 2: machine restart retains claim, work and chat identity to merge'
   const before=w.record();assert.ok(before.chats.at(-1).session?.id,'register native session before restart');
   const allocations=readdirSync(join(w.commonDir,'pdd/worktree-assignments/runs')).length,publications=w.github.prs.length;
   const claim=w.github.issues.get(17).comments.find(c=>c.body.includes('coordinatorId'));
-  w.herdr.workspaces=[];w.herdr.tabs=[];w.herdr.panes=[];w.time+=120000;
+  w.herdr.workspaces=[];w.herdr.tabs=[];w.herdr.panes=[];
+  w.coordinatorHerdr.workspaces=[];w.coordinatorHerdr.tabs=[];w.coordinatorHerdr.panes=[];w.time+=120000;
   await w.tick();await w.tick();
   const after=w.record();
   assert.equal(readdirSync(join(w.commonDir,'pdd/worktree-assignments/runs')).length,allocations);assert.equal(w.github.prs.length,publications);
@@ -74,6 +75,7 @@ test('factory 4: stuck run parks and its merged dependency wakes it to merge',as
 test('factory 5a: a full Herdr pane budget defers admission, then released room reaches merge',async t=>{
   const w=await factoryWorld(t);
   await w.begin({beforeRun:async()=>{
+    if(!w.herdr.workspaces.length)await w.herdr.herdr(['workspace','create','--cwd',w.cwd,'--label','personal','--no-focus']);
     const workspace=w.herdr.workspaces[0].workspace_id;
     for(let n=w.herdr.panes.length;n<56;n++) {
       w.herdr.tabs.push({tab_id:`occupied-t${n}`,workspace_id:workspace});
@@ -387,4 +389,21 @@ test('factory 3125: restart and doctor use the healthy saved profile with a sign
   assert.equal(w.state().coordinatorId,prior.coordinatorId);
   assert.equal(w.state().environment.CODEX_HOME,w.agentProfile);
   assert.ok(w.doctorAccounts.length>=3);assert.ok(w.doctorAccounts.every(profile=>profile===w.agentProfile));
+});
+
+test('factory 3125: a full workflow session admits healthy coordinator reuse in its own session',async t=>{
+  const w=await factoryWorld(t);await w.start();
+  const prior=w.state();
+  const personal=await w.herdr.herdr(['workspace','create','--cwd',w.cwd,'--label','personal','--no-focus']);
+  const workflowPanes=structuredClone(w.herdr.panes),coordinatorPanes=structuredClone(w.coordinatorHerdr.panes);
+  assert.ok(!w.herdr.panes.some(p=>p.pane_id===prior.paneId));
+  assert.ok(w.coordinatorHerdr.panes.some(p=>p.pane_id===prior.paneId));
+  const offset=w.herdrTransportCalls.length;
+  await w.command(['autopilot','doctor'],{env:{PDD_HERDR_PANE_BUDGET:'1'}});
+  assert.ok(!w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd'&&a[2]==='pane'&&a[3]==='list'));
+  await w.command(['autopilot','start'],{env:{PDD_HERDR_PANE_BUDGET:'1'}});
+  assert.equal(w.state().paneId,prior.paneId);assert.equal(w.state().coordinatorId,prior.coordinatorId);
+  assert.deepEqual(w.herdr.panes,workflowPanes);assert.deepEqual(w.coordinatorHerdr.panes,coordinatorPanes);
+  assert.ok(w.herdr.panes.some(p=>p.pane_id===personal.result.root_pane.pane_id));
+  assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });

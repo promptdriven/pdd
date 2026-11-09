@@ -350,7 +350,7 @@ async function trusted(row, state, config, p) {
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
 function parkingPorts(state, p, {localOnly = false} = {}) {
-  const worker = {...p, autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
+  const worker = {...workflowCleanupPorts(p,p), autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
     const result = await p.execute(file, args, options);
     if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
     return result;
@@ -517,7 +517,7 @@ async function advanceWaitingPr1Gates(state, p, numbers = null) {
     if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
     return result;
   });
-  const workerPorts = {...p, execFile, isTTY: false};
+  const workerPorts = {...workflowCleanupPorts(p,p), execFile, isTTY: false};
   let runs;
   try { runs = await listRuns({cwd: state.cwd}, workerPorts); }
   catch (error) { p.warn(`PR 1 gate inspection unavailable: ${line(error.message)}`); return reconsider; }
@@ -541,7 +541,7 @@ async function resumeStoppedWorkers(state, p, recoveredRuns = null) {
     if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
     return result;
   });
-  const workerPorts = {...p, execFile, isTTY: false};
+  const workerPorts = {...workflowCleanupPorts(p,p), execFile, isTTY: false};
   let runs;
   try { runs = await listRuns({cwd: state.cwd}, workerPorts); }
   catch (error) { p.warn(`Stopped-chat inspection unavailable: ${line(error.message)}`); return; }
@@ -2251,7 +2251,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
     const env = input.env ?? ports.env ?? process.env;
-    let doctorInput=input;
+    let doctorInput=input, coordinatorState;
     try {
       // Resolve identity without creating state, admission locks or GitHub ledgers.
       const cwd=await gitRoot({env,execute:(file,args,options)=>
@@ -2264,6 +2264,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
         if (!previous) throw Error('Original coordinator recovery needs saved local state.');
         profile=custodyProjection(state,resolve(input.cwd,resumeCustody));
       } else profile=savedProfile(previous,env);
+      coordinatorState=resumeCustody?{...state,paneId:profile.paneId,workspaceId:profile.workspaceId,agent:profile.agent}:state;
       doctorInput={...input,cwd,env,profile,coordinatorPaneId:resumeCustody?profile.paneId:previous?.paneId};
     } catch (error) {
       if (command==='start') return bad(error.message);
@@ -2271,6 +2272,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (!error.exact) return bad(error.message);
     }
     const diagnostics = await runAutopilotDoctor(doctorInput, {...doctorPorts,
+      coordinatorHealth:doctorPorts.coordinatorHealth??(({env})=>coordinatorHealth(coordinatorState,{
+        herdr:ports.herdr,
+        execute:(file,args)=>(doctorPorts.run??runAgentProcess)(file,args,{cwd:doctorInput.cwd,env,timeoutMs:10000,maxBytes:1024*1024}),
+      })),
       reclaimablePanes:doctorPorts.reclaimablePanes??(({env,panes})=>{
         // A read-only candidate count. Only the existing guarded sweeps may close them.
         const runs=(ports.allRuns??allRuns)({cancelled:true},{...ports,env});
