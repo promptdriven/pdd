@@ -237,8 +237,8 @@ test('a lost reopen reply is read once by ID, while a rejected reopen keeps the 
   }
 });
 
-// Wrong: a Try that the server no longer knows (404) or that expired (410) blocks pdd simulate until the person edits the state file (review R8).
-test('RUNTIME-TRY10: GET 404/410 counts as ended and DELETE 404/410 as stopped; the record goes and the next pdd simulate makes a new one', async t => {
+// A missing/expired status preserves the original setup; an explicit stop or replacement needs no metadata edit.
+test('RUNTIME-TRY10: GET 404/410 keeps the original setup; explicit stop or --new handles it deliberately', async t => {
   for (const status of [404, 410]) {
     const setup = harbor(t);
     const gone = new Set(), lastTry = f => f.posts.filter(post => post.command === 'try').at(-1).request.requestId;
@@ -257,7 +257,10 @@ test('RUNTIME-TRY10: GET 404/410 counts as ended and DELETE 404/410 as stopped; 
     assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
     gone.add(lastTry(fake));
     const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
-    assert.equal(again.code, 0, `${status}: ${again.err}`);
+    assert.equal(again.code, 3, `${status}: ${again.err}`);
+    assert.equal(fake.posts.filter(post => post.command === 'try').length, 2, 'status alone cannot authorize replacement');
+    const deliberate = await tryStory(setup, fake, ['place-order'], { '--new': true, '--no-open': true });
+    assert.equal(deliberate.code, 0, deliberate.err);
     assert.equal(fake.posts.filter(post => post.command === 'try').length, 3, String(status));
   }
 });
@@ -295,8 +298,8 @@ test('RUNTIME-TRY12: --app-map must be a Git-visible app-map JSON; an open Try n
   assert.equal(fake.posts.filter(post => post.command === 'try').at(-1).request.app_map, 'app.json');
 });
 
-// Wrong: after a Try setup that the server lost (state unknown, for example after a restart), pdd simulate stays stuck until --new (issue 4).
-test('RUNTIME-TRY13: a Try setup that ends unknown is forgotten, and the next pdd simulate makes a new Try', async t => {
+// Unknown setup is retained for same-ID reads, including an unknown answer to its first submission.
+test('RUNTIME-TRY13: an unknown setup keeps its receipt and a later confirmed read reuses it', async t => {
   const setup = harbor(t), lost = new Set();
   const fake = await fakeRuntime(t, (entry, f) => {
     const id = entry.url.split('/').at(-1);
@@ -307,13 +310,20 @@ test('RUNTIME-TRY13: a Try setup that ends unknown is forgotten, and the next pd
   assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
   const restarted = await tryStory(setup, fake, ['place-order'], { '--new': true, '--no-open': true });
   assert.equal(restarted.code, 3);
-  assert.match(restarted.err, /The Try setup did not finish on the server \(its state is unknown; the server may have restarted\)\. It used no AI calls\. Run pdd simulate place-order to make a new Try\./);
+  const original = fake.posts.filter(post => post.command === 'try').at(-1).request.requestId;
+  assert.ok(restarted.err.includes(original)); assert.match(restarted.err, /saved setup is kept/);
+  assert.doesNotMatch(restarted.err, /used no AI calls/);
   const next = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
-  assert.equal(next.code, 0, next.err);
+  assert.equal(next.code, 3, next.err);
+  assert.equal(fake.posts.filter(post => post.command === 'try').length, 2);
+  lost.delete(original);
+  const recovered = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(recovered.code, 0, recovered.err);
+  assert.equal(fake.posts.filter(post => post.command === 'try').length, 2, 'same original is recovered');
+  lost.add(original);
+  const deliberate = await tryStory(setup, fake, ['place-order'], { '--new': true, '--no-open': true });
+  assert.equal(deliberate.code, 0, deliberate.err);
   assert.equal(fake.posts.filter(post => post.command === 'try').length, 3);
-  lost.add(fake.posts.filter(post => post.command === 'try').at(-1).request.requestId);
-  const after = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
-  assert.equal(after.code, 0, after.err); assert.equal(fake.posts.filter(post => post.command === 'try').length, 4);
 });
 
 // Wrong: adding a saved case to a compact test file rewrites the whole file (issue 16).
