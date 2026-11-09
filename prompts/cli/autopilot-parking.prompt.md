@@ -58,6 +58,6 @@ This bound triggers a visible retry reason, never permission to close unsafe wor
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"284de410e0162548bf2f3df439b32d5b02a4237609693fdca276eb6c13072372","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"ad317b974c589666b7f77274430d434f60a5a8253008d87a0cabc0016913c288","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
