@@ -1,7 +1,7 @@
 // Generated from prompts/test/autopilot-factory.prompt.md.
 import '../test-home.mjs';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync,existsSync,readdirSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync,existsSync,readdirSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve,dirname} from 'node:path';
 import {fork,execFileSync,execFile} from 'node:child_process';
@@ -29,10 +29,13 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   for(const dir of [w.cwd,w.home,join(base,'bin')])mkdirSync(dir,{recursive:true});
   for(const name of ['gh','herdr','codex','claude','gemini','agy','curl','wget'])writeFileSync(join(base,'bin',name),'#!/bin/sh\necho factory-external-program-denied >&2\nexit 97\n',{mode:0o700});
   writeFileSync(join(base,'bin/gh'),'#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = token ]; then echo factory-token; elif [ \"$1\" = api ] && [ \"$2\" = user ]; then echo \"example 1\"; else echo factory-native-gh-denied >&2; exit 97; fi\n',{mode:0o700});
+  symlinkSync(join(packageRoot,'bin/pdd.mjs'),join(base,'bin/pdd'));
   w.env={CI:'1',HOME:w.home,USERPROFILE:w.home,PATH:join(base,'bin')+':'+dirname(process.execPath)+':/usr/bin:/bin',XDG_CONFIG_HOME:join(base,'config'),PDD_STATE_DIR:join(base,'runtime'),PDD_INTERPRETER_QUEUE:join(base,'interpreter-queue'),PDD_SUITE_QUEUE:join(base,'suite-queue'),PDD_INTERPRETER_CONCURRENCY:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_ALLOW_PROTOCOL:'file',LANG:'C.UTF-8'};
   w.git=(cwd,...a)=>execFileSync('git',a,{cwd,env:w.env,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   w.git(w.cwd,'init','-q','-b','main');w.git(w.cwd,'config','user.email','factory@example.invalid');w.git(w.cwd,'config','user.name','Factory');
   put(w.cwd,'pdd.json',{autopilot:{mode:'auto',trust:['example'],base:'main',parking:{hours:24,maxParked:20}}});
+  put(w.cwd,'AGENTS.md','<!-- pdd:start -->\nUse the installed PDD skills.\n<!-- pdd:end -->\n');
+  for (const skill of ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph','pdd-autopilot','pdd-check','pdd-merge']) put(w.home,`.agents/skills/${skill}/SKILL.md`,'Factory skill entrypoint.');
   put(w.cwd,'value.mjs','export const value = 1;\n');
   const initialPrompt=valuePrompt(codeOnly?2:1);
   put(w.cwd,'value.prompt.md',initialPrompt.replace('"prose_sha256":""',`"prose_sha256":"${proseSha256(initialPrompt)}"`));
@@ -48,23 +51,36 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   w.state=()=>readJson(w.stateFile);
   w.record=(number=17)=>readJson(join(w.commonDir,`pdd/runs/${number}/status.json`));
   w.github=factoryGithub(w);w.interpreter=factoryInterpreter();w.herdr=shared?.herdr??fakeHerdr();w.herdr.now=()=>w.time;
-  const externalHerdr=async a=>{
-    if(a[0]==='status')return {...await w.herdr.herdr(a),session:w.sessionName};
+  w.coordinatorHerdr=shared?.coordinatorHerdr??fakeHerdr();
+  if(!shared)w.coordinatorHerdr.next=100000;
+  w.coordinatorHerdr.now=()=>w.time;
+  w.herdrTransportCalls=[];
+  const externalHerdr=async argv=>{
+    assert.equal(argv[0],'--session','fake transport requires an explicit Herdr session');
+    const session=argv[1],a=argv.slice(2);
+    assert.ok(['pdd','pdd-autopilot'].includes(session),'unknown Herdr session');
+    w.herdrTransportCalls.push(argv);
+    const h=session==='pdd'?w.herdr:w.coordinatorHerdr;
+    if(a[0]==='status')return {...await h.herdr(a),session};
     if(a[0]==='pane'&&a[1]==='get') {
-      const p=w.herdr.panes.find(p=>p.pane_id===a[2]);if(!p)throw Object.assign(Error('pane_not_found'),{code:'pane_not_found'});
+      const p=h.panes.find(p=>p.pane_id===a[2]);if(!p)throw Object.assign(Error('pane_not_found'),{code:'pane_not_found'});
       return {result:{pane:{...p,agent:p.agent?.agent,agent_status:p.agent?.agent_status,agent_session:p.agent?.agent_session,foreground_cwd:p.cwd}}};
     }
-    const sessionsBefore=w.herdr.sessions.length;
-    const result=await w.herdr.herdr(a);
+    const sessionsBefore=h.sessions.length;
+    const result=await h.herdr(a);
+    if(a[0]==='agent'&&a[1]==='get') {
+      const p=h.panes.find(p=>p.pane_id===a[2]);
+      result.result={type:'agent_info',agent:{...p,...p.agent,foreground_cwd:p.cwd}};
+    }
     if(a[0]==='pane'&&a[1]==='run') {
-      const p=w.herdr.panes.find(p=>p.pane_id===a[2]);
+      const p=h.panes.find(p=>p.pane_id===a[2]);
       if(a[3].includes("codex")) {
         const resumed=/\bresume '?([0-9a-f-]{36})/.exec(a[3])?.[1];
         const id=resumed??randomUUID();
         const name=p.agent?.name;
         p.agent={agent:'codex',agent_status:'idle',agent_session:{agent:'codex',kind:'id',value:id},prompts:[],...(name?{name}:{})};
-        w.herdr.sessions.splice(sessionsBefore);
-        if(!w.herdr.sessions.some(s=>s.id===id&&s.root===p.cwd))w.herdr.sessions.push({agent:'codex',id,root:p.cwd,at:w.time});
+        h.sessions.splice(sessionsBefore);
+        if(!h.sessions.some(s=>s.id===id&&s.root===p.cwd))h.sessions.push({agent:'codex',id,root:p.cwd,at:w.time});
       }
     }
     return result;
@@ -92,8 +108,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     }
     if(file==='herdr') {
       if(a[0]==='--version')return {code:0,stdout:'1.0.0',stderr:''};
-      const args=a[0]==='--session'?a.slice(2):a;
-      return {code:0,stdout:JSON.stringify(await externalHerdr(args)),stderr:''};
+      return {code:0,stdout:JSON.stringify(await externalHerdr(a)),stderr:''};
     }
     if(file===process.execPath && a[0]?.endsWith('/bin/pdd.mjs')) {
       const r=await w.command(a.slice(1),{cwd:o.cwd,env:o.env,allowFailure:true,actor:'resend-child'});
@@ -132,8 +147,22 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
           let value;
           if(m.method==='exec')value=await w.execute(...m.args);
           else if(m.method==='herdr')value=await externalHerdr(...m.args);
-          else if(m.method==='sessions')value=await w.herdr.findNativeSessions(...m.args);
+          else if(m.method==='sessions')value=[...await w.herdr.findNativeSessions(...m.args),...await w.coordinatorHerdr.findNativeSessions(...m.args)];
           else if(m.method==='warning')w.warnings.push(m.args[0]);
+          else if(m.method==='doctorExec') {
+            const [file,args,opts]=m.args;
+            if(file===join(base,'bin/pdd')) {
+              value=await new Promise(resolve=>execFile(file,args,{cwd:opts.cwd,env:{...w.env,...opts.env},encoding:'utf8'},(e,stdout,stderr)=>resolve({code:e?.code??0,stdout,stderr})));
+            } else if(file==='gh' && args[0]==='--version')value={code:0,stdout:'gh version 2.60',stderr:''};
+            else if(file==='codex') {
+              const signedIn=opts.env.PDD_FACTORY_DOCTOR!=='1' && (!w.agentProfile || opts.env.CODEX_HOME===w.agentProfile);
+              value={code:signedIn?0:1,stdout:signedIn?'Logged in using ChatGPT':'Not logged in',stderr:''};
+              (w.doctorAccounts??=[]).push(opts.env.CODEX_HOME);
+            }
+            else if(file==='claude')value={code:1,stdout:JSON.stringify({loggedIn:false}),stderr:''};
+            else if(file==='systemctl'||file==='loginctl')value={code:0,stdout:file==='loginctl'?'yes':'',stderr:''};
+            else value=await w.execute(file,args,opts);
+          }
           else if(m.method==='runtimeHealth')value={state:w.interpreter.mode==='refused'?'unavailable':'healthy',detail:'factory interpreter program'};
           else if(m.method==='alert'){w.alerts.push(m.args[0]);value={exitCode:0};}
           else if(m.method==='sleep'){w.time+=Math.min(m.args[0],1000);await new Promise(r=>setTimeout(r,1));}
@@ -150,7 +179,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     });
     if(child.exitCode===null && child.signalCode===null)await new Promise(r=>child.once('exit',r));
     result.nativeOutput=processOut;
-    w.time=Math.max(w.time,result.time)+100;w.herdr.idle();
+    w.time=Math.max(w.time,result.time)+100;w.herdr.idle();w.coordinatorHerdr.idle();
     w.commands.push({actor,pid:child.pid,argv:argv??['tick'],code:result.code,stdout:result.stdout,stderr:result.stderr});
     if(!allowFailure)assert.equal(result.code,0,`${actor}: pdd ${argv?.join(' ')??'tick'}\n${result.stdout}\n${result.stderr}\n${w.warnings.slice(-3).join('\n')}`);
     return result;
@@ -158,7 +187,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   w.tick=()=>w.command(undefined,{operation:'tick',actor:'timer'});
   w.context=()=>{const s=w.state();return {PDD_AUTOPILOT_CONTEXT:JSON.stringify(s.ownerLaunch.coordinator),HERDR_PANE_ID:s.paneId,HERDR_SOCKET_PATH:join(base,'sessions/pdd-autopilot/socket')};};
   w.messages=()=>{
-    const calls=w.herdr.calls.slice(w.seenCalls);w.seenCalls=w.herdr.calls.length;
+    const calls=w.coordinatorHerdr.calls.slice(w.seenCalls);w.seenCalls=w.coordinatorHerdr.calls.length;
     for(const a of calls)if(a[0]==='agent'&&a[1]==='prompt') {
       const path=/Artifact path: (.+)/.exec(a.at(-1))?.[1];
       const text=path?readFileSync(JSON.parse(path),'utf8'):a.at(-1);

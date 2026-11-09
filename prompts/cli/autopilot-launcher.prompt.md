@@ -1296,6 +1296,38 @@ Load [audit policy](autopilot-audit.prompt.md) as required context.
 
 Before allocating a missing coordinator workspace, request one pane through the same bounded finished/idle workflow sweeps used for worker admission. Reconcile same-repository, same-folder, same-machine older coordinator runs through live stable-claim recovery before final pane admission and worker filtering. Claim recovery failure is retried; proven transfer uses the workflow owner's normal handover path. Pane-budget reclamation can also reclaim blocked runs of another repository through that repository's enabled owner and guarded claim recovery. It never assigns those runs to the requesting repository. Retained pane reasons appear in the pane hold warning.
 
+## First-start diagnostics (#3125)
+
+Dispatch doctor to [the doctor owner](autopilot-doctor.prompt.md), required native
+generation and verification context. Start first retains the existing Git-folder validation in the C locale: an invalid
+location returns the existing repository error without other probes. For valid
+repository invocations, before any start state write, admission lock,
+timer change, workspace allocation, claim or GitHub mutation, run that same doctor
+with the selected invocation environment and injected ports. Read only the saved
+state first to resolve the same verified profile binding used by restart; a
+signed-out unrelated caller must not block a healthy saved coordinator. For
+--resume-custody, validate the projection shape and repository identity read-only
+and use its original profile for preflight. Doctor uses that saved profile too
+when invoked in the same checkout. No directory or lock is created by resolution.
+Share agent selection with the doctor owner; definition overrides apply to all
+checks and repair commands. After a pass, use that invocation environment for
+startup checks too. Keep state-file lookup and definitionHome tied to the caller
+home that selected the configuration. Revalidate saved profile/custody under existing start
+guards before effects. On a required failure return the complete multi-line report
+unchanged. Doctor bypasses launcher writes and the GitHub ledger. Successful start retains existing readiness, saved
+profile/custody, base, admission and delegation checks. A doctor pass alone grants
+no approval or merge authority. Supply the same read-only coordinatorHealth used
+by launcher status, bound to the saved target and `pdd-autopilot` session. Saved
+targets need no immediate workflow allocation; unavailable target evidence defers
+to guarded recovery. Supply the saved coordinator pane identity. The doctor
+owner defines prerequisite failures and advisory capacity. Do not predict cleanup
+candidates in preflight: native guarded cleanup can reclaim finished run shells
+as well as chats. Leave actual reclamation and capacity admission to start.
+Never run tidy, parking, claim recovery or a lock acquisition during doctor.
+Keep the workflow Herdr binding for delegated workflow gate advancement and
+stopped-worker recovery and parking. The coordinator binding belongs to `pdd-autopilot`;
+workflow operations belong to `pdd`, including when both ports are injected.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.

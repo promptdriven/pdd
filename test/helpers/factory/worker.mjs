@@ -1,3 +1,4 @@
+import * as doctorFiles from 'node:fs';
 // Generated from prompts/test/autopilot-factory.prompt.md.
 // A new native process for each command/tick. Only external ports cross IPC.
 import net from 'node:net';
@@ -32,7 +33,7 @@ process.on('message',async m=>{
     const ports={...healthyMachine,...isolatedCheckCapacity(base,{taskset:null}),queueRoot:env.PDD_SUITE_QUEUE,env,stateRoot,autopilotStateRoot:stateRoot,stateDir,layoutDirectory,now:()=>time,
       sleep:async ms=>{time+=ms;await rpc('sleep',ms);},
       execFile:(...a)=>rpc('exec',...a),run:(...a)=>rpc('exec',...a),
-      herdr:(...a)=>rpc('herdr',...a),workflowHerdr:(...a)=>rpc('herdr',...a),
+      herdr:args=>rpc('herdr',['--session','pdd-autopilot',...args]),workflowHerdr:args=>rpc('herdr',['--session','pdd',...args]),
       findNativeSessions:(...a)=>rpc('sessions',...a),
       checkCapacityPorts:{...isolatedCheckCapacity(base,{taskset:null}),queueRoot:env.PDD_SUITE_QUEUE,now:()=>time},
       codexLimits:async()=>({state:'healthy'}),agentDefinitions:()=>[{kind:'codex',name:'codex',command:'codex',env:{}}],
@@ -41,8 +42,10 @@ process.on('message',async m=>{
       armCoordinatorIdle:()=>{},wait:async()=>{},
       warn:s=>rpc('warning',s),sendAlert:input=>rpc('alert',input),sendDigest:async()=>({exitCode:0}),
       runtimeHealth:()=>rpc('runtimeHealth'),
+      doctorPorts:{files:doctorFiles,run:(...a)=>rpc('doctorExec',...a),
+        codexLimits:async()=>({state:'healthy'}),runtimeHealth:()=>rpc('runtimeHealth')},
     };
-    const workflowRunner=Object.fromEntries(Object.entries(runner).map(([k,v])=>[k,typeof v==='function'?(input,p)=>v(input,{...ports,...p,env:p?.env??env}):v]));
+    const workflowRunner=Object.fromEntries(Object.entries(runner).map(([k,v])=>[k,typeof v==='function'?(input,p)=>v(input,{...ports,...p,herdr:ports.workflowHerdr,env:p?.env??env}):v]));
     let code;
     if(operation==='hold-interpreter'||operation==='hold-interpreter-dispatched') {
       const {acquireInterpreterSlot,markInterpreterDispatch}=await import('../../../src/interpreter-queue.mjs');

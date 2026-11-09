@@ -16,6 +16,9 @@ export function factoryGithub(w) {
   const original = f.gh;
   f.gh = async (a,o={}) => {
     f.commands.push({args:a,input:o.input});
+    if(a[0]==='--version')return ok('gh version 2.60');
+    if(a[0]==='repo' && a[1]==='view' && a.includes('nameWithOwner,defaultBranchRef,viewerPermission,mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed'))return ok({nameWithOwner:w.repository,defaultBranchRef:{name:'main'},viewerPermission:'WRITE',squashMergeAllowed:true});
+    if(a[0]==='api' && a[1]?.includes('/rules/branches/'))return ok([]);
     if(a[0]==='label') return ok('');
     if(a[0]==='issue') {
       const n=Number(a[2]);

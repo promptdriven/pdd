@@ -69,10 +69,42 @@ selected check.
 
 ## Autopilot on this machine
 
+`pdd autopilot doctor` checks the pdd selected by PATH, Node 22.20 or newer,
+Git, gh sign-in, write access, merge methods and effective branch rules, agent
+sign-in and read-only usage, Herdr and pane room, setup instructions and skills,
+mode and trust, draft prompts, authenticated interpreter capacity access, and the
+platform's user scheduler. Linux lingering and macOS sleep are advisory.
+Codex usage uses a read-only account request. Claude usage remains unproved;
+run `claude` and `/usage` to inspect it. No agent prompt is sent.
+Unreadable branch rules are advisory; repository reviews and checks still apply.
+Each line includes a repair or inspection command. PATH repairs name this
+installation, including source checkouts. A required failure refuses start with
+the same report before state files, locks, timers, panes or claims change.
+Draft and unreadable prompt paths are warnings. Doctor never approves them.
+A successful interpreter access read sends no source and proves no prompt behavior.
+See [the first-start path](../README.md#autopilot-on-your-own-repository).
+
+Doctor uses the saved coordinator profile on restart.
+A selected agent's HOME, CODEX_HOME, CLAUDE_CONFIG_DIR and other environment
+settings apply to its checks. Repair commands carry that profile environment.
+A malformed agents.json report names the file to edit. An invalid
+PDD_RUNTIME_URL report gives the HTTPS-origin or unset repair.
+Pane pressure, unreadable capacity, interpreter health and agent usage limits
+are warnings with fix commands. They never refuse start at preflight. Start can
+sweep, park and wait. It must still prove room through guarded cleanup and admission,
+including cleanup of a finished run shell after its chats have closed.
+Doctor closes no panes. A reused coordinator needs no extra pane.
+Doctor verifies that coordinator in `pdd-autopilot`. A full `pdd` workflow
+session does not block reuse. Fresh allocation uses the native workflow pane
+admission rules. Unavailable saved-target evidence defers to guarded recovery.
+Interpreter readiness uses the runtime client's health check, including a JSON
+404 from an interpreter without the optional capacity endpoint.
+
 Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine.
 
 | Command | What it does |
 |---|---|
+| `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
 | `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD with the run and post the evidence once on the issue. BAD opens a revert PR and records one decision alert. Unknown external outcomes require inspection before any retry. |

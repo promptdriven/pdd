@@ -1,5 +1,6 @@
 import './helpers/test-home.mjs';
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import {healthyDoctorPorts} from './helpers/doctor-fixture.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import * as nativeFs from 'node:fs';
@@ -64,6 +65,27 @@ async function fixture(t, options = {}) {
       }
       return {};
     },
+  };
+  // Use the same selected definition and fake account as launcher admission.
+  f.ports.doctorPorts=input=>{
+    const ports=healthyDoctorPorts(input),run=ports.run;
+    let definitions=[];
+    ports.agentDefinitions=async ({env})=>definitions=f.ports.selectAgent
+      ? [await f.ports.selectAgent({cwd}, {...f.ports,env}) ?? {id:'codex',kind:'codex',command:'codex',env:{}}]
+      : loadAgentDefinitions({cwd,env});
+    const read=ports.files.readFileSync;
+    ports.files.readFileSync=path=>path.includes('/skills/')?'skill':path.endsWith('/.gemini/oauth_creds.json')?(f.ports.selectAgent?'{"refresh_token":"fixture"}':nativeFs.readFileSync(path,'utf8')):read(path);
+    ports.run=async(file,args,options)=>{
+      if (!f.ports.selectAgent && ['codex','claude','agy','gemini'].includes(file)) return f.ports.run(file,args,options);
+      if (args[0]==='models' || args[0]==='--version' && file!=='git' && file!=='gh' && file!=='herdr' && !file.endsWith('/pdd')) return {code:definitions.some(def=>def.command===file)?0:1,stdout:'fixture',stderr:''};
+      if (args.join(' ')==='login status' || args.join(' ')==='auth status --json') {
+        (f.doctorAccounts??=[]).push({...options.env});
+        const ready=!f.accountReady || f.accountReady(options.env);
+        return {code:ready?0:1,stdout:args[0]==='auth'?JSON.stringify({loggedIn:ready}):ready?'Logged in using ChatGPT':'Not logged in',stderr:''};
+      }
+      return run(file,args,options);
+    };
+    return ports;
   };
   f.module = await import('../src/autopilot-launcher.mjs');
   f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
@@ -227,6 +249,9 @@ test('autopilot routes parse and dispatch without setup or a runtime call', asyn
 
 test('start installs a timer and runs the recipe immediately; unchanged empty ticks wake no AI', async t => {
   const f = await fixture(t);
+  const profile=join(f.home,'original-profile');
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{CODEX_HOME:profile}});
+  f.accountReady=env=>env.CODEX_HOME===profile;
   assert.equal((await f.invoke('start')).exitCode, 0);
   assert.equal(f.polls.length, 1); assert.equal(f.prompts.length, 1);
   assert.match(f.prompts[0], /"recipeFirst":true/);
@@ -258,7 +283,8 @@ test('start installs a timer and runs the recipe immediately; unchanged empty ti
     if(args[0]==='agent'&&args[1]==='get')return {result:{type:'agent_info',agent:live}};
     return oldHerdr(args);
   };
-  const recovered=await f.invoke('start',{resumeCustody:artifact}); assert.equal(recovered.exitCode,0,recovered.message);
+  const recovered=await f.invoke('start',{resumeCustody:artifact,env:{HOME:f.home,PATH:process.env.PATH,CODEX_HOME:join(f.dir,'signed-out-caller')}}); assert.equal(recovered.exitCode,0,recovered.message);
+  assert.ok(f.doctorAccounts.length>=3);assert.ok(f.doctorAccounts.every(env=>env.CODEX_HOME===profile));
   const restored=f.state(); assert.equal(restored.coordinatorId,original.coordinatorId); assert.equal(restored.agent.kind,'codex'); assert.deepEqual(restored.uncertainDeliveryHistory,history); assert.equal(restored.runs,undefined);
   f.ports.listRuns=async()=>[]; const semanticOnly=await f.invoke('start',{resumeCustody:artifact}); assert.equal(semanticOnly.exitCode,0,semanticOnly.message); assert.equal(f.state().coordinatorId,original.coordinatorId); assert.deepEqual(f.state().uncertainDeliveryHistory,history); assert.equal(f.state().runs,undefined);
 });
@@ -2219,4 +2245,162 @@ test('audit tick discovers completed runs through the injected Git executor', as
   assert.ok(rules.some(row => row.kind === 'post-merge-audit' && row.number === 17 && row.pr === 23));
   assert.ok(f.runs.slice(before).some(([file, args]) => file === 'git' && args.includes('--git-common-dir')));
   assert.equal(f.runs.slice(before).filter(([file]) => file === 'gh').length, 0, 'local audit discovery needs no GitHub read');
+});
+
+
+test('start: custody preflight uses the original healthy profile with a signed-out caller',async t=>{
+  const f=await fixture(t),profile=join(f.home,'original-profile');
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{CODEX_HOME:profile}});
+  f.accountReady=env=>env.CODEX_HOME===profile;
+  assert.equal((await f.invoke('start')).exitCode,0);
+  const original=f.state(),launch=original.ownerLaunch,artifact=join(f.dir,'custody.json');
+  writeFileSync(artifact,JSON.stringify({repository:original.repo,sourceRoot:f.cwd,coordinatorId:original.coordinatorId,machine:original.machine,activation:original.activatedAt,paneId:original.paneId,workspaceId:original.workspaceId,agent:launch.profile.agent,home:launch.profile.home,definitionHome:launch.profile.definitionHome,configHome:launch.profile.configHome,launchStartedAt:launch.startedAt}));
+  f.ports.listRuns=async()=>[];
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{}});
+  const r=await f.invoke('start',{resumeCustody:artifact,env:{HOME:f.home,PATH:process.env.PATH,CODEX_HOME:join(f.dir,'signed-out-caller')}});
+  assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().coordinatorId,original.coordinatorId);assert.equal(f.state().environment.CODEX_HOME,profile);
+  assert.ok(f.doctorAccounts.every(env=>env.CODEX_HOME===profile));
+});
+
+test('start: a custom Claude definition supplies HOME and config environment to doctor and startup checks',async t=>{
+  const f=await fixture(t),home=join(f.dir,'invocation home'),config=join(f.dir,'Claude config');
+  mkdirSync(join(f.home,'.config','pdd'),{recursive:true});
+  writeFileSync(join(f.home,'.config','pdd','agents.json'),JSON.stringify({include_defaults:false,agents:[{name:'Claude profile',kind:'claude',command:'claude',env:{HOME:home,CLAUDE_CONFIG_DIR:config,CODEX_HOME:join(home,'codex')}}]}));
+  delete f.ports.selectAgent;
+  const run=f.ports.run;
+  f.ports.run=async(file,args,options)=>{
+    if(file==='claude')return {code:0,stdout:'{"loggedIn":true}',stderr:''};
+    if(file==='gh' && args[0]==='auth') {assert.equal(options.env.HOME,home);assert.equal(options.env.CLAUDE_CONFIG_DIR,config);}
+    return run(file,args,options);
+  };
+  const r=await f.invoke('start');assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().agent.kind,'claude');assert.equal(f.state().environment.HOME,home);assert.equal(f.state().environment.CLAUDE_CONFIG_DIR,config);assert.equal(f.state().definitionHome,f.home);
+});
+
+
+test('start: an absent selected provider directory masks an unrelated ambient profile',async t=>{
+  const f=await fixture(t),ambient=process.env.CODEX_HOME;
+  process.env.CODEX_HOME=join(f.dir,'ambient-profile');
+  t.after(()=>{if(ambient===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=ambient;});
+  const run=f.ports.run;
+  f.ports.run=async(file,args,options)=>{
+    if(file==='gh' && args[0]==='auth')assert.equal(options.env.CODEX_HOME,undefined);
+    return run(file,args,options);
+  };
+  const r=await f.invoke('start');assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().environment.CODEX_HOME,undefined);
+});
+
+// Native-start outcomes are the preservation contract. An optional disposable
+// base checkout repeats the same states against its real public launcher too.
+const admissionStates=[
+  {name:'fresh with room',baseAdmitted:true},
+  {name:'fresh with full workflow session',panes:1,budget:'1',baseAdmitted:false},
+  {name:'fresh with unlimited workflow session',panes:2,budget:'0',baseAdmitted:true},
+  {name:'fresh with invalid budget',budget:'invalid',baseAdmitted:false},
+  {name:'fresh with malformed workflow inventory',invalidInventory:true,baseAdmitted:false},
+  {name:'fresh with unreadable status but native inventory available',statusUnavailable:true,baseAdmitted:true},
+  {name:'saved idle coordinator and full workflow session',restart:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'saved working coordinator and overfull workflow session',restart:true,status:'working',panes:2,budget:'1',baseAdmitted:true},
+  {name:'saved blocked coordinator and invalid budget',restart:true,status:'blocked',budget:'invalid',baseAdmitted:true},
+  {name:'saved coordinator and unreadable workflow inventory',restart:true,invalidInventory:true,baseAdmitted:true},
+  {name:'saved target observation unavailable',restart:true,unavailable:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'optional capacity endpoint returns JSON 404',runtime404:true,baseAdmitted:true},
+  {name:'saved coordinator with JSON 404 and full workflow session',restart:true,runtime404:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'missing sign-in is the new preflight refusal',signedOut:true,baseAdmitted:true},
+];
+for(const row of admissionStates)test(`start admission parity: ${row.name}`,async t=>{
+  const prepare=async module=>{
+    const f=await fixture(t);if(module)f.module=module;
+    f.ports.allRuns=()=>[];
+    f.ports.tidyRuns=async()=>({closed:0});
+    f.ports.workflowHerdr=async args=>{
+      if(args[0]==='status') {
+        if(row.statusUnavailable)throw Object.assign(Error('unreadable'),{code:'transport_error'});
+        return {running:true};
+      }
+      assert.deepEqual(args.filter(a=>a!=='--json'),['pane','list']);
+      return {result:{type:'pane_list',panes:f.workflowPanes??[]}};
+    };
+    const original=f.ports.doctorPorts;
+    f.ports.doctorPorts=input=>{
+      const p=original(input),run=p.run;
+      p.run=async(file,args,options)=>{
+        if(file==='herdr'&&args[0]==='--session') {
+          assert.ok(['pdd','pdd-autopilot'].includes(args[1]));
+          (f.sessionReads??=[]).push(args);
+          try {
+            const value=await (args[1]==='pdd'?f.ports.workflowHerdr:f.ports.herdr)(args.slice(2));
+            return {code:0,stdout:JSON.stringify(value),stderr:''};
+          } catch(error) {return {code:1,stdout:'',stderr:JSON.stringify({error:{code:error.code}})};}
+        }
+        return run(file,args,options);
+      };
+      if(row.runtime404)p.fetch=async()=>new Response('{"error":{"code":"not-found"}}',{status:404});
+      return p;
+    };
+    const env={HOME:f.home,PATH:'/synthetic/bin'};
+    if(row.restart)assert.equal((await f.invoke('start',{env})).exitCode,0);
+    const prior=row.restart?f.state():null;
+    f.agentStatus=row.status;
+    if(row.unavailable) {
+      const herdr=f.ports.herdr;
+      f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get')throw Object.assign(Error('unreadable'),{code:'transport_error'});return herdr(args);};
+    }
+    f.workflowPanes=row.invalidInventory?[{}]:Array.from({length:row.panes??0},(_,i)=>({pane_id:`personal-${i}`,workspace_id:'personal',tab_id:`tab-${i}`,terminal_id:`terminal-${i}`}));
+    if(row.signedOut)f.accountReady=()=>false;
+    const result=await f.invoke('start',{env:{...env,...(row.budget===undefined?{}:{PDD_HERDR_PANE_BUDGET:row.budget})}});
+    if(prior&&result.exitCode===0) {
+      assert.equal(f.state().paneId,prior.paneId);assert.equal(f.state().coordinatorId,prior.coordinatorId);
+    }
+    return result;
+  };
+  let baseAdmitted=row.baseAdmitted;
+  if(process.env.PDD_ADMISSION_BASE_ROOT) {
+    const {pathToFileURL}=await import('node:url');
+    const base=await import(pathToFileURL(join(process.env.PDD_ADMISSION_BASE_ROOT,'src/autopilot-launcher.mjs')));
+    const result=await prepare(base);
+    baseAdmitted=result.exitCode===0;
+    assert.equal(baseAdmitted,row.baseAdmitted,`native base: ${result.message}`);
+  }
+  const result=await prepare();
+  assert.equal(result.exitCode===0,baseAdmitted&&!row.signedOut,result.message);
+});
+
+
+test('start: guarded cleanup reclaims a finished workflow shell after its chat has closed',async t=>{
+  const {fixture:workflowFixture}=await import('./helpers/workflow-runner-fixture.mjs');
+  const {tidyRuns}=await import('../src/workflow-runner.mjs');
+  const {allRuns}=await import('../src/workflow-runs.mjs');
+  const w=await workflowFixture(t);
+  assert.equal((await w.run()).exitCode,0);
+  const run=w.record();run.state='completed';run.chats[0].endedAt=w.clock;
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  w.tick(16*60_000);w.herdr.idle();
+  const shell=w.herdr.paneOf(run.layout);shell.agent={agent:'codex',agent_status:'working'};
+  const cleaned=await tidyRuns({},w.ports);
+  assert.equal(cleaned.closed,1);assert.equal(cleaned.kept,1);
+  assert.ok(!w.herdr.paneOf(run.chats[0]));assert.ok(w.herdr.paneOf(run.layout));
+  shell.agent=null;
+  const paneCount=w.herdr.panes.length;
+  assert.ok(paneCount>0);
+  const f=await fixture(t);
+  f.ports.stateDir=w.state;
+  assert.equal(allRuns({cancelled:true},{stateDir:w.state}).length,1);
+  f.ports.tidyRuns=options=>tidyRuns(options,w.ports);
+  f.ports.workflowHerdr=w.herdr.herdr;
+  const original=f.ports.doctorPorts;
+  f.ports.doctorPorts=input=>{
+    const p=original(input),read=p.run;
+    p.run=async(file,args,options)=>{
+      if(file==='herdr'&&args[0]==='--session'&&args[1]==='pdd')return {code:0,stdout:JSON.stringify(await w.herdr.herdr(args.slice(2))),stderr:''};
+      return read(file,args,options);
+    };
+    return p;
+  };
+  const result=await f.invoke('start',{env:{HOME:f.home,PATH:process.env.PATH,PDD_HERDR_PANE_BUDGET:String(paneCount)}});
+  assert.equal(result.exitCode,0,result.message);
+  assert.equal(w.herdr.panes.length,paneCount-1);
+  assert.ok(!w.herdr.paneOf(run.layout));
 });

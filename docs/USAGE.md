@@ -29,18 +29,18 @@ PDD runs on your own machine, with your own agent account and your own GitHub ac
 Check your tools:
 
 ```sh
-node -v               # Node.js 22 or newer
+node -v               # Node.js 22.20 or newer
 git --version         # Git
 gh auth status        # "Logged in to github.com"
 herdr --version       # Herdr, for workflow runs
 codex login status    # "Logged in ..."  (or use Claude Code)
 ```
 
-PDD needs Node.js 22 or newer. The other tools work with the versions you have. If a tool is missing:
+PDD needs Node.js 22.20 or newer. The other tools work with the versions you have. If a tool is missing:
 
 | Tool | How to get it |
 |---|---|
-| Node.js 22 or newer | [nodejs.org](https://nodejs.org), or your Node version manager |
+| Node.js 22.20 or newer | [nodejs.org](https://nodejs.org), or your Node version manager |
 | Git | [git-scm.com](https://git-scm.com) |
 | GitHub CLI | [cli.github.com](https://cli.github.com). Then run `gh auth login`. If `git push` asks for a password later, run `gh auth setup-git`. |
 | Herdr | `curl -fsSL https://herdr.dev/install.sh \| sh`, or see [herdr.dev/docs/install](https://herdr.dev/docs/install/). You need Herdr only for workflow runs. You do not have to open it yourself. |
@@ -88,6 +88,20 @@ Important:
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
+
+### 2.3 Start Autopilot on your repository
+
+Follow [Autopilot on your own repository](../README.md#autopilot-on-your-own-repository)
+for the ordered installation, sign-in, setup, doctor, start, status and stop path.
+It requires Node.js 22.20 or newer and repository write permission.
+`pdd autopilot doctor` reads readiness without GitHub writes or AI calls.
+Start runs the same checks before it changes local state or starts work.
+Manual gates need your later approval. Explicit auto setup and start can delegate
+ordinary automatic gates and eligible merges. Strict approvals and required
+human reviews still need a person. An empty trust list still trusts the owner
+and write-access users. Draft prompts may need approval at the first check;
+doctor lists them without approving them. Interpreter access is checked without
+running a prompt, so native green CI and doctor do not prove prompt behavior.
 
 ## 3. If you have the old Python pdd
 
@@ -427,7 +441,7 @@ Factories and method-bearing instances can bind through Runtime interface v2 han
 
 ### 7.1 Approve a prompt
 
-Only a person approves a prompt. An agent never sets `"status": "approved"`.
+In manual workflows, a person approves a prompt. Explicit Autopilot auto setup and start can delegate ordinary approval gates through the supported commands. Strict approvals and required human reviews still need a person. An agent never edits `"status": "approved"` directly.
 
 ```sh
 pdd approve prompts/place_order.prompt.md

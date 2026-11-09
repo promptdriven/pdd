@@ -69,6 +69,13 @@ real gh, agent, system timer or live Herdr process may run. Never touch another
 process or its state. Use the repository fakes as the starting point. Keep
 execution reports outside source.
 
+Keep Herdr's --session argument through every fake transport boundary. Maintain
+separate `pdd` workflow and `pdd-autopilot` coordinator inventories and identities.
+A full workflow session must admit restart of its healthy saved coordinator in
+the other session without allocating, closing or charging a workflow pane.
+Test machine-state admission parity with native start, except the authorized
+missing-sign-in refusal; include the supported interpreter JSON 404 health reply.
+
 After a real merge and completed audit, damage its local audit JSON. Repeated
 ticks must still select and deliver a new eligible issue. Status names the held
 run, PR and cause. No auditor, repeated audit publication or audit time rule is
@@ -114,6 +121,8 @@ no duplicate ticket, no signal to a recovered process, and unchanged receipt
 bytes after later observations. Finish the workflow with a fresh successful
 validation; the failed attempt stays available. Use only the factory's private
 home, config and queues. Retain this scenario as a failing assertion on the base.
+
+Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr and interpreter fakes. An executable stale pdd earlier on PATH and missing Codex sign-in must produce PATH and agent failure lines with concrete commands; start returns the identical diagnostics and creates no state, timers, panes, claims, GitHub writes or interpreter jobs. Run the real doctor for existing factory starts with the factory program, file, profile and health ports. Do not replace selected-profile observations with a separately healthy account. A restart with an unrelated signed-out caller must retain the healthy saved profile and coordinator identity. No real machine/account read escapes.
 
 ## Dependencies
 

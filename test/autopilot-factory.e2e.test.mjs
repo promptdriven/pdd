@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
 import {interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
-import {existsSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {existsSync,readdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {factoryWorld,put,readJson,valuePrompt,scenario} from './helpers/factory/world.mjs';
@@ -133,7 +133,8 @@ test('factory 2: machine restart retains claim, work and chat identity to merge'
   const before=w.record();assert.ok(before.chats.at(-1).session?.id,'register native session before restart');
   const allocations=readdirSync(join(w.commonDir,'pdd/worktree-assignments/runs')).length,publications=w.github.prs.length;
   const claim=w.github.issues.get(17).comments.find(c=>c.body.includes('coordinatorId'));
-  w.herdr.workspaces=[];w.herdr.tabs=[];w.herdr.panes=[];w.time+=120000;
+  w.herdr.workspaces=[];w.herdr.tabs=[];w.herdr.panes=[];
+  w.coordinatorHerdr.workspaces=[];w.coordinatorHerdr.tabs=[];w.coordinatorHerdr.panes=[];w.time+=120000;
   await w.tick();await w.tick();
   const after=w.record();
   assert.equal(readdirSync(join(w.commonDir,'pdd/worktree-assignments/runs')).length,allocations);assert.equal(w.github.prs.length,publications);
@@ -184,6 +185,7 @@ test('factory 4: stuck run parks and its merged dependency wakes it to merge',as
 test('factory 5a: a full Herdr pane budget defers admission, then released room reaches merge',async t=>{
   const w=await factoryWorld(t);
   await w.begin({beforeRun:async()=>{
+    if(!w.herdr.workspaces.length)await w.herdr.herdr(['workspace','create','--cwd',w.cwd,'--label','personal','--no-focus']);
     const workspace=w.herdr.workspaces[0].workspace_id;
     for(let n=w.herdr.panes.length;n<56;n++) {
       w.herdr.tabs.push({tab_id:`occupied-t${n}`,workspace_id:workspace});
@@ -505,4 +507,57 @@ test('factory 2b: validation log and child custody survive a session change (#31
     await validation;
     await eventually(()=>queueRows(w.env.PDD_SUITE_QUEUE).every(r=>r.state==='finished'),'owned factory validations must settle');
   }
+});
+
+test('factory 3125: fresh repo with stale PATH and no agent sign-in refuses start without effects',async t=>{
+  const w=await factoryWorld(t);
+  rmSync(join(w.base,'bin/pdd'));
+  put(w.base,'bin/pdd','#!/bin/sh\nif [ "$1" = --version ]; then echo 0.1.15; else echo "pdd setup"; fi\n');
+  const {chmodSync}=await import('node:fs');chmodSync(join(w.base,'bin/pdd'),0o700);
+  const commands=w.github.commands.length,issues=JSON.stringify([...w.github.issues]),panes=w.herdr.panes.length;
+  const opts={env:{PDD_FACTORY_DOCTOR:'1'},allowFailure:true};
+  const doctor=await w.command(['autopilot','doctor'],opts);
+  const start=await w.command(['autopilot','start'],opts);
+  assert.equal(doctor.code,1,'doctor must diagnose stale PATH and missing agent sign-in');
+  assert.match(doctor.stderr,/FAIL path:.*0\.1\.15.*; fix: .*autopilot doctor/);
+  assert.match(doctor.stderr,/FAIL agent:.*; fix: .*codex.*login/);
+  assert.equal(start.code,1,'preflight must refuse a first start');
+  assert.equal(start.stderr,doctor.stderr,'start must use the same doctor report');
+  assert.equal(existsSync(w.stateFile),false);assert.equal(existsSync(w.stateRoot),false);
+  assert.equal(w.herdr.panes.length,panes);assert.equal(w.github.prs.length,0);
+  assert.equal(JSON.stringify([...w.github.issues]),issues);assert.equal(w.interpreter.posts.length,0);
+  const reads=w.github.commands.slice(commands);
+  assert.ok(reads.every(({args})=>args[0]==='repo'||args[0]==='auth'||args[0]==='api'&&!args.includes('POST')));
+  assert.ok(!existsSync(join(w.home,'.config/systemd')));
+});
+
+
+test('factory 3125: restart and doctor use the healthy saved profile with a signed-out caller',async t=>{
+  const w=await factoryWorld(t);
+  w.agentProfile=join(w.home,'original-profile');
+  const env={CODEX_HOME:w.agentProfile};
+  await w.command(['autopilot','start'],{env});
+  const prior=w.state(),caller={CODEX_HOME:join(w.home,'signed-out-caller')};
+  await w.command(['autopilot','doctor'],{env:caller});
+  await w.command(['autopilot','start'],{env:caller});
+  assert.equal(w.state().coordinatorId,prior.coordinatorId);
+  assert.equal(w.state().environment.CODEX_HOME,w.agentProfile);
+  assert.ok(w.doctorAccounts.length>=3);assert.ok(w.doctorAccounts.every(profile=>profile===w.agentProfile));
+});
+
+test('factory 3125: a full workflow session admits healthy coordinator reuse in its own session',async t=>{
+  const w=await factoryWorld(t);await w.start();
+  const prior=w.state();
+  const personal=await w.herdr.herdr(['workspace','create','--cwd',w.cwd,'--label','personal','--no-focus']);
+  const workflowPanes=structuredClone(w.herdr.panes),coordinatorPanes=structuredClone(w.coordinatorHerdr.panes);
+  assert.ok(!w.herdr.panes.some(p=>p.pane_id===prior.paneId));
+  assert.ok(w.coordinatorHerdr.panes.some(p=>p.pane_id===prior.paneId));
+  const offset=w.herdrTransportCalls.length;
+  await w.command(['autopilot','doctor'],{env:{PDD_HERDR_PANE_BUDGET:'1'}});
+  assert.ok(!w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd'&&a[2]==='pane'&&a[3]==='list'));
+  await w.command(['autopilot','start'],{env:{PDD_HERDR_PANE_BUDGET:'1'}});
+  assert.equal(w.state().paneId,prior.paneId);assert.equal(w.state().coordinatorId,prior.coordinatorId);
+  assert.deepEqual(w.herdr.panes,workflowPanes);assert.deepEqual(w.coordinatorHerdr.panes,coordinatorPanes);
+  assert.ok(w.herdr.panes.some(p=>p.pane_id===personal.result.root_pane.pane_id));
+  assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });
