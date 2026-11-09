@@ -15,7 +15,7 @@ const read = run => JSON.parse(readFileSync(join(run.runDir, 'status.json')));
 const closes = f => f.herdr.calls.filter(a => ['tab', 'workspace'].includes(a[0]) && a[1] === 'close');
 const launches = f => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run');
 
-async function setup(t) {
+async function setup(t, stateName) {
   const f = await fixture(t);
   assert.equal((await f.run()).exitCode, 0);
   assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
@@ -24,14 +24,14 @@ async function setup(t) {
   save(run);
   writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   f.ports.autopilotStateRoot = f.state;
-  const stateFile = join(f.state, createHash('sha256').update(f.source).digest('hex').slice(0, 20) + '.json');
+  const stateFile = join(f.state, stateName ?? createHash('sha256').update(f.source).digest('hex').slice(0, 20) + '.json');
   writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main', stateFile,
     cwd: f.source, repo: run.repo, packageRoot, runs: 1, coordinatorId: 'idle-owner', machine: 'idle-machine', activatedAt: 1,
     agent: {id: 'claude', kind: 'claude', command: 'claude'}, environment: f.ports.env, retryAt: f.clock + 86400000}));
   const ports = {...healthyMachine, ...f.ports, sendDigest: async () => ({exitCode: 0}), sendAlert: async () => ({exitCode: 0}),
     checkCapacityPorts: isolatedCheckCapacity(f.base), run: async (file, args, options) => ({code: 0, ...await f.ports.execFile(file, args, options)}), warn: () => {}};
   f.herdr.calls.length = 0;
-  return {f, run, ports, tick: () => tickAutopilot(stateFile, ports)};
+  return {f, run, ports, stateFile, tick: () => tickAutopilot(stateFile, ports)};
 }
 
 for (const kind of ['idle-ceiling', 'resume-ceiling', 'pause']) test(`3110 ${kind} releases panes after grace and retains saved custody`, async t => {
@@ -170,6 +170,48 @@ for (const boundary of ['check-probe', 'close-checkpoint', 'final-native-read'])
   assert.equal(f.record().progressAt, f.clock);
 });
 
+
+for (const change of ['progress', 'authority', 'disabled-authority', 'running-check', 'unknown-check']) test(`3110 workspace-close guard retains custody after late ${change}`, async t => {
+  const {f, run, ports, stateFile, tick} = await setup(t, 'coordinator.json');
+  run.state = 'stuck'; run.progressAt = f.clock - 120_000;
+  run.chatIdleLimit = {at: run.progressAt}; save(run);
+  let changed = false, suite = null;
+  ports.readSuiteProgress = () => suite;
+  const herdr = ports.herdr;
+  ports.herdr = async args => {
+    const result = await herdr(args);
+    if (!changed && args[0] === 'pane' && args[1] === 'process-info'
+        && args.includes(run.layout.paneId) && f.record().layout.phase === 'close_intent') {
+      changed = true;
+      if (change === 'progress') {
+        const current = f.record(); current.state = 'running'; current.progressAt = f.clock + 1;
+        current.updatedAt = f.clock + 1; delete current.chatIdleLimit; save(current);
+      } else if (change === 'authority' || change === 'disabled-authority') {
+        const state = JSON.parse(readFileSync(stateFile));
+        if (change === 'authority') state.coordinatorId = 'replacement-owner';
+        else state.enabled = false;
+        writeFileSync(stateFile, JSON.stringify(state));
+      } else suite = {state: change === 'running-check' ? 'running' : 'unavailable'};
+    }
+    return result;
+  };
+  await tick();
+  assert.equal(changed, true, 'reach the last native read after the saved workspace close intent');
+  assert.equal(closes(f).filter(args => args[0] === 'tab').length, 1);
+  assert.equal(closes(f).filter(args => args[0] === 'workspace').length, 0, 'late custody changes must prevent workspace closure');
+  assert.ok(f.herdr.panes.some(pane => pane.pane_id === run.layout.paneId));
+  const current = f.record();
+  assert.equal(current.layout.phase, 'close_intent');
+  assert.equal(current.parking.phase, 'closing');
+  assert.deepEqual(current.automaticOrigin, run.automaticOrigin);
+  assert.deepEqual(current.chats.at(-1).session, run.chats.at(-1).session);
+  assert.ok(existsSync(run.root)); assert.ok(existsSync(run.runDir));
+  if (change === 'progress') {
+    assert.equal(current.state, 'running');
+    assert.equal(current.progressAt, f.clock + 1);
+    assert.equal(current.chatIdleLimit, undefined);
+  }
+});
 
 for (const kind of ['idle', 'resume']) test(`3110 explicit retry resumes a parked ${kind} ceiling once`, async t => {
   const {f, run, ports, tick} = await setup(t);

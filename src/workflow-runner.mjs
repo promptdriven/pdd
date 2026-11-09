@@ -3915,7 +3915,7 @@ function currentParkingOwner(run, p) {
   try {
     const root = realpathSync(run.sourceRoot), id = createHash('sha256').update(root).digest('hex').slice(0, 20);
     const folder = p.autopilotStateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
-    const state = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8'));
+    const state = JSON.parse(readFileSync(p.autopilotStateFile ?? join(folder, `${id}.json`), 'utf8'));
     return state.enabled === true && samePath(state.cwd, root) && state.repo?.toLowerCase() === run.repo?.toLowerCase()
       && state.coordinatorId === run.automaticOrigin?.coordinatorId && state.machine === run.automaticOrigin?.machine ? state : null;
   } catch {return null;}
@@ -4903,7 +4903,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   cleanupUpdatedAt = parked.updatedAt; cleanupProgressAt = parked.progressAt;
   const result = await closeFinishedChats(copy, {...p, force: true, reason: 'park', beforeClose: async () => {
     const fresh = readRun(run.runDir);
-    if (!unchanged(fresh) || continuationCheckHeld(fresh, p))
+    if (!unchanged(fresh) || !currentParkingOwner(fresh, p) || continuationCheckHeld(fresh, p))
       throw Object.assign(Error('Parking custody changed before close'), {code: 'workflow_progress_refused'});
   }, checkpoint: async (chat, layout) => {
     if (continuationCheckHeld(readRun(run.runDir), p)) throw Object.assign(Error('Check process custody changed'), {code: 'workflow_progress_refused'});

@@ -372,7 +372,7 @@ async function trusted(row, state, config, p) {
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
 function parkingPorts(state, p, {localOnly = false} = {}) {
-  const worker = {...p, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
+  const worker = {...p, autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
     const result = await p.execute(file, args, options);
     if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
     return result;

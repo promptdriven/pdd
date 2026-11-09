@@ -290,7 +290,7 @@ An optional `ports.onlyChat` selects one saved pane/terminal identity from the f
 kept is an array of `{area, reason}`, warnings is an array of diagnostics. Dry run
 (`ports.dryRun`) reports eligible count but writes no file/record or Herdr effect.
 After all ended-run chat tabs are gone, use the [verified layout cleanup](workflow-herdr-layout.prompt.md#cleanup),
-forwarding the caller environment and explicit cancellation force. Preserve the layout owner's `createdWorkspaceId` and restart cleanup custody at every layout checkpoint; allocation and reopen must not discard them. Forward the caller environment to every layout allocation and recovery path, including replacement, so caller-pane protection uses the same environment. A retained
+forwarding the caller environment, explicit cancellation force and optional `ports.beforeClose` callback. The layout owner invokes that callback at its final workspace-close boundary; propagate `workflow_progress_refused` without closing the workspace. Preserve the layout owner's `createdWorkspaceId` and restart cleanup custody at every layout checkpoint; allocation and reopen must not discard them. Forward the caller environment to every layout allocation and recovery path, including replacement, so caller-pane protection uses the same environment. A retained
 shell is included in kept as `{area:"run shell", reason:<cleanup error code>}`
 and in warnings, so tidy counts it and status reports why it stays open.
 Remove a stale shell retention reason after successful cleanup.

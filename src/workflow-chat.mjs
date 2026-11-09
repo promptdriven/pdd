@@ -960,7 +960,7 @@ export async function closeFinishedChats(run, ports = {}) {
     try {
       const custody = {...run.layout};
       await withHerdrLayoutLock(() => closeHerdrRunLayout({runId: run.runId, cwd: run.root, commonDir: run.commonDir, layout: custody},
-        {command: herdr, env: ports.env, force: ports.force && ports.reason !== 'park', checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
+        {command: herdr, env: ports.env, force: ports.force && ports.reason !== 'park', beforeClose: ports.beforeClose, checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
       {directory: ports.layoutDirectory});
     } catch (error) {
       if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;

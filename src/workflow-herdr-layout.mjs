@@ -517,6 +517,7 @@ export async function closeHerdrRunLayout({runId, cwd, layout, commonDir}, ports
   layout.phase = 'close_intent';
   await checkpoint();
   if (!await inspect()) return;
+  await ports.beforeClose?.();
   const closed = await command(['workspace', 'close', run.workspaceId]);
   if (closed.id !== 'cli:workspace:close' || closed.result?.type !== 'ok' || (await inventory(command)).some(w => w.workspace_id === run.workspaceId)) throw problem('workspace_close_unconfirmed');
   layout.phase = 'closed';
