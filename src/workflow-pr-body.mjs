@@ -308,9 +308,21 @@ function changes(facts, fileLimit) {
   return [`## What changed (+${diff.added} −${diff.removed}, ${plural(count, 'file')})`, '', ...rows, ''];
 }
 // "Fix" is a closing keyword: its label carries a zero-width space, so "**Fix:** #5 …" never closes issue #5.
+// Keep JSON's escaped controls and all authored spaces inside a safely delimited code span.
+function findingsSpan(value) {
+  const text = MARKERS(String(value));
+  const fence = '`'.repeat([...text.matchAll(/`+/g)].reduce((most, run) => Math.max(most, run[0].length), 0) + 1);
+  return `${fence} ${text} ${fence}`;
+}
 function summary(facts) {
   const f = facts.fields ?? {}, bullet = (label, value) => value ? [`- **${label}:** ${inertText(value)}`] : [];
-  const rows = facts.layout === 'spec' ? [...bullet('Problem', f.problem), ...bullet('This PR', f.thisPr || facts.thisPr), ...bullet('Verdict', f.verdict)]
+  const finding = facts.bugFindings?.input, outcomes = facts.bugFindings?.outcomes ?? [];
+  const findingRows = finding ? [
+    `- **Cause:** ${findingsSpan(finding.cause ? JSON.stringify(finding.cause) : 'Reproduction failed; cause unknown.')}`,
+    ...bullet('Relations', finding.relations.length ? `Search: ${finding.search}` : finding.search === 'complete' ? 'Search complete; no relations found.' : 'Search unavailable.'),
+    ...finding.relations.map((r, index) => `  - ${findingsSpan(JSON.stringify({ issue: r.issue, classification: r.classification, source: r.source, quote: r.quote, effect: r.effect, outcome: outcomes[index] ?? null }))}`)
+  ] : [];
+  const rows = facts.layout === 'spec' ? [...bullet('Problem', f.problem), ...findingRows, ...bullet('This PR', f.thisPr || facts.thisPr), ...bullet('Verdict', f.verdict)]
     : facts.single ? [...bullet('Problem', f.problem), ...bullet('Change', f.change || f.fix), ...bullet('Result', f.result)]
     : [...bullet('Problem', f.problem), ...bullet('Cause', f.cause), ...bullet('Fix\u200b', f.fix), ...bullet('Result', f.result)];
   return rows.length ? ['## Summary', '', ...rows, ''] : [];
