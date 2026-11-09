@@ -17,6 +17,82 @@ const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.str
 const launches = f => f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run');
 const deliveries = f => f.herdr.calls.filter(args => args[0] === 'agent' && args[1] === 'prompt');
 
+for (const absent of ['workspace', 'legacy-workspace', 'unowned-workspace', 'pane', 'starting-pane']) test(`3132 absent ${absent} completes parking and keeps resume custody`, async t => {
+  const {f, tick, stateFile} = await setup(t, 'codex');
+  const held = f.record(), session = held.chats.at(-1).session;
+  held.state = 'paused'; held.blockedOn = {kind:'dependency', until:'2897'};
+  if (absent === 'legacy-workspace') delete held.layout.createdWorkspaceId;
+  if (absent === 'unowned-workspace') held.layout.createdWorkspaceId = null;
+  if (absent === 'starting-pane') {held.chats.at(-1).state = 'starting'; held.chats.at(-1).startUnconfirmed = true;}
+  save(f, held);
+  await f.herdr.herdr(absent.endsWith('workspace') ? ['workspace','close',held.layout.workspaceId] : ['tab','close',held.chats.at(-1).tabId]);
+  f.herdr.calls.length = 0;
+  await tick();
+  const after = f.record(), chat = after.chats.at(-1);
+  assert.equal(after.parking?.phase, 'parked');
+  assert.equal(chat.closed.reason, 'absent'); assert.ok(Number.isFinite(chat.closed.confirmedAt));
+  assert.equal(chat.state, 'ended'); assert.deepEqual(chat.session, session);
+  assert.equal(f.herdr.calls.some(a => a[0] === 'tab' && a[1] === 'close'), false);
+  if (absent.endsWith('workspace')) {
+    assert.equal(f.herdr.calls.some(a=>a[1]==='close'),false);
+    assert.equal(after.layout.createdWorkspaceId,held.layout.createdWorkspaceId);
+  }
+  assert.deepEqual([JSON.parse(readFileSync(stateFile)).parking.working, JSON.parse(readFileSync(stateFile)).parking.parked], [0,1]);
+});
+
+test('3132 working current agent defers parking; done current agent saves screen before forced close', async t => {
+  const {f, tick, ports, stateFile} = await setup(t, 'codex');
+  const held = f.record(), chat = held.chats.at(-1), pane = f.herdr.paneOf(chat);
+  held.state = 'waiting'; held.question = {at:f.clock,text:'Choose the case'}; save(f,held);
+  pane.agent.agent_status = 'working';
+  await tick();
+  assert.equal(f.record().parking, undefined);
+  assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 1);
+  assert.ok(f.herdr.paneOf(chat));
+  pane.agent.agent_status = 'done'; pane.screen = 'retained native output';
+  const h = ports.herdr;
+  ports.herdr = async args => {
+    if (args[0] === 'tab' && args[1] === 'close') {
+      const saved = f.record().chats.at(-1);
+      assert.deepEqual(saved.session, chat.session);
+      assert.equal(readFileSync(saved.closed.screen,'utf8'), pane.screen);
+      assert.equal(saved.closed.reason, 'park');
+    }
+    return h(args);
+  };
+  await tick(); assert.equal(f.record().parking.phase, 'parked');
+  assert.equal(f.herdr.paneOf(chat), undefined);
+});
+
+test('3132 bounded closing names the cause and retries without releasing its slot', async t => {
+  const {f, tick, ports, stateFile} = await setup(t, 'codex');
+  const held = f.record(); held.state = 'paused'; held.blockedOn = {kind:'dependency',until:'2897'}; save(f,held);
+  const h = ports.herdr;
+  let attempts = 0;
+  ports.herdr = async args => {
+    if (args[0] === 'pane' && args[1] === 'read') {attempts++; throw Object.assign(Error('capture refused'),{code:'screen_unavailable'});}
+    return h(args);
+  };
+  await tick(); assert.equal(f.record().parking.phase, 'closing');
+  const previousAttempts = f.record().parking.closeAttempts, previousReads = attempts;
+  f.tick(61_000); await tick();
+  const after = f.record(), summary = JSON.parse(readFileSync(stateFile)).parking;
+  assert.ok(after.parking.closeReasons);
+  assert.equal(after.parking.closeReasons['screen-unavailable'], 1);
+  assert.equal(after.parking.closeReasons['closing-retry'], 1);
+  assert.ok(after.parking.closeAttempts > previousAttempts); assert.equal(after.parking.closeAttemptAt, f.clock);
+  assert.equal(summary.working, 1); assert.equal(summary.closing[0].number, 17);
+  assert.equal(summary.closing[0].reasons['screen-unavailable'], 1); assert.ok(attempts > previousReads);
+  const {parkingWords} = await import('../src/autopilot-parking.mjs');
+  assert.match(parkingWords(summary), /17.*screen-unavailable/);
+  // Losing a stale blocker without new progress must not strand the reservation.
+  const changed = f.record(); delete changed.blockedOn; changed.state = 'running';
+  changed.progressAt = changed.updatedAt = changed.parking.at; save(f,changed);
+  ports.herdr = h; await tick();
+  assert.equal(f.record().parking.phase, 'parked');
+  assert.equal(f.record().parking.closeReasons, undefined);
+});
+
 for (const [kind,field] of [['interface-missing','/interface'],['undefined-call-bound','/limits/max_model_calls'],['undefined-call-bound','/calls/0/max_calls'],['recursive-call-bound','/calls']])
   test(`3114 repair: local ${kind} ${field} cannot become an interpreter blocker or park`, async t => {
     const {f,tick,ports,stateFile} = await setup(t);
@@ -1283,7 +1359,7 @@ for (const cause of ['pdd', 'interpreter reason', 'stuckCause', 'interpreter rea
       assert.ok(replacement, 'save a new stop during recovery notice delivery');
       assert.equal(f.record().parkReason, replacement.parkReason); assert.equal(f.record().stuckCause, 'work');
       assert.deepEqual(f.record().gate, retry.gate); assert.deepEqual(f.record().question, retry.question);
-      f.herdr.calls.length = 0; await tick();
+      f.herdr.idle(); f.herdr.calls.length = 0; await tick();
       assert.deepEqual(f.record().parking.blocker, {kind: 'dependency', until: '322'});
       assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
     }

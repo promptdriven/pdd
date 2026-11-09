@@ -10,6 +10,57 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {factoryWorld,put,readJson,valuePrompt,scenario} from './helpers/factory/world.mjs';
 
+test('factory 3132: absent starting panes, done closure, busy deferral and closing admission share the run cap',async t=>{
+  const w=await factoryWorld(t,{workflow:'bug'});w.runLimit=1;
+  w.github.add(19,{title:'Independent work',body:'Change the value.',created:w.time-1000,updated:w.time});
+  await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
+  await w.command(['workflow','status','17']);
+  await w.command(['workflow','park','--blocker','dependency','--until','18','--reason','Waiting for issue #18 to merge'],{cwd:w.record().root});
+  const held=w.record(),old=held.chats[0],current=held.chats.at(-1);
+  old.state='starting';old.startUnconfirmed=true;
+  writeFileSync(join(held.runDir,'status.json'),JSON.stringify(held));
+  w.herdr.panes=w.herdr.panes.filter(p=>p.pane_id!==old.paneId);
+  w.herdr.tabs=w.herdr.tabs.filter(tab=>tab.tab_id!==old.tabId);
+  const pane=w.herdr.paneOf(current);pane.agent.agent_status='working';
+  await w.tick();
+  assert.equal(w.record().parking,undefined,'3132_FACTORY_BUSY_PARKED');
+  assert.equal(w.state().parking.working,1);
+  pane.agent.agent_status='done';pane.screen='Factory retained output';
+  const h=w.herdr.herdr;let refuseScreen=true,closedCurrent=false;
+  w.herdr.herdr=async args=>{
+    if(args[0]==='pane'&&args[1]==='read'&&args[2]===current.paneId&&refuseScreen)
+      throw Object.assign(Error('screen unavailable'),{code:'screen_unavailable'});
+    if(args[0]==='tab'&&args[1]==='close'&&args[2]===current.tabId) {
+      const saved=w.record().chats.at(-1);
+      assert.equal(saved.session.id,current.session.id);
+      assert.equal(readFileSync(saved.closed.screen,'utf8'),pane.screen);closedCurrent=true;
+    }
+    return h(args);
+  };
+  await w.tick();
+  assert.equal(w.record().chats[0].closed.reason,'absent','3132_FACTORY_ABSENT_UNCONFIRMED');
+  assert.ok(Number.isFinite(w.record().chats[0].closed.confirmedAt));
+  assert.equal(w.record().parking.phase,'closing');assert.equal(w.state().parking.working,1);
+  w.time+=61000;await w.tick();
+  assert.equal(w.record().parking.closeReasons['closing-retry'],1);
+  const status=await w.command(['autopilot','status']);assert.match(status.stdout,/17.*screen-unavailable/);
+  // Use an issued dependency decision and a real claim. Native admission must
+  // refuse the next allocation while the stopped done turn is still closing.
+  const packet=w.packets.find(p=>p.issues.some(i=>i.number===19&&i.eligible));
+  assert.ok(packet);const issue=packet.issues.find(i=>i.number===19);
+  w.github.claim(19,{coordinatorId:w.state().coordinatorId,machine:w.state().machine});
+  const refused=await w.command(['workflow','run','bug','19','--agent','codex','--origin','autopilot','--decision-id',issue.decisionId,'--outcome','code'],{actor:'coordinator',env:w.context(),allowFailure:true});
+  assert.notEqual(refused.code,0,'3132_FACTORY_RUN_CAP_EXCEEDED');
+  assert.equal(existsSync(join(w.commonDir,'pdd/runs/19/status.json')),false);
+  assert.equal(w.state().parking.working,1);
+  refuseScreen=false;await w.tick();
+  assert.equal(w.record().parking.phase,'parked');assert.ok(closedCurrent);
+  assert.equal(w.state().parking.working,0);assert.equal(w.state().parking.parked,1);
+  assert.deepEqual(w.record().chats.at(-1).session,current.session);
+  assert.ok(w.record().chats.every(chat=>Number.isFinite(chat.closed.confirmedAt)));
+  assert.deepEqual(w.leadActions,[]);
+});
+
 test('factory 3114: full native check retains baseline scope and blocks missing-interface dispatch',async t=>{
   const w=await factoryWorld(t);
   put(w.cwd,'value.prompt.md',valuePrompt(2));

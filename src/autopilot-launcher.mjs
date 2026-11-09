@@ -362,8 +362,10 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     list: () => listRuns({cwd: state.cwd, cancelled: true}, worker),
     checkProgress: async run => {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
-      return busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
-        || busy((p.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: p.env}, {now: p.now, ...p.interpreterQueuePorts}));
+      if (busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
+        || busy((p.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: p.env}, {now: p.now, ...p.interpreterQueuePorts}))) return true;
+      const chat = currentChat(run), live = chat ? await chatSession(chat, {...worker, run}) : null;
+      return Boolean(live?.alive && !['idle', 'done'].includes(live.status));
     },
     observeBlocker: async run => {
       if (run.blockedOn) return null;
@@ -2367,7 +2369,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const local = parkingPorts(state, p);
       const runs = (await local.list()).filter(run => run.automaticOrigin?.coordinatorId === state.coordinatorId);
       const observed = await Promise.all(runs.map(async run => ({...run, checkHeld: await local.checkProgress(run)})));
-      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1), state.interpreterPattern);
+      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1, p.now()), state.interpreterPattern);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
     }

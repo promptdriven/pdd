@@ -89,17 +89,32 @@ export function idleParkingBlocker(run, now, graceMs = 60_000) {
 }
 const label = blocker => blocker?.kind === 'pdd-route' ? 'missing PDD route' : blocker?.kind === 'dependency' ? `needs #${blocker.until}`
   : blocker?.kind === 'pdd' ? `needs ${blocker.until}` : blocker?.kind ?? 'unknown';
-export function parkingSummary(runs, limit) {
+const needsGrace = run => run.chatIdleLimit || run.chatResumeLimit || run.state === 'paused' && !run.parkReason && !run.stuckCause;
+function closingHold(run, now, blocker = blockerFor({...run, parking: undefined})) {
+  if (run.parking?.phase !== 'closing' || blocker) return null;
+  if (!stopped(run) && [run.progressAt, run.updatedAt].some(at => Number.isFinite(at) && at > run.parking.at))
+    return 'new progress since park';
+  if (needsGrace(run) && Number.isFinite(now) && now < idleSince(run) + 60_000)
+    return `recovery grace until ${new Date(idleSince(run) + 60_000).toISOString()}`;
+  return null;
+}
+export function parkingSummary(runs, limit, now) {
   const live = runs.filter(run => !ended(run)), parked = live.filter(run => run.parking?.phase === 'parked' && !run.parking.checkHeld && !run.checkHeld);
   const reservations = run => run.parking && run.parking.phase !== 'parked' || run.parking?.checkHeld;
   const working = live.filter(run => !parked.includes(run) && (!stopped(run) || reservations(run) || run.checkHeld)).length;
   const blockers = {};
   for (const run of parked) {const name = label(run.parking.blocker); blockers[name] = (blockers[name] ?? 0) + 1;}
-  return {working, parked: parked.length, blockers, wakePending: [], limit};
+  const closing = live.filter(run => run.parking?.phase === 'closing').map(run => {
+    const hold = closingHold(run, now);
+    return {number: run.number, reasons: hold ? {[hold]: 1, ...(now - run.parking.at >= 60_000 ? {'closing-retry': 1} : {})}
+      : Object.keys(run.parking.closeReasons ?? {}).length ? run.parking.closeReasons : {'cleanup-pending': 1}};
+  });
+  return {working, parked: parked.length, blockers, wakePending: [], limit, closing};
 }
 export function parkingWords(summary, interpreter) {
   const s = summary ?? {working: 0, parked: 0, blockers: {}, limit: 0};
   return `working ${s.working} of ${s.limit} · parked ${s.parked}${s.parked ? ` (${Object.entries(s.blockers).map(([name, count]) => `${name} ${count}`).join(', ')})` : ''}`
+    + (s.closing?.length ? ` · closing ${s.closing.map(row => `#${row.number} (${Object.entries(row.reasons).map(([reason,count]) => `${reason} ${count}`).join(', ')})`).join('; ')}` : '')
     + (interpreter?.testMode ? ` · interpreter: test mode (${interpreter.streak} no-verdict in a row)` : '');
 }
 export async function reconcileParking(state, ports, {wakeRules = [], wake = false, policy = {}, release = true} = {}) {
@@ -120,9 +135,8 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     const observed = !saved || saved.kind === 'person' ? await ports.observeBlocker?.(run) : null;
     // Unclassified stops also release native resources after a short grace.
     // Their original recovery counters and alert custody survive the park.
-    const graceHold = run.chatIdleLimit || run.chatResumeLimit || run.state === 'paused' && !run.parkReason && !run.stuckCause;
-    if (run.parking?.phase === 'closing' && !saved && !observed
-      && (!stopped(run) || graceHold && !idleParkingBlocker(run, ports.now()))) continue;
+    const graceHold = needsGrace(run);
+    if (closingHold(run, ports.now(), observed ?? saved)) continue;
     const blocker = observed ?? saved ?? run.parking?.blocker
       ?? (stopped(run) && !graceHold ? {kind: 'unknown', until: null} : idleParkingBlocker(run, ports.now()));
     if (!blocker && !run.parking) continue;
@@ -143,18 +157,17 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     const rule = wakeRules.find(rule => rule.number === run.number && ['runtime-ready', 'environment-ready'].includes(rule.kind));
     if (run.parking.phase === 'waking' || await ports.blockerCleared(run, rule)) ready.push({run, rule});
   }
-  const occupied = rows => rows.filter(run => !ended(run) && !(run.parking?.phase === 'parked' && !run.parking.checkHeld)).length;
   const summarize = async rows => parkingSummary(await Promise.all(rows.map(async run =>
-    stopped(run) && !run.parking && await ports.checkProgress(run) ? {...run, checkHeld: true} : run)), limit);
+    stopped(run) && !run.parking && await ports.checkProgress(run) ? {...run, checkHeld: true} : run)), limit, ports.now());
   let summary = await summarize(runs);
-  let occupancy = occupied(runs);
+  let occupancy = summary.working;
   for (const {run, rule} of ready) {
     if (run.parking.phase !== 'waking' && occupancy >= limit) {summary.wakePending.push(run.number); continue;}
     const result = await ports.wake(run, rule);
     if (result?.recovery === 'resumed') {
       const index = wakeRules.indexOf(rule); if (index >= 0) wakeRules.splice(index, 1);
     } else summary.wakePending.push(run.number);
-    occupancy = occupied(await list());
+    occupancy = (await summarize(await list())).working;
   }
   // Wake-up wins at the timeout boundary. Failed cleanup/resume retains its slot.
   if (wake && release) {

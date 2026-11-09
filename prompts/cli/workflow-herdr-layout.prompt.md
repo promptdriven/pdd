@@ -8,6 +8,18 @@ Inputs retain run UUID, origin-verified `owner/repo`, sourceRoot, commonDir, ass
 
 ## Find live identity before creating
 
+Export `validateHerdrInventory(reply, kind, workspaceId?)` as the shared validator
+for workspace, tab and pane inventories, including chat cleanup. Return the
+complete rows only when the result type is `<kind>_list`, its plural field is an
+array, and every row has a unique nonempty string `<kind>_id`. Tab and pane rows
+also require nonempty string `workspace_id`; pane rows require nonempty string
+`tab_id` and `terminal_id`. For a scoped request, every row's `workspace_id`
+must equal the requested workspace. Otherwise throw `invalid_<kind>_inventory`.
+An empty valid scoped list can prove absence only after a valid workspace list
+establishes that the requested workspace exists; a valid workspace list can
+itself prove that workspace absent. Malformed or out-of-scope evidence is unknown
+and cannot authorize a close or a confirmed absence record.
+
 Resolve the verified repository parent through the worktree owner's read-only lookup, forwarding execFile. Keep the invoking sourceRoot and assigned cwd unchanged; a linked caller is never the parent checkout. Normalize both sides of filesystem comparisons with the same realpath-based identity rule, including sourceRoot, parent, commonDir, checkout_path and repo_key. Symlink aliases compare equally in either direction; inability to establish identity is uncertainty, never label-based equality. CommonDir separates independent clones of the same repository.
 
 <a id="pane-identity"></a>**Pane identity.** A tab or pane is identified by its Herdr IDs (tab, pane and terminal) inside a workspace whose live worktree `checkout_path` and `repo_key` match. The live folder of a pane's shell (Herdr `cwd` and `foreground_cwd`) is never identity: the person's shell startup file can `cd` a new pane to another folder, and a command in the pane can move it at any time. So no root-pane, parent-root, area-tab or new-area-pane check compares it: a shell in another folder is still the same pane, and it alone never causes a refusal. The [area chat](workflow-chat.prompt.md) starts each agent with its own `cd` to the worktree.
@@ -120,6 +132,12 @@ intent from fresh inventory: absence confirms closed without another close;
 presence permits retry only with the same verified workspace identity, original
 root and safety guards above. Changed or unknown ownership remains pending and
 untouched. No intent alone authorizes a repeated close.
+
+Complete valid workspace inventory also confirms an already absent run workspace
+as closed before any close intent exists. Require valid saved workspace and
+original root fields; checkpoint closed and send no close request. Absence does
+not grant creation authority. Every request to close a present workspace still
+requires the saved creation authority above.
 
 `closeHerdrRepoLayoutIfIdle` returns true if a safely owned idle parent was closed or is already gone, false when retained. Adoption is not creation ownership: never close a parent merely because it is a non-linked workspace of the clone. A parent may be closed only with durable run-record evidence that PDD created this exact parent/root, no remaining open run uses it, unchanged verified parent identity and exactly its one original tab/pane. Existing run records with workspace IDs alone do not prove parent creation or its initial roots; preserve those parents and return false. Without that evidence preserve it, including legacy or person-opened parents. Never create another durable layout registry to establish cleanup ownership.
 

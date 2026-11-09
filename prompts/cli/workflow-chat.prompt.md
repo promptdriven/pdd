@@ -265,9 +265,14 @@ current area. Each finished chat gets an `endedAt` epoch-ms boundary at handoff
 or run end; legacy records use the next area's start, cancellation or saved update
 time. Close only after 15 minutes from that boundary and from `openedAt`.
 `ports.graceMs:0` removes only that grace under budget pressure or replacement.
-Never park the current live chat, including a gate, question or failed chat.
-Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory:
-the saved workspace must match the run checkout and clone, and its saved tab
+Ordinary finished-chat cleanup leaves the current chat, including a gate,
+question or failed chat. Forced parking includes it with the guards below.
+Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory.
+Use the layout owner's `validateHerdrInventory` for every workspace, tab and pane
+inventory in chat cleanup and replacement, session proof and pane counting.
+Cleanup retains invalid or out-of-scope inventory as `invalid_cleanup_inventory`,
+without writing a new close mark, confirmedAt or ended state from that evidence.
+The saved workspace must match the run checkout and clone, and its saved tab
 must have exactly the saved pane. After a restart, terminal-only drift may be refreshed when the saved area tab label still matches, agent absence is authoritative, and the foreground is an idle shell. Save that terminal identity before close and recheck it after the checkpoint. A refreshed terminal requires the matching area tab label, authoritative agent absence and an empty shell at both checks, including forced cancellation. Persist `closed.restartTerminal: true` with its close intent so these guards also apply on retries. A live agent with a different terminal, a reused ID, split tab,
 foreign workspace or unknown inventory is retained with a reason. No live-folder
 comparison establishes pane identity. Inspect the agent immediately before
@@ -285,7 +290,13 @@ Before close, read `pane read PANE --source recent-unwrapped --lines 5000` into
 `<runDir>/chats/<area>-<startedAt>.txt`, private mode 0600. For ordinary cleanup, read failure does not
 block closing a safely resumable session; parking requires the saved screen. Await `ports.checkpoint(chat, layout)`
 before `tab close`; failure sends no close. Retry a marked chat through the same
-identity checks. Missing tabs are ended evidence only with a saved close mark.
+identity checks. Complete valid workspace or pane inventory that proves a saved
+workspace or saved pane absent records that chat as ended with
+closed:{at,reason:"absent",screen:null,confirmedAt}; retain a prior close intent
+and screen if present, and always retain saved session custody for resume.
+This also applies to starting/unconfirmed chats. Send no close for an absent
+chat, and do not treat agent_not_found alone or unavailable/malformed inventory
+as pane absence. Dry run does not write and counts no absent pane as open.
 An optional `ports.onlyChat` selects one saved pane/terminal identity from the finished set for globally ordered sweeping. Recheck caller protection, live identity, agent status and the required agent-absence process evidence after the durable checkpoint, immediately before the close. Return `{closed, kept, warnings}`: closed is the number of tabs confirmed closed,
 kept is an array of `{area, reason}`, warnings is an array of diagnostics. Dry run
 (`ports.dryRun`) reports eligible count but writes no file/record or Herdr effect.
@@ -297,6 +308,12 @@ Remove a stale shell retention reason after successful cleanup.
 Explicit cancellation uses the same routine with `ports.force:true`: it bypasses
 busy/session/grace checks, but retains ownership and caller-pane protection.
 `closeChats` delegates to it. A cancelled/replaced run can be cancelled again.
+
+Forced parking bypasses finished-chat grace for idle/done agents, including the
+current chat. Preserve the same agent, pane and terminal identity and session
+proof, caller protection and saved-screen-before-close requirements at both
+inspections. Never close a busy agent or gain workspace creation authority from
+absence. An absent chat needs no screen capture because no close is sent.
 
 Export `paneUsage(ports)` returning `{panes,budget}` from one complete session-wide
 pane list (an optional `onPaneUsage(rows)` receives that complete inventory), and `ensurePaneBudget(need, ports)` returning that shape plus `closed`.
@@ -378,7 +395,7 @@ Bound Codex discovery for one chat to its latest launch anchor, ending before th
 
 For parking, attempt each chat independently. Learn a UUID from saved custody, the verified `chatSession` result or bounded native discovery. Apply the same live-identity proof before saving a UUID through status, lifecycle observation or cleanup. Contradictory or unavailable live evidence grants no custody; independent bounded native discovery may still prove the chat's own UUID. Require it for the current area's chat, which must resume later. A finished-area chat can close without a UUID only after saving its screen. Keep a chat with no required evidence and name no-saved-session; keep a failed required screen capture as screen-unavailable. Parking never bypasses busy-agent checks, including the last observation before close. Save each screen before parking closes its tab; save session and close custody before the effect. Dry-run makes no durable changes.
 
-Use the [layout owner's legacy cleanup exception](workflow-herdr-layout.prompt.md#cleanup) only for a genuinely absent createdWorkspaceId field. Explicit null means creation was not proved and cannot be upgraded. Checkpoint permitted legacy creation custody before any close. Retain other workspaces with not-pdd-created. This compatibility proof authorizes cleanup of the run workspace only; existing caller, tab, terminal and foreground protections still apply.
+Use the [layout owner's legacy cleanup exception](workflow-herdr-layout.prompt.md#cleanup) only for a genuinely absent createdWorkspaceId field. Explicit null means creation was not proved and cannot be upgraded. Checkpoint permitted legacy creation custody before any close. Retain other present workspaces with not-pdd-created. Complete inventory can confirm an absent workspace without creation authority because this sends no close and never upgrades that authority. This compatibility proof authorizes cleanup of the run workspace only; existing caller, tab, terminal and foreground protections still apply.
 
 Export countReasons(kept) to count the reason fields, mergeReasonCounts(...groups) to sum reason-to-count mappings, and reasonWords(counts) to format sorted `reason count` pairs separated by comma-space (empty is `none`). Cleanup returns counts by retained reason as reasonCounts in addition to existing results. Pane-budget errors include retained counts by reason from the latest finished/idle sweeps, without double counting repeated passes over the same class.
 
@@ -399,7 +416,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"c7ae567825c77710b336da5584757491d63f177a93885019ad4458eb215bfa2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"c7ae567825c77710b336da5584757491d63f177a93885019ad4458eb215bfa2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

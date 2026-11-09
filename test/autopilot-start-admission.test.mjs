@@ -61,3 +61,22 @@ test('#3102 default parked limit is twice the working limit', async t => {
   f.settings.runs = f.coordinator.runs = 4;
   assert.deepEqual(await checkDependencyStart(f, f.ports), {allowed: false, reason: 'parked'}, 'default backlog limit must apply independently');
 });
+
+for (const observation of ['done','absent']) test(`3132 ten working slots include closing ${observation} custody in native admission`, async t => {
+  const f = await setup(t, {working:8});
+  assert.equal((await f.f.run()).exitCode, 0);
+  const run = f.f.record(), chat = run.chats.at(-1);
+  run.state = 'waiting'; run.parking = {at:f.f.clock,phase:'closing',blocker:{kind:'person'}};
+  if (observation === 'done') f.f.herdr.paneOf(chat).agent.agent_status = 'done';
+  else {chat.state = 'ended'; await f.f.herdr.herdr(['workspace','close',run.layout.workspaceId]);}
+  writeFileSync(join(run.runDir,'status.json'), JSON.stringify(run));
+  const extra = {...f.runs.at(-1),number:18,runId:'run-18',runDir:join(run.commonDir,'pdd/runs/18')};
+  mkdirSync(extra.runDir,{recursive:true}); writeFileSync(join(extra.runDir,'status.json'),JSON.stringify(extra));
+  const rows = [...f.runs,run,extra];
+  assert.equal(parkingSummary(rows,10).working,10);
+  const native = createDependencyReadPorts({cwd:f.f.source},{...f.ports,owners:undefined});
+  const owners = JSON.parse((await native.owners.read({repository:f.repository,issues:[]})).json);
+  assert.equal(owners.runs.filter(r=>r.working).length,10);
+  f.owners.runs = owners.runs;
+  assert.deepEqual(await checkDependencyStart(f,f.ports),{allowed:false,reason:'runs'});
+});

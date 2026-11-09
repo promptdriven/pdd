@@ -4093,6 +4093,8 @@ async function cleanupRunChats(run, p, options = {}) {
       if (chat) {
         const target = latest.chats?.find(item => sameChat(item,chat) && item.terminalId === savedTerminals.get(chat.paneId));
         if (!target || !options.force && !finishedChats(latest).includes(target)) throw Object.assign(Error('Cleanup target changed'), {code:'workflow_progress_refused'});
+        if (chat.closed?.reason === 'absent' && target.closed)
+          chat.closed = {...target.closed, confirmedAt: chat.closed.confirmedAt};
         Object.assign(target, structuredClone(chat));
         savedTerminals.set(chat.paneId, chat.terminalId);
       }
@@ -5165,7 +5167,18 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     });
     return {...done(''), recovery: 'parked'};
   }
-  if (continuationCheckHeld(run, p)) return skipped();
+  const retainClosing = reason => {
+    if (run.parking?.phase === 'closing') commitRun(run, p, fresh => {
+      fresh.parking.closeReasons = {[reason]: 1, ...(p.now() - fresh.parking.at >= 60_000 ? {'closing-retry': 1} : {})};
+      fresh.parking.closeAttemptAt = p.now();
+      fresh.parking.closeAttempts = (fresh.parking.closeAttempts ?? 0) + 1;
+    });
+    return skipped(reason);
+  };
+  if (continuationCheckHeld(run, p)) return retainClosing('check-busy');
+  const activeChat = currentChat(run), live = activeChat ? await chatSession(activeChat, {...p, run}) : null;
+  const agentBusy = live?.alive && !['idle','done'].includes(live.status);
+  if (agentBusy && run.parking) return retainClosing('agent-busy');
   if (!input.blocker) return skipped();
   const snapshot = {state: run.state, area: run.area, gate: run.gate, question: run.question, done: run.done,
     blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, stuckCause: run.stuckCause, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin,
@@ -5174,21 +5187,21 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   const unchanged = fresh => fresh && fresh.runId === run.runId && fresh.root === run.root && !ended(fresh)
     && fresh.updatedAt === cleanupUpdatedAt && fresh.progressAt === cleanupProgressAt && (input.idleGraceMs === undefined || currentParkingOwner(fresh, p))
     && Object.entries(snapshot).every(([key, value]) => sameFact(fresh[key], value));
-  if (!conditionalCommit(run, p, unchanged, fresh => {
-    fresh.parking ??= {at: p.now(), blocker: input.blocker, phase: 'closing',
+  if (!agentBusy && !conditionalCommit(run, p, unchanged, fresh => {
+    fresh.parking ??= {at: p.now(), blocker: input.blocker, phase: 'closing', closeReasons: {'cleanup-pending': 1},
       ...(input.blocker.kind === 'person' && (run.gate || openQuestion(run))
         ? {personWait: {gate: run.gate ?? null, question: run.question ?? null}} : {})};
     replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch, input.interpreterCheck, p.now());
   })) return skipped();
   const parked = readRun(run.runDir), copy = structuredClone(parked);
   cleanupUpdatedAt = parked.updatedAt; cleanupProgressAt = parked.progressAt;
-  const result = await closeFinishedChats(copy, {...p, force: true, reason: 'park', beforeClose: async () => {
+  const result = await closeFinishedChats(copy, {...p, force: !agentBusy, graceMs: 0, reason: 'park', beforeClose: async () => {
     const fresh = readRun(run.runDir);
     if (!unchanged(fresh) || !currentParkingOwner(fresh, p) || continuationCheckHeld(fresh, p))
       throw Object.assign(Error('Parking custody changed before close'), {code: 'workflow_progress_refused'});
   }, checkpoint: async (chat, layout) => {
     if (continuationCheckHeld(readRun(run.runDir), p)) throw Object.assign(Error('Check process custody changed'), {code: 'workflow_progress_refused'});
-    if (!conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at, fresh => {
+    if (!conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking?.at, fresh => {
       if (chat) {
         const target = fresh.chats.find(item => sameChat(item, chat));
         if (!target || target.terminalId !== chat.terminalId) throw Object.assign(Error('Parking chat changed'), {code: 'workflow_progress_refused'});
@@ -5199,11 +5212,23 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     const saved = readRun(run.runDir);
     cleanupUpdatedAt = saved.updatedAt; cleanupProgressAt = saved.progressAt;
   }});
-  const closed = !result.kept.length && readRun(run.runDir)?.layout?.phase === 'closed'
-    && readRun(run.runDir).chats.every(chat => Number.isFinite(chat.closed?.confirmedAt));
-  if (closed) conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at,
-    fresh => {fresh.parking.phase = 'parked';});
-  conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at, fresh => {fresh.cleanupKept = result.kept;});
+  if (agentBusy) {
+    const kept = [...result.kept, {area: activeChat.area, reason: 'agent-busy'}];
+    conditionalCommit(parked, p, unchanged, fresh => {fresh.cleanupKept = kept;});
+    return {...done(result.warnings.join('\n')), recovery: 'skipped', reasonCounts: {...result.reasonCounts, 'agent-busy': 1}};
+  }
+  const cleaned = readRun(run.runDir);
+  const closed = !result.kept.length && cleaned?.layout?.phase === 'closed'
+    && cleaned.chats.every(chat => Number.isFinite(chat.closed?.confirmedAt));
+  conditionalCommit(parked, p, fresh => unchanged(fresh) && fresh.parking?.at === parked.parking.at, fresh => {
+    fresh.cleanupKept = result.kept;
+    fresh.parking.closeAttemptAt = p.now();
+    fresh.parking.closeAttempts = (fresh.parking.closeAttempts ?? 0) + 1;
+    if (closed) {fresh.parking.phase = 'parked'; delete fresh.parking.closeReasons;}
+    else fresh.parking.closeReasons = {
+      ...(Object.keys(result.reasonCounts).length ? result.reasonCounts : {'cleanup-unconfirmed': 1}),
+      ...(p.now() - fresh.parking.at >= 60_000 ? {'closing-retry': 1} : {})};
+  });
   return {...done(result.warnings.join('\n')), recovery: closed ? 'parked' : 'skipped', reasonCounts: result.reasonCounts};
 }));
 

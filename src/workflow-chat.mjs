@@ -9,7 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const PACKAGE_BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin/pdd.mjs');
 import { promisify } from 'node:util';
-import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, recoverHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath } from './workflow-herdr-layout.mjs';
+import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, recoverHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle, samePath, validateHerdrInventory } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { tomlString } from './toml-string.mjs';
 import { lookupIssueWorktree } from './workflow-worktree.mjs';
@@ -591,15 +591,11 @@ export async function chatSession(chat, ports = {}) {
         && (!validSessionId(chat.session?.id) || value === chat.session.id)) {
       try {
         const reply = await herdrCommand(ports)(['pane', 'list', ...(chat.workspaceId ? ['--workspace', chat.workspaceId] : [])]);
-        const panes = reply?.result?.panes;
-        if (reply?.result?.type === 'pane_list' && Array.isArray(panes)
-            && panes.every(p => typeof p?.pane_id === 'string' && p.pane_id)
-            && new Set(panes.map(p => p.pane_id)).size === panes.length) {
-          const pane = panes.find(p => p.pane_id === chat.paneId);
-          identity = pane?.terminal_id === chat.terminalId
-            && (!chat.workspaceId || pane.workspace_id === chat.workspaceId)
-            && (!chat.tabId || pane.tab_id === chat.tabId);
-        }
+        const panes = validateHerdrInventory(reply, 'pane', chat.workspaceId || undefined);
+        const pane = panes.find(p => p.pane_id === chat.paneId);
+        identity = pane?.terminal_id === chat.terminalId
+          && (!chat.workspaceId || pane.workspace_id === chat.workspaceId)
+          && (!chat.tabId || pane.tab_id === chat.tabId);
       } catch { /* Unavailable terminal identity grants no session custody. */ }
     }
     let namingError;
@@ -631,11 +627,7 @@ export async function chatSession(chat, ports = {}) {
 }
 
 async function workspaceInventory(herdr) {
-  const reply = await herdr(['workspace', 'list']), rows = reply?.result?.workspaces;
-  if (reply?.result?.type !== 'workspace_list' || !Array.isArray(rows)
-    || rows.some(row => typeof row?.workspace_id !== 'string' || !row.workspace_id)
-    || new Set(rows.map(row => row.workspace_id)).size !== rows.length) throw problem('invalid_workspace_inventory');
-  return rows;
+  return validateHerdrInventory(await herdr(['workspace', 'list']), 'workspace');
 }
 
 export async function rebuildClosedChat({ run, chat, message, resumeMessage }, ports = {}) {
@@ -828,10 +820,7 @@ export async function paneUsage(ports = {}) {
   let reply;
   try { reply = await herdrCommand(ports)(['pane', 'list']); }
   catch (error) { if (error.code === 'server_not_running') return {panes: 0, budget}; throw error; }
-  const panes = reply?.result?.panes;
-  if (reply?.result?.type !== 'pane_list' || !Array.isArray(panes) ||
-      panes.some(p => !p?.pane_id || !p.workspace_id || !p.tab_id || !p.terminal_id) ||
-      new Set(panes.map(p => p.pane_id)).size !== panes.length) throw problem('invalid_pane_inventory');
+  const panes = validateHerdrInventory(reply, 'pane');
   ports.onPaneUsage?.(panes);
   return {panes: panes.length, budget};
 }
@@ -890,11 +879,8 @@ export async function closeFinishedChats(run, ports = {}) {
   };
   const inventory = async (kind, workspace) => {
     const reply = await herdr([kind, 'list', ...(workspace ? ['--workspace', workspace] : [])]);
-    const rows = reply?.result?.[`${kind}s`], key = `${kind}_id`;
-    if (reply?.result?.type !== `${kind}_list` || !Array.isArray(rows) ||
-        rows.some(row => typeof row?.[key] !== 'string' || !row[key]) ||
-        new Set(rows.map(row => row[key])).size !== rows.length) throw problem('invalid_cleanup_inventory');
-    return rows;
+    try { return validateHerdrInventory(reply, kind, workspace); }
+    catch { throw problem('invalid_cleanup_inventory'); }
   };
   const assertEmptyForeground = async paneId => {
     let reply;
@@ -911,7 +897,15 @@ export async function closeFinishedChats(run, ports = {}) {
     if (!SHELLS.has(rows[0].name)) throw problem('pane-unknown');
   };
   if (run.layout?.workspaceId && run.layout.createdWorkspaceId !== run.layout.workspaceId) {
-    const workspace = (await inventory('workspace')).find(w => w.workspace_id === run.layout.workspaceId);
+    let workspace;
+    try { workspace = (await inventory('workspace')).find(w => w.workspace_id === run.layout.workspaceId); }
+    catch (error) {
+      const reason = error.code ?? 'cleanup-unavailable';
+      for (const chat of run.chats ?? []) if (!Number.isFinite(chat.closed?.confirmedAt)) kept.push({area:chat.area,reason});
+      if (!kept.length) kept.push({area:'run shell',reason});
+      warnings.push(`warning: Herdr inventory is unavailable (${warningReason(error)}).`);
+      return {closed,kept,warnings,reasonCounts:countReasons(kept)};
+    }
     const label = `${run.repo?.split('/')[1]}#${run.number} ${run.workflow}`;
     if (!Object.hasOwn(run.layout, 'createdWorkspaceId') && workspace?.label === label
         && samePath(workspace.worktree?.checkout_path, run.root)
@@ -921,7 +915,7 @@ export async function closeFinishedChats(run, ports = {}) {
         if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
         await ports.checkpoint(null, run.layout);
       }
-    } else if (ports.reason === 'park') {
+    } else if (ports.reason === 'park' && workspace) {
       const kept = (run.chats ?? []).filter(chat => !Number.isFinite(chat.closed?.confirmedAt)).map(chat => ({area: chat.area, reason: 'not-pdd-created'}));
       if (!kept.length) kept.push({area: 'run shell', reason: 'not-pdd-created'});
       return {closed: 0, kept, warnings, reasonCounts: countReasons(kept)};
@@ -929,6 +923,14 @@ export async function closeFinishedChats(run, ports = {}) {
   }
   const finished = ports.force ? run.chats ?? [] : finishedChats(run);
   const candidates = ports.onlyChat ? finished.filter(chat => chat.paneId === ports.onlyChat.paneId && chat.terminalId === ports.onlyChat.terminalId) : finished;
+  const confirmAbsent = async chat => {
+    if (ports.dryRun || Number.isFinite(chat.closed?.confirmedAt)) return;
+    chat.closed ??= {at: now(), reason: 'absent', screen: null};
+    chat.closed.confirmedAt = now();
+    chat.state = 'ended';
+    await checkpoint(chat);
+    closed++;
+  };
   for (const chat of [...candidates].sort((a,b) => finishedAt(run,a) - finishedAt(run,b))) {
     const keep = reason => kept.push({area: chat.area, reason});
     try {
@@ -937,17 +939,16 @@ export async function closeFinishedChats(run, ports = {}) {
       if (!ports.force && !chat.closed && (!Number.isFinite(end) || now() < Math.max(end, chat.openedAt ?? 0) + grace)) { keep('grace'); continue; }
       const workspaces = await inventory('workspace'), workspace = workspaces.find(w => w.workspace_id === chat.workspaceId);
       if (!workspace) {
-        // A missing workspace is not a license to close IDs on another server.
-        if (!chat.closed) keep('workspace-absent');
-        else if (!ports.dryRun && !Number.isFinite(chat.closed.confirmedAt)) { chat.closed.confirmedAt = now(); await checkpoint(chat); }
+        // Absence confirms custody without sending a close to any saved ID.
+        await confirmAbsent(chat);
         continue;
       }
       if (!samePath(workspace.worktree?.checkout_path, run.root) || !samePath(workspace.worktree?.repo_key, run.commonDir) || workspace.worktree?.is_linked_worktree !== true)
         { keep('workspace-identity'); continue; }
       const tabs = await inventory('tab', chat.workspaceId), panes = await inventory('pane', chat.workspaceId);
       const tab = tabs.find(t => t.tab_id === chat.tabId), rows = panes.filter(p => p.tab_id === chat.tabId);
-      if (!tab && !rows.length && chat.closed) {
-        if (!ports.dryRun && !Number.isFinite(chat.closed.confirmedAt)) { chat.closed.confirmedAt = now(); await checkpoint(chat); }
+      if (!panes.some(p => p.pane_id === chat.paneId)) {
+        await confirmAbsent(chat);
         continue;
       }
       if (!tab || tab.workspace_id !== chat.workspaceId || rows.length !== 1 || rows[0].workspace_id !== chat.workspaceId ||
@@ -1057,9 +1058,9 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
   const uncertain = () => problem('replacement_pending', `Chat replacement is pending at ${record?.phase ?? 'unknown'}. Retry: pdd workflow open ${run.number} --new. End the run with pdd workflow cancel ${run.number}.`);
   const inventory = async (kind, workspace) => {
     const reply = await herdr([kind, 'list', ...(workspace ? ['--workspace', workspace] : [])]);
-    const rows = reply?.result?.[`${kind}s`];
-    if (reply?.result?.type !== `${kind}_list` || !Array.isArray(rows) || rows.some(row => !row || typeof row[`${kind}_id`] !== 'string' || !row[`${kind}_id`]) || new Set(rows.map(row => row[`${kind}_id`])).size !== rows.length) throw invalid();
-    if (kind !== 'workspace' && rows.some(row => typeof row.workspace_id !== 'string' || !row.workspace_id || kind === 'pane' && ['tab_id', 'terminal_id', 'cwd'].some(key => typeof row[key] !== 'string' || !row[key]))) throw invalid();
+    let rows;
+    try { rows = validateHerdrInventory(reply, kind, workspace); } catch { throw invalid(); }
+    if (kind === 'pane' && rows.some(row => typeof row.cwd !== 'string' || !row.cwd)) throw invalid();
     return rows;
   };
   assertRestartCaller({chat, pending}, ports);

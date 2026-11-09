@@ -1204,18 +1204,22 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
       continue;
     }
     const chat = currentChat(run), state = chatLifecycle(chat); let finishedTurn = false;
-    if (['paused', 'stuck', 'question', 'waiting'].includes(run.state) && chat && !chat.startUnconfirmed && !run.chatFailure
+    const live = ['paused', 'stuck', 'question', 'waiting'].includes(run.state) && chat
+      ? await chatSession(chat, {...ports, run}) : null;
+    const agentHeld = live?.alive && !['idle','done'].includes(live.status);
+    if (live && !chat.startUnconfirmed && !run.chatFailure
       && !(run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))) {
-      const live = await chatSession(chat, ports), now = (ports.now ?? Date.now)();
+      const now = (ports.now ?? Date.now)();
       const own = sessionEvidenceDue(chat, live, now) && !observedSession(chat, chat.agent ?? run.agent)
         ? await ownSession({ run, chat, since: launchAnchor(chat), ports }) : null;
       const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
       finishedTurn = live.alive && live.status === 'done' && validSessionId(chat.session?.id) && validSessionId(live.sessionId) && chat.session.id === live.sessionId && observed.exact;
       // A saved end alone cannot establish current custody; Herdr must also confirm absence.
-      if (!live.alive && ['agent_not_found', 'server_not_running'].includes(live.code)
+      if (!run.parking && !live.alive && ['agent_not_found', 'server_not_running'].includes(live.code)
         && ['ended', 'failed'].includes(observed.state)) continue;
+      if (run.parking) finishedTurn = false;
     }
-    runs.push({ issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId, working: checkHeld || working && !finishedTurn,
+    runs.push({ issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId, working: checkHeld || Boolean(agentHeld) || working && !finishedTurn,
       state: chat?.startUnconfirmed || (state === 'starting' && !finishedTurn) ? 'starting' : ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown', ...(finishedTurn ? { occupied: false } : {}),
       ...(run.state === 'paused' && run.runtimeWait ? { waiting: 'runtime' } : {}) });
   }
