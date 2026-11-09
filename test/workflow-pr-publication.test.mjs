@@ -47,7 +47,17 @@ const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/h
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
 else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName==='topic'?{...found,headRefOid:remote()||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
-else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
+else if(a[0]==='api'&&a[1]==='user')out('publisher');
+else if(a[0]==='api'&&a.some(x=>x.includes('/comments'))&&a.includes('POST')){
+ const body=JSON.parse(fs.readFileSync(0,'utf8')).body,number=(s.comments||[]).length+1;
+ s.events.push({kind:'comment',body});s.comments??=[];
+ if(!s.failComment){s.comments.push({body:s.wrongContent?body+' altered':body,user:{login:s.wrongActor?'other':'publisher'},html_url:'https://github.com/example/project/pull/'+(s.wrongPr?24:23)+'#issuecomment-'+number});
+  if(s.ambiguousComment)s.comments.push({body,user:{login:'publisher'},html_url:'https://github.com/example/project/pull/23#issuecomment-'+(number+1)});
+  if(s.foreignComment)s.comments.push({body,user:{login:'other'},html_url:'https://github.com/example/project/pull/23#issuecomment-'+(number+1)});
+ }
+ fs.writeFileSync(file,JSON.stringify(s));if(s.failComment){process.stderr.write('error: comment failed');process.exit(1)}out('{}');
+}
+else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out(a.includes('--slurp')?[s.comments||[]]:(s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
  const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
@@ -55,6 +65,7 @@ else if(a[1]==='create'||a[1]==='edit'){
  if(kind==='create'){s.prs.push({number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
  else{s.prs.find(p=>p.url===a[2]).body=body;out('updated')}
  fs.writeFileSync(file,JSON.stringify(s));
+ if(kind==='edit'&&s.unknownEdit){process.stderr.write('lost reply');process.exit(1)}
 }else throw Error('unexpected gh '+a.join(' '));
 `;
   writeFileSync(join(bin, 'gh'), fake); chmodSync(join(bin, 'gh'), 0o755);
@@ -73,6 +84,117 @@ else if(a[1]==='create'||a[1]==='edit'){
   return { base, root, bare, git, run, head, runDir, save, invoke, machine, change, data, configure: values => writeFileSync(state, JSON.stringify({ ...data(), ...values })) };
 }
 const allLabels = 'Review: reviewed\nProof (gap closed): regression\nProof (defect fixed): repaired\nNot caught because: missing case\nNot checked: external check\nNot fixed yet: this helps find the cause';
+
+test('2874: a reviewer can recover late cleaned evidence from the same PR', t => {
+  const f = fixture(t, {prompt:true});
+  const late = 'Limitation: upstream failure remains DEFERRED; https://github.com/example/upstream/issues/476';
+  f.run.done.scope.summary = `${'😀 ordinary notes '.repeat(6000)}${late} /home/somebody/private https://runtime.example/s/private-token`;
+  f.save();
+  const result = f.invoke('check complete'); assert.equal(result.exitCode, 0, result.message);
+  const data = f.data(), create = data.events.find(row => row.kind === 'create');
+  const body = data.prs[0].body, indexUrl = /Full step summaries: (https:\/\/[^\s_]+)/.exec(body)?.[1];
+  assert.ok(indexUrl, 'late evidence recovery index must be linked from the PR');
+  assert.match(create.body, /Full step summary recovery is pending/);
+  const index = data.comments.find(row => row.html_url === indexUrl);
+  assert.ok(index, 'the linked index is a confirmed same-PR comment');
+  const chunks = data.comments.filter(row => /:chunk:/.test(row.body));
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) assert.ok(index.body.includes(chunk.html_url));
+  assert.ok(chunks.some(row => row.body.includes(late)), 'late evidence must be available in a recovery chunk');
+  assert.ok(data.comments.every(row => [...row.body].length <= 60000));
+  assert.ok([...body].length <= 60000);
+  assert.doesNotMatch(body, /private-token|\/home\/somebody/);
+  assert.doesNotMatch(data.comments.map(row => row.body).join('\n'), /private-token|\/home\/somebody/);
+});
+
+test('2874: oversized indivisible URL fails before PR or comment publication', t => {
+  const f = fixture(t, {prompt:true});
+  f.run.done.scope.summary = `https://example.com/${'a'.repeat(60001)}`; f.save();
+  const result = f.invoke('check complete');
+  assert.equal(result.exitCode, 1);
+  assert.match(result.message, /recovery cannot be published/i);
+  assert.equal(f.data().events.filter(row => row.kind === 'comment' || row.kind === 'create').length, 0);
+});
+
+test('2874: multiple summaries remain ordered in bounded recovery comments', t => {
+  const f = fixture(t);
+  f.run.done.build.summary = `first build ${'😀 '.repeat(31000)}\nlast build https://github.com/example/upstream/issues/476`;
+  f.run.done.review.summary = `first review ${'review '.repeat(10000)}\nlast review`;
+  f.save(); const result = f.invoke('formal complete'); assert.equal(result.exitCode, 0, result.message);
+  const data = f.data(), indexUrl = /Full step summaries: (https:\/\/[^\s_]+)/.exec(data.prs[0].body)?.[1];
+  const index = data.comments.find(row => row.html_url === indexUrl); assert.ok(index);
+  const links = [...index.body.matchAll(/https:\/\/github\.com\/example\/project\/pull\/23#issuecomment-\d+/g)].map(row => row[0]);
+  const text = links.map(link => data.comments.find(row => row.html_url === link)?.body ?? '').join('\n');
+  assert.ok(text.indexOf('first build') < text.indexOf('last build'));
+  assert.ok(text.indexOf('last build') < text.indexOf('first review'));
+  assert.ok(text.indexOf('first review') < text.indexOf('last review'));
+  assert.ok(text.includes('https://github.com/example/upstream/issues/476'));
+  assert.ok(data.comments.every(row => [...row.body].length <= 60000));
+  assert.match(data.prs[0].body, /build \([\d,]+ characters left out\)/);
+  assert.match(data.prs[0].body, /review \([\d,]+ characters left out\)/);
+});
+
+test('2874: an unconfirmed comment retains the one pending PR and is not resent', t => {
+  const f = fixture(t, {prompt:true});
+  f.run.done.scope.summary = 'ordinary notes '.repeat(5000); f.save(); f.configure({failComment:true});
+  const result = f.invoke('check complete'); assert.equal(result.exitCode, 1);
+  const first = f.data(); assert.equal(first.prs.length, 1); assert.match(first.prs[0].body, /recovery is pending/);
+  const sent = first.events.filter(row => row.kind === 'comment').length; assert.equal(sent, 1);
+  const retry = f.invoke('check complete'); assert.equal(retry.exitCode, 1);
+  const after = f.data(); assert.equal(after.prs.length, 1); assert.equal(after.events.filter(row => row.kind === 'comment').length, sent);
+});
+
+test('2874: a failed update preserves the previously confirmed recovery link', t => {
+  const f = fixture(t, {existing:true,prompt:true});
+  f.run.done.scope.summary = 'new notes '.repeat(8000); f.save();
+  const prs = f.data().prs, previous = `${prs[0].body}\nFull step summaries: https://github.com/example/project/pull/23#issuecomment-42\n`;
+  prs[0].body = previous; f.configure({prs,failComment:true});
+  const result = f.invoke('check complete'); assert.equal(result.exitCode, 1);
+  assert.equal(f.data().prs[0].body, previous);
+  assert.equal(f.data().events.filter(row => row.kind === 'edit').length, 0);
+});
+
+test('2874: duplicate actor comments are ambiguous and cannot establish custody', t => {
+  const f = fixture(t, {prompt:true});
+  f.run.done.scope.summary = 'notes '.repeat(12000); f.save(); f.configure({ambiguousComment:true});
+  const result = f.invoke('check complete'); assert.equal(result.exitCode, 1);
+  assert.match(f.data().prs[0].body, /recovery is pending/);
+  assert.equal(f.data().events.filter(row => row.kind === 'edit').length, 0);
+});
+
+test('2874: matching foreign comments do not make an actor-owned comment ambiguous', t => {
+  const f = fixture(t, {prompt:true});
+  f.run.done.scope.summary = 'notes '.repeat(12000); f.save(); f.configure({foreignComment:true});
+  const result = f.invoke('check complete'); assert.equal(result.exitCode, 0, result.message);
+  const data = f.data(), index = /Full step summaries: (https:\/\/[^\s_]+)/.exec(data.prs[0].body)?.[1];
+  assert.ok(data.comments.some(row => row.html_url === index && row.user.login === 'publisher'));
+});
+
+test('2874: a lost final edit reply is reconciled by reading the same PR', t => {
+  const f = fixture(t, {prompt:true});
+  f.run.done.scope.summary = 'notes '.repeat(12000); f.save(); f.configure({unknownEdit:true});
+  const result = f.invoke('check complete'); assert.equal(result.exitCode, 0, result.message);
+  const data = f.data(); assert.equal(data.events.filter(row => row.kind === 'edit').length, 1);
+  assert.match(data.prs[0].body, /Full step summaries: https:\/\/github\.com\/example\/project\/pull\/23#issuecomment-/);
+});
+
+test('2874: an unconfirmed final edit retains pending and is not blindly resent', t => {
+  const f = fixture(t, {prompt:true});
+  f.run.done.scope.summary = 'notes '.repeat(12000); f.save(); f.configure({failEdit:1});
+  const result = f.invoke('check complete'); assert.equal(result.exitCode, 1);
+  assert.match(f.data().prs[0].body, /recovery is pending/);
+  const retry = f.invoke('check complete'); assert.equal(retry.exitCode, 1);
+  assert.equal(f.data().events.filter(row => row.kind === 'edit').length, 1);
+  assert.equal(f.data().prs.length, 1);
+});
+
+for (const wrong of ['wrongActor','wrongPr','wrongContent']) test(`2874: ${wrong} cannot confirm a recovery comment`, t => {
+  const f = fixture(t, {prompt:true});
+  f.run.done.scope.summary = 'notes '.repeat(12000); f.save(); f.configure({[wrong]:true});
+  const result = f.invoke('check complete'); assert.equal(result.exitCode, 1);
+  assert.match(f.data().prs[0].body, /recovery is pending/);
+  assert.equal(f.data().events.filter(row => row.kind === 'edit').length, 0);
+});
 
 for(const kind of ['349-value move','800 numeric edits','ownership marker','oversized pointer'])test(`2870 review publication: ${kind} stays advisory and reviewable`,t=>{
   const f=fixture(t,{opted:true});mkdirSync(join(f.root,'test/runtime'),{recursive:true});

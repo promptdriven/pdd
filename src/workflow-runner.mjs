@@ -43,6 +43,8 @@ import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinR
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
+import { planSummaryRecovery, summaryRecoveryNotice, SUMMARY_RECOVERY_LINK_RESERVE } from './workflow-summary-recovery.mjs';
+import { publishSummaryRecovery, editSummaryRecoveryBody } from './workflow-summary-custody.mjs';
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
@@ -1368,7 +1370,7 @@ function summaryStart(text, size) {
   else if (/\S/.test(points[size])) kept = kept.replace(/\s+\S*$/, '');
   return kept.trimEnd();
 }
-const SHORTENED = /^_\d+ step summar(?:y was|ies were) shortened to fit the PR size limit: .*\._$/;
+const SHORTENED = /^_\d+ step summar(?:y was|ies were) shortened to fit the PR size limit: .*_$/;
 // The steps of one PR area (those since the previous PR) and their whole summaries after the PR cleaning.
 function prSteps(run, area) {
   const index = run.areas.findIndex(item => item.name === area.name), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
@@ -1612,7 +1614,7 @@ function stackedLine(run, facts) {
 const ownLines = (run, evidence) => evidence.pddLines?.length ? (run.publicationPending ? ['pdd result: publication-pending (source is being published).'] : evidence.pddLines) : [];
 // With `readable` (#3042), the description is the readable part and one closed Details section that holds this whole
 // pdd body; without it (the publication identity), only the pdd body.
-function prBody(run, area, env, drafts = [], tests = true, evidence, readable = null) {
+function prBody(run, area, env, drafts = [], tests = true, evidence, readable = null, recoveryReserve = 0) {
   const steps = prSteps(run, area);
   const raw = Object.fromEntries(steps.map(step => [step, cleanSummary(run, step)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
@@ -1658,7 +1660,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
     ...(!noted && hasReportLink([...lines, ...Object.values(full), ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
   const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
-  const notes = readable?.notes ?? [], budget = BODY_BUDGET - (readable ? characters(readablePrBody(readable.text, notes.join('\n'))) + 2 : 0);
+  const notes = readable?.notes ?? [], budget = BODY_BUDGET - recoveryReserve - (readable ? characters(readablePrBody(readable.text, notes.join('\n'))) + 2 : 0);
   // Room for the full summaries with every summary left out comes first, so a cut is never silent. The top evidence,
   // approvals and verify.md then fit as before, and the full summaries get the room that is left.
   const least = fullSummaries(steps, full, 0);
@@ -1671,6 +1673,26 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   const verifyText = verify === null ? null : balancedDetails(verifyFit(hideLocalPaths(verify, run), budget - 200 - characters(body('', lifted, approvals, least)), env, false, true));
   const inner = withSummaries(steps, full, section => body(verifyText, lifted, approvals, section), budget - 200);
   return readable ? readablePrBody(readable.text, [inner.trimEnd(), ...(notes.length ? ['', ...notes] : [])].join('\n')) : inner;
+}
+
+// Plan before any publication effect. The reserve covers the eventual index URL
+// even when the initial body must truthfully say recovery is still pending.
+function summaryRecoveryPlan(run, area, body) {
+  if (!/^_\d+ step summar(?:y was|ies were) shortened to fit the PR size limit: .*\. The PR author has the full summaries in the run folder\._$/m.test(body)) return null;
+  const rows = prSteps(run, area).map(step => ({ step, text: keepLines(cleanSummary(run, step)) }));
+  return planSummaryRecovery(run.runId, rows);
+}
+function summaryRecoveryBody(body, link = null) {
+  const result = body.replace(/(^_\d+ step summar(?:y was|ies were) shortened to fit the PR size limit: .*\. )(?:The PR author has the full summaries in the run folder\.|Full step summary recovery is pending\.)(?=_$)/m, (_, prefix) => prefix + summaryRecoveryNotice(link));
+  if (characters(result) > BODY_BUDGET) throw Error('The full-summary recovery notice exceeds the PR body budget.');
+  return result;
+}
+function renderRecoveryBody(run, area, env, drafts, tests, evidence, readable) {
+  let body = prBody(run, area, env, drafts, tests, evidence, readable);
+  if (!summaryRecoveryPlan(run, area, body)) return { body, plan: null };
+  body = prBody(run, area, env, drafts, tests, evidence, readable, SUMMARY_RECOVERY_LINK_RESERVE + 100);
+  const plan = summaryRecoveryPlan(run, area, body);
+  return { body: summaryRecoveryBody(body), plan };
 }
 
 // GitHub refuses a PR title over 256 characters; the GitHub intent checks its UTF-16 length. The issue title stays whole
@@ -1795,14 +1817,22 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   };
   const markedReplayBody = (replay, pending = false, readable = null) => {
     const evidence = pending ? { ...prepared, lines: ['Check evidence: publication-pending (source is being published).', ...prepared.lines.map(line => line.startsWith('Old-code proof:') ? 'Old-code proof: publication-pending (source is being published).' : line)] } : prepared;
-    const body=prBody({...run,replayEvidence:replay,publicationPending:pending},area,p.env,bodyDrafts,bodyTests,evidence,readable);
+    const {body,plan}=renderRecoveryBody({...run,replayEvidence:replay,publicationPending:pending},area,p.env,bodyDrafts,bodyTests,evidence,readable);
     if(body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
-    return body+`\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`;
+    return {body:body+`\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`,plan};
+  };
+  const confirmRecovery = async (rendered, pr) => {
+    if (!rendered.plan) return rendered.body;
+    const link = await publishSummaryRecovery({run,pr,plan:rendered.plan}, {execFile:p.execFile});
+    return summaryRecoveryBody(rendered.body, link);
   };
   const editReplay = async (body,afterPush=false,informational=false) => {
     try {
-      const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file','-'],{cwd:run.root,input:body});
-      if(reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr||'gh pr edit failed'),{stderr:reply.stderr,code:reply.code});
+      if (body.includes('Full step summaries: ') || existsSync(join(run.runDir, `summary-recovery-${existing.number}.json`))) await editSummaryRecoveryBody({run,pr:existing,body},{execFile:p.execFile});
+      else {
+        const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file','-'],{cwd:run.root,input:body});
+        if(reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr||'gh pr edit failed'),{stderr:reply.stderr,code:reply.code});
+      }
     } catch(error) {if(informational)return fail(causeOf(error));return fail([...lines,`The code-space PR description could not be updated (${causeOf(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${retry}.`].join('\n'));}
     return null;
   };
@@ -1824,7 +1854,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     }
     if (!inventoryOnly) {
       let pending;
-      try { const replay={...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'};pending=markedReplayBody(replay,true,await readableFor(prepared,{pending:true,replay})); }
+      try { const replay={...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'};pending=await confirmRecovery(markedReplayBody(replay,true,await readableFor(prepared,{pending:true,replay})),existing); }
       catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n')); }
       const failed=await editReplay(pending);if(failed)return failed;
@@ -1845,7 +1875,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
       // CI and the checker are read for the pushed head; a code PR also reads PR 1's state and CI (readableFacts).
       const published = await publishedChecks(run, existing, codePr ? run.testInventory.headSha : promptHead, p), readable = await readableFor(prepared,{published});
       finalFacts = readable.facts;
-      finalBody=markedReplayBody(run.replayEvidence,false,readable);
+      finalBody=await confirmRecovery(markedReplayBody(run.replayEvidence,false,readable),existing);
     }
     catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `${oneLine(error.message)} Source was pushed; the PR stays publication-pending. ${retry}.`].join('\n')); }
@@ -1875,8 +1905,8 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   const base = bodyBase;
   // PR 1 says "tests" only when it has a test file (0.1.6 tester: a browser-only Story had none).
   const tests = bodyTests;
-  let body, readable;
-  try { readable = await readableFor(prepared); body = prBody(run, area, p.env, bodyDrafts, tests, prepared, readable); }
+  let body, readable, recovery;
+  try { readable = await readableFor(prepared); recovery = renderRecoveryBody(run, area, p.env, bodyDrafts, tests, prepared, readable); body = recovery.body; }
   catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n')); }
   let intent;
@@ -1898,7 +1928,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     // intent was validated, including its native journal evidence.
     prepared = await publicationEvidence(run, area, p);
     readable = await readableFor(prepared);
-    body = prBody(run, area, p.env, bodyDrafts, tests, prepared, readable);
+    recovery = renderRecoveryBody(run, area, p.env, bodyDrafts, tests, prepared, readable); body = recovery.body;
     const changed = await automatic.validate(); if (changed) return changed;
   }
   const outcome = await publishWorkflowPr({ cwd: run.root, intent, body: `${body}\n<!-- ${intent.marker} -->\n`, draft: run.draft ?? false }, p.commandPorts);
@@ -1908,10 +1938,22 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
   const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
+  // Save the confirmed identity before supplementary writes. A retry must use
+  // this same PR even if comment publication or its final edit is uncertain.
+  if (recovery.plan) {
+    const applyPending = publicationUpdate(run,codePr?['testInventory']:[]);
+    commitRun(run,p,latest=>{applyPending(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
+    try {
+      const confirmed = await confirmRecovery({body:`${body}\n<!-- ${intent.marker} -->\n`,plan:recovery.plan},published);
+      await editSummaryRecoveryBody({run,pr:published,body:confirmed},{execFile:p.execFile});
+    } catch (error) {
+      return fail([...lines, `The PR is open, but full-summary recovery remains unconfirmed (${causeOf(error)}). ${retry}.`].join('\n'));
+    }
+  }
   rememberPublication(published,outcome.pr);
   if (commitSha(published.publishedHeadSha)) published.readable = savedReadable(readable.facts, published.publishedHeadSha);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
-  commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
+  commitRun(run,p,latest=>{applyPublication(latest);const saved=latest.pr.find(pr=>pr.url===published.url&&pr.stage===published.stage);if(saved)Object.assign(saved,published);else latest.pr.push(published);});
   // PR 1's Next line now links PR 2 (#3042). A failure there only warns.
   const ask = askArea(run), pr1 = codePr && ask && prOf(run, ask.name);
   if (pr1) {
@@ -2645,11 +2687,22 @@ async function draftDescription(run, pr1, drafts, p) {
     const leading = opening + [...lifted, ...(lifted.length ? [''] : []), ...ordinaryTop, ...(ordinaryTop.length ? [''] : []), evidence.issueReference, '', ...approvals, ...(approvals.length ? [''] : []), ''].join('\n');
     const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
     const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
-    const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
+    let nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
+    if (summaryRecoveryPlan(run, area, nextBody)) {
+      nextBody = withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET - SUMMARY_RECOVERY_LINK_RESERVE - 100);
+      const plan = summaryRecoveryPlan(run, area, nextBody);
+      // Never replace the current body until the complete new copy and index
+      // have both been confirmed on this same PR.
+      const link = await publishSummaryRecovery({run,pr:pr1,plan},{execFile:p.execFile});
+      nextBody = summaryRecoveryBody(nextBody, link);
+    }
     // Only the time of the status line changed: nothing to write.
     if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return []; }
-    const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
-    if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
+    if (nextBody.includes('Full step summaries: ') || existsSync(join(run.runDir, `summary-recovery-${pr1.number}.json`))) await editSummaryRecoveryBody({run,pr:pr1,body:nextBody},{execFile:p.execFile});
+    else {
+      const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
+      if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
+    }
     remember();
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
