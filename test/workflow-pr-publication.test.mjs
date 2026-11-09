@@ -122,7 +122,8 @@ test('2874: multiple summaries remain ordered in bounded recovery comments', t =
   f.run.done.review.summary = `first review ${'review '.repeat(10000)}\nlast review`;
   f.save(); const result = f.invoke('formal complete'); assert.equal(result.exitCode, 0, result.message);
   const data = f.data(), indexUrl = /Full step summaries: (https:\/\/[^\s_]+)/.exec(data.prs[0].body)?.[1];
-  const index = data.comments.find(row => row.html_url === indexUrl); assert.ok(index);
+  assert.ok(Array.isArray(data.comments), 'recovery comments must exist');
+  const index = data.comments.find(row => row.html_url === indexUrl); assert.ok(index, 'recovery index comment must exist');
   const links = [...index.body.matchAll(/https:\/\/github\.com\/example\/project\/pull\/23#issuecomment-\d+/g)].map(row => row[0]);
   const text = links.map(link => data.comments.find(row => row.html_url === link)?.body ?? '').join('\n');
   assert.ok(text.indexOf('first build') < text.indexOf('last build'));
@@ -167,6 +168,7 @@ test('2874: matching foreign comments do not make an actor-owned comment ambiguo
   f.run.done.scope.summary = 'notes '.repeat(12000); f.save(); f.configure({foreignComment:true});
   const result = f.invoke('check complete'); assert.equal(result.exitCode, 0, result.message);
   const data = f.data(), index = /Full step summaries: (https:\/\/[^\s_]+)/.exec(data.prs[0].body)?.[1];
+  assert.ok(Array.isArray(data.comments), 'actor-owned recovery comments must exist');
   assert.ok(data.comments.some(row => row.html_url === index && row.user.login === 'publisher'));
 });
 
