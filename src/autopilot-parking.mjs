@@ -52,16 +52,18 @@ export function blockerFor(run) {
   if (ended(run)) return null;
   if (run.blockedOn) return run.blockedOn;
   if (run.runtimeWait) return {kind: 'interpreter', until: null};
-  if (!stopped(run) && !run.parking) return null;
+  if (!stopped(run) && !run.parking && !run.gate && !(run.question && !run.question.answeredAt)) return null;
   const question = run.question && !run.question.answeredAt;
   const reason = question ? String(run.question.text ?? '') : reasonFor(run);
   const dependency = /(?:waiting|blocked) (?:for|on|by) (?:issue )?#([1-9][0-9]*) (?:to )?merge/i.exec(reason);
   if (dependency) return {kind: 'dependency', until: dependency[1]};
+  const chat = [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
+  const resumedQuestion = !stopped(run) && !run.parking && question && Number.isFinite(chat?.resumedAt) && chat.resumedAt >= run.question.at;
   if (/(?:missing|wait(?:ing)?|needs?|no supported).*#2897/i.test(reason)
     || /(?:no supported|missing|installed PDD has no).*PR\s*1.*(?:current[- ]main|integration|re-entry)/i.test(reason)
-    || /supported native recovery.*PR\s*1/i.test(reason)) return {kind: 'pdd', until: '#2897'};
+    || /supported native recovery.*PR\s*1/i.test(reason)) return resumedQuestion ? null : {kind: 'pdd', until: '#2897'};
   const fix = /missing PDD (?:feature|bug|fix).*?#([1-9][0-9]*)/i.exec(reason);
-  if (fix) return {kind: 'pdd', until: `#${fix[1]}`};
+  if (fix) return resumedQuestion ? null : {kind: 'pdd', until: `#${fix[1]}`};
   const route = routeQuestionFor(run);
   if (route) return {kind: 'pdd-route', until: route.until};
   if (question) return {kind: 'person', until: null};
@@ -75,6 +77,15 @@ export function blockerFor(run) {
   if (environmentRecovery(run)) return {kind: 'environment', until: null};
   if (run.state === 'waiting' && run.pr?.length) return {kind: 'ci', until: run.pr.at(-1).url};
   return null;
+}
+export function idleSince(run) {
+  return Math.max(...[[run.progressAt, run.updatedAt, run.startedAt, 0].find(Number.isFinite),
+    run.gate?.at, run.question && !run.question.answeredAt ? run.question.at : null,
+    run.chatIdleLimit?.at, run.chatResumeLimit?.at].filter(Number.isFinite));
+}
+export function idleParkingBlocker(run, now, graceMs = 60_000) {
+  if (ended(run) || now < idleSince(run) + graceMs) return null;
+  return blockerFor(run) ?? (stopped(run) ? {kind: 'unknown', until: null} : null);
 }
 const label = blocker => blocker?.kind === 'pdd-route' ? 'missing PDD route' : blocker?.kind === 'dependency' ? `needs #${blocker.until}`
   : blocker?.kind === 'pdd' ? `needs ${blocker.until}` : blocker?.kind ?? 'unknown';
@@ -107,16 +118,18 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     const saved = blockerFor({...run, parking: undefined});
     // Native check/limit evidence can refine a generic gate; explicit named waits win.
     const observed = !saved || saved.kind === 'person' ? await ports.observeBlocker?.(run) : null;
-    // Recovery ceilings retain their own alert/retry custody. A bare pause is
-    // deliberate; neither state alone establishes another parking incident.
-    if (!saved && !observed && !run.parking && (run.chatIdleLimit || run.chatResumeLimit
-      || run.state === 'paused' && !run.parkReason && !run.stuckCause)) continue;
-    const blocker = observed ?? saved ?? run.parking?.blocker ?? (stopped(run) ? {kind: 'unknown', until: null} : null);
+    // Unclassified stops also release native resources after a short grace.
+    // Their original recovery counters and alert custody survive the park.
+    const graceHold = run.chatIdleLimit || run.chatResumeLimit || run.state === 'paused' && !run.parkReason && !run.stuckCause;
+    if (run.parking?.phase === 'closing' && !saved && !observed
+      && (!stopped(run) || graceHold && !idleParkingBlocker(run, ports.now()))) continue;
+    const blocker = observed ?? saved ?? run.parking?.blocker
+      ?? (stopped(run) && !graceHold ? {kind: 'unknown', until: null} : idleParkingBlocker(run, ports.now()));
     if (!blocker && !run.parking) continue;
     const progress = await ports.checkProgress(run);
     if (progress && !run.parking) continue;
     await ports.park(run, blocker ?? run.parking.blocker);
-    if (blocker?.kind === 'unknown') {
+    if (blocker?.kind === 'unknown' && !run.chatIdleLimit && !run.chatResumeLimit && run.state !== 'paused') {
       const key = JSON.stringify([run.runId, run.parkReason ?? null, run.question ?? null]);
       state.parkingAlerts ??= {};
       if (!state.parkingAlerts[key] && await ports.alertUnknown?.(run) === true) state.parkingAlerts[key] = true;

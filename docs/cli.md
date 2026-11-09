@@ -904,6 +904,14 @@ expires after 31 minutes without a refresh. Standalone checks then probe current
 machine capacity with default limits. Another active repository's snapshot is
 retained when a different repository stops.
 
+Idle automatic runs release their chat process and panes through parking. This
+includes stuck runs, person waits, and stopped recovery attempts. Bare pauses and recovery
+ceilings without a named blocker get a 60-second grace period. Saved sessions, worktrees and claims stay.
+A continuation uses the saved session in a new pane. Before pane admission fails,
+pdd tries the oldest idle automatic runs with zero grace. Active or uncertain
+checks and workspaces without a saved creation record prevent cleanup. Personal
+workspaces stay open and are listed for manual inspection.
+
 `pdd autopilot status` reports calculated and chosen checks and runs, and
 `check slots: B busy of S, W waiting, cores per check C`. These are the shared
 admission limits, including another repository's active override. Status uses

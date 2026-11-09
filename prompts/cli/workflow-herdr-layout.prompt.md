@@ -108,6 +108,10 @@ unknown occupancy refuses with `run_shell_unknown`. `ports.force:true` permits
 explicit cancellation to bypass occupancy checks only. Check these guards and
 ownership both before saving close intent and again after its awaited checkpoint,
 immediately before the close effect. Failed checkpoints send no close.
+After all final native inspections, await optional `ports.beforeClose()` immediately
+before `workspace close`, so the caller can revalidate workflow progress, authority
+and check custody. A rejection propagates unchanged and sends no close; retain
+the saved close intent for a safe retry. With no callback, preserve existing cleanup.
 
 Save `layout.phase = "close_intent"` before the request and `"closed"` after
 documented acknowledgement and complete valid inventory proving absence. A
