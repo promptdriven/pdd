@@ -17,6 +17,28 @@ const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.str
 const launches = f => f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run');
 const deliveries = f => f.herdr.calls.filter(args => args[0] === 'agent' && args[1] === 'prompt');
 
+for (const [kind,field] of [['interface-missing','/interface'],['undefined-call-bound','/limits/max_model_calls'],['undefined-call-bound','/calls/0/max_calls'],['recursive-call-bound','/calls']])
+  test(`3114 repair: local ${kind} ${field} cannot become an interpreter blocker or park`, async t => {
+    const {f,tick,ports,stateFile} = await setup(t);
+    fullTicks(f,stateFile,ports);
+    const held=f.record(),batch='20261101-120000-abcd';
+    const reason={code:'check-plan-prerequisite',message:`Repair ${kind}: value.prompt.md ${field}; run a fresh pdd test.`};
+    const rows=[{test:'tests/value.json',story:'value',state:'not run',reason,unsent:true,calls:0,request_ids:[]}];
+    const folder=join(f.ports.env.HOME,'.pdd/runtime/batches',batch);mkdirSync(folder,{recursive:true});
+    writeFileSync(join(folder,'batch.json'),JSON.stringify({version:1,batch,root:held.root,intent:'check',created_at:new Date(f.clock).toISOString(),rows}));
+    writeFileSync(join(folder,'summary.json'),JSON.stringify({batch,rows}));
+    ports.readRunResults=()=>[{kind:'pdd test',batch,at:f.clock,states:rows,summary:reason.message}];
+    held.state='waiting';held.gate={kind:'approve-pr',area:held.areas[held.area].name};held.done.check='Local full check blocked';save(f,held);
+    const before=f.record();
+    const refused=await parkAutomaticRun({runtime:true,reason:reason.message,cwd:held.root},{...f.agentPorts(),readRunResults:ports.readRunResults});
+    assert.equal(refused.exitCode,1,'3114_LOCAL_PARK_ACCEPTED');
+    assert.deepEqual(f.record(),before);
+    await tick();
+    assert.notEqual(f.record().parking?.blocker?.kind,'interpreter','3114_LOCAL_BLOCKER_MISCLASSIFIED');
+    assert.equal(f.record().runtimeWait,undefined);
+    assert.equal(f.record().parking?.interpreterWait,undefined);
+  });
+
 test('3091 repair 2 person park becomes one stable inferred interpreter wait', async t => {
   const {f, tick, ports, stateFile, warnings} = await setup(t);
   fullTicks(f, stateFile, ports);

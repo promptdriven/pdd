@@ -1,5 +1,6 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d2d1a5200bcdfaa937010139e919cf5b86ce9fe6ed26c5c63d55bd315805af9f).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 052509645626cb536e8213d1c9791d35bae95c2316184e1a22b0c18d57bea0ae).
+import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -1290,24 +1291,6 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
   row.seconds = !ENDED.has(row.state) ? null : row.sent_at && row.ended_at ? (row.ended_at - row.sent_at) / 1000 : row.server_seconds;
 }
 
-// Declared operations estimate possible work; conditional branches may use fewer calls. Caps stay authoritative.
-function costLine(rows, root, visible) {
-  const prompts = new Map();
-  const cost = (path, seen = new Set()) => {
-    if (seen.has(path)) return 0;
-    if (!prompts.has(path)) prompts.set(path, readPrompt(root, visible, path));
-    const iface = prompts.get(path)?.interface;
-    if (!iface) return 1;
-    const next = new Set([...seen, path]);
-    const resources = (iface.resources ?? []).reduce((sum, resource) => sum + (Array.isArray(resource.operations) ? resource.operations.length : 0), 0);
-    const calls = (iface.calls ?? []).reduce((sum, call) => sum + (Number.isInteger(call?.max_calls) ? call.max_calls : 0) * cost(call?.target, next), 0);
-    return 1 + resources + calls;
-  };
-  const most = rows.reduce((sum, row) => sum + row.max_calls, 0);
-  const about = Math.min(most, rows.reduce((sum, row) => sum + row.steps.reduce((steps, step) => steps + cost(step?.entry_path), 0), 0));
-  return `Checking all ${rows.length} ${rows.length === 1 ? 'story' : 'stories'}: about ${about} AI call${about === 1 ? '' : 's'} (at most ${most}).`;
-}
-
 function nativeSourceIdentity(context, rows) {
   const tests = rows.filter(row => row.native_only?.length).map(row => row.test);
   if (!tests.length) return null;
@@ -1330,7 +1313,7 @@ function saveLocalNativeResult(context, rows, intent, problems = []) {
 
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
-  return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
+  return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     ...(context.singleAttempt ? {single_attempt:true} : {}),
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
@@ -1350,6 +1333,7 @@ function batchRecord(context) {
       ...(row.accounting_complete !== undefined ? { accounting_complete: row.accounting_complete } : {}), ...(row.capacity_uncertain ? { capacity_uncertain: true } : {}),
       busy_request_id: row.busy_request_id ?? null, busy_observed_at: row.busy_observed_at ?? null, capacity_until: row.capacity_until ?? null,
       engine_sha: row.engine_sha ?? null, requested_model: row.requested_model ?? null, cache_identity: row.cache_identity ?? null,
+      ...(row.cached ? {cached:true,passed_at:row.passed_at,checks:row.checks,criteria:row.criteria} : {}),
       ...(row.cache_reason ? { cache_reason: row.cache_reason } : {}), criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
 }
 
@@ -1851,13 +1835,18 @@ function printResult(context, rows, extra = {}) {
   }
   markDeadline(context, rows);
   rows = rows.map(row => heldForLint(row) && !row.dispatchIncomplete ? { ...row, calls: 0 } : row);
-  const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
+  const { ports } = context, exitCode = context.localOnly && context.checkPlan?.full && context.checkPlan.prerequisites.length ? 4
+    : exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
   const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the interpreter engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
   const coverage = exitCode === 5 && context.coverage?.runtime?.native_only === 0
     ? Object.fromEntries(Object.entries(context.coverage).filter(([key])=>key !== 'runtime')) : context.coverage;
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage, rows, exitCode, summaryLine: context.noFailed ? 'No failed Stories. 0 AI calls.' : summaryLine(rows),
     warnings: [...new Set([...warnings, ...(context.unmatched ?? [])]), ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
+  if (context.checkPlan) {
+    summary.check_plan = context.checkPlan;
+    summary.check_scope = checkPlanResults(context.checkPlan, rows);
+  }
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
   if (context.batch && rows.some(row => row.can_retry)) line(ports.stderr, `Retry only unstarted checks with: pdd test --retry ${context.batch}`);
   if (context.readStop) line(ports.stderr, context.readStop);
@@ -1867,6 +1856,7 @@ function printResult(context, rows, extra = {}) {
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
   else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, coverage: context.coverage, warnings, details: context.details, timeoutMin: context.timeoutMin,
     now: ports.now(), noFailed: context.noFailed, interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
+  if (!context.json) for (const value of checkPlanResultLines(summary.check_scope)) line(ports.stdout, scrub(value));
   // At the time limit the jobs keep running on the server.
   if (exitCode === 3 && context.batch) line(ports.stderr, context.timedOut ? `Still running. Read the results later with: pdd test --read ${context.batch}`
     : `If pdd stops, read the results with: pdd test --read ${context.batch}`);
@@ -2284,9 +2274,11 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (row.recovery_state !== undefined) { row.state = row.recovery_state; delete row.reason; }
   }
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
+  context.checkPlan = saved.check_plan ?? null;
   if (saved.local_only === true && saved.rows.length && saved.rows.every(row => row.unsent && ['refused','not_run'].includes(row.state) && !row.request_ids?.length)) {
     Object.assign(context,{localOnly:true,batch:name,intent:saved.intent,coverage:saved.coverage,rows:saved.rows,warnings:saved.warnings ?? [],
       capture:{sha256:saved.source_sha256},startedAt:Date.parse(saved.created_at),lint:saved.lint});
+    if (quiet) return saved.rows;
     return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,saved.lint?.problems ?? []) : printResult(context,saved.rows);
   }
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
@@ -2296,7 +2288,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
-  const rows = saved.rows.map(row => ({ ...row, why: ['refused', 'not_run', 'unknown'].includes(row.state) && row.why === 'Checks failed.' ? null : row.why, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: null, failed_checks: [], all_checks: [] }));
+  const rows = saved.rows.map(row => ({ ...row, why: ['refused', 'not_run', 'unknown'].includes(row.state) && row.why === 'Checks failed.' ? null : row.why, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: row.cached ? row.checks : null, failed_checks: [], all_checks: [] }));
   const candidates = rows.filter(row => heldForLint(row));
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
   const evidence = candidates.map(row => ({ row, hadCalls: Object.hasOwn(row, 'calls'), calls: row.calls }));
@@ -2421,6 +2413,7 @@ async function runRetry(context, name, options) {
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
   if (context.intent !== undefined && context.intent !== 'check') throw new Stop(2, 'The saved batch has no Check intent. Start a fresh selected pdd test.');
+  if (context.localOnly) return () => printResult(context, rows);
   if (context.interrupted || ports.now() >= context.deadline) return () => printResult(context, rows);
   const capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd test instead.');
@@ -3220,6 +3213,24 @@ async function runBatch(context, cwd, words, options, setRelease) {
       ...(row.not_checked??[]).map(item=>[item.criterion_id,item.text])]);
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
+  const runs = allRuns({cancelled:true}, {env:ports.env}).filter(run => {
+    try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
+  });
+  context.checkPlan = buildCheckPlan({root,found,selected,rows,full:words.length === 0,
+    base:runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD'});
+  for (const value of checkPlanLines(context.checkPlan)) line(ports.stderr, value);
+  if (!words.length && context.checkPlan.prerequisites.length) {
+    const note = {code:'check-plan-prerequisite',message:checkPlanResults(context.checkPlan,rows).guidance};
+    for (const row of rows) {
+      if (row.state === 'ready') Object.assign(row,{state:'not_run',calls:0,phase:'local'});
+      if (row.state !== 'passed') row.note = note;
+    }
+    context.warnings.push('Full check blocked by a check-plan prerequisite. 0 AI calls. No checks were sent.');
+    saveLocalNativeResult(context,rows,'check');
+    printResult(context,rows);
+    return 4;
+  }
+
   context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible));
   context.unmatched = unmatchedLines(found);
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
@@ -3238,7 +3249,6 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.testCache = cache;
   const fresh = rows.filter(row => !row.cached);
   if (!fresh.some(row => row.state === 'ready')) return printResult(context, rows);
-  if (!words.length) line(ports.stderr, costLine(fresh.filter(row => row.state === 'ready'), root, found.visible));
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   let identity;
   try { identity = signIn(ports.gh, context.store); }
@@ -3253,7 +3263,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   }
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  Object.assign(context, { capture, identity, batch, startedAt, deadline: Infinity, rows: fresh,
+  Object.assign(context, { capture, identity, batch, startedAt, deadline: Infinity, rows,
     intent: 'check', head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
   setRelease(interruptible(context));
@@ -3279,7 +3289,6 @@ async function runBatch(context, cwd, words, options, setRelease) {
         if (options['--max-calls'] !== undefined) row.max_calls = Number(options['--max-calls']);
       }
       await beginTestAttempts(cache, rerun, capture, options, origin, true);
-      context.rows.push(...rerun);
       const stopReason = context.interrupted ? 'interrupted' : context.readStop ? 'reading stopped'
         : ports.now() >= context.deadline ? 'time limit reached' : context.stopped ? 'stopped' : null;
       if (stopReason) {
