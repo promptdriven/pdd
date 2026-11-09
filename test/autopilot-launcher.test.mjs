@@ -33,11 +33,22 @@ async function fixture(t, options = {}) {
     warn: text => { (f.warnings ??= []).push(text); },
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
     pathDiagnostic: () => [],
-    run: async (command, args) => {
+    run: async (command, args, options = {}) => {
       f.runs.push([command, args]);
       if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"trunk"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
+      if (command === 'gh' && args[0] === 'api' && args.includes('graphql')) {
+        const {query,variables} = JSON.parse(options.input ?? '{}');
+        if (typeof query === 'string' && !/\bmutation\b/.test(query)) {
+          const rows = {};
+          for (const [name,number] of Object.entries(variables ?? {})) if (/^n\d+$/.test(name)) {
+            const row = f.issues.find(row=>row.number===number);
+            rows[`i${name.slice(1)}`] = row ? {url:row.html_url,number:row.number,labels:{nodes:row.labels.map(label=>({name:typeof label==='string'?label:label.name})),pageInfo:{hasNextPage:false}}} : null;
+          }
+          return {code:0,stdout:JSON.stringify({data:{repository:rows}}),stderr:''};
+        }
+      }
       if (command === 'gh' && args[0] === 'api' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9]\d*$/.test(args.find(arg => String(arg).startsWith('repos/')) ?? '')) {
         const number = Number(args.find(arg => String(arg).startsWith('repos/')).split('/').at(-1));
         return {code:0,stdout:'HTTP/2.0 200 OK\r\n\r\n'+JSON.stringify(f.issues.find(row => row.number === number) ?? {number,labels:[]}),stderr:''};
@@ -448,6 +459,7 @@ test('native HTTP tick uses ETags and revalidates cached later pages, including 
     if (command === 'gh' && args[0] === 'api' && args.includes('--include')) {
       const endpoint = args.find(arg => String(arg).startsWith('repos/'));
       if (/\/issues\/31$/.test(endpoint ?? '')) return {code:0,stderr:'',stdout:'HTTP/2.0 200 OK\r\n\r\n'+JSON.stringify(issue(31))};
+      if (!/^repos\/owner\/repo\/issues\?/.test(endpoint ?? '')) return run(command,args,opts);
       queries.push(args);
       const second = args[4]?.includes('page=2');
       if (phase === 0) return { code: 0, stderr: '', stdout: second
