@@ -581,6 +581,12 @@ On a full pass, publish PR 1 through the existing `automatic-check-pass` route,
 with no words or AI decision. Its evidence basis also records `origin:"automatic"`
 and the admitted `automaticOrigin` tuple. Recheck current scope and strict policy
 before preparation and authorization, and winning custody before authorization.
+Guard progress against the latest saved run before approval writes, Git mutations
+and PR publication effects. Require the same run, area, gate, automatic origin
+and Story approval coverage, with the waiting state and all eligibility guards
+above still satisfied. Cancellation, a new person question or another eligibility
+change during preparation or publication stops further effects and preserves the
+saved blocker. The run lock alone does not exclude cancellation or questions.
 Preserve prepared-source validation, rollback and retry behavior of that route.
 Do not reuse normal-run card code-or-stop behavior: leave the existing `ask-code`
 gate and its scoped automatic handoff for the coordinator. Do not start code,

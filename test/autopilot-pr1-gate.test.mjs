@@ -8,10 +8,11 @@ import {automaticFixture} from './helpers/autopilot-run-base-fixture.mjs';
 import {packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
-import {approveRun, runStatus, stepDone} from '../src/workflow-runner.mjs';
+import {approveRun, runStatus, stepDone, cancelRun, askPerson} from '../src/workflow-runner.mjs';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
 import {captureSource} from '../src/runtime-preflight.mjs';
 import {renderJson} from '../src/runtime-output.mjs';
+import {readPromptApprovals} from '../src/approval-policy.mjs';
 
 const STORY = 'user_stories/place-order.md', TEST = 'tests/place-order.json', PROMPT = 'prompts/place_order.prompt.md';
 let batches = 0;
@@ -154,4 +155,48 @@ for (const kind of ['strict', 'scope', 'custody', 'Story']) test(`#3099 publicat
   await f.scan();
   assert.equal(changed, true, 'the control must reach publication preparation');
   assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0); assert.equal(f.record().decisions.length, decisions);
+});
+
+for (const boundary of ['preparation', 'pre-push', 'post-push'])
+for (const kind of ['cancelled', 'question']) test(`#3099 ${kind} during ${boundary} stops further publication`, async t => {
+  const f = await setup(t);
+  const path = join(f.run.root, PROMPT);
+  writeFileSync(path, readFileSync(path, 'utf8').replace(/"status":\s*"approved"/, '"status":"draft"'));
+  f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Synthetic checked draft');
+  saveCheck(f);
+  const before = f.record(), original = f.tickPorts.execFile;
+  const approvals = () => readPromptApprovals({commonDir: before.commonDir}, f.automaticPorts);
+  const beforeApprovals = approvals(), checkedPrompt = readFileSync(path, 'utf8');
+  const command = {preparation: 'commit', 'pre-push': 'ls-remote', 'post-push': 'push'}[boundary];
+  let changed = false, blocker, blockerApprovals;
+  f.tickPorts.execFile = async (file, args, opts) => {
+    const result = await original(file, args, opts);
+    if (!changed && file === 'git' && args[0] === command) {
+      changed = true; f.tick();
+      const action = kind === 'cancelled'
+        ? await cancelRun({ref: '17', cwd: f.source}, f.automaticPorts)
+        : await askPerson({text: 'Which product scope?', cwd: f.run.root}, f.automaticPorts);
+      assert.equal(action.exitCode, 0, action.message);
+      blocker = f.record();
+      blockerApprovals = approvals();
+    }
+    return result;
+  };
+  await f.scan();
+  assert.equal(changed, true, 'the race must reach its publication boundary');
+  assert.equal(f.prs.length, 0, 'a saved blocker must prevent PR creation');
+  assert.equal(f.pushes.length, boundary === 'post-push' ? 1 : 0, 'a saved blocker must prevent further pushes');
+  const after = f.record();
+  if (boundary === 'preparation') {
+    assert.deepEqual(blocker.decisions, before.decisions);
+    assert.deepEqual(blockerApprovals, beforeApprovals);
+    assert.equal(readFileSync(path, 'utf8'), checkedPrompt, 'unrecorded prompt approval edits must be restored');
+  }
+  assert.deepEqual(approvals(), blockerApprovals);
+  assert.deepEqual(after.decisions, blocker.decisions, 'a saved blocker must prevent further automatic approval');
+  assert.deepEqual(after.approvalRecord, blocker.approvalRecord);
+  assert.equal(after.state, blocker.state);
+  assert.deepEqual(after.cancelled, blocker.cancelled);
+  assert.deepEqual(after.question, blocker.question);
+  assert.deepEqual(after.gate, blocker.gate);
 });

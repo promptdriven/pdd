@@ -187,7 +187,7 @@ function commitRun(run, p, update) {
   return run;
 }
 // Revalidate command authority at local commits and before consequential effects.
-function protectProgress(run,p,{approval=false}={}) {
+function protectProgress(run,p,{approval=false,validate}={}) {
   const selectedState=run.state,selectedGate=structuredClone(run.gate ?? null),selectedArea=run.area;
   const check=latest=>{
     if (latest.parking?.phase === 'releasing') throw Object.assign(Error('This parked run is releasing its claim. Wait for release to finish.'), {code: 'workflow_progress_refused'});
@@ -195,6 +195,7 @@ function protectProgress(run,p,{approval=false}={}) {
       throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`),{code:'workflow_progress_refused'});
     if(approval && (latest.area!==selectedArea || Boolean(latest.gate)!==Boolean(selectedGate) || (selectedGate?.id && latest.gate?.id!==selectedGate.id) || ['area','kind','at'].some(key=>latest.gate?.[key]!==selectedGate?.[key])))
       throw Object.assign(Error('The gate changed, look again.'),{code:'workflow_progress_refused'});
+    validate?.(latest);
   };
   p.progressGuard=check;
   const inspect=()=>{const latest=readRun(run.runDir);if(!latest||runIdentity(latest)!==runIdentity(run))throw Object.assign(Error('The selected workflow run is missing or was replaced'),{code:'workflow_progress_refused'});check(latest);};
@@ -206,7 +207,7 @@ function protectProgress(run,p,{approval=false}={}) {
   };
   p.commandPorts={...p.commandPorts,execFile:p.execFile};
   p.herdr=async args=>{if(['create','run','prompt'].includes(args[1]))inspect();return herdr(args);};
-  return ()=>{approval=false;};
+  return ()=>{approval=false;validate=undefined;};
 }
 const sameGate = (current, selected) => (!current || !selected) ? current === selected : ['area','kind','at'].every(key=>current[key]===selected[key]) && (!selected.id || current.id===selected.id);
 const equalFact = (a,b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -2251,19 +2252,36 @@ function automaticPr1Scope(run, p, packageRoot) {
   } catch { return 'current automatic approval policy or operator scope is unavailable'; }
   return null;
 }
+function automaticPr1Eligible(run, {cwd, coordinatorId, machine}, published = null) {
+  const area = run.areas[run.area];
+  return validSavedAutomaticOrigin(run) && run.automaticOrigin.coordinatorId === coordinatorId
+    && run.automaticOrigin.machine === machine && samePath(run.sourceRoot, cwd)
+    && ['pdd-bug', 'pdd-feature'].includes(run.skill) && run.state === 'waiting'
+    && !run.parking && !openQuestion(run) && !run.repairLimit
+    && (!run.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
+    && run.gate?.kind === 'approve-pr' && run.gate.area === area?.name
+    && area.gate === 'pr' && area.before === 'approve'
+    && (!prOf(run, area.name) || published && sameFact(prOf(run, area.name), published))
+    && area.steps.every(step => run.done[step]);
+}
 export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutation(args, ports, async ({ref, cwd, packageRoot = PACKAGE_ROOT, coordinatorId, machine}, ports) => {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, {cwd}, p);
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area];
-  if (!validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== coordinatorId
-    || run.automaticOrigin.machine !== machine || !samePath(run.sourceRoot, cwd)
-    || !['pdd-bug', 'pdd-feature'].includes(run.skill) || run.state !== 'waiting'
-    || run.parking || openQuestion(run) || run.repairLimit
-    || run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase)
-    || run.gate?.kind !== 'approve-pr' || run.gate.area !== area?.name
-    || area.gate !== 'pr' || area.before !== 'approve' || prOf(run, area.name)
-    || area.steps.some(step => !run.done[step])) return done('Automatic PR 1 gate skipped.');
+  const owner = {cwd, coordinatorId, machine};
+  if (!automaticPr1Eligible(run, owner)) return done('Automatic PR 1 gate skipped.');
+  const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), area, index: run.area, branch: run.branch});
+  let publicationGate;
+  const progressRecorded = protectProgress(run, p, {validate: latest => {
+    // Only this invocation's durably saved PR may appear during its final transition.
+    if (!automaticPr1Eligible(latest, owner, prOf(run, area.name)) || !sameFact(latest.automaticOrigin, selected.origin)
+      || !sameFact(storyCoverage(latest), selected.coverage) || !sameFact(latest.areas[latest.area], selected.area)
+      || latest.area !== selected.index || latest.branch !== selected.branch
+      || publicationGate && (!sameGate(latest.gate, publicationGate) || latest.gate.storyChanges?.length))
+      throw Object.assign(Error('Automatic PR 1 eligibility changed. Preserve the current blocker and inspect the run.'), {code: 'workflow_progress_refused'});
+  }});
+  p.inspectProgress();
   const hold = reason => {
     const gateId = run.gate.id;
     commitRun(run, p, latest => { if (latest.gate?.id === gateId) latest.gate.automaticHold = reason; });
@@ -2283,9 +2301,11 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
     tests: contents.tests, stories: (storyCoverage(run).fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
     prompts: snapshot.map(row => row.path)}, p);
   if (!check.pass) return hold(`prompt check is not a full pass: ${check.problems.slice(0, 20).map(problem => `${problem.kind}: ${problem.path}: ${problem.detail}`).join('; ')}`);
-  return automaticPr1(run, area, 'check', p, [], check, packageRoot);
+  publicationGate = structuredClone(run.gate);
+  p.inspectProgress();
+  return automaticPr1(run, area, 'check', p, [], check, packageRoot, progressRecorded);
 }));
-async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
+async function automaticPr1(run, area, step, p, lines, check, packageRoot, progressRecorded = () => {}) {
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
   let snapshot, edits = [], approvalRecorded = false;
@@ -2339,6 +2359,7 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
       }
     },
     async validate() {
+      p.inspectProgress?.();
       const head = await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}');
       const dirty = await rawGit(p, run.root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
       if (head !== automatic.head || dirty || await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}') !== automatic.head) {
@@ -2362,13 +2383,16 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
     }
   };
   const selectedArea = run.area, selectedGate = structuredClone(run.gate), selectedQuestion = run.question, published = [];
-  const failed = await publishAreaPr(run, area, p, published, `run done ${step} again`, automatic);
-  if (failed) { if (!approvalRecorded) restoreApprovalEdits(); return failed; }
+  let failed;
+  try { failed = await publishAreaPr(run, area, p, published, `run done ${step} again`, automatic); }
+  finally { if (!approvalRecorded) restoreApprovalEdits(); }
+  if (failed) return failed;
   const askCode = area.then === 'ask-code', at = p.now();
   commitRun(run, p, latest => {
     if (latest.area === selectedArea && sameGate(latest.gate, selectedGate)) { latest.state = 'waiting'; latest.gate = askCode ? { id: p.randomUUID(), area: area.name, at, kind: 'ask-code' } : null; }
     if (equalFact(latest.question, selectedQuestion)) latest.question = null;
   });
+  progressRecorded();
   const label = prLabel(run, area), url = prOf(run, area.name).url;
   const head = [...lines, ...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256} (full check pass under the Story approval)`),
     `pdd recorded ${step}. The prompt check passed in full on the current prompts (${check.tests.length} test${check.tests.length === 1 ? '' : 's'}), so pdd opened ${label === 'the PR' ? 'the PR' : label} with no approval question (route automatic-check-pass).`, ...published];
