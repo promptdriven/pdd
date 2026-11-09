@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a36f278cf6f53155b87600ce2bda1bd87c6bf83bcfb377dbfed0e5d40ed6f924).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6038e2525b5d66b44b95eff44058a43c3e6b3f1c50a447d1d3c97d3c28fb84f8).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -3883,7 +3883,7 @@ Nothing was sent to the chat.` };
         deferredEnvironment.add(entry.id);
         continue;
       }
-      const personRetry = entry.kind === 'change' && (entry.personRetry || run.state === 'stuck' && isRetryRequest(entry.text));
+      const personRetry = entry.kind === 'change' && isRetryRequest(entry.text) && (entry.personRetry || run.state === 'stuck');
       const retryRefusal = personRetry && await personRetryRefusal(run, entry.text, p, true);
       if (retryRefusal) return fail(retryRefusal);
       const retryTarget = environmentRecovery(run)?.step;
