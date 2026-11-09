@@ -510,7 +510,7 @@ test('tick: after 4 hours stuck the owner stops refreshing its claim and asks on
 test('workflow: an automatic run does not push or open its PR after its claim expired', async t => {
   const exec = promisify(callbackExec);
   const f = await runnerFixture(t, { name: 'small-change', agent: 'codex' });
-  f.ports.env = { HOME: f.ports.env.HOME };
+  f.ports.env = { HOME: f.ports.env.HOME, PDD_INTERPRETER_QUEUE: f.ports.env.PDD_INTERPRETER_QUEUE };
   assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
   const run = f.record(); f.tick();
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());

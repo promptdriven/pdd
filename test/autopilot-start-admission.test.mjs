@@ -61,4 +61,3 @@ test('#3102 default parked limit is twice the working limit', async t => {
   f.settings.runs = f.coordinator.runs = 4;
   assert.deepEqual(await checkDependencyStart(f, f.ports), {allowed: false, reason: 'parked'}, 'default backlog limit must apply independently');
 });
-
