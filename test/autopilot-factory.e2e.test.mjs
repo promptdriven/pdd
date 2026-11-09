@@ -135,6 +135,56 @@ test('factory 4: stuck run parks and its merged dependency wakes it to merge',as
   assert.deepEqual(w.record().done,before.done);await a.finish();await a.merge();assert.deepEqual(w.leadActions,[]);
 });
 
+test('factory 3129: manual labels exclude intake and removal restores eligibility',async t=>{
+  const w=await factoryWorld(t);
+  await w.github.gh(['issue','edit','17','--add-label','pdd:manual']);
+  w.github.add(18,{title:'Another issue',body:'Independent work.',created:w.time-1000,updated:w.time-1000});
+  await w.start();await w.tick();w.messages();
+  assert.ok(w.dependencyRequests.some(request=>request.issues.some(issue=>issue.endsWith('/18'))),'control issue did not reach dependency review');
+  assert.ok(w.dependencyRequests.every(request=>request.issues.every(issue=>!issue.endsWith('/17'))),'manual issue reached dependency review');
+  assert.ok(w.packets.every(packet=>!packet.issues.some(issue=>issue.number===17 && issue.eligible)),'manual issue was eligible');
+  assert.ok(!w.github.issues.get(17).labels.includes('pdd:working'),'manual issue was claimed');
+  await w.github.gh(['issue','edit','17','--remove-label','pdd:manual']);
+  await w.tick();w.messages();await w.reviewDependencies();await w.tick();w.messages();
+  assert.ok(w.packets.some(packet=>packet.issues.some(issue=>issue.number===17 && issue.eligible)),'unlabeled issue did not become eligible');
+  assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3129: manual label releases saved claimed work without losing it',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();
+  const before=w.record(), head=w.git(before.root,'rev-parse','HEAD'),prs=structuredClone(w.github.prs);
+  assert.ok(prs.length);assert.ok(existsSync(before.root));
+  await w.github.gh(['issue','edit','17','--add-label','pdd:manual']);
+  await w.tick();await w.tick();
+  const after=w.record();
+  assert.equal(after.state,'cancelled',JSON.stringify({gap:'manual claim was not released',parking:after.parking,warnings:w.warnings,labels:w.github.issues.get(17).labels,commands:w.github.commands.slice(-12)}));
+  assert.ok(!w.github.issues.get(17).labels.includes('pdd:working'));
+  assert.ok(existsSync(before.root));assert.equal(w.git(before.root,'rev-parse','HEAD'),head);
+  assert.deepEqual(w.github.prs,prs);assert.equal(after.root,before.root);assert.deepEqual(after.done,before.done);
+  const status=await w.command(['autopilot','status']);
+  const kept=status.stdout.split('\n').filter(line=>line.includes('Kept for a person:'));
+  assert.equal(kept.length,1);assert.equal((kept[0].match(/#17\b/g)??[]).length,1);
+  w.packets.length=0;
+  await w.github.gh(['issue','edit','17','--remove-label','pdd:manual']);
+  await w.tick();w.messages();await w.reviewDependencies();await w.tick();w.messages();
+  assert.ok(w.packets.some(packet=>packet.issues.some(issue=>issue.number===17 && issue.eligible)),'released issue did not become eligible');
+  const cleared=await w.command(['autopilot','status']);
+  assert.ok(!cleared.stdout.split('\n').some(line=>line.includes('Kept for a person:') && /#17\b/.test(line)));
+  assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3129: installed capability wakes a parked run',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
+  await w.command(['workflow','status','17']);
+  await w.command(['workflow','park','--reason','Waiting for PDD issue #3129','--blocker','pdd','--until','#3129'],{cwd:w.record().root});
+  const before=w.record();w.installedPddCapabilities=[];await w.tick();
+  assert.equal(w.record().parking?.phase,'parked','missing capability must retain the park');
+  w.installedPddCapabilities=undefined;await w.tick();await w.tick();
+  assert.notEqual(w.record().parking?.phase,'parked','installed issue-3129 capability did not wake the run');
+  assert.deepEqual(w.record().done,before.done);assert.equal(w.record().root,before.root);
+  assert.deepEqual(w.leadActions,[]);
+});
+
 test('factory 5a: a full Herdr pane budget defers admission, then released room reaches merge',async t=>{
   const w=await factoryWorld(t);
   await w.begin({beforeRun:async()=>{

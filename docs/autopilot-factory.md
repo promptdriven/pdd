@@ -47,6 +47,7 @@ the same merge.
 | Lost verdict | Timer ticks send nothing again; one explicit synthetic person decision permits one resend. |
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |
 | Stopped panes across repositories | A full shared pane budget is reclaimed from stopped runs without saved session IDs or workspace-creation fields. Same-machine coordinator claims are recovered. A second repository starts its coordinator and first workflow run. Every held run then resumes its own current session. |
+| Manual issues | A manual label excludes intake. A claimed run releases saved work and the issue becomes eligible after label removal. An installed capability wakes a run waiting for it. |
 | Capacity and queues | Pane and check-slot waits recover; dead holders release reservations without resending an uncertain request. |
 | Claim transfer | The old coordinator cannot continue the current chat or publish after another machine takes the claim. |
 | Base integration | A clean base merge uses the separate bounded integration counter, retains failed evidence and needs fresh validation before merge. |

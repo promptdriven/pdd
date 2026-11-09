@@ -57,7 +57,10 @@ export function factoryGithub(w) {
       let endpoint=a.find(x=>x.startsWith('repos/')||x.startsWith('https://api.github.com/'));
       endpoint=endpoint?.replace('https://api.github.com/','');
       let value,handled=true;
-      if(endpoint===`repos/${f.repo}`)value={full_name:f.repo,owner:{login:f.owner},default_branch:'main'};
+      if(a.includes('DELETE') && /\/issues\/\d+\/labels\//.test(endpoint??'')) {
+        const match=endpoint.match(/\/issues\/(\d+)\/labels\/(.+)$/);f.unlabel(Number(match[1]),decodeURIComponent(match[2]));value={};
+      }
+      else if(endpoint===`repos/${f.repo}`)value={full_name:f.repo,owner:{login:f.owner},default_branch:'main'};
       else if(endpoint?.includes('/commits/')) {const commit=endpoint.split('/commits/')[1];value={sha:commit,parents:w.git(w.remote,'rev-list','--parents','-n','1',commit).split(/\s+/).slice(1).map(sha=>({sha}))};}
       else if(endpoint?.includes('/releases'))value=[];
       else if(/\/issues\/\d+\/timeline/.test(endpoint??'') && f.issues.get(Number(endpoint.match(/issues\/(\d+)/)[1]))?.timeline.some(e=>e.source)) {
