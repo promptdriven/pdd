@@ -123,7 +123,10 @@ new attempt on an existing file.
 Commands can contain unrecognizable positional secrets. Save `command` as
 `[redacted]` and `commandFingerprint` as the SHA-256 hex digest of the original
 UTF-8 command; execute the original only in memory. The fingerprint identifies
-an attempt without storing command values. Do not reconstruct the command.
+an attempt without storing command values. Use the one-shot SHA-256 content
+digest API for this command fingerprint; it is an attempt identifier, not a
+password verifier or a password storage scheme. Preserve its lowercase hex
+representation and original UTF-8 input bytes. Do not reconstruct the command.
 
 Before any durable write, redact every receipt string and stdout/stderr using
 [shared secret redaction](secret-redaction.prompt.md). Its exact-value guarantee

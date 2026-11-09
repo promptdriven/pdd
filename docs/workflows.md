@@ -2,32 +2,36 @@
 
 A PDD workflow is a skill: a folder of plain Markdown and one JSON file. Your agent follows it. pdd itself does only four things: it starts the run, it holds the gates, it opens the PRs and it shows the status.
 
-## The three workflows
+## The four workflows
 
 | Workflow | Use it for |
 |---|---|
 | `pdd-feature` | New behavior. |
 | `pdd-bug` | The code breaks an accepted expectation. |
 | `pdd-small-change` | A small change with a clear effect that is easy to undo. If the impact grows, the agent suggests `bug` or `feature`. |
+| `pdd-product` | Map a whole product and plan its runs. |
 
 Each workflow has areas. Each area has steps and ends at a gate. `?` marks an optional step.
 
 | Workflow | Area 1 | Area 2 | Area 3 (only when you ask) |
 |---|---|---|---|
-| `feature` | story: understand, visual?, prompt-story. Gate **approve** | prompt PR: check, try?. Gate **try it and approve**. pdd opens **PR 1**. Then **code now or stop?** | code: build, verify, formal, review. pdd opens **PR 2** |
-| `bug` | story: reproduce, prompt-story. Gate **approve** | prompt PR: check, try?. Gate **try it and approve**. pdd opens **PR 1**. Then **code now or stop?** | code: build, verify, formal, review. pdd opens **PR 2** |
+| `feature` | story: understand, visual?, prompt-story. Gate **approve** | prompt PR: check, try?. pdd opens **PR 1** at the applicable gate | code: build, verify, formal, review. pdd opens **PR 2** |
+| `bug` | story: reproduce, prompt-story. Gate **approve** | prompt PR: check, try?. pdd opens **PR 1** at the applicable gate | code: build, verify, formal, review. pdd opens **PR 2** |
 | `small-change` | plan: scope. Gate **approve** | build: change, verify, formal. pdd opens **one PR** | |
+| `product` | map: understand, map. Gate **approve** | plan: parts, contracts, plan. pdd opens **one PR** | |
 
 PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests that fail on today's code go to PR 2, so merging PR 1 never breaks the main branch. PR 2 holds the code. You can stop at PR 1, merge it, and make PR 2 later.
+
+In a normal feature or bug run, the Story card includes the code-or-stop choice. A valid Story approval and full saved check pass open PR 1, then pdd follows that choice. In strict mode, you can try the result when available and approve before PR 1, then choose whether to make the code PR.
 
 ### A big request: a plan and many Stories
 
 In `feature`, the understand step counts the separate behaviors in the issue. One behavior gets one Story and no plan. More behaviors get a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order.
 
 - Each Story in the plan has its own test file, `tests/<story>.json`.
-- At the story gate, the chat shows pdd's Story card as pdd prints it: the issue and what you asked, the verdict line, each Story with its acceptance criteria, what must not change and its rules to check, the test cases (case, input, expected), the prompts that change with their changed lines, the full file paths, the next step and "Approve, or tell me what to change." `pdd workflow card N` prints the same card at any time. In strict mode (`strict_approvals: true`), pdd prints no card: the chat gives the paths of the Story files and the plan, and ends with "Reply in your own words here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
+- At the story gate, the chat shows pdd's Story card as pdd prints it: the issue and what you asked, the verdict line, each Story with its acceptance criteria, what must not change and its rules to check, the test cases (case, input, expected), the prompts that change with their changed lines, the full file paths, the next step and "Approve, or tell me what to change." `pdd workflow card N` prints the same card at any time. In strict mode (`strict_approvals: true`), pdd prints no card: the chat gives the paths of the Story files and the plan, and asks for approval or changes. You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
 - The check step prints one `Prompt tests (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
-- `pdd workflow status` shows the count, for example `Stories: 4 of 5 pass (✗ refunds)`.
+- `pdd workflow status` shows the count, for example `Stories: 4 of 5 Stories pass (✗ refunds)`.
 
 What each step does:
 
@@ -44,7 +48,7 @@ What each step does:
 | build | Builds only what you approved. Tests through the public interface. |
 | verify | Runs the replay test of `RUNBOOK.md` section 17 on the code and on a planted mistake, then the tests and the repo's required checks. Writes the tables first, and the exact commands and their real output last, in a closed `<details>` block. |
 | formal | A fresh subagent that did not write the code runs the formal check of `RUNBOOK.md` section 17 for each Story with `## Rules to check`. Adds one result to `verify.md`, after the tables. |
-| review | A fresh independent subagent that neither built nor verified gets only the issue, Story, Defect block, diff, Old-code proof and Tests vs base, PR 1 body and supplied step summaries, never builder notes or chat history. It must not open build.md, verify.md or formal.md in the run folder. It answers the six questions in `steps/review.md`, inspects source and tests, exercises a real changed path and writes the actual verdict and findings to the run folder. |
+| review | A fresh independent subagent that neither built nor verified gets only the issue, Story, Defect block, diff, available old-code proof and test comparison evidence, PR 1 body and supplied step summaries, never builder notes or chat history. It must not open build.md, verify.md or formal.md in the run folder. It answers the six questions in `steps/review.md`, inspects source and tests, exercises a real changed path and writes the actual verdict and findings to the run folder. |
 
 If verify or formal finds a failing case, or review finds must-fixes, the chat returns to a fresh build, then verify, formal and fresh review. There are at most two repair rounds after the initial review. In an Autopilot run, the chat keeps repairing while a useful correction exists, up to 5 repair rounds in one area (a round returns to an earlier step; a retry of the PR open is not one); pdd then refuses another round, marks the run stuck and the issue takes the stuck path. If vectors still fail, PR 2 keeps "✗ N vectors fail" at the top. The PR then opens with the actual `Review: N must-fix` or `Review: no must-fix` verdict and any remaining must-fix list at the top. There is no new human gate. These are agent instructions; metadata orders steps but does not enforce reviewer independence or judgment.
 
@@ -85,7 +89,7 @@ Strict mode (`strict_approvals: true`) and Autopilot runs keep their own gates. 
 6. At a gate, the chat shows the result, asks you and stops. There is no time limit. When the chat needs your answer in the middle of a step, the agent runs `pdd workflow ask "<question>"` first, so `status` shows that the run waits for you.
 7. If you ask for changes, the same chat revises and asks you again. The gate stays open.
 8. If you approve, pdd starts a new chat for the next area. That chat gets the outputs of the approved area: the files, the summaries and the run folder.
-9. Completing the last step of an area with a PR gate pushes the branch and opens the PR. For bug and feature, the review-completion hold in point 5 overrides generic completion after each step: keep PR 2 unopened during repairs.
+9. After the last step of an area with a PR gate, pdd pushes the branch and opens the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. For bug and feature, the review-completion hold in point 5 overrides generic completion after each step: keep PR 2 unopened during repairs.
 10. You merge the PRs on GitHub. `pdd workflow status` reads the PR state. When the last PR is merged, the run is completed.
 
 A workflow can start from any checkout of a repository in one of the four Git layouts in the table: a normal clone and its linked worktrees, a bare `project.git`, a bare repository stored in `project/.git`, and a bare `project/.bare` named by a `project/.git` file. All checkouts of one repository share the same issue claims and allocation records in the common Git directory. pdd reads what Git reports for your checkout: the common Git directory, the primary registration in `git worktree list`, `core.bare` and the origin. It allocates only when they agree and every origin names the same GitHub repository. New run worktrees live in one folder beside the primary repository:
@@ -106,8 +110,7 @@ For a bare parent, pdd opens the run worktree directly from the new parent works
 repository identity, and pdd checks it. The chat starts in the run worktree. Until that check passes, each
 `pdd workflow open ISSUE` checks the parent identity and its first tab again before it starts the chat. If Herdr confirms `linked_worktree_source` before any native agent starts, run
 `pdd workflow open ISSUE` to finish that same allocated run. A saved linked-parent failure can recover through
-this command even after an earlier open failed. pdd preserves the old parent shell workspace, records it as
-superseded, and opens the verified parent under an unused label. It does not allocate another Git worktree.
+this command even after an earlier open failed. pdd preserves the old parent shell workspace unchanged and opens the verified parent under an unused label. It does not allocate another Git worktree.
 An uncertain or lost allocation reply remains blocked for inspection; it never authorizes another native chat.
 
 Review a run without entering its chat with `pdd workflow view ISSUE`; `status` prints this command. The terminal view brings together the saved state and gate, recorded human approvals, pending decisions, PRs, Prompt tests lines, report links and the Simulator link. It links to the full issue and to current Stories (including acceptance criteria), plan, prompts, tests and gate notes. The commit and uncommitted-change indicator identify what you are reading. These are current files; a recorded approval does not certify later edits. Prompt approval and permission to start code work remain separate decisions. Missing artifacts or links are shown as unavailable or not recorded.
@@ -147,7 +150,7 @@ PR 1 has no `verify.md`, no Simulator links and no local paths.
 
 In a normal run, you choose at the Story card: stop after PR 1 (the default), or go on to the code PR. The chat records the choice with the approval (`--through code`), or you give it at the start: `pdd workflow run NAME ISSUE --through code`. After PR 1 opens, pdd follows the choice and asks nothing.
 
-In strict mode, the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
+In strict mode, the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, tell your agent, or run `pdd workflow approve N` in a terminal."
 
 | You choose | What happens |
 |---|---|
@@ -157,7 +160,7 @@ In strict mode, the chat shows the PR 1 link and asks: "Do you want the code PR 
 
 The code area is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code.
 
-PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instead starts with `Not fixed yet: this helps find the cause`, uses `Refs #N` and keeps the issue open. PR-top rendering and old-code proof depend on the runner integration (#2594 and #2570). If PR 1 names draft prompts, approve through the chat route above or approve each with `pdd approve PROMPT` at a terminal. The agent runs pdd and never sets approval fields. The later code-or-stop decision remains separate.
+PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instead starts with `Not fixed yet: this helps find the cause`, uses `Refs #N` and keeps the issue open. If PR 1 names draft prompts, approve through the chat route above or approve each with `pdd approve PROMPT` at a terminal. The agent runs pdd and never sets approval fields. The later code-or-stop decision remains separate.
 
 ### Who can approve
 
@@ -182,7 +185,7 @@ The code that the steps write is committed on the run's branch, in the run's wor
 
 ## Tests and evidence
 
-pdd does not run tests. The agents do.
+Agents run tests. `pdd workflow prove` also runs its supplied command on base and head.
 
 - The verify step runs in a fresh subagent that did not write the code.
 - It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
@@ -196,7 +199,7 @@ Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1
 `replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).
 [Corpus adoption](replay-evidence.md#adopt-an-unchanged-approved-corpus) supplies a frozen declared anchor for an existing approved corpus.
 Without it, the anchor also holds the [approved scenarios on the base](replay-evidence.md#approved-scenarios-on-the-base) that link to the run's changes, or all of them when the base `pdd.json` sets `replay.base_scenarios` to `"all"`.
-The Proof table shows the replay counts, and the Details section begins with the validated replay status and exact counts, original vector and current source hashes,
+The Proof table shows the replay counts, and the Details section includes the validated replay status and exact counts, original vector and current source hashes,
 public-boundary execution coverage, semantic mutation control, and the [formal status](replay-evidence.md#the-formal-result) with scope, reason and a repair step.
 Missing, malformed or stale records appear as blocked/not replayed. Assertion failures remain publishable.
 Saved areas and custom workflows without this field retain their behavior. pdd checks structure and identity;
@@ -217,7 +220,7 @@ Read that output before you merge. Passing tests are useful evidence. They are n
 
 If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` for you, too.
 
-`pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first one found wins.
+`pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first eligible one found wins; only a project copy can override a bundled workflow.
 
 1. `.agents/skills/` in the project
 2. `.claude/skills/` in the project
@@ -227,7 +230,7 @@ If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` f
 
 The project is the top folder of the Git repo of your current folder. Put your copy where your agent reads it too, or in both folders of a level.
 
-`npx skills add promptdriven/pdd` installs the five PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`) for Claude Code. After an update of the pdd command, `pdd setup` replaces an older copy that has its `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
+`npx skills add promptdriven/pdd` installs the ten PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`) for Claude Code. After an update of the pdd command, `pdd setup` replaces an older copy that has its `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
 
 Give your workflow a new name. A project copy with the same name as a PDD skill (for example `pdd-bug`) works only in Codex:
 
@@ -256,7 +259,7 @@ Then edit the copy:
 Then use it:
 
 ```sh
-pdd workflow list            # pdd-mybug is in the list
+pdd workflow list            # mybug is in the list
 pdd workflow run mybug 42    # a run on issue 42
 ```
 
@@ -287,13 +290,14 @@ pdd-mybug/
 {"version":2,"areas":[
 {"name":"story","steps":["reproduce","prompt-story"],"optional":[],"gate":"approve"},
 {"name":"prompt-pr","steps":["check","try"],"optional":["try"],"gate":"pr","before":"approve","then":"ask-code"},
-{"name":"code","steps":["build","verify","formal","review"],"optional":[],"gate":"pr"}]}
+{"name":"code","steps":["build","verify","formal","review"],"optional":[],"gate":"pr","replay_evidence":"pdd.replay-evidence.v1"}]}
 ```
 
 - Each area has a `name`, its `steps` in order, the `optional` steps and a `gate`.
 - `gate` is `approve` (the person approves, then a new chat starts) or `pr` (pdd opens a PR).
-- `"before":"approve"` on a `pr` area makes the person try and approve before pdd opens that PR.
-- `"then":"ask-code"` on a `pr` area makes it PR 1. pdd then asks the person before the next area, which makes PR 2. Leave it out for a workflow with one PR, like `small-change`.
+- `"before":"approve"` on a `pr` area provides an approval gate before the PR. In a normal run with Story approval, a full saved check pass can open PR 1 automatically; strict and other routes retain the person gate.
+- `"then":"ask-code"` on a `pr` area makes it PR 1; the next area makes PR 2. A normal run follows the choice saved on the Story card; strict and other routes ask about the code PR. Leave it out for a workflow with one PR, like `small-change`.
+- `replay_evidence` may declare `pdd.replay-evidence.v1` on a PR area.
 - Each step has a file `steps/STEP.md`.
 - The last area ends with `pr`. It should have a `verify` step, so that the PR body has the test output.
 

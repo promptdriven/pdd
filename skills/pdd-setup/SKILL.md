@@ -7,7 +7,9 @@ metadata:
 
 # PDD setup
 
-Add one short PDD block to the file that this repo's agents read, and keep `.pdd/` out of Git. This skill installs nothing: if you can read it, the PDD skills are already installed. The `pdd setup` command does the same and also installs the skills when they are missing.
+Add one short PDD block to the file that this repo's agents read, and keep `.pdd/` out of Git. This skill installs nothing: if you can read it, the PDD skills are already installed. The `pdd setup` command checks for a ready agent, does the same in the current folder, installs missing skills and updates eligible marked copies, then previews MCP changes for approval.
+
+The bundled skills also include pdd-product, pdd-autopilot, pdd-check, pdd-merge, pdd-graph and pdd-setup. Bundled workflow names also include `product`.
 
 1. Pick the file: `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, create `AGENTS.md`. Use the repo root.
 2. Write this block exactly. Leave out the RUNBOOK.md line if the pdd-prompting skill has no RUNBOOK.md.

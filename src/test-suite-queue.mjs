@@ -1,9 +1,9 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 79ce3b7b591feb6a47ac8e6a913aae7acd2247a29a446316193cd53cc411650f).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: b1e53593c12693d9f4394249e176c5e5aa93c22d6adda8960d7b35a30c4ff516).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
 import { join, isAbsolute, resolve } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, hash as contentDigest, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { machineCheckPorts } from './machine-resources.mjs';
@@ -231,7 +231,8 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       const all = records(p), ticket = (all.at(-1)?.ticket ?? 0) + 1;
       const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
       const logFolder = join(env.PDD_STATE_DIR ?? join(env.HOME || process.env.HOME,'.local','state','pdd'), 'validation', createHash('sha256').update(p.root).digest('hex').slice(0,20));
-      Object.assign(record, {command:'[redacted]', commandFingerprint:createHash('sha256').update(command).digest('hex'), source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),
+      // Content identity for a validation attempt; never used to verify a password.
+      Object.assign(record, {command:'[redacted]', commandFingerprint:contentDigest('sha256', command, 'hex'), source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),
         logPath:null, receiptPath:join(p.root,`ticket-${ticket}.json`),
         recorderPid:null, recorderIdentity:null, exitCode:null, signal:null, counts:null, outcome:'running'});
       for (;;) {
