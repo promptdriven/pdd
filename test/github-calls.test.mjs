@@ -76,6 +76,8 @@ async function tickWorld(t, { github } = {}) {
       if (args[0] === 'status') return { running: true };
       const live = { pane_id: 'p1', workspace_id: 'w1', cwd, foreground_cwd: cwd, tab_id: 't1', terminal_id: 'term1', agent: 'codex', agent_status: 'idle', agent_session: 'session' };
       if (args[0] === 'workspace') return { result: { type: 'workspace_info', workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
+      // #3123 admission reads complete native pane inventory before allocation.
+      if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: [live]}};
       if (args[0] === 'pane' && args[1] === 'get') return { result: { type: 'pane_info', pane: live } };
       if (args[0] === 'agent' && args[1] === 'get') { if (!w.agentStarted) throw Object.assign(Error('agent_not_found'), { code: 'agent_not_found' }); return { result: { type: 'agent_info', agent: live } }; }
       if (args[0] === 'pane' && args[1] === 'run') { w.agentStarted = true; return {}; }

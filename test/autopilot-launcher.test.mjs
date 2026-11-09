@@ -2200,3 +2200,23 @@ for(const boundary of ['disabled','foreign-repository','foreign-checkout','forei
   assert.equal(packets.flatMap(p=>p.timeRules??[]).some(r=>r.kind==='post-merge-audit'),false);
   if(authority)assert.equal(readFileSync(authority,'utf8'),before);
 });
+
+
+test('audit tick discovers completed runs through the injected Git executor', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const state = f.state(), commonDir = join(f.cwd, '.git'), runDir = join(commonDir, 'pdd', 'runs', '17');
+  mkdirSync(runDir, {recursive: true});
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify({v: 1, number: 17,
+    repo: state.repo, sourceRoot: f.cwd, root: f.cwd, commonDir, runDir,
+    runId: 'synthetic-completed-audit', state: 'completed', areas: [], chats: [],
+    automaticOrigin: {repository: state.repo, coordinatorId: 'previous', machine: state.machine},
+    pr: [{number: 23, state: 'merged'}]}));
+  f.prompts.length = 0;
+  const before = f.runs.length;
+  assert.equal((await f.tick()).exitCode, 0);
+  const rules = f.prompts.flatMap(text => JSON.parse(text.trim().split('\n').at(-1)).timeRules ?? []);
+  assert.ok(rules.some(row => row.kind === 'post-merge-audit' && row.number === 17 && row.pr === 23));
+  assert.ok(f.runs.slice(before).some(([file, args]) => file === 'git' && args.includes('--git-common-dir')));
+  assert.equal(f.runs.slice(before).filter(([file]) => file === 'gh').length, 0, 'local audit discovery needs no GitHub read');
+});

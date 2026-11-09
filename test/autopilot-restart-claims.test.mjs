@@ -85,6 +85,7 @@ function world(t, existing) {
     },
     herdr: async args => {
       if (args[0] === 'status') return { running: true };
+      if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: []}}; // Restart removed the old coordinator pane.
       if (args[0] === 'workspace') { f.activePane = 'p2'; return { result: { workspace: { workspace_id: 'w2' }, root_pane: { pane_id: 'p2' } } }; }
       const pane = { pane_id: args[2], workspace_id: args[2] === 'p1' ? 'w1' : 'w2', cwd, foreground_cwd: cwd, tab_id: 'tab', terminal_id: args[2], agent: 'codex', agent_status: 'idle', agent_session: 'session' };
       if (args[0] === 'pane' && args[1] === 'get') return { result: { type: 'pane_info', pane } };

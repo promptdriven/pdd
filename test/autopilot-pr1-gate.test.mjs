@@ -68,6 +68,7 @@ async function setup(t, {registered = false, beforeApproval} = {}) {
     reconcileDependencyIntake: async () => {f.intakes++; f.onIntake?.(); return {eligible: [], queued: [], skipped: []};},
     queryIssues: async () => ({status: 304, issues: []}),
   };
+  f.herdr.idle(); // The saved gate follows the worker's completed turn.
   f.scan = () => tickAutopilot(f.stateFile, f.tickPorts);
   f.status = async () => JSON.parse((await runStatus({ref: '17', cwd: f.source, json: true}, f.automaticPorts)).message).runs[0];
   return f;
@@ -552,8 +553,34 @@ for (const change of ['Story', 'expected']) test(`#3099 registered parked ${chan
     const next = status.message.split('\n').find(line => line.startsWith('Next:'));
     assert.match(next, /Story.*approval/i, 'public guidance must ask for the revised Story approval');
     assert.ok(!next.includes(before.gate.automaticHold), 'public guidance must drop the obsolete check failure');
+    assert.ok((await f.status()).words.includes(after.gate.automaticHold), 'parked summary retains the current hold');
   }
   const effects = f.herdr.calls.slice(calls).filter(args => args[0] === 'pane' && args[1] === 'run' || args[0] === 'agent' && args[1] === 'prompt');
   assert.deepEqual(effects, [], 'the held gate must not wake or message a worker');
   assert.deepEqual(f.warnings, []);
+});
+
+
+test('PR 1 refreshed interpreter wait reconciles before intake and preserves independent blockers', async t => {
+  for (const boundary of ['inferred', 'dependency', 'busy']) {
+    const f = await setup(t, {registered: true});
+    if (boundary === 'busy') f.herdr.paneOf(f.record().chats.at(-1)).agent.agent_status = 'working';
+    if (boundary === 'dependency') {
+      const run = f.record(); run.blockedOn = {kind: 'dependency', until: '18'};
+      writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+    }
+    await f.scan();
+    const before = f.record();
+    assert.equal(before.parking.phase, boundary === 'busy' ? 'closing' : 'parked');
+    assert.equal(before.parking.blocker.kind, boundary === 'dependency' ? 'dependency' : 'interpreter');
+    saveCheck(f);
+    f.onIntake = () => assert.equal(f.prs.length, boundary === 'inferred' ? 1 : 0, 'refresh is reconciled before intake');
+    await f.scan();
+    assert.equal(f.prs.length, boundary === 'inferred' ? 1 : 0, boundary);
+    assert.equal(f.record().gate.kind, boundary === 'inferred' ? 'ask-code' : 'approve-pr');
+    assert.equal(f.record().parking.at, before.parking.at);
+    assert.deepEqual(f.record().automaticOrigin, before.automaticOrigin);
+    if (boundary === 'dependency') assert.deepEqual(f.record().blockedOn, before.blockedOn);
+    if (boundary === 'busy') assert.ok(f.herdr.paneOf(before.chats.at(-1)), 'busy native work remains open');
+  }
 });

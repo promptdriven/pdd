@@ -19,6 +19,7 @@ async function setup(t, stateName) {
   const f = await fixture(t);
   assert.equal((await f.run()).exitCode, 0);
   assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
+  f.herdr.idle(); // A stopped worker has completed its native turn.
   const run = f.record();
   run.automaticOrigin = {repository: run.repo, coordinatorId: 'idle-owner', machine: 'idle-machine', claim: {commentId: '11', labelEventId: '12'}};
   save(run);
@@ -97,6 +98,7 @@ async function nextRun(f, number) {
 test('3110 pane admission parks oldest idle chat before refusing new work', async t => {
   const {f, run} = await setup(t);
   assert.equal((await nextRun(f, 18)).exitCode, 0);
+  f.herdr.idle();
   const second = JSON.parse(readFileSync(join(run.commonDir, 'pdd/runs/18/status.json')));
   second.automaticOrigin = run.automaticOrigin;
   second.state = 'stuck'; second.chatResumeLimit = {area: second.chats.at(-1).area, at: f.clock};
@@ -116,13 +118,18 @@ test('3110 pane admission parks oldest idle chat before refusing new work', asyn
   assert.ok(close >= 0 && create > close);
 });
 
-for (const guard of ['manual', 'foreign', 'unowned-workspace', 'busy-check', 'unknown-check', 'session']) test(`3110 idle cleanup keeps ${guard} custody`, async t => {
+for (const guard of ['manual', 'foreign', 'unowned-workspace', 'busy-check', 'unknown-check', 'busy-agent', 'session']) test(`3110 idle cleanup keeps ${guard} custody`, async t => {
   const {f, run, ports, tick} = await setup(t);
   run.state = 'stuck'; run.chatIdleLimit = {at: f.clock - 120_000}; run.progressAt = f.clock - 120_000;
   if (guard === 'manual') delete run.automaticOrigin;
   if (guard === 'foreign') run.automaticOrigin.coordinatorId = 'another-owner';
-  if (guard === 'unowned-workspace') delete run.layout.createdWorkspaceId;
-  if (guard === 'session') delete run.chats.at(-1).session;
+  if (guard === 'unowned-workspace') run.layout.createdWorkspaceId = null;
+  if (guard === 'busy-agent') f.herdr.paneOf(run.chats.at(-1)).agent.agent_status = 'working';
+  if (guard === 'session') {
+    delete run.chats.at(-1).session;
+    f.herdr.paneOf(run.chats.at(-1)).agent = null;
+    f.herdr.sessions = []; // No live or saved native proof for the current chat.
+  }
   if (guard === 'busy-check' || guard === 'unknown-check') ports.readSuiteProgress = () => ({state: guard === 'busy-check' ? 'running' : 'unavailable'});
   save(run); await tick();
   assert.equal(closes(f).length, 0, '3110 uncertain or unowned resources must stay open');

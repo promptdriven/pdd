@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2980aa1ee8f73228b60ebf6b979503072f968cf6a47d94c4a3ad5bbe1fba8820).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3074b51164b3d06db09e8c725294121e74654a98bcd04feb5761bd45e0c0c8f1).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4420,7 +4420,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const group = run.parking?.phase === 'parked' ? 'waiting' : run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : environmentRecovery(run) && environmentRecovery(run).attempts < ENVIRONMENT_BACKOFF.length ? 'working' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
     : run.state === 'stuck' || run.gate || question || cannotWork || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) && !(run.promptReturn && area?.steps.some(step=>!run.done[step])) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
-  const words = run.parking?.phase === 'parked' ? `parked (${run.parking.blocker.kind})` : group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
+  const words = run.parking?.phase === 'parked' ? `parked (${run.parking.blocker.kind})${run.gate?.automaticHold ? ` · PR 1 waits: ${run.gate.automaticHold}` : ''}` : group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
     : environmentStatus(run) ? environmentStatus(run)
     : run.state === 'stuck' ? `stuck: ${stuckReason(run)}`

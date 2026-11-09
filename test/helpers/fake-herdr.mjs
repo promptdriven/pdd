@@ -5,7 +5,7 @@ export function fakeHerdr() {
   // sessions: the native session files that agents started by pane commands wrote ({agent, id, root, at}).
   // realIdentity: true follows the identity rules of real Herdr 0.9.1: a new workspace has no Git identity, and opening
   // the workspace's own non-linked checkout gives it that identity (already_open) instead of opening another workspace.
-  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null, sessions: [], now: () => Date.now(), realIdentity: false, shellStartFolder: null };
+  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null, sessions: [], nextSession: 17, now: () => Date.now(), realIdentity: false, shellStartFolder: null };
   const id = prefix => `${prefix}${h.next++}`;
   const commonDir = cwd => realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim());
   const gitOut = (cwd, ...args) => { try { return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
@@ -70,7 +70,7 @@ export function fakeHerdr() {
       if (cd && !folder(target)) { p.commands = [...(p.commands ?? []), command]; return {}; }
       if (cd) p.cwd = target;
       const kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : / gemini /.test(command) ? 'gemini' : / agy /.test(command) ? 'agy' : null;
-      const session = command.match(/--(?:session-id|resume) '?([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume '?([0-9a-f-]{36})/)?.[1] ?? '00000000-0000-4000-8000-000000000017';
+      const session = command.match(/--(?:session-id|resume) '?([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume '?([0-9a-f-]{36})/)?.[1] ?? `00000000-0000-4000-8000-${String(h.nextSession++).padStart(12, '0')}`;
       p.commands = [...(p.commands ?? []), command];
       if (kind) {
         p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };

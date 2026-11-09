@@ -66,10 +66,11 @@ for(const mode of ['shell','agent','unknown']) test(`${scenarioTitle({shell:'she
 });
 
 for (const throws of [false,true]) test(`attach handoff persists observations and never writes after ${throws?'failure':'completion'}`,async t=>{
- const f=await fixture(t);await f.run();
+ const f=await fixture(t,{agent:'codex'});await f.run();
  const original=f.record().chats.at(-1);
  const session='00000000-0000-4000-8000-000000000088';
  f.herdr.paneOf(original).agent.agent_session.value=session;
+ f.herdr.sessions=[{agent:'codex',id:session,root:f.record().root,at:original.startedAt}];
  let detach,entered;
  const hold=new Promise(r=>detach=r),entering=new Promise(r=>entered=r);
  const watching=openRun(opts(f),{...f.ports,attach:async()=>{

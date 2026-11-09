@@ -14,6 +14,7 @@ const save = run => writeFileSync(join(run.runDir, 'status.json'), JSON.stringif
 async function setup(t, {full = false} = {}) {
   const f = await fixture(t);
   assert.equal((await f.run()).exitCode, 0);
+  f.herdr.idle(); // A stopped worker has completed its native turn.
   const run = f.record();
   run.automaticOrigin = {repository: run.repo, coordinatorId: 'route-owner', machine: 'route-machine', claim: {commentId: '11', labelEventId: '12'}};
   save(run);

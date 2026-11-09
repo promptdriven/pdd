@@ -81,6 +81,8 @@ async function fixture(t, initialReviews = [[]]) {
     herdr: async args => {
       const live={pane_id:'fake-pane',workspace_id:'fake-workspace',cwd,foreground_cwd:cwd,tab_id:'t',terminal_id:'term',agent:'codex',agent_status:f.agentStatus,agent_session:'session'};
       if (args[0] === 'workspace') return { result: { type:'workspace_info', root_pane: { pane_id: 'fake-pane' }, workspace: { workspace_id: 'fake-workspace' } } };
+      // #3123 admission reads complete native pane inventory before allocation.
+      if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: [live]}};
       if (args[0] === 'pane' && args[1] === 'get') return {result:{type:'pane_info',pane:live}};
       if (args[0] === 'pane' && args[1] === 'run') { f.agentStarted = true; return {}; }
       if (args[0] === 'pane' && args[1] === 'read') return '';

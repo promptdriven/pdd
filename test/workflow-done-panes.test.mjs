@@ -77,7 +77,7 @@ test('3096: status classifies restart panes, warns near capacity and lists unown
   assert.equal(f.herdr.workspaces.some(w => w.workspace_id === run.layout.workspaceId), false);
 });
 
-for (const guard of ['caller', 'busy', 'unknown', 'agent', 'root-title', 'split', 'foreign-clone', 'legacy', 'wrong-creation'])
+for (const guard of ['caller', 'busy', 'unknown', 'agent', 'root-title', 'split', 'foreign-clone', 'unproved-creation', 'wrong-creation'])
   test(`3096: restart cleanup retains ${guard}`, async t => {
     const {f, run} = await doneRun(t), pane = f.herdr.paneOf(run.layout), command = f.ports.herdr;
     if (guard === 'caller') f.ports.env.HERDR_PANE_ID = pane.pane_id;
@@ -87,7 +87,7 @@ for (const guard of ['caller', 'busy', 'unknown', 'agent', 'root-title', 'split'
     if (guard === 'root-title') f.herdr.tabs.find(t => t.tab_id === pane.tab_id).label = 'personal';
     if (guard === 'split') f.herdr.panes.push({...pane, pane_id: 'personal-split'});
     if (guard === 'foreign-clone') f.herdr.workspaces.find(w => w.workspace_id === run.layout.workspaceId).worktree.repo_key = f.source;
-    if (guard === 'legacy') { delete run.layout.createdWorkspaceId; save(f, run); }
+    if (guard === 'unproved-creation') { run.layout.createdWorkspaceId = null; save(f, run); }
     if (guard === 'wrong-creation') { run.layout.createdWorkspaceId = 'other-workspace'; save(f, run); }
     assert.equal(await tidy(f), 0);
     assert.ok(f.herdr.workspaces.some(w => w.workspace_id === run.layout.workspaceId));
@@ -339,4 +339,16 @@ test('3096 integration: creation checkpoints retain root custody before area all
   };
   const opened = await f.open();
   assert.ok(snapshots.filter(value => value.workspaceId === opened.workspaceId).length >= 2);
+});
+
+
+test('3123 finished cleanup adopts genuine legacy creation and retains history', async t => {
+  const {f, run} = await doneRun(t);
+  delete run.layout.createdWorkspaceId; save(f, run);
+  assert.equal(await tidy(f), 0);
+  assert.equal(f.record().layout.createdWorkspaceId, run.layout.workspaceId);
+  assert.equal(f.record().layout.phase, 'closed');
+  assert.equal(f.herdr.workspaces.some(w => w.workspace_id === run.layout.workspaceId), false);
+  assert.deepEqual(f.record().chats[0].session, run.chats[0].session);
+  assert.ok(existsSync(run.root));
 });

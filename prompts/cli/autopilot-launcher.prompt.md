@@ -29,7 +29,12 @@ remaining intake work. Preserve GitHub budget waits; perform this reconciliation
 only when those waits permit it, before local parking and before intake. Budget
 waits still permit local parking and stopped-chat maintenance but no PR 1
 publication. Reconcile already parked approval waits through the same runner
-boundary. Refresh the local budget observation after native maintenance before
+boundary. When an inferred wait or incomplete parking reservation initially
+prevents this boundary, reconsider that run once after local parking refreshes
+its current blocker and cleanup facts, within the same tick and before intake.
+Re-read the GitHub budget before this second pass. The runner still owns eligibility;
+a held check, independent wait, or incomplete close never authorizes publication.
+Refresh the local budget observation after native maintenance before
 heartbeats and intake, so reads made during gate reconciliation or stopped-chat
 maintenance count toward subsequent work. Observe and off modes never advance
 gates.
@@ -1269,7 +1274,11 @@ issues. Match repository, source checkout and machine independently of the
 origin coordinator ID. Completed runs need no worker custody recovery or live
 claim. Include both absent audits and saved verdicts with unsent follow-ups;
 retain the audit owner's shared reservations and disable policy. The coordinator runs `pdd autopilot audit RUN PR`. Ticks make no model
-calls. Pass injected filesystem ports to discovery. Collect its per-PR holds
+calls. Discover saved audit runs through the same injected counted process executor
+as the rest of the tick, including local Git reads. Discovery must not fall back
+to an ambient child process when only the launcher run port is supplied. Keep
+GitHub reads within the existing budget and ledger. Pass injected filesystem
+ports to discovery. Collect its per-PR holds
 as `state.auditHolds`, an array of `{number,pr,cause}` where `number` is the run
 number, `pr` is the PR number and `cause` is the audit owner's named cause.
 Persist this observation with tick state. Local status and status --all show

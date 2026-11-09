@@ -35,6 +35,7 @@ async function ready(t, route) {
   }};
   const args = {ref: '17', cwd: f.source, packageRoot, coordinatorId: origin.coordinatorId, machine: origin.machine};
   if (route === 'wake' || route === 'parked-open') {
+    f.herdr.idle(); // Parking must not close a working native agent.
     const paused = f.record(); paused.state = 'paused';
     paused.blockedOn = {kind: 'dependency', until: '18'}; writeRun(paused);
     const parked = await parkBlockedRun({...args, blocker: {kind: 'dependency', until: '18'}}, f.ports);

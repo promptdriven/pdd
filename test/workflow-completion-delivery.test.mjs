@@ -147,6 +147,7 @@ async function launcherHarness(f) {
     },
     herdr: async args => {
       herdrCalls.push(args);
+      if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: Array.from({length: workspaceCount}, (_, i) => ({pane_id: `pane-${i + 1}`, workspace_id: `workspace-${i + 1}`, tab_id: `tab-${i + 1}`, terminal_id: `terminal-${i + 1}`}))}};
       if (args[0] === 'workspace' && args[1] === 'create') {
         workspaceCount++;
         return {result: {workspace: {workspace_id: `workspace-${workspaceCount}`}, root_pane: {pane_id: `pane-${workspaceCount}`}}};

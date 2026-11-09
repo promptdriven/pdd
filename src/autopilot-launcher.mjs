@@ -9,7 +9,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c79bd4ee2f931f4db31cc9c86904940bd048e41d0eaacebd3b43ace5493e1ed8).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 808124fcc087a04559c3a602881c2bb97cb443f415f1018a0c73ba83fa729641).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -537,7 +537,8 @@ async function parkingTick(state, p, config, options = {}) {
   } catch (error) { p.warn(`Parking reconciliation held: ${line(error.message)}`); }
 }
 
-async function advanceWaitingPr1Gates(state, p) {
+async function advanceWaitingPr1Gates(state, p, numbers = null) {
+  const reconsider = new Set();
   const execFile = p.execFile ?? (async (file, args, options) => {
     const result = await p.execute(file, args, options);
     if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
@@ -546,17 +547,19 @@ async function advanceWaitingPr1Gates(state, p) {
   const workerPorts = {...p, execFile, isTTY: false};
   let runs;
   try { runs = await listRuns({cwd: state.cwd}, workerPorts); }
-  catch (error) { p.warn(`PR 1 gate inspection unavailable: ${line(error.message)}`); return; }
+  catch (error) { p.warn(`PR 1 gate inspection unavailable: ${line(error.message)}`); return reconsider; }
   for (const run of runs) {
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
       || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine
-      || run.state !== 'waiting' || run.gate?.kind !== 'approve-pr') continue;
+      || run.state !== 'waiting' || run.gate?.kind !== 'approve-pr' || numbers && !numbers.has(run.number)) continue;
+    if (run.parking && (run.parking.phase !== 'parked' || run.parking.blocker?.kind !== 'person')) reconsider.add(run.number);
     try {
       const result = await p.scanAction(() => advanceAutomaticPr1({ref: String(run.number), cwd: state.cwd,
         packageRoot: state.packageRoot, coordinatorId: state.coordinatorId, machine: state.machine}, workerPorts));
       if (result.exitCode !== 0) p.warn(`PR 1 gate held for #${run.number}: ${line(result.message)}`);
     } catch (error) { p.warn(`PR 1 gate held for #${run.number}: ${line(error.message)}`); }
   }
+  return reconsider;
 }
 
 async function resumeStoppedWorkers(state, p, recoveredRuns = null) {
@@ -1615,9 +1618,15 @@ async function runTick(stateFile, ports, completion) {
     };
     let {budget, restLeft} = readBudget();
     if (config.mode === 'auto') {
+      let reconsider;
       if (!(state.retryAt > p.now()) && !(budget.state === 'reserve' && budget.resetAt > p.now()))
-        await advanceWaitingPr1Gates(state, p);
+        reconsider = await advanceWaitingPr1Gates(state, p);
       await parkingTick(state, p, config, {localOnly: true});
+      if (reconsider?.size) {
+        const current = readBudget().budget;
+        if (!(state.retryAt > p.now()) && !(current.state === 'reserve' && current.resetAt > p.now()))
+          await advanceWaitingPr1Gates(state, p, reconsider);
+      }
       deferredWakes = async () => {
         deferredWakes = null;
         if (state.health.paused) return;
@@ -1787,7 +1796,7 @@ async function runTick(stateFile, ports, completion) {
     state.auditHolds = [];
     if(config.mode === 'auto') {
       const auditConfig = p.readConfig ? await p.readConfig(state.cwd) : read(join(state.cwd,'pdd.json'),{});
-      if(auditConfig.autopilot?.audit !== false) for(const run of await (p.listRuns ?? listRuns)({cwd:state.cwd,cancelled:true},p)) {
+      if(auditConfig.autopilot?.audit !== false) for(const run of await (p.listRuns ?? listRuns)({cwd:state.cwd,cancelled:true},workflowCleanupPorts(p, ports))) {
         if(run.repo?.toLowerCase()!==state.repo.toLowerCase() || run.automaticOrigin?.repository?.toLowerCase()!==state.repo.toLowerCase()
           || run.automaticOrigin?.machine!==state.machine || !samePath(run.sourceRoot,state.cwd)) continue;
         for(const pr of pendingAudits({run}, {...p,onAuditHold: hold => state.auditHolds.push({number:run.number,...hold})})) timeRules.push({kind:'post-merge-audit',number:run.number,pr,reason:`Run pdd autopilot audit ${run.number} ${pr}; retain the saved verdict and do not launch an auditor by hand.`});

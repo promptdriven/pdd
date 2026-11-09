@@ -1147,7 +1147,8 @@ in shared durable custody under the machine workflow state root, keyed by
 repository, run attempt, PR and merge commit. The run's `audits/` folder holds
 evidence copies. Every clone reads shared results and effect reservations under
 the repository lock. An interrupted auditor is unknown, never a pass.
-Pending known work is offered to the coordinator on later ticks.
+Pending known work is offered to the coordinator on later ticks. Discovery reads
+saved runs through the tick process port. The local scan needs no GitHub read.
 
 Set `autopilot.audit` to `false` in this repository's `pdd.json` to disable audits.
 The default is on. Codex and Claude auditors start a fresh native session using
