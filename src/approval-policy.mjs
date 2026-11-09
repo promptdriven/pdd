@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-policy.prompt.md (sha256: d0186622720ad1aba97bed39d42a328936ddca450e20dfd376be1063b45e90eb).
+// Generated from prompts/cli/approval-policy.prompt.md (sha256: 250bd819d9aa281860033b4e860d0c848ad19abfa5a653f8a4d2d8ab4bd2e278).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -103,6 +103,7 @@ export async function recordPromptApproval({ commonDir, evidence }, ports = {}) 
   try {
     const approvals = readPromptApprovals({ commonDir }, ports);
     fs.writeFileSync(temporary, JSON.stringify({ v: 1, approvals: [...approvals, evidence] }, null, 2) + '\n', { mode: 0o600 });
+    ports.beforeApprovalCommit?.();
     fs.renameSync(temporary, join(dir, 'approvals.json'));
   } finally {
     try { fs.unlinkSync(temporary); } catch { /* Already renamed or never written. */ }

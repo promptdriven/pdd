@@ -3090,7 +3090,7 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   const fs = p.fs ?? { writeFileSync }, changed = [];
   try {
     for (const edit of edits) { changed.push(edit); fs.writeFileSync(join(run.root, edit.path), edit.next); }
-    await recordPromptApproval({ ...await promptApprovalContext(run, p), evidence }, p);
+    await recordPromptApproval({ ...await promptApprovalContext(run, p), evidence }, { ...p, beforeApprovalCommit: p.inspectProgress });
   } catch (error) {
     const left = [];
     for (const edit of changed.reverse()) { try { fs.writeFileSync(join(run.root, edit.path), edit.text); } catch { left.push(edit.path); } }

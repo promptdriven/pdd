@@ -587,6 +587,11 @@ and Story approval coverage, with the waiting state and all eligibility guards
 above still satisfied. Cancellation, a new person question or another eligibility
 change during preparation or publication stops further effects and preserves the
 saved blocker. The run lock alone does not exclude cancellation or questions.
+Supply the current-run progress guard to the approval journal's guarded commit
+boundary. Recheck after any wait for journal custody, immediately before its
+durable append. A saved blocker during that wait prevents a new journal entry
+as well as a run decision, push or PR; preserve the blocker and clean up the
+refused journal write through the shared approval policy.
 Preserve prepared-source validation, rollback and retry behavior of that route.
 Do not reuse normal-run card code-or-stop behavior: leave the existing `ask-code`
 gate and its scoped automatic handoff for the coordinator. Do not start code,

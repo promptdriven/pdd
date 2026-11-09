@@ -1,9 +1,11 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as nativeFs from 'node:fs';
 import {cpSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {createHash} from 'node:crypto';
+import {hostname} from 'node:os';
+import {createHash, randomUUID} from 'node:crypto';
 import {automaticFixture} from './helpers/autopilot-run-base-fixture.mjs';
 import {packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
@@ -199,4 +201,64 @@ for (const kind of ['cancelled', 'question']) test(`#3099 ${kind} during ${bound
   assert.deepEqual(after.cancelled, blocker.cancelled);
   assert.deepEqual(after.question, blocker.question);
   assert.deepEqual(after.gate, blocker.gate);
+});
+
+for (const kind of ['cancelled', 'question']) test(`#3099 ${kind} during journal contention prevents durable approval`, async t => {
+  const f = await setup(t), path = join(f.run.root, PROMPT);
+  const checkedPrompt = readFileSync(path, 'utf8').replace(/"status":\s*"approved"/, '"status":"draft"');
+  writeFileSync(path, checkedPrompt);
+  f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Synthetic checked draft');
+  saveCheck(f);
+  const before = f.record(), dir = join(before.commonDir, 'pdd'), journal = join(dir, 'approvals.json');
+  const initialJournal = readFileSync(journal, 'utf8'), lock = join(dir, 'approvals.lock'), token = randomUUID();
+  const holder = join(lock, `owner-${token}.json`);
+  mkdirSync(lock);
+  writeFileSync(holder, JSON.stringify({pid: process.pid, hostname: hostname(), token}));
+  const releaseHolder = () => {
+    if (nativeFs.existsSync(holder)) nativeFs.unlinkSync(holder);
+    if (nativeFs.existsSync(lock) && !nativeFs.readdirSync(lock).length) nativeFs.rmdirSync(lock);
+  };
+  t.after(releaseHolder);
+  let contended = false, blockerTask, blockerError, blocker, blockerJournal;
+  // Observe a real live owner inspection. Every filesystem operation still uses
+  // native fs. The public blocker runs while acquisition awaits its next retry.
+  f.tickPorts.fs = {...nativeFs, readFileSync(file, ...args) {
+    const value = nativeFs.readFileSync(file, ...args);
+    if (file === holder && !contended) {
+      contended = true;
+      blockerTask = Promise.resolve().then(async () => {
+        try {
+          f.tick();
+          const action = kind === 'cancelled'
+            ? await cancelRun({ref: '17', cwd: f.source}, f.automaticPorts)
+            : await askPerson({text: 'Which product scope?', cwd: f.run.root}, f.automaticPorts);
+          assert.equal(action.exitCode, 0, action.message);
+          blocker = f.record();
+          blockerJournal = readFileSync(journal, 'utf8');
+        } finally { releaseHolder(); }
+      }).catch(error => { blockerError = error; });
+    }
+    return value;
+  }};
+  await f.scan();
+  await blockerTask;
+  if (blockerError) throw blockerError;
+  assert.equal(contended, true, 'the race must inspect the real journal holder');
+  if (kind === 'cancelled') assert.equal(blocker.state, 'cancelled');
+  else assert.ok(blocker.question?.text, 'the public question must be saved before releasing journal custody');
+  assert.equal(f.prs.length, 0, 'a saved blocker must prevent PR creation');
+  assert.equal(f.pushes.length, 0, 'a saved blocker must prevent pushes');
+  const after = f.record();
+  assert.deepEqual(blocker.decisions, before.decisions);
+  assert.deepEqual(after.decisions, blocker.decisions);
+  assert.deepEqual(after.approvalRecord, blocker.approvalRecord);
+  assert.equal(after.state, blocker.state);
+  assert.deepEqual(after.cancelled, blocker.cancelled);
+  assert.deepEqual(after.question, blocker.question);
+  assert.deepEqual(after.gate, blocker.gate);
+  assert.equal(blockerJournal, initialJournal);
+  assert.equal(readFileSync(journal, 'utf8'), blockerJournal, 'a saved blocker must prevent a later approval journal write');
+  assert.equal(readFileSync(path, 'utf8'), checkedPrompt, 'unrecorded prompt approval edits must be restored');
+  assert.equal(nativeFs.existsSync(lock), false, 'refusal must release journal custody');
+  assert.deepEqual(nativeFs.readdirSync(dir).filter(name => /^\.approvals\..*\.tmp$/.test(name)), [], 'refusal must remove its temporary journal');
 });
