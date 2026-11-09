@@ -54,6 +54,14 @@ npm pack --ignore-scripts --pack-destination /tmp/pdd-alpha-pack
 
 Use a fresh temporary directory if that destination already contains prior artifacts. Extract the returned archive into another clean directory, run its local CLI and inspect its files. Do not publish to npm or change a global `pdd` to test packaging.
 
+## Autopilot factory
+
+Run `scripts/factory-test.sh` for the complete offline Autopilot factory. It uses
+real Git and native PDD workflows with disposable service fakes and scripted
+agents. See [the factory test](docs/autopilot-factory.md) for its scenarios,
+isolation and limits. A candidate gap remains a failing test; retain its expected
+outcome and report the gap. This command does not run the public full suite.
+
 ## Scope and license
 
 Contributions are under the repository's [MIT license](LICENSE). Retain applicable notices. Keep the package self-contained, with no hosted services, private dependencies, operational fixtures or credentials in source or package artifacts. An optional proposal for a future capability is not an implemented public command.
