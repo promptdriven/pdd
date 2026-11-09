@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: e231ad3d2a648d60da85ed700c6a4c72f207db94a74c46f047069bb8a5380167).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: e3586639832d461faf237f7ccdef5b01a177deb9e322337e88dbabffc1883a41).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -178,6 +178,13 @@ export function pr1Order(facts) {
 // is missing, stale or not finished keeps the status from ✅: it waits for it, or it is blocked with the reason.
 function proofRows(facts) {
   const r = facts.records ?? {}, rows = [], blocked = [], waiting = [];
+  const small = facts.workflow === 'small-change' && facts.single === true && facts.layout === 'code';
+  if (small) {
+    const checklist = r.checklist;
+    rows.push(['Issue checklist', checklist?.status === 'recorded' ? `${checklist.items.length} items; ${checklist.mustFix.length} must-fix` : checklist?.status ?? 'missing', '—']);
+    if (!checklist || checklist.status === 'missing') waiting.push('the issue checklist');
+    else if (checklist.status !== 'recorded' || checklist.mustFix.length) blocked.push('issue checklist has must-fix items');
+  }
   const manual = facts.mode === 'manual', code = facts.layout === 'code', pair = code && !facts.single;
   if (facts.pending) waiting.push('publication');
   // GitHub shows a head that pdd did not publish: every record below is for the older head.
@@ -208,8 +215,8 @@ function proofRows(facts) {
     // recorded Proved or Not applicable result. With scenario vectors the code replay needs a typed block, so the row is
     // never "not needed" there. Without replay, malformed or stale supplied formal evidence also holds the PR.
     const formal = replay?.formal ?? r.formal;
-    const status = replay || formal ? formalStatusText(formal, r.rulesToCheck) : null;
-    const needed = replay ? r.rulesToCheck !== false : r.rulesToCheck === true;
+    const status = replay || formal || small ? formalStatusText(formal, small ? true : r.rulesToCheck) : null;
+    const needed = small || (replay ? r.rulesToCheck !== false : r.rulesToCheck === true);
     if (status?.status === 'recorded') {
       const scope = inertText(formal.scope, 80), counterexample = r.counterexample ?? replay?.counterexample;
       const result = FORMAL[formal.result] ?? (formal.result === 'failed' ? `Failed at ${counterexample ? codeSpan(clip(oneLine(counterexample), 80)) : 'the counterexample in Details'}`
@@ -217,8 +224,8 @@ function proofRows(facts) {
       const control = formal.control_outcome === 'assertion_failure' ? '✗ fails (as expected)' : formal.control_outcome === 'not_run' ? '—' : inertText(formal.control_outcome, 40);
       rows.push([`Formal check${scope ? ` (${scope})` : ''}`, result, control]);
       if (formal.result === 'failed') blocked.push(`formal check failed${counterexample ? ` at ${codeSpan(clip(oneLine(counterexample), 80))}` : ''}`);
-      else if (needed && r.formalStep && formal.result === 'not_run') blocked.push('formal check not run');
-    } else if (status && r.formalStep) {
+      else if (needed && (r.formalStep || small) && formal.result === 'not_run') blocked.push('formal check not run');
+    } else if (status && (r.formalStep || small)) {
       // The same words, reason and repair step as the replay header; never a bare "not recorded".
       if (status.notNeeded && (replay || status.status === 'missing')) rows.push(['Formal check', 'not needed (no Rules to check in the Story)', '—']);
       else {
@@ -292,6 +299,16 @@ export const sameReadableTop = (a, b) => [a, b].map(text => String(text ?? '').t
 function table(header, rows) {
   return [`| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows.map(row => `| ${row.join(' | ')} |`)];
 }
+function issueChecklist(facts) {
+  if (facts.workflow !== 'small-change' || facts.single !== true) return [];
+  const items = facts.records?.checklist?.items ?? [];
+  if (!items.length) return [];
+  return ['## Issue checklist', '', ...table(['Item', 'Request', 'State', 'Source / quote', 'Evidence / exclusion'], items.map(item => [
+    cell(item.id, Infinity), cell(item.request, Infinity), cell(item.state),
+    cell(`${item.source}: ${item.quote}`, Infinity),
+    cell(item.state === 'excluded' ? `${item.exclusion?.reason ?? ''}: "${item.exclusion?.quote ?? ''}"` : item.evidence, Infinity),
+  ])), ''];
+}
 function casesTable(facts) {
   const cases = facts.fields?.cases ?? [];
   if (!cases.length) return [];
@@ -360,7 +377,7 @@ export function readablePrTop(facts, { fileLimit = MAX_FILES } = {}) {
   const header = facts.layout === 'spec' ? ['Check', 'Result'] : ['Check', 'New code', facts.workflow === 'feature' ? 'Planted mistake' : 'Old code'];
   const lines = [`${prStatus(facts)}${stamp(facts.updatedAt)}`, '', ...(facts.notFixed ? [NOT_FIXED_LINE, ''] : []),
     ...(stories.length ? ['## User story', '', ...stories.flatMap((story, index) => [...(index ? [''] : []), inertText(story, 600)]), ''] : []),
-    ...summary(facts), ...casesTable(facts), ...changes(facts, fileLimit),
+    ...summary(facts), ...issueChecklist(facts), ...casesTable(facts), ...changes(facts, fileLimit),
     `## ${facts.layout === 'spec' ? 'Checks' : 'Proof'}`, '', ...table(header, rows), '',
     ...(facts.layout === 'spec' ? [approvalLine(facts), ''] : []), ...readableNextLines(facts)];
   return { text: lines.join('\n'), notes };

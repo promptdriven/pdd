@@ -11,7 +11,9 @@ You are a fresh checker. You did not build this PR; no builder chat. `pdd.json` 
 
 PR 1 (prompt, Story, tests): read the issue first and write 3 input → result pairs from it. Trace issue → Story → prompt → tests. Each expected value comes from an issue quote or the old behavior. A new test value needs no person when you (blind, from the Story, with a named rule) and the runtime agree; else it is a note. A saved `pdd test` result for the new and the old prompt counts only when it matches the Story, the test cases and the prompt source at this head, and it was a fresh run (not cached). Else run `CI=1 pdd test <story> --cache-clear --json` once. A result you cannot check is not a fresh pass. The new passes; the old fails for the claimed reason, except code-only bugs (pdd-prompting RUNBOOK §14). No runtime verdict is not a FAIL; say so, and pdd-merge adds the `pdd:no-verdict` label.
 
-PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff. Build the head and run the changed path with the repo's start-up recipe, with the Story as the script. Follow `verification-setup.md` in the pdd-prompting skill to repeat the real action from a fresh checkout and report setup, behavior and dependency scope separately. For a screen change, take before and after screenshots and write one line on what changed.
+PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff. Build the head; run the changed path with the repo recipe and Story. Repeat the real action from a fresh checkout with pdd-prompting/verification-setup.md; report setup, behavior and dependency scope. For a screen change, take before and after screenshots; describe the change.
+
+Small-change: follow RUNBOOK §15. Derive the issue checklist independently. Missing items or unsupported exclusions are must-fixes. Check the shared formal exemption.
 
 Read pdd-prompting/review.md.
 
@@ -21,6 +23,6 @@ Verdict: one PR comment with a JSON block: `verdict` (PASS, FAIL or NOT SURE), `
 
 A second fresh checker must agree when the risk is 4-5, when two verdicts split, or when the PR changes check, merge or approval code. Use the other family when it is installed and signed in; else a second fresh session of the same family, labeled `checker_mode: same-family`.
 
-One question to a person: a product call that the issue does not settle, NOT SURE after one new try, or an action that cannot be undone (it deletes data, writes to a real outside system or spends money).
+Ask about an unsettled product call, NOT SURE after one new try, or irreversible action.
 
 After merge: a fresh session from a family other than the builder's reruns each merged PR on main and gives its own risk 1-5. A problem becomes a new issue. If no other family is available, say so; do not claim this review.

@@ -1,6 +1,6 @@
 # verify
 
-- Run the focused tests for the change and the repo's required checks.
+- Compare each checklist item with the issue and trusted follow-ups; update its state and evidence (RUNBOOK §15), then run focused and required checks.
 - For a behavior fix, show that the new test fails on the old code in a throwaway copy, when you can.
 - For a behavior fix, write `Proof (defect fixed):` and `Proof (gap closed):` with evidence for each in verify.md. Give a reason for each removed test or changed assertion.
 - If only the warning light changed, write `Not fixed yet: this helps find the cause` in verify.md for pdd to lift to the PR top; use `Refs #N` and keep the issue open.
