@@ -292,7 +292,7 @@ for (const legacy of [false, true]) test(`another machine wins a recovery race w
 // Use the existing workflow fake to reach actual workflow done / PR publication.
 test('workflow done publishes finished work after the tick recovers its expired claim', async t => {
   const runner = await runnerFixture(t, { name: 'small-change', agent: 'codex' });
-  runner.ports.env = { HOME: runner.ports.env.HOME };
+  runner.ports.env = { HOME: runner.ports.env.HOME, PDD_INTERPRETER_QUEUE: runner.ports.env.PDD_INTERPRETER_QUEUE };
   assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: runner.source, packageRoot }, runner.ports)).exitCode, 0);
   const run = runner.record(); runner.tick();
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, runner.agentPorts());
