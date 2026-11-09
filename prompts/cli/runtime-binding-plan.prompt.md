@@ -14,7 +14,15 @@ ends beside the block. Each content line is a literal repository-relative POSIX
 prompt path; no blank lines, links, titles, fragments, whitespace, absolute paths,
 backslashes, URL escapes, empty/dot/parent components or other syntax. Only
 letters, digits, underscores, hyphens, dots and slashes are accepted in paths.
-The block must be outside other fenced examples. Fail closed if HTML markup
+Narrowing requires LF or CRLF line ends throughout the authored Story. Before
+block admission, any bare CR, vertical tab (U+000B), form feed (U+000C), file/group/
+record separator (U+001C–U+001E), NEL (U+0085), line separator (U+2028) or paragraph
+separator (U+2029) cancels narrowing. Return null with reason
+`unsupported-line-ends` and message `boundary not applied: unsupported line ends;
+full dependency closure is required`. Never normalize these characters into
+narrowing authority. A valid top-level block with CRLF may narrow.
+The block must be at top level, outside every other fence, list and HTML block;
+container-prefixed or indented blocks cannot narrow. Fail closed if HTML markup
 makes its context uncertain, or any additional/unsupported boundary fence is
 present. Tag-like, comment, declaration and processing-instruction openers make
 context uncertain even without matched closers. Do not use Markdown links, headings or reference definitions as scope
@@ -24,7 +32,7 @@ reference examples cannot remove an edge.
 On zero blocks, duplicate blocks, malformed/ambiguous syntax or invalid paths,
 return null and append one named note {code,reason,message}. code is
 `boundary-not-applied`; reason identifies missing-block, legacy-syntax,
-duplicate-blocks, unsupported-syntax or invalid-path. Legacy Runtime boundary
+duplicate-blocks, unsupported-syntax, unsupported-line-ends or invalid-path. Legacy Runtime boundary
 headings are advisory only: message is `boundary not applied: use the
 pdd-boundary block`. If a valid block coexists with a legacy heading, apply only
 the block and emit the legacy note; the heading cannot alter membership. Other messages name the reason and say full dependency

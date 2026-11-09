@@ -1282,7 +1282,12 @@ prompts/cli.prompt.md
 ````
 
 Use the exact opening and closing fence lines shown above, with blank lines or
-file ends beside the block. List one repository-relative prompt path per line,
+file ends beside the block. The block must be at top level, outside every other
+fence, list and HTML block. Use only LF or CRLF line ends throughout the Story.
+A bare CR, vertical tab, form feed, U+001C–U+001E, NEL (U+0085), U+2028 or U+2029
+anywhere in the Story keeps the full closure with reason `unsupported-line-ends`
+and the note `boundary not applied: unsupported line ends`. List one
+repository-relative prompt path per line,
 including the entry and every executable Runtime call target. Paths use letters,
 digits, underscores, hyphens, dots and slashes, with no whitespace, blank lines,
 empty/dot/parent components, fragments, escapes or Markdown link syntax. Each

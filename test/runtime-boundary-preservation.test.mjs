@@ -138,6 +138,7 @@ function assertCli(f,expectedBoundary=null) {
   const plan=JSON.parse(result.stdout).plans[0];
   assert.deepEqual(plan.boundary,expectedBoundary);
   assert.ok(plan.edges.some(edge=>edge.prompt_path===RUNNER&&edge.key==='files.read'&&edge.state==='missing'));
+  return plan;
 }
 
 for(const [name,text] of [
@@ -218,4 +219,57 @@ test('3135 repair2: a legacy heading cannot shrink the valid block and has an ad
   assert.deepEqual(capture.bindingPlans[0].boundary,[PLACE,RUNNER].sort(),'3135_REPAIR2_BLOCK_AUTHORITY');
   assert.ok(capture.bindingPlans[0].notes.some(note=>note.code==='boundary-not-applied'&&note.reason==='legacy-syntax'));
   assertCli(f,[PLACE,RUNNER].sort());
+});
+
+const unsupportedLineEnds=[
+  ['bare CR','\r'],['vertical tab','\u000b'],['form feed','\u000c'],
+  ['file separator','\u001c'],['group separator','\u001d'],['record separator','\u001e'],
+  ['NEL','\u0085'],['line separator','\u2028'],['paragraph separator','\u2029'],
+];
+function assertTarInterface(capture,count) {
+  const tar=spawnSync('tar',['-xOf','-',RUNNER],{input:capture.tar,encoding:'utf8'});
+  assert.equal(tar.status,0);
+  assert.equal(interfaceBlocks(tar.stdout).length,count,'3135_INTEGRATION_TAR_INTERFACE');
+}
+for(const [name,ending] of unsupportedLineEnds)for(const context of ['outer fence','elsewhere in Story'])
+  test(`3135 integration regression: ${name} ${context} keeps every required edge`,t=>{
+    const f=setup(t);
+    // The outer-fence form is the review's exact witness for CR and U+2028.
+    const text=context==='outer fence'
+      ? `\n~~~markdown${ending}example\n\n\x60\x60\x60pdd-boundary\n${PLACE}\n\x60\x60\x60\n\n~~~\n`
+      : `\nStory note${ending}continued\n${strictBlock([PLACE])}`;
+    appendFileSync(join(f.repo,STORY),text);
+    const capture=captureSource(f.repo,{tests:[TEST]});
+    // Check actual tar bytes first so the review witnesses detect scope loss.
+    assertTarInterface(capture,1);assertRequired(capture);
+    assertPlanNote(capture.bindingPlans[0],'unsupported-line-ends');
+    assert.ok(capture.bindingPlans[0].notes.some(note=>/boundary not applied: unsupported line ends\b/.test(note.message)));
+    assertPlanNote(assertCli(f),'unsupported-line-ends');
+  });
+
+for(const [name,text] of [
+  ['LF outer fence',`\n~~~markdown\nexample\n${strictBlock([PLACE])}\n~~~\n`],
+  ['backtick outer fence',`\n\x60\x60\x60\x60markdown\n${strictBlock([PLACE])}\x60\x60\x60\x60\n`],
+  ['bullet list',`\n- Example\n\n${strictBlock([PLACE]).split('\n').map(line=>`  ${line}`).join('\n')}\n`],
+  ['ordered list',`\n1. Example\n\n${strictBlock([PLACE]).split('\n').map(line=>`   ${line}`).join('\n')}\n`],
+  ['list opening line',`\n- \x60\x60\x60pdd-boundary\n  ${PLACE}\n  \x60\x60\x60\n`],
+  ['block quote',`\n${strictBlock([PLACE]).split('\n').map(line=>`> ${line}`).join('\n')}\n`],
+  ['HTML block',`\n<div>\n${strictBlock([PLACE])}\n</div>\n`],
+]) test(`3135 integration control: ${name} cannot narrow`,t=>{
+  const f=setup(t);appendFileSync(join(f.repo,STORY),text);
+  const capture=captureSource(f.repo,{tests:[TEST]});
+  assertTarInterface(capture,1);assertRequired(capture);
+  assertPlanNote(capture.bindingPlans[0],'unsupported-syntax');assertCli(f);
+});
+
+test('3135 integration control: valid top-level CRLF block narrows',async t=>{
+  const f=setup(t),runner=read(f,RUNNER);
+  save(f,STORY,(read(f,STORY)+strictBlock([PLACE])).replace(/\r?\n/g,'\r\n'));
+  const capture=captureSource(f.repo,{tests:[TEST]}),plan=capture.bindingPlans[0];
+  assertTarInterface(capture,0);
+  assert.deepEqual(plan.boundary,[PLACE]);assert.deepEqual(plan.notes,[]);assert.deepEqual(plan.edges,[]);
+  assert.equal(read(f,RUNNER),runner);
+  const {ports}=portsFor({HOME:f.home,XDG_CONFIG_HOME:join(f.home,'config'),PDD_STATE_DIR:f.state});
+  assert.equal(await runCheck({cwd:f.repo,words:['place-order'],options:{'--explain-bindings':true,'--json':true}},ports),0);
+  assert.deepEqual(JSON.parse(ports.stdout.text).plans[0].boundary,[PLACE]);
 });

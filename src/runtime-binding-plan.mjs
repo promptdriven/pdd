@@ -1,13 +1,18 @@
-// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 612a35dd24ce56bd81dc925f509945f9779346867ddc1c2a6386376a1f9b4bdb).
+// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 88601e7ece87e6f69f19abacd4e734c480f540913988622106f93146c031403d).
 
 const rows = value => Array.isArray(value) ? value : [];
 const boundaryNote = (notes, reason) => {
   notes.push({code:'boundary-not-applied',reason,message:reason === 'legacy-syntax'
     ? 'boundary not applied: use the pdd-boundary block'
-    : `boundary not applied: ${reason}; full dependency closure is required`});
+    : `boundary not applied: ${reason === 'unsupported-line-ends' ? 'unsupported line ends' : reason}; full dependency closure is required`});
   return null;
 };
 export function runtimeBoundary(storyPath, text, {notes=[]}={}) {
+  // Scope removal needs unambiguous line boundaries throughout the Story.
+  // Do not normalize unsupported separators into apparent top-level authority.
+  if (/\r(?!\n)|[\v\f\u001c-\u001e\u0085\u2028\u2029]/u.test(text)) {
+    return boundaryNote(notes,'unsupported-line-ends');
+  }
   const lines = text.split(/\r?\n/);
   // Admission is deliberately stricter than Markdown discovery. Count even
   // unsupported/example markers so uncertain declarations never yield a subset.
