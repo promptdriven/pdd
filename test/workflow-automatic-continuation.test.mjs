@@ -11,7 +11,7 @@ const origin = {repository:'example/project',coordinatorId:'coordinator-a',machi
 const reply = value => ({json:JSON.stringify(value)});
 async function ready(t) {
   const f=await fixture(t,{name:'bug',agent:'codex'});
-  f.ports.env={HOME:f.ports.env.HOME};
+  f.ports.env={HOME:f.ports.env.HOME,PDD_INTERPRETER_QUEUE:f.ports.env.PDD_INTERPRETER_QUEUE};
   assert.equal((await startRun({name:'bug',issue:'17',agent:'codex',cwd:f.source,packageRoot},f.ports)).exitCode,0);
   for(const step of ['reproduce','prompt-story']) { f.tick(); const r=await stepDone({step,summary:step,cwd:f.record().root},f.agentPorts()); assert.equal(r.exitCode,0,r.message); }
   const run=f.record(); run.automaticOrigin=structuredClone(origin); writeRun(run);
