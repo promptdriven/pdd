@@ -2,7 +2,7 @@
 
 I can have the evidence for each proposed bug relation checked before any link is written.
 
-As a maintainer, I want check relation evidence, so that related bug work is grounded in evidence.
+As a maintainer, I want to check relation evidence, so that related bug work is grounded in evidence.
 
 ## Acceptance criteria
 

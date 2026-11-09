@@ -30,6 +30,26 @@
       "id": "changed",
       "given": "A source revision or authority changes after validation",
       "required_observation": "The effect is held until current evidence and authority are valid."
+    },
+    {
+      "id": "unavailable",
+      "given": "The current revision cannot be read",
+      "required_observation": "The whole batch has zero writes and reports the held source."
+    },
+    {
+      "id": "untrusted",
+      "given": "The issue comment author is not trusted",
+      "required_observation": "The whole batch has zero writes and reports the held source."
+    },
+    {
+      "id": "unsafe",
+      "given": "The code locator escapes the checkout",
+      "required_observation": "The whole batch has zero writes and reports the held source."
+    },
+    {
+      "id": "mismatch",
+      "given": "The exact quote is absent from the cited revision",
+      "required_observation": "The whole batch has zero writes and reports the held source."
     }
   ]
 }

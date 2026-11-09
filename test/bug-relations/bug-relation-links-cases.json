@@ -8,7 +8,7 @@
     },
     {
       "id": "AC2",
-      "text": "An explicitly selected existing Class parent may receive the selected sub-issue; an unsupported duplicate effect is reported without claiming success."
+      "text": "An explicitly selected existing Class parent may receive the selected sub-issue; an explicit duplicate is marked with verified native readback."
     },
     {
       "id": "AC3",
@@ -29,7 +29,7 @@
     {
       "id": "duplicate",
       "given": "A validated duplicate choice names endpoints and direction",
-      "required_observation": "It is reported unsupported until a documented native mutation and safe readback exist; no substitute link is made."
+      "required_observation": "The duplicate issue receives the documented comment and a matching complete timeline readback confirms the selected canonical issue."
     },
     {
       "id": "holds",
@@ -40,6 +40,41 @@
       "id": "uncertain",
       "given": "A mutation has an unknown result",
       "required_observation": "The batch stops and does not blindly resend; confirmed earlier results remain visible."
+    },
+    {
+      "id": "classifications",
+      "given": "Five classifications each explicitly choose none",
+      "required_observation": "All five are retained with no dependency writes."
+    },
+    {
+      "id": "direction",
+      "given": "A needs effect reverses the agent supplied dependent and blocker",
+      "required_observation": "Only the supplied direction is eligible; the inverse is never written."
+    },
+    {
+      "id": "unsafe-endpoint",
+      "given": "An effect names an unrelated endpoint or itself",
+      "required_observation": "No mutation occurs."
+    },
+    {
+      "id": "undo",
+      "given": "A human unmarks a previously marked duplicate",
+      "required_observation": "The duplicate remains unmarked and is not recreated."
+    },
+    {
+      "id": "unknown-post",
+      "given": "The duplicate comment POST outcome is unknown",
+      "required_observation": "The batch stops and retry uses readback only, with no second POST."
+    },
+    {
+      "id": "unknown-readback",
+      "given": "The duplicate timeline pagination is incomplete",
+      "required_observation": "No success is claimed and no POST is repeated."
+    },
+    {
+      "id": "already",
+      "given": "The selected link is already present",
+      "required_observation": "It is reported already present and no mutation is sent."
     }
   ]
 }

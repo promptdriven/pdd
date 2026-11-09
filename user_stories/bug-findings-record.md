@@ -2,7 +2,7 @@
 
 I can see a reproduced bug’s cause and its discovered relations in the run and PR 1.
 
-As a maintainer, I want keep reproduced bug findings, so that related bug work is grounded in evidence.
+As a maintainer, I want to keep reproduced bug findings, so that related bug work is grounded in evidence.
 
 ## Acceptance criteria
 

@@ -35,6 +35,21 @@
       "id": "inert",
       "given": "Findings contain Markdown, mentions, closing words and ownership markers",
       "required_observation": "Rendering does not notify, forge ownership or close an issue; check results remain unchanged."
+    },
+    {
+      "id": "intake",
+      "given": "A valid bound findings file on successful bug reproduction with a needs effect",
+      "required_observation": "Done invokes the relation boundary once, saves the finding and receipt, and PR 1 retains both after refresh."
+    },
+    {
+      "id": "malformed",
+      "given": "A malformed, mismatched or unsafe findings file",
+      "required_observation": "Done refuses before effects and retains prior observations."
+    },
+    {
+      "id": "legacy",
+      "given": "A bug run has no findings input",
+      "required_observation": "Legacy completion is unchanged."
     }
   ]
 }

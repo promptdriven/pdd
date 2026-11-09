@@ -2,12 +2,12 @@
 
 I can have my evidence-backed relation choices reflected in safe native issue links.
 
-As a maintainer, I want apply chosen native relations, so that related bug work is grounded in evidence.
+As a maintainer, I want to apply chosen native relations, so that related bug work is grounded in evidence.
 
 ## Acceptance criteria
 
 1. Only a necessary-before needs choice may create a dependency in the supplied direction; other classifications do not automatically become dependencies.
-2. An explicitly selected existing Class parent may receive the selected sub-issue; an unsupported duplicate effect is reported without claiming success.
+2. An explicitly selected existing Class parent may receive the selected sub-issue; an explicit duplicate is marked with verified native readback.
 3. Existing links, human removals, graph cycles, ownership, incomplete observations and uncertain mutation outcomes are respected.
 
 ## Native cases for the code step
