@@ -17,6 +17,8 @@ for (const key of [
   'PDD_STATE_DIR', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME',
   'XDG_DATA_HOME', 'XDG_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
   'GEMINI_CLI_HOME', 'AGY_HOME', 'GH_CONFIG_DIR',
+  // Outer suite controls must not select a test's queue or subprocess command.
+  'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'SUITE',
 ]) delete process.env[key];
 
 // userInfo bypasses HOME and reads the account database. A caught lookup still

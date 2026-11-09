@@ -35,6 +35,54 @@ function child(args, env, cwd = root) {
   return spawnSync(process.execPath, args, { cwd, env, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
 }
 
+for (const entry of ['focused import', 'npm preload']) test(`${entry} removes inherited suite controls before tests and subprocesses`, t => {
+  const f = caller(t), project = join(f.dir, 'suite-project');
+  mkdirSync(join(project, 'test/helpers'), { recursive: true });
+  writeFileSync(join(project, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  writeFileSync(join(project, 'package.json'), JSON.stringify({ private: true, type: 'module', scripts: { test: manifest.scripts.test } }));
+  const controls = { PDD_SUITE_QUEUE: join(f.home, 'suite-queue'), PDD_VM_SUITE_LOCK: join(f.home, 'suite.lock'), SUITE: 'synthetic-unused-command' };
+  mkdirSync(controls.PDD_SUITE_QUEUE);
+  writeFileSync(join(controls.PDD_SUITE_QUEUE, 'keep'), 'caller-suite-queue');
+  writeFileSync(controls.PDD_VM_SUITE_LOCK, 'caller-suite-lock');
+  Object.assign(f.env, controls, { PDD_CHECK_CPUS: '3' });
+  const before = snapshot(f.home), parentEnv = { ...f.env }, record = join(f.dir, 'suite-test-home');
+  const file = join(project, 'test/controls.test.mjs');
+  writeFileSync(file, `
+    ${entry === 'focused import' ? "import './helpers/test-home.mjs';" : ''}
+    import test from 'node:test';
+    import assert from 'node:assert/strict';
+    import { writeFileSync } from 'node:fs';
+    import { execFileSync } from 'node:child_process';
+    import { join } from 'node:path';
+    writeFileSync(${JSON.stringify(record)}, process.env.HOME);
+    test('suite controls', () => {
+      const names = ${JSON.stringify(Object.keys(controls))};
+      for (const name of names) assert.equal(process.env[name], undefined, name);
+      const inherited = JSON.parse(execFileSync(process.execPath, ['-e',
+        'console.log(JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([key]) => '+JSON.stringify(names)+'.includes(key)))))'
+      ], { encoding: 'utf8' }));
+      assert.deepEqual(inherited, {});
+      assert.equal(process.env.PDD_CHECK_CPUS, '3');
+      assert.equal(process.env.PDD_INTERPRETER_QUEUE, join(process.env.HOME, 'interpreter-queue'));
+      process.env.PDD_SUITE_QUEUE = join(process.env.HOME, 'fixture-suite-queue');
+      const selected = execFileSync(process.execPath, ['-e', 'process.stdout.write(process.env.PDD_SUITE_QUEUE)'], { encoding: 'utf8' });
+      assert.equal(selected, process.env.PDD_SUITE_QUEUE);
+    });
+  `);
+  const result = entry === 'focused import' ? child(['--test', file], f.env, project)
+    : spawnSync('npm', ['test', '--ignore-scripts=false'], {
+      cwd: project, env: { ...f.env, npm_config_cache: join(f.dir, 'npm-cache'), npm_config_userconfig: join(f.dir, 'no-npmrc'), npm_config_update_notifier: 'false' },
+      encoding: 'utf8', timeout: 30000,
+    });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stdout, /# pass 1\b/);
+  assert.match(result.stdout, /# fail 0\b/);
+  assert.equal(existsSync(readFileSync(record, 'utf8')), false);
+  assert.deepEqual(f.env, parentEnv);
+  assert.deepEqual(snapshot(f.home), before, 'caller-suite-controls');
+});
+
 test('default state, skills, homedir fallback and children use a disposable home', t => {
   const f = caller(t), before = snapshot(f.home);
   const script = `
