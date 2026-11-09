@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: c9ce3391adce6318e14b67bca43cb54c702e7f875e1835a49027f397cbd5ca36).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 6f157c29e2941f8ba2569bea02e308bba39f5566bb0ab4f1e90af3045a9b64a1).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -458,7 +458,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     `${row.test} ${item.criterion_id}: not checked: ${cleanText(item.reason,secrets)} (${cleanText(item.text,secrets)})`);
   for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.test, secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
     `  Client advice: ${JSON.stringify(row.client_advice)}`);
-  if (coverage) out.push(coverageText(coverage));
+  if (coverage) out.push(coverageText(coverage, {busy: rows.some(row => row.busy_display || row.busy) && rows.every(row => row.state === 'passed' || row.busy_display || row.busy)}));
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];
   out.push(`${rows.filter(row => row.state === 'passed').length} of ${rows.length} stories passed.${models.length ? ` Model asked for: ${models.join(', ')}.` : ''}`);
   const linked = rows.filter(row => row.report_url);
@@ -487,9 +487,9 @@ export function tryUsageHeaders(usage) {
     'x-pdd-try-remaining': String(usage.remaining), 'x-pdd-try-cap': String(usage.cap) };
 }
 
-export function coverageText(coverage) {
+export function coverageText(coverage, {busy = false} = {}) {
   const runtime = coverage?.runtime;
-  const promptLine = runtime ? `${runtime.native_only ? 'Runtime' : 'Interpreter'} coverage: ${runtime.checkable} of ${runtime.total} prompts checkable, ${runtime.native_only} native-only\n` : '';
+  const promptLine = runtime ? `${busy || runtime.native_only ? 'Runtime' : 'Interpreter'} coverage: ${runtime.checkable} of ${runtime.total} prompts checkable, ${runtime.native_only} native-only\n` : '';
   if (!coverage?.available) return promptLine + 'Module binding coverage unavailable: no pdd-bindings.json.';
   return promptLine + [`${coverage.bound} of ${coverage.total} modules bound`, ...coverage.modules.filter(m => m.state === 'unbound').map(m => `  ${m.path}: ${m.reason} Port attempted: ${m.port_attempt}`)].join('\n');
 }

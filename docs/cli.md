@@ -1102,7 +1102,7 @@ Native-only requires a reason that names an effect the bound ports cannot fake
 (RUNBOOK §21). A checker reviews the reason. Approval records it. Checks show
 `not run: <reason>`, with no passing result. Other selected tests can run.
 
-Test output, workflow status and saved PR evidence include prompt coverage counts. Text uses `Runtime coverage: N of M prompts checkable, K native-only` for native declarations and `Interpreter coverage` otherwise. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
+Test output, workflow status and saved PR evidence include prompt coverage counts. Text uses `Runtime coverage: N of M prompts checkable, K native-only` for native declarations and `Interpreter coverage` otherwise. A response with only passed and busy checks uses `Runtime coverage` and retains all coverage counts. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
 
 Saved reads preserve native-only outcomes and reasons while other selected rows
 wait for lint or complete it. Local lint also saves coverage and omission evidence
