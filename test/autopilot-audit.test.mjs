@@ -5,7 +5,7 @@ import * as nativeFs from 'node:fs';
 import {readFileSync,writeFileSync,mkdirSync,readdirSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {pendingAudits} from '../src/autopilot-audit.mjs';
+import {auditMerge,pendingAudits} from '../src/autopilot-audit.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {captureCosts} from '../src/cost-ledger.mjs';
 import {updateRunCosts} from '../src/workflow-runs.mjs';
@@ -65,6 +65,57 @@ async function atLaunch(ready,pending) {
 const comments = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.some(a=>a.endsWith('/comments')));
 const reopens = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('PATCH')&&c.args.includes('state=open'));
 const newPrs = w=>w.calls.filter(c=>c.file==='gh'&&c.args[0]==='pr'&&c.args[1]==='create');
+
+const checkHeldAudit=w=>auditMerge({run:w.run,pr:23},{...w.ports,fs:w.fs??nativeFs,
+  execFile:async(file,args)=>{w.calls.push({file,args});throw Error('held audit must not execute a program');},
+  sendAlert:async input=>{w.alerts.push(input);return {exitCode:w.uncertain==='alert'?1:0};},
+});
+
+// The recommendation is the only damaged field. No saved effect may run.
+for(const custody of ['local','shared']) for(const damage of ['missing','non-boolean'])
+  test(`3138 repair 1: ${custody} ${damage} recommendation holds and alerts once`,async t=>{
+    const w=await world(t),record={schema:'pdd.audit.v1',repository:w.run.repo.toLowerCase(),runId:w.run.runId,pr:23,
+      merge,parent,at:1,state:'recorded',completedAt:2,chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},
+      result:result('BAD'),comment:{state:'unknown',at:2},revert:{state:'unknown',at:2}};
+    if(damage==='missing')delete record.result.revert;else record.result.revert='false';
+    const folder=custody==='local'?join(w.run.runDir,'audits'):join(w.concernFolder(),'..','records');
+    mkdirSync(folder,{recursive:true});
+    const identity=createHash('sha256').update(JSON.stringify([record.runId,record.pr,record.merge])).digest('hex');
+    const file=custody==='local'?w.file():join(folder,`${identity}.json`);
+    writeFileSync(file,JSON.stringify(record));writeFileSync(`${file}.revert`,'');
+    const bytes=readFileSync(file,'utf8'),reservations=readdirSync(folder).sort(),holds=[];
+    for(let n=0;n<2;n++) {
+      assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[]);
+      const out=await checkHeldAudit(w);assert.equal(out.exitCode,1);assert.match(out.message,/audit-evidence-invalid/);
+    }
+    assert.equal(w.alerts.length,1,'MISSING_RECOMMENDATION_NEEDS_ONE_DECISION_ALERT');
+    const alert=JSON.parse(w.alerts[0].text);
+    assert.equal(w.alerts[0].kind,'decision');assert.match(alert.cause,/recommendation.*(missing|unavailable)/i);
+    assert.match(alert.need,/inspect/i);assert.match(alert.need,/keep.*merge.*finish/i);
+    assert.ok(alert.need.includes(`git revert -m 1 ${merge}`));assert.ok(alert.need.includes(w.run.baseBranch));
+    assert.deepEqual(holds.map(h=>h.cause),['audit-evidence-invalid','audit-evidence-invalid']);
+    assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+    assert.equal(readFileSync(file,'utf8'),bytes);assert.deepEqual(readdirSync(folder).sort(),reservations);
+    assert.equal(readFileSync(`${file}.revert`,'utf8'),'');
+  });
+
+for(const failure of ['failed','uncertain'])test(`3138 repair 1: recommendation alert ${failure} custody survives restart`,async t=>{
+  const w=await world(t),record={schema:'pdd.audit.v1',runId:w.run.runId,pr:23,merge,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:result('BAD')};
+  delete record.result.revert;mkdirSync(join(w.run.runDir,'audits'),{recursive:true});writeFileSync(w.file(),JSON.stringify(record));
+  const bytes=readFileSync(w.file(),'utf8');
+  // The first response either confirms failure or leaves delivery uncertain.
+  w.uncertain='alert';
+  if(failure==='uncertain')w.fs={...nativeFs,renameSync(from,to) {
+    if(String(to).includes('/decisions/') && JSON.parse(readFileSync(from,'utf8')).state==='failed')throw Error('crash before final journal');
+    return nativeFs.renameSync(from,to);
+  }};
+  assert.equal((await checkHeldAudit(w)).exitCode,1);assert.equal(w.alerts.length,1);
+  delete w.fs;delete w.uncertain;
+  assert.equal((await checkHeldAudit(w)).exitCode,1);assert.equal((await checkHeldAudit(w)).exitCode,1);
+  assert.equal(w.alerts.length,failure==='failed'?2:1);
+  assert.equal(readFileSync(w.file(),'utf8'),bytes);assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+});
 
 for(const recommendation of [false,true])test(`3138 BAD revert=${recommendation} saves the recommendation and alerts once`,async t=>{
   const w=await world(t);w.answer={...result('BAD'),revert:recommendation};

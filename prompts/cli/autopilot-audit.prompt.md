@@ -105,7 +105,25 @@ present publication reservation, including its state, time and successful value
 (or concern kind). Invalid local or shared authority is audit-evidence-invalid;
 unreadable authority is audit-evidence-unreadable. Retain its bytes and
 reservations. It authorizes no follow-up effects and no additional auditor
-launch, including for another PR in the same evidence inventory. Supply shared auditor chats to cost refresh by runId;
+launch, including for another PR in the same evidence inventory. One narrow
+exception is a person-decision alert for a recorded BAD result whose recommendation
+is absent or non-Boolean, with all other record and filename identity checks valid
+for the selected repository, run attempt and merged PR. This is a diagnostic hold,
+not an accepted verdict or permission for a follow-up publication. Never infer
+false, import, repair or rewrite that evidence or its effect reservations. Keep the
+command nonzero with audit-evidence-invalid; create no revert, issue update,
+comment or auditor. Identify the recommendation as missing or unavailable, ask the
+person to inspect the evidence, and name both choices: keep the merge and finish
+the rest, or revert on a review branch with `git revert -m 1 MERGE_SHA` and a PR
+against the saved base. Share this alert route between held discovery and the
+audit command. Under repository audit custody, journal the alert separately in
+`decisions/IDENTITY.json` with schema (`pdd.audit-decision.v1`), repository
+(lowercase), runId, pr, merge, state (sending/sent/failed/unknown) and at. Reserve
+sending before delivery; sent and recovered sending/unknown suppress repeats.
+Only a confirmed failed send may retry. A damaged/unreadable decision journal
+holds without sending. Its identity is the audit identity below, independent of
+the damaged recommendation and source bytes, so repeats and independent clones
+cannot duplicate a successful or uncertain alert. Supply shared auditor chats to cost refresh by runId;
 a shared attempt absent from discovery leaves cost admission unknown. Use the native dead-owner recovery lock through an
 injected acquireAuditLock port; it is not the workflow mutation lock. A second
 caller waits for a later tick, never sends an early BAD alert. The concern file
@@ -151,14 +169,20 @@ means no evidence yet. Preserve all evidence and reservations. Continue ordinary
 inventory holds every otherwise pending audit that could use that inventory;
 an invalid audit cannot admit a launch for another PR. A local folder failure
 holds its merged PRs only.
-Discovery makes no paid call or publication.
+Discovery makes no paid call or publication. Its caller routes invalid-evidence
+holds through auditMerge for the narrow decision-alert exception above; the hold
+and empty audit offer remain unchanged.
+
+Port `auditHoldOnly: true` restricts a discovery-triggered auditMerge call to
+inspection and this diagnostic alert. If the evidence is repaired between the
+scan and the call, leave ordinary follow-ups and launches for the next scan.
 
 Ports may supply fs, env, now, execFile, readConfig, agentDefinitions,
 codexLimits, refreshCosts (the identity-guarded updateRunCosts boundary), dailyUsage (`{known,total}` in tokens), runAuditor, sendAlert,
 alertPorts and acquireAuditLock; defaults use the declared native dependencies.
 `auditStateRoot` optionally selects this repository's private bookkeeping folder;
 otherwise use stateDirFor(ports)/autopilot-audits/ plus the first 20 hex characters
-of SHA-256 of the lowercase repository. This folder owns operation.lock, concerns/KIND.json and
+of SHA-256 of the lowercase repository. This folder owns operation.lock, concerns/KIND.json, decisions/IDENTITY.json and
 records/IDENTITY.json, where IDENTITY is SHA-256 of the JSON tuple
 [runId, integer PR, merge SHA]. Shared records retain the lowercase repository.
 Run evidence copies stay under the run's audits folder. A damaged authority is a
@@ -177,6 +201,6 @@ hold, never absence. Legacy local reservation files also prevent resend.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"29610a18b4740c1207ff0aa38ef424517026fff8b8dd4a1f2cb7aefecae9616b","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"b044a771e22d62165145f6c451506951f8d1d5b80998444be4d14f2bdcbd2956","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

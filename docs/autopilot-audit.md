@@ -60,6 +60,15 @@ reservations cause an `audit-evidence-invalid` hold. The hold preserves the save
 evidence and reservations. The public audit command applies the same checks as
 discovery. Damaged evidence cannot admit another PR's auditor.
 
+A recorded BAD audit with only a missing or non-Boolean revert recommendation
+stays held. Discovery and the audit command use the same decision-alert path.
+The alert says that the recommendation is unavailable. It asks the person to
+inspect the evidence and choose: keep the merge and finish the rest, or use
+`git revert -m 1 MERGE_SHA` on a review branch and open a PR against the saved
+base. A separate durable alert record preserves the damaged evidence and all
+publication reservations. Repeats send nothing after success or uncertain
+delivery. A confirmed failed send can retry. No revert PR or new auditor runs.
+
 Completed automatic runs remain eligible after coordinator replacement. Discovery
 matches the repository, source checkout and machine. It includes absent audits
 and saved verdicts with unsent follow-ups. Shared reservations still prevent a

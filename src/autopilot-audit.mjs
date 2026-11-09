@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 0a8e9dd7bd71282056b692f47efb6b223695731c68dad12f9c9b185a3189cd19).
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 1eda7594528a6fbbf4a80475f95a0ff632aa9e12515a00f394f99390cb4acb09).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -51,13 +51,21 @@ function validAudit(audit) {
     || audit.concern.kind !== audit.result.kind)) return false;
   return true;
 }
+// This predicate permits a diagnostic alert only. It never admits damaged authority.
+function unavailableRecommendation(audit) {
+  return object(audit?.result) && audit.result.verdict==='BAD' && typeof audit.result.revert!=='boolean'
+    && validAudit({...audit,result:{...audit.result,revert:false}});
+}
 function auditRecords(fs, folder, local = false) {
   let names;
   try {names=fs.readdirSync(folder);} catch(e) {if(e.code==='ENOENT') return [];throw e;}
   return names.filter(n=>local ? /^\d+\.json$/.test(n) : n.endsWith('.json')).map(name=>{
     const audit=read(fs,join(folder,name));
-    if(!validAudit(audit) || (local ? audit.pr!==Number(name.slice(0,-5))
-      : !named(audit.repository) || name!==`${auditIdentity(audit)}.json`)) throw invalidEvidence();
+    const identityValid=object(audit) && (local ? audit.pr===Number(name.slice(0,-5))
+      : named(audit.repository) && name===`${auditIdentity(audit)}.json`);
+    if(!validAudit(audit) || !identityValid) throw Object.assign(invalidEvidence(), {
+      recommendationHold:identityValid && unavailableRecommendation(audit) ? audit : undefined,
+    });
     return audit;
   });
 }
@@ -117,6 +125,39 @@ function validResult(r) {
     && typeof r.revert === 'boolean' && typeof r.kind === 'string'
     && (r.verdict !== 'CONCERN' || /^[a-z][a-z0-9-]{0,79}$/.test(r.kind));
 }
+// Separate custody lets us ask for a decision without importing or repairing authority.
+async function alertUnavailableRecommendation(run, pr, audit, ports) {
+  const saved=run.pr.find(p=>p.number===Number(pr));
+  const savedMerge=saved?.mergeCommit?.oid ?? saved?.mergeCommit ?? saved?.mergeSha;
+  if(!audit || audit.runId!==run.runId || audit.pr!==Number(pr) || saved?.state!=='merged'
+    || savedMerge && savedMerge!==audit.merge
+    || audit.repository!==undefined && audit.repository.toLowerCase()!==run.repo.toLowerCase()) return;
+  const fs=ports.fs ?? nativeFs, now=ports.now ?? Date.now;
+  const folder=join(repositoryFolder(run,ports),'decisions'),file=join(folder,`${auditIdentity(audit)}.json`);
+  fs.mkdirSync(folder,{recursive:true,mode:0o700});
+  const previous=read(fs,file);
+  if(previous) {
+    if(previous.schema!=='pdd.audit-decision.v1' || previous.repository!==run.repo.toLowerCase()
+      || previous.runId!==run.runId || previous.pr!==Number(pr) || previous.merge!==audit.merge
+      || !time(previous.at) || !['sending','sent','failed','unknown'].includes(previous.state)) throw invalidEvidence();
+    if(previous.state!=='failed') return;
+  }
+  const reservation={schema:'pdd.audit-decision.v1',repository:run.repo.toLowerCase(),runId:run.runId,
+    pr:Number(pr),merge:audit.merge,state:'sending',at:now()};
+  if(previous) save(fs,file,reservation);
+  else fs.writeFileSync(file,JSON.stringify(reservation),{flag:'wx',mode:0o600});
+  try {
+    const input={action:'alert',cwd:run.sourceRoot ?? run.root,env:ports.env ?? process.env,
+      issue:String(run.number),kind:'decision',text:JSON.stringify({
+        cause:`Post-merge audit BAD for PR #${pr} (${audit.merge}). Revert recommendation is missing or unavailable.`,
+        tried:'Held the audit without a revert or another auditor. Saved evidence and effect reservations are unchanged.',
+        need:`Inspect the saved audit evidence and decide: keep the merge and finish the rest on issue #${run.number}, or revert on a review branch with git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.`,
+      })};
+    const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
+    reservation.state=result?.exitCode===0?'sent':result?.exitCode!==undefined?'failed':'unknown';
+  } catch {reservation.state='unknown';}
+  reservation.at=now();save(fs,file,reservation);
+}
 export async function auditMerge(input, ports = {}) {
   const fs=ports.fs ?? nativeFs, run=input?.run;
   if(!run?.commonDir || !run?.runDir) return {exitCode:1,message:'Post-merge audit: saved run is unavailable.'};
@@ -155,9 +196,12 @@ async function auditMergeOwned({run, pr}, ports = {}) {
     localRecords=auditRecords(fs,dirname(localFile),true);
     sharedRecords=auditRecords(fs,recordsFolder);
   } catch(error) {
+    try {await alertUnavailableRecommendation(run,pr,error.recommendationHold,ports);}
+    catch { /* An unavailable alert journal cannot release the evidence hold. */ }
     return fail(error instanceof SyntaxError || error.code==='audit-evidence-invalid'
       ? 'audit-evidence-invalid; saved authority needs inspection.' : 'audit-evidence-unreadable; saved authority needs inspection.');
   }
+  if(ports.auditHoldOnly) return fail('saved evidence needs an ordinary audit scan before follow-up.');
   if(sharedRecords.some(a=>a.repository!==run.repo.toLowerCase())
     || localRecords.some(a=>a.repository!==undefined && a.repository.toLowerCase()!==run.repo.toLowerCase()))
     return fail('audit-evidence-invalid; saved audit repository differs.');
