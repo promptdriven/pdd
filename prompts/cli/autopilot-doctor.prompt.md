@@ -129,8 +129,8 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 ```json
 {
   "kind": "partial",
-  "status": "draft",
-  "prose_sha256": "",
+  "status": "approved",
+  "prose_sha256": "567e8436ec26b25bcdfd88298b9c657e16d7f4baefb93b2049dc1ee620d56f83",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

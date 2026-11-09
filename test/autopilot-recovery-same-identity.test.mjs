@@ -107,15 +107,21 @@ async function launcherHarness(f) {
   let agentStarted = false, workspaceCount = 0, coordinatorStatus = 'idle';
   let coordinatorSnapshot = graph.snapshot;
   const ownerPorts = {read: async () => reply({localOwner: 'launcher-coordinator', claims: [], runs: [], runsKnown: true})};
+  const fixtureAgent = {id: 'offline-fixture', kind: 'codex', command: 'offline-fixture', env: {}};
   const ports = {
     ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir),
+    doctorPorts: input => {
+      const doctor = healthyMachine.doctorPorts(input), run = doctor.run;
+      return {...doctor, agentDefinitions: () => [fixtureAgent],
+        run: (file, args, options) => run(file === fixtureAgent.command ? 'codex' : file, args, options)};
+    },
     env: {HOME: home, PATH: process.env.PATH},
     stateRoot,
     now: () => now,
     elapsedNow: () => 10,
     sleep: async () => {},
     timer: async (action, state) => { timerCalls.push({action, nextTick: state.nextTick, enabled: state.enabled}); return action === 'start'; },
-    selectAgent: async () => ({id: 'offline-fixture', kind: 'codex', command: 'offline-fixture', env: {}}),
+    selectAgent: async () => fixtureAgent,
     pathDiagnostic: () => [],
     readRunProgress: async () => [],
     allocationCheck: async () => ({ state: 'ready', message: '' }),

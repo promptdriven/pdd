@@ -327,3 +327,4 @@ Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopi
 ## First-start doctor
 
 Register autopilot.doctor, prefix autopilot doctor, local autopilot-doctor, no operands or options. Advertise `pdd autopilot doctor` as read-only first-start diagnostics with no AI call. Preserve other forms.
+Completion offers `doctor` only after `autopilot`. The top-level `doctor` command remains unsupported, including its help forms.
