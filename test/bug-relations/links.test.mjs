@@ -52,3 +52,19 @@ test('unknown duplicate recovers from matching new event without another post',a
 test('changed evidence after initial validation prevents dispatch',async()=>{const x=fixture();let reads=0;const original=x.ports.evidence.read;x.ports.evidence.read=async()=>++reads===1?original():({json:JSON.stringify({requirements:[]})});assert.equal((await invoke(x,dup())).outcomes[0].status,'held');assert.equal(x.writes.length,0);});
 test('confirmed failure stops the batch',async()=>{const x=fixture();x.ports.github.markDuplicate=async()=>{x.writes.push('post');throw Object.assign(Error('rejected'),{status:403});};assert.deepEqual((await invoke(x,dup(),dep())).outcomes.map(x=>x.status),['failed','held']);});
 test('sub-issue removal and incomplete readback do not repeat writes',async()=>{const x=fixture();x.sub='removed';assert.equal((await invoke(x,sub())).outcomes[0].status,'held');assert.equal(x.writes.length,0);});
+test('failed batch revalidation preserves confirmed and uncertain dispatches without resending',async()=>{
+  for (const mode of ['unavailable','changed']) {
+    const x=fixture(), receipts=new Map();
+    x.ports.checkpoint={read:async ({index})=>receipts.get(index),write:async row=>receipts.set(row.index,row)};
+    x.fail=true;
+    const relations=[dep(),dup(),sub()];
+    const first=await invoke(x,...relations);
+    assert.deepEqual(first.outcomes.map(o=>o.status),['applied','unknown','held']);
+    const saved=structuredClone([...receipts]);
+    x.ports.evidence.read=async()=>{if(mode==='unavailable')throw Error('offline');return {json:JSON.stringify({requirements:[{key:key(2),revision:'changed',text:'quote',authority:'trusted'}]})};};
+    const retry=await invoke(x,...relations);
+    assert.deepEqual(retry.outcomes.map(o=>o.status),['applied','unknown','held'],mode);
+    assert.equal(x.writes.length,2,mode);
+    assert.deepEqual([...receipts],saved,mode);
+  }
+});

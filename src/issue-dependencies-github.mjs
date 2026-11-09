@@ -1697,7 +1697,33 @@ export async function applyReproducedBugRelations({ cwd = '', repository, issue,
   const ports = createDependencyReadPorts({cwd}, supplied), github = ports.github[LIVE_GITHUB] ?? ports.github;
   const key = n => `https://github.com/${repository.toLowerCase()}/issues/${n}`;
   const result = (index,status,reason = '') => ({index,status,reason});
-  const holdAll = why => ({outcomes: relations.map((_,i) => result(i,'held',why))});
+  const checkpoint = supplied.checkpoint;
+  const holdAll = async why => {
+    const outcomes = [];
+    let stopped = false;
+    for (let index = 0; index < relations.length; index++) {
+      const effect = relations[index].effect;
+      if (stopped || effect.kind === 'none' || !checkpoint?.read || !checkpoint?.write) {
+        outcomes.push(result(index,'held',stopped ? 'Earlier mutation is unresolved' : why));
+        continue;
+      }
+      let prior;
+      try { prior = await checkpoint.read({index,effect}); }
+      catch {
+        outcomes.push(result(index,'unknown','Dispatch checkpoint unavailable'));
+        stopped = true;
+        continue;
+      }
+      if (prior?.state === 'applied' || prior?.state === 'failed') {
+        outcomes.push(prior.outcome ?? result(index,prior.state,prior.state === 'failed' ? 'Previous dispatch failed' : ''));
+        if (prior.state === 'failed') stopped = true;
+      } else if (prior?.state === 'dispatching' || prior?.state === 'unknown') {
+        outcomes.push(prior.outcome?.status === 'unknown' ? prior.outcome : result(index,'unknown','Prior dispatch remains unconfirmed'));
+        stopped = true;
+      } else outcomes.push(result(index,'held',why));
+    }
+    return {outcomes};
+  };
   const evidence = async r => {
     const s = r.source; let row;
     if (s.kind === 'code') {
@@ -1721,7 +1747,6 @@ export async function applyReproducedBugRelations({ cwd = '', repository, issue,
   const write = pacedSortWrites(ports,{cwd,repository});
   const readGraph = async () => supplied.relationSnapshot ? supplied.relationSnapshot.read({cwd,repository}) : (await readDependencySnapshot({cwd,repository},{...supplied,snapshotStore:null})).snapshot;
   const outcomes = [];
-  const checkpoint = supplied.checkpoint;
   const checkOwnership = async numbers => {
     const owners = parse((await ports.owners.read({repository,issues:[...new Set([issue,...numbers])].map(key)})).json);
     if (!Array.isArray(owners.claims)) return false;
