@@ -9,17 +9,17 @@ metadata:
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-Briefs: `steps/`; `?` is optional.
+Briefs: `steps/` (`?` optional).
 1. story: reproduce, prompt-story → gate: approve
 2. prompt-pr: check, try? → approve, then gate: pr, then ask
 3. code: build, verify, formal, review → gate: pr
 
-- Autopilot `observe` or `auto`: read `steps/autopilot.md` first.
-- Main chat: coordinate; no code or checks.
-- Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Every brief requires "the run's main chat" for the chat in briefs/notes; keep actual actors and root paths. Wait one long time-out; no small follow-ups. Read §11 once; pdd-prompting RUNBOOK "Bounded handoffs".
+- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
+- Main chat coordinates; no code/checks.
+- Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Each brief: call this chat "the run's main chat" in briefs/notes; keep actual actors and root paths. Wait one long time-out; no small follow-ups. Read §11 once; pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
-- Read RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
+- Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
 - Ask at person gates only. Normal runs: show the Story card as printed; a full check pass opens PR 1. Strict mode keeps its gates. Outside runs, ask before PRs. Merge only on request (RUNBOOK §2).
 - Use full URLs.
 - Normal runs skip try; the person can ask for it at the card. Else follow the optional-step gate or Autopilot overlay.
@@ -33,7 +33,7 @@ Briefs: `steps/`; `?` is optional.
 
 ## In a run
 
-- Steps write `<run folder>/STEP.md` and commit code.
+- Steps: write `<run folder>/STEP.md`; commit code.
 - For an answer mid-step, run `<pdd> workflow ask "<question>"`. Ask in plain chat, never request_user_input, and end your turn. The person replies in chat or with `<pdd> workflow changes N "answer"`.
 - Judge the later reply without exact phrases. Never approve questions or changes. Strict mode: show changed prompts again. Record gate and draft approval:
 
@@ -43,4 +43,4 @@ Briefs: `steps/`; `?` is optional.
 PDD_SAID
 ```
 
-Quote a delimiter absent as a whole line. Blank fails. §2.
+Quote a delimiter absent as a line. Blank fails. §2.
