@@ -1,4 +1,5 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 1398972c19e472bb84a2452375f61198b342c4c18613bdf26757beb8c55d9a34).
+import {issueEffectAllowed} from './issue-dependencies-github.mjs';
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 984f525a04105db9da04fd7e6755865d051402ec503067b6883349f56a508c0d).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -273,7 +274,11 @@ async function sendAlert(input, ports, env, fs) {
   let repo;
   try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* Checked below. */ }
   if (!repoName(repo)) return done(1, 'Autopilot alerts need a GitHub repository; run pdd autopilot alert in its checkout.');
+  const allowed = () => issueEffectAllowed({repository:repo,issue:Number(issue),cwd:input.cwd,localOnly:true},{...ports,env});
+  const held = () => done(1,'Manual issue authority holds this alert.');
+  if (!await allowed()) return held();
   return withRecord(repo, env, ports, fs, async (file, record) => {
+    if (!await allowed()) return held();
     const at = new Date((ports.now ?? Date.now)()).toISOString(), host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd);
     const destination = destinationFor(fs, env, ports, input.kind), number = Number(issue);
     const confirmer = destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook';
@@ -303,6 +308,8 @@ async function sendAlert(input, ports, env, fs) {
         const kinds = group.map(key => record.incidents[key].kind);
         const issues = [...new Set(group.flatMap(key => issuesOf(record.incidents[key])))].sort((a, b) => a - b);
         const route = destinationFor(fs, env, ports, kinds[0]);
+        for (const number of issues) if (!await issueEffectAllowed({repository:repo,issue:number,cwd:input.cwd,localOnly:true},{...ports,env})) return held();
+        if (!await allowed()) return held();
         const outcome = route ? await deliver(route, alertText('recovered', { kinds, host, repo, issues: issues.length ? issues : [number], fields: clean }), ports, input.cwd)
           : { result: 'not-configured' };
         for (const key of group) delete record.incidents[key];
@@ -327,6 +334,7 @@ async function sendAlert(input, ports, env, fs) {
       return done(0, joined ? `Added #${issue} to the open ${input.kind} alert on this machine; nothing sent. Use --update to send the new issue list.`
         : `Alert for ${label} is already open; nothing sent. Use --update only for a material change.`);
     }
+    for (const number of issues) if (!await issueEffectAllowed({repository:repo,issue:number,cwd:input.cwd,localOnly:true},{...ports,env})) return held();
     const outcome = await send(alertText(action === 'update' ? 'update' : 'alert', { kinds: [input.kind], host, repo, issues, fields: clean }));
     record.incidents[key] = { kind: input.kind, host, ...route, issues, listed: issues, fields: clean, openedAt: open?.openedAt ?? at, updatedAt: at,
       result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) };

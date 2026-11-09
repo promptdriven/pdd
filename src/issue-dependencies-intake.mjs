@@ -1,5 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: 399c196da1ad3776ad6ab4e423c2f0e7150ae641316baab80962ce3210b00046).
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: afa3039824e6c6b2b7acd0b9add33044c006a107cf7e0cbe6d9f1c783701414c).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { gitContext } from './workflow-runs.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange, issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges, commandGithubFloor } from './issue-dependencies-github.mjs';
+import { issueEffectAllowed, createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges, commandGithubFloor } from './issue-dependencies-github.mjs';
 
 const snapshotRead = async (ports, args) => {
   const result = await (ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports));
@@ -179,6 +179,7 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
       try { await ports.checkPaneCapacity(); }
       catch (error) { return {allowed:false,reason:error.code === 'herdr_pane_budget' ? 'panes' : 'unknown'}; }
     }
+    if (node.eligible && !await issueEffectAllowed({repository,issue:subjectNumber,cwd},ports)) return {allowed:false,reason:'dependency'};
     return node.eligible ? { allowed: true, reason: 'ok' } : { allowed: false, reason: 'dependency' };
   } catch { return { allowed: false, reason: 'unknown' }; }
 }
@@ -442,10 +443,8 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   // One delivery through the existing route. `redelivery` marks a repeated request
   // while it is sent, so the launcher can name it and refuse it under uncertain custody.
   const send = async again => {
-    if (ports.manualHold) for (const key of prepared.queued) {
-      const hold = await ports.manualHold.read({repository, issue:Number(key.split('/').pop())});
-      if (!hold.known || hold.held) return false;
-    }
+    for (const key of prepared.queued)
+      if (!await issueEffectAllowed({repository, issue:Number(key.split('/').pop()), cwd}, ports)) return false;
     // Snapshot ownership can predate a restart or takeover. Check before AI work.
     try {
       const live = json((await ports.owners.read({ repository, issues: prepared.queued })).json);

@@ -1,5 +1,6 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
+import {manualEffectCases} from './helpers/manual-effect-cases.mjs';
 import assert from 'node:assert/strict';
 import {applyDependencyChanges, createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact} from '../src/issue-dependencies-github.mjs';
 import {reconcileDependencyIntake} from '../src/issue-dependencies-intake.mjs';
@@ -174,6 +175,34 @@ test('manual exclusion covers every automatic effect kind', async t => {
       return w.writes.length;
     }],
   ];
+  effects.push(
+    ['nudge', async () => {
+      const w = await factoryWorld(t); await w.begin();
+      await w.command(['workflow','status','17']);
+      const root = w.record().root, start = w.herdr.calls.length;
+      w.time += 10 * 60 * 1000;
+      await w.github.gh(['issue','edit','17','--add-label','pdd:manual']);
+      await w.tick();
+      const workerPanes = new Set(w.record().chats.map(chat => chat.paneId));
+      return w.herdr.calls.slice(start).filter(args => args[0] === 'agent' && args[1] === 'prompt' && workerPanes.has(args[2])).length;
+    }],
+    ['dependency-review delivery', async () => {
+      const w = pendingWorld(); w.hold(true); let sent = 0;
+      w.ports.pending = {read:async () => ({json:'{}'}),save:async () => ({ok:true}),deliver:async ({requestJson}) => {if (JSON.parse(requestJson).issues.includes(key(1))) sent++;return {state:'delivered'};}};
+      await reconcileDependencyIntake({repository,mode:'auto'},w.ports);
+      return sent;
+    }],
+    ['sort labels', async () => {
+      const w = fixture(); w.save(w.record(1,{question:'Which product owns this?'}));
+      w.issues[0].labels = ['pdd:manual'];
+      w.ports.manualAuthority = {read:async () => ({known:true,allowed:true})};
+      const page = w.ports.github.page;
+      w.ports.github.page = args => args.kind === 'timeline' ? {json:JSON.stringify({items:[{event:'labeled',label:{name:'pdd:manual'},actor:{login:'writer'}}],next:''})} : page(args);
+      await reconcileDependencyIntake({repository,mode:'auto'},w.ports);
+      return w.writes.filter(write => write.kind === 'label').length;
+    }],
+  );
+  effects.push(...manualEffectCases.map(([kind,run]) => [kind,() => run(t)]));
   const actual = [];
   for (const [kind, run] of effects) actual.push({kind, count:await run()});
   assert.deepEqual(actual, effects.map(([kind]) => ({kind,count:0})), 'a held issue received an automatic effect');

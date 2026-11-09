@@ -3,7 +3,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: f8569417196ff7f2de3199926ee523baead550ba2ec849b5c94a7728e7c8cec1).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 029190450a41b4a320a052655af83964451027a0f422d7c0d9088daa5dce1e14).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -113,6 +113,8 @@ function service(cwd, ports) {
     }
     let transportInvoked = false;
     const executeRequest = async () => {
+      const target = /^repos\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)(?:[/?]|$)/.exec(endpoint);
+      if (write && purpose !== 'claims' && target && !await issueEffectAllowed({repository:target[1],issue:Number(target[2]),cwd},ports)) throw Error('manual-hold');
       if (checkOwnership && !await checkOwnership()) throw Error('sort-owner-changed');
       if (checkOwnership && ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
       transportInvoked = true;
@@ -264,7 +266,7 @@ function rawGithub(cwd, ports) {
       if (label ? !observed.labels?.some(x => x.name === label) : assignee ? !observed.assignees?.some(x => x.login === assignee) : observed.state !== 'closed') throw Error('sort-write-pending');
       return { ok: true };
     },
-    withSortGroupAdmission: async ({ repository, rootCause, write }, action) => {
+    withSortGroupAdmission: async ({ repository, rootCause, write, checkOwnership }, action) => {
       if (!repositoryName(repository) || !/^[a-z\d]+(?:-[a-z\d]+)*$/.test(rootCause)) throw Error('sort-groups-unavailable');
       const ref = `refs/heads/pdd/issue-groups/${createHash('sha256').update(rootCause).digest('hex')}`;
       const endpoint = `repos/${repository}/git/refs/${ref.slice(5)}`;
@@ -272,7 +274,7 @@ function rawGithub(cwd, ports) {
       const head = (await s.api(`repos/${repository}/commits/HEAD`)).value;
       if (!/^[a-f\d]{40,64}$/.test(head.sha ?? '')) throw Error('sort-groups-unavailable');
       let reserved;
-      try { reserved = await write(() => s.api(`repos/${repository}/git/refs`, 'POST', JSON.stringify({ ref, sha: head.sha }))); }
+      try { reserved = await write(() => s.api(`repos/${repository}/git/refs`, 'POST', JSON.stringify({ ref, sha: head.sha }), undefined, undefined, checkOwnership)); }
       catch (error) {
         // A positive read of an existing reservation means busy, including a lost
         // creation response. Never steal it based on age or local coordinator state.
@@ -284,11 +286,11 @@ function rawGithub(cwd, ports) {
       // No finally: an uncertain issue POST must retain admission. Its visible
       // marker can still recover the group without authorizing another creation.
       const result = await action();
-      await write(() => s.api(endpoint, 'DELETE'));
+      await write(() => s.api(endpoint, 'DELETE', undefined, undefined, undefined, checkOwnership));
       return result;
     },
-    createSortUmbrella: async ({ repository, title, body }) => {
-      const created = (await s.api(`repos/${repository}/issues`, 'POST', JSON.stringify({ title, body }))).value;
+    createSortUmbrella: async ({ repository, title, body, checkOwnership }) => {
+      const created = (await s.api(`repos/${repository}/issues`, 'POST', JSON.stringify({ title, body }), undefined, undefined, checkOwnership)).value;
       if (!Number.isSafeInteger(created.number) || created.number < 1) throw Error('sort-write-pending');
       const observed = (await s.api(`repos/${repository}/issues/${created.number}`)).value;
       if (observed.html_url !== created.html_url || observed.title !== title || observed.body !== body) throw Error('sort-write-pending');
@@ -1120,6 +1122,12 @@ export async function recoverCoordinatorClaim({ cwd = '', repository, claim, coo
     || !coordinatorId || !machine || claim.machine !== machine || !claim.coordinatorId || claim.coordinatorId === coordinatorId
     || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? '')) || !claim.labelEventId || !Number.isFinite(time(at))) return skipped;
   const livePorts = createDependencyReadPorts({ cwd }, ports);
+  const checkHold = async () => {
+    if (!ports.manualCustody) return issueEffectAllowed({repository,issue:i.issue,cwd},livePorts);
+    const hold = await (ports.manualSafetyRead ?? ports.readManualHold ?? readManualHold)({repository,issue:i.issue,cwd},livePorts);
+    return hold.known === true && hold.held === true;
+  };
+  if (!await checkHold()) return skipped;
   // No cached snapshot or conditional comment body supplies recovery authority.
   const freshPorts = { ...livePorts, githubCache: null, dependencyReads: undefined };
   const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, freshPorts), s = service(cwd, freshPorts);
@@ -1147,7 +1155,7 @@ export async function recoverCoordinatorClaim({ cwd = '', repository, claim, coo
       ...(proof.expired ? { coordinatorRestartRecoveredAt: iso(time(at)) } : {}) };
     // Replacing the one JSON block preserves the readable legacy claim comment.
     const body = String(comment.body).replace(record.text, () => JSON.stringify(expected));
-    const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository)).value;
+    const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository, checkHold)).value;
     if (String(saved?.id) !== claim.commentId || !isDeepStrictEqual(claimRecord(saved.body)?.value, expected)) throw Error('Claim recovery readback is unresolved');
   }
   const recovered = value => matches(value) && value.active === true && value.coordinatorId === coordinatorId;
@@ -1159,7 +1167,7 @@ export async function recoverCoordinatorClaim({ cwd = '', repository, claim, coo
     let posted = false;
     for (const row of comments) if (String(row.body ?? '').includes(marker)
       && (await livePorts.authority.read({ repository, author: row.user?.login })).authority === 'trusted') posted = true;
-    if (!posted) await s.api(`repos/${repository}/issues/${i.issue}/comments`, 'POST', JSON.stringify({ body: `Autopilot recovered this machine's run after a coordinator restart.\n\n${marker}` }), 'claims', repository);
+    if (!posted && !ports.manualCustody) await s.api(`repos/${repository}/issues/${i.issue}/comments`, 'POST', JSON.stringify({ body: `Autopilot recovered this machine's run after a coordinator restart.\n\n${marker}` }), 'claims', repository, checkHold);
     current = await readWinner();
     if (!recovered(current)) return skipped;
   }
@@ -1606,16 +1614,23 @@ function validReview(review) {
     && (review.outcome !== 'complete' || !review.questions.length) && (review.outcome !== 'question' || review.questions.length > 0);
 }
 
-// A shared early observation is conservative for the tick. A fresh safety read
-// also catches a label added after preparation or during a mutation admission wait.
-async function manualEffectClear({repository, issue, cwd = ''}, ports) {
-  if (ports.manualHold) {
-    let hold;
-    try { hold = await ports.manualHold.read({repository, issue}); } catch { return false; }
-    if (!hold.known || hold.held) return false;
+// One admission rule for tick effects and public automatic commands. The tick's
+// observation is sticky; a fresh safety read catches labels added while waiting.
+export async function issueEffectAllowed({repository, issue, cwd = '', localOnly = false}, ports = {}) {
+  if (!Number.isSafeInteger(Number(issue)) || Number(issue) <= 0) return false;
+  const target = {repository, issue:Number(issue), cwd};
+  try {
+    const observation = await ports.manualHold?.read(target);
+    if ((!ports.manualRepository || sameRepo(repository,ports.manualRepository)) && ports.manualHolds?.has(target.issue)) return false;
+    if (localOnly && ports.manualReadsDeferred?.()) return observation?.known === true && observation.held === false || ports.manualObservationDeferred?.(target) === true;
+    if (observation && (!observation.known || observation.held)) return false;
+    const hold = await (ports.manualSafetyRead ?? ports.readManualHold ?? readManualHold)(target, ports);
+    await ports.onManualHold?.({...target, hold});
+    return hold.known === true && hold.held === false;
+  } catch {
+    await ports.onManualHold?.({...target, hold:{known:false, held:false}});
+    return false;
   }
-  const hold = await readManualHold({repository, issue, cwd}, ports);
-  return hold.known && !hold.held;
 }
 
 async function saveRecord({ repository, issue, value, type }, supplied) {
@@ -1627,7 +1642,7 @@ async function saveRecord({ repository, issue, value, type }, supplied) {
   const marker = type === 'review' ? REVIEW : IMPACT;
   const body = `${readable}\n\n<!-- ${marker} -->\n<details><summary>${title}</summary>\n\n\`\`\`json\n${JSON.stringify({ schema_version: `pdd.dependency-${type}.v1`, [type]: value })}\n\`\`\`\n</details>`;
   try {
-    const checkOwnership = () => manualEffectClear({repository, issue:i.issue, cwd:ports.cwd}, ports);
+    const checkOwnership = () => issueEffectAllowed({repository, issue:i.issue, cwd:ports.cwd}, ports);
     if (!await checkOwnership()) return {id:'', state:'pending', warnings:[]};
     const raw = parse((await ports.github.appendComment({ repository, issue: i.issue, body, checkOwnership })).json);
     if (!raw.id) throw Error('No native comment confirmation');
@@ -1716,7 +1731,7 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
     const blocker = snapshot.issues.find(i => info(i.key)?.key === info(dependency.key)?.key);
     if (!/^[1-9][0-9]*$/.test(blocker?.nodeId ?? '')) return pending('REST blocker identity is unavailable');
     if (ports.admitEffect && !await ports.admitEffect()) return pending('Automatic control changed before dependency effect');
-    const checkOwnership = () => manualEffectClear({repository, issue:target.issue, cwd}, ports);
+    const checkOwnership = () => issueEffectAllowed({repository, issue:target.issue, cwd}, ports);
     if (!await checkOwnership()) return pending('Manual hold prevents dependency effect');
     try { await ports.github.addBlocker({ repository, issue: target.issue, blockerId: blocker.nodeId, checkOwnership }); }
     catch { /* An unclear reply is resolved only by observing the native edge. */ }

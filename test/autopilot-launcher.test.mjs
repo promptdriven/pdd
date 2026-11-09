@@ -37,6 +37,10 @@ async function fixture(t, options = {}) {
       if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"trunk"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
+      if (command === 'gh' && args[0] === 'api' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9]\d*$/.test(args.find(arg => String(arg).startsWith('repos/')) ?? '')) {
+        const number = Number(args.find(arg => String(arg).startsWith('repos/')).split('/').at(-1));
+        return {code:0,stdout:'HTTP/2.0 200 OK\r\n\r\n'+JSON.stringify(f.issues.find(row => row.number === number) ?? {number,labels:[]}),stderr:''};
+      }
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
       throw Error(`unexpected process ${command} ${args}`);
@@ -416,6 +420,8 @@ test('native HTTP tick uses ETags and revalidates cached later pages, including 
   const run = f.ports.run;
   f.ports.run = async (command, args, opts) => {
     if (command === 'gh' && args[0] === 'api' && args.includes('--include')) {
+      const endpoint = args.find(arg => String(arg).startsWith('repos/'));
+      if (/\/issues\/31$/.test(endpoint ?? '')) return {code:0,stderr:'',stdout:'HTTP/2.0 200 OK\r\n\r\n'+JSON.stringify(issue(31))};
       queries.push(args);
       const second = args[4]?.includes('page=2');
       if (phase === 0) return { code: 0, stderr: '', stdout: second
@@ -1010,7 +1016,9 @@ test('time rules retry failed delivery and discard refreshed pending events', as
 });
 
 test('time rule uses cached comment activity and never adds a GitHub query on unchanged ticks', async t => {
-  const f = await fixture(t); const changedAt = f.time;
+  const f = await fixture(t);
+  // Manual authority is a separate port; this test measures comment caching.
+  f.ports.readManualHold = async () => ({known:true,held:false}); const changedAt = f.time;
   f.issues = [issue(105, { labels: [{ name: 'pdd:working' }], comments: 1, updated_at: new Date(changedAt).toISOString() })];
   f.issueComments = { 105: [{ id: 1, body: 'Claim refreshed on this machine', user: { login: 'owner' }, created_at: new Date(changedAt).toISOString(), updated_at: new Date(changedAt + hour / 2).toISOString() }] };
   await f.invoke('start'); f.prompts.length = 0; f.status = 304;
@@ -2204,6 +2212,8 @@ for(const boundary of ['disabled','foreign-repository','foreign-checkout','forei
 
 test('audit tick discovers completed runs through the injected Git executor', async t => {
   const f = await fixture(t);
+  // Isolate local run discovery from the separate manual authority reader.
+  f.ports.readManualHold = async () => ({known:true,held:false});
   assert.equal((await f.invoke('start')).exitCode, 0);
   const state = f.state(), commonDir = join(f.cwd, '.git'), runDir = join(commonDir, 'pdd', 'runs', '17');
   mkdirSync(runDir, {recursive: true});
@@ -2219,4 +2229,11 @@ test('audit tick discovers completed runs through the injected Git executor', as
   assert.ok(rules.some(row => row.kind === 'post-merge-audit' && row.number === 17 && row.pr === 23));
   assert.ok(f.runs.slice(before).some(([file, args]) => file === 'git' && args.includes('--git-common-dir')));
   assert.equal(f.runs.slice(before).filter(([file]) => file === 'gh').length, 0, 'local audit discovery needs no GitHub read');
+});
+
+test('3129 public add does not label held issues', async t => {
+  const f = await fixture(t);
+  f.ports.readManualHold = async () => ({known:true,held:true});
+  await f.invoke('add',{issues:['12','15']});
+  assert.equal(f.ack.length,0);
 });

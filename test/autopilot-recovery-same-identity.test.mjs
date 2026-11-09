@@ -108,7 +108,7 @@ async function launcherHarness(f) {
   let coordinatorSnapshot = graph.snapshot;
   const ownerPorts = {read: async () => reply({localOwner: 'launcher-coordinator', claims: [], runs: [], runsKnown: true})};
   const ports = {
-    ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir),
+    ...healthyMachine, readManualHold:async () => ({known:true,held:false}), checkCapacityPorts: isolatedCheckCapacity(dir),
     env: {HOME: home, PATH: process.env.PATH},
     stateRoot,
     now: () => now,

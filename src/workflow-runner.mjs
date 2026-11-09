@@ -9,8 +9,8 @@ import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
-import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3074b51164b3d06db09e8c725294121e74654a98bcd04feb5761bd45e0c0c8f1).
+import { readDependencySnapshot, createDependencyReadPorts, issueEffectAllowed, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 68629ff595937f5ac311bdedd310fb5c97d65c59fb27d748d6835df3e4bb09a0).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -47,6 +47,7 @@ import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from '
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
+const automaticEffectAllowed = (run, p, localOnly = true) => !run?.automaticOrigin && !p.manualHold || issueEffectAllowed({repository:run.repo,issue:run.number,cwd:run.sourceRoot ?? run.root,localOnly}, p);
 export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry', 'route-interface-drafting', 'issue-3129', 'manual-label', 'route-manual-label']);
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -222,10 +223,12 @@ function protectProgress(run,p,{approval=false,validate}={}) {
   const exec=p.execFile,herdr=herdrCommand(p);
   p.execFile=async(file,args,options)=>{
     if((file==='git'&&['add','commit','push','checkout','switch','branch'].includes(args[0])) || (file==='gh'&&args[0]==='pr'&&['create','edit'].includes(args[1])))inspect();
+    if (file === 'git' && args[0] === 'push' || file === 'gh' && (args[0] === 'pr' && ['create','edit','comment'].includes(args[1]) || args.includes('--method') && ['POST','PATCH','DELETE'].some(method => args.includes(method))))
+      if (!await automaticEffectAllowed(run,p,false)) throw Object.assign(Error('Manual issue authority holds publication.'),{code:'workflow_progress_refused'});
     return exec(file,args,options);
   };
   p.commandPorts={...p.commandPorts,execFile:p.execFile};
-  p.herdr=async args=>{if(['create','run','prompt'].includes(args[1]))inspect();return herdr(args);};
+  p.herdr=async args=>{if(['create','run','prompt'].includes(args[1])) {inspect();if (!await automaticEffectAllowed(run,p)) throw Object.assign(Error('Manual issue authority holds worker delivery.'),{code:'workflow_progress_refused'});}return herdr(args);};
   return ()=>{approval=false;validate=undefined;};
 }
 const sameGate = (current, selected) => (!current || !selected) ? current === selected : ['area','kind','at'].every(key=>current[key]===selected[key]) && (!selected.id || current.id===selected.id);
@@ -1869,6 +1872,7 @@ async function commitPublicationFiles(run, p, lines, promptGuard = null) {
 }
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
 async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
+  if (!await automaticEffectAllowed(run,p,false)) return fail('Manual issue authority holds publication.');
   if (run.draft !== undefined && typeof run.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
   const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title) || `Issue #${run.number}`;
   if (existing) {
@@ -2372,6 +2376,7 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area];
   const owner = {cwd, coordinatorId, machine};
+  if (!await automaticEffectAllowed(run,p)) return done('Manual issue authority holds PR 1.');
   if (!automaticPr1Eligible(run, owner, p)) return done('Automatic PR 1 gate skipped.');
   const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), storyDecision: recordedStoryDecision(run), area, index: run.area, branch: run.branch});
   let publicationGate;
@@ -4149,6 +4154,7 @@ export const recoverAutomaticRunOwner = saveGuard((args, ports) => lockedMutatio
   const owner = currentParkingOwner(run,p,{allowOlder:true});
   if (!owner || owner.coordinatorId !== input.coordinatorId || owner.machine !== input.machine) return skip();
   if (run.automaticOrigin.coordinatorId === owner.coordinatorId) return skip();
+  if (!await automaticEffectAllowed(run,p)) return skip();
   const result = await recoverParkingOwner(run,owner,p);
   return result ? {...done(''),recovery:'recovered',claim:result.claim} : skip();
 }));
@@ -4163,6 +4169,7 @@ export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {},
     const owner = currentParkingOwner(run, p, {allowOlder:true});
     if (!owner || !validSavedAutomaticOrigin(run) || readRunOwnership(run.runDir, p) || explicitlyStopped(run, p)
       || ['parked', 'waking', 'releasing'].includes(run.parking?.phase)) continue;
+    if (!await automaticEffectAllowed(run,p,true)) continue;
     const blocker = idleParkingBlocker(run, p.now(), graceMs);
     if (!blocker) continue;
     const result = await parkBlockedRun({ref: String(run.number), cwd: run.sourceRoot,
@@ -4195,6 +4202,7 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
       release = acquireRunLock(run.runDir);
       const latest = readRun(run.runDir);
       if (!latest || latest.runId !== run.runId) continue;
+      if (!await automaticEffectAllowed(latest,p,true)) continue;
       const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
         ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
       closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
@@ -4759,6 +4767,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
+  if (automaticResume && !await automaticEffectAllowed(run,p)) return {...done(''),recovery:'held'};
   if (run.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
@@ -5056,6 +5065,7 @@ export const nudgeIdleRun = saveGuard((args, ports) => lockedMutation(args, port
     && validSavedAutomaticOrigin(fresh) && fresh.automaticOrigin.coordinatorId === input.coordinatorId
     && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd);
   if (!owned(run) || run.parking || layoutClosing(run) || chat?.closed) return skipped();
+  if (!await automaticEffectAllowed(run,p)) return skipped();
   // The saved stop survives a failed alert handoff or process restart. The alert
   // service owns retries and delivered/unconfirmed deduplication on later ticks.
   if (run.state === 'stuck' && run.chatIdleLimit)
@@ -5143,6 +5153,7 @@ function replaceParkingBlocker(run, blocker, interpreterBatch, interpreterCheck,
 export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
   const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
   const skipped = reason => ({...done(''), recovery: 'skipped', ...(reason ? {reasonCounts:{[reason]:1}} : {})});
+  if (input.manualClear && !await automaticEffectAllowed(run,p,true)) return skipped('manual-authority');
   if (input.manualClear && run?.parking?.blocker?.kind === 'manual' && !run.parking.releaseAttempted
     && (run.parking.phase === 'parked' || run.parking.phase === 'releasing' && run.parking.releaseAttempted === false) && currentParkingOwner(run, p)) {
     commitRun(run, p, fresh => {
@@ -5163,10 +5174,15 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'stuckCause', 'environmentRetry', 'automaticOrigin', 'progressAt', 'updatedAt', 'chatIdleLimit', 'chatResumeLimit']
     .some(key => !sameFact(run[key], input.expected[key]))) return skipped();
   if (input.idleGraceMs !== undefined && (!currentParkingOwner(run, p, {allowOlder:true}) || !idleParkingBlocker(run, p.now(), input.idleGraceMs))) return skipped();
+  if (!input.manualHold && !await automaticEffectAllowed(run,p,true)) return skipped('manual-authority');
+  if (input.manualHold) {
+    const chat = currentChat(run);
+    if (continuationCheckHeld(run,p) || !chat || !chat.closed?.confirmedAt && !idleAgent(chat,await chatSession(chat,{...p,run}))) return skipped();
+  }
   if (run.automaticOrigin.coordinatorId !== input.coordinatorId) {
     const owner = currentParkingOwner(run, p, {allowOlder:true});
     if (owner?.coordinatorId !== input.coordinatorId) return skipped('claim-unavailable');
-    try { if (!await recoverParkingOwner(run, owner, p)) return skipped(ended(run) ? 'claim-transferred' : 'claim-unavailable'); }
+    try { if (!await recoverParkingOwner(run, owner, {...p,manualCustody:input.manualHold === true})) return skipped(ended(run) ? 'claim-transferred' : 'claim-unavailable'); }
     catch { return skipped('claim-unavailable'); }
   }
   if (run.parking?.phase === 'parked') {
@@ -5186,7 +5202,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     if (chat?.closed?.confirmedAt) return true;
     return Boolean(chat && idleAgent(chat, await chatSession(chat, {...p, run:fresh})));
   };
-  if (continuationCheckHeld(run, p) || input.manualHold && !await manualIdle(run)) return skipped();
+  if (continuationCheckHeld(run, p) || input.manualHold && !await manualIdle(run) || !input.manualHold && !await automaticEffectAllowed(run,p,true)) return skipped();
   if (!input.blocker) return skipped();
   const snapshot = {state: run.state, area: run.area, gate: run.gate, question: run.question, done: run.done,
     blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, stuckCause: run.stuckCause, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin,
@@ -5205,7 +5221,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   cleanupUpdatedAt = parked.updatedAt; cleanupProgressAt = parked.progressAt;
   const result = await closeFinishedChats(copy, {...p, force: true, reason: 'park', beforeClose: async () => {
     const fresh = readRun(run.runDir);
-    if (!unchanged(fresh) || !currentParkingOwner(fresh, p) || continuationCheckHeld(fresh, p) || input.manualHold && !await manualIdle(fresh))
+    if (!unchanged(fresh) || !currentParkingOwner(fresh, p) || continuationCheckHeld(fresh, p) || input.manualHold && !await manualIdle(fresh) || !input.manualHold && !await automaticEffectAllowed(fresh,p,true))
       throw Object.assign(Error('Parking custody changed before close'), {code: 'workflow_progress_refused'});
   }, checkpoint: async (chat, layout) => {
     if (continuationCheckHeld(readRun(run.runDir), p)) throw Object.assign(Error('Check process custody changed'), {code: 'workflow_progress_refused'});
@@ -5263,6 +5279,7 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
     || run.parking?.at !== input.at || !['parked', 'waking'].includes(run.parking.phase)) return skipped();
   if (run.cancelled?.state === 'handed-over') return fail(await chatContinuationOwnership(run, p));
   if (ended(run) || explicitlyStopped(run, p)) return skipped();
+  if (!await automaticEffectAllowed(run,p)) return skipped();
   const ownership = await chatContinuationOwnership(run, p);
   if (ownership) return fail(ownership);
   if (input.expectedBlocker) {

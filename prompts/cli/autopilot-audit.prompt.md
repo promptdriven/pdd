@@ -149,7 +149,18 @@ records/IDENTITY.json, where IDENTITY is SHA-256 of the JSON tuple
 Run evidence copies stay under the run's audits folder. A damaged authority is a
 hold, never absence. Legacy local reservation files also prevent resend.
 
+Use the [shared issue effect gate](issue-dependencies-github.prompt.md#issue-effect-gate)
+for the original issue, including a closed issue of a completed run. Enforce it
+at public command entry, before audit reservation and auditor invocation, and
+before every follow-up reservation and external publication (comments, revert
+branch/PR, alerts and concern issues). Recheck after admission waits and long
+reads. Held or unknown authority launches nothing, publishes nothing and keeps
+evidence and known unsent work pending until clearance. A hold arriving after a
+verdict must not mark the unsent publication sending/unknown.
+
 ## Dependencies
+
+- [Shared issue effect gate](issue-dependencies-github.prompt.md#issue-effect-gate): required native generation and testing context for manual authority at audit admission and publication.
 
 - [Run records](workflow-runs.prompt.md): machine state root, indexed attempts and identity-guarded cost refresh.
 - [Cost ledger](cost-ledger.prompt.md): session attribution and daily measured usage.

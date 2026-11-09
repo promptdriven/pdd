@@ -25,6 +25,10 @@ export async function launcher(t) {
       if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
+      if (command === 'gh' && args[0] === 'api' && /^repos\/owner\/repo\/issues\/[1-9]\d*$/.test(args.find(arg => String(arg).startsWith('repos/')) ?? '')) {
+        const number = Number(args.find(arg => String(arg).startsWith('repos/')).split('/').at(-1));
+        return {code:0,stdout:'HTTP/2.0 200 OK\r\n\r\n'+JSON.stringify(f.issues.find(row => row.number === number) ?? {number,labels:[]}),stderr:''};
+      }
       if (command === 'gh' && args[0] === 'api') return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
       throw Error(`unexpected process ${command} ${args}`);

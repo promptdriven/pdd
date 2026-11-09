@@ -1298,6 +1298,19 @@ Before allocating a missing coordinator workspace, request one pane through the 
 
 Manual authority reads and releases obey retry and reserve waits, rechecking budget after remote calls and before the first automatic gate pass; saved confirmed holds suppress automatic work while reads are deferred. Unknown authority suppresses work but cannot itself establish a confirmed person hold. A confirmed clearance resumes the saved park under its prior blocker or the ordinary wake route; uncertain release custody is reconciled first.
 
+Each tick extends its shared observation to every effect target before work:
+include closed issues of completed/cancelled audit runs, group umbrellas and
+members, all dependency nodes, recovery targets, environment waits and incident
+alert subjects. Observe once per issue, independent of coordinator lifetime or
+issue state. Enforce the GitHub reader's shared issue effect gate immediately
+before every issue effect, including direct alerts, admission sweeps and audit
+offers. Pass the same gate context to native owners. Observe repository health
+while holds suppress issue alerts; retain incidents and pending audit evidence.
+Status retains confirmed issue numbers and also shows unknown authority reasons
+in `manualSuppressions` entries `{number,reason}`. Reasons are `manual` or
+`authority-unknown`; deferred reads alone add no suppression without a signal.
+The public audit command enforces the gate through the audit owner. Public `add` checks every target before repository label creation and again before each issue label write; held targets stay unmarked.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.

@@ -83,6 +83,14 @@ Exercise an issue labeled `pdd:manual` before intake: no claim, sorting or depen
 
 Include a complete pane budget held by several stopped runs. Each has several area chats in one worktree, no saved session IDs, an old layout without createdWorkspaceId and an older coordinator ID for the same machine and folder. Hide Herdr IDs so bounded native discovery must prove the correct sessions. Start a second repository's coordinator and its first workflow run against the shared Herdr service; both must obtain panes through native reclamation. Verify the first run has a live area chat before waking the held runs. Later clear the blockers and resume every held run with its own current-area UUID. Assert screens exist before closes, saved sessions match each area, claim recovery preserves each admitted claim era, and foreign workspaces and busy agents survive. Use only disposable homes, config, queues and service fakes; select a unique throwaway session name for the harness.
 
+Repair #3129 effect coverage runs the native closed-run audit offer and public
+audit command under a writer hold, the busy older-owner admission sweep with
+confirmed and unknown authority, held running group membership updates and both
+environment-exhaustion and resource alerts. A table executes every effect kind
+against a held issue and counts zero effects after all rows execute. The same
+unchanged tests must detect the repair base at assertions, not startup failures.
+Use repository fakes and real native workflow/Git paths; no live service calls.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

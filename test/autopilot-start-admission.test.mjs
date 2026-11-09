@@ -61,3 +61,12 @@ test('#3102 default parked limit is twice the working limit', async t => {
   f.settings.runs = f.coordinator.runs = 4;
   assert.deepEqual(await checkDependencyStart(f, f.ports), {allowed: false, reason: 'parked'}, 'default backlog limit must apply independently');
 });
+
+test('3129 a hold during pane admission refuses the native automatic start', async t => {
+  const f = await setup(t);
+  let held = false;
+  f.ports.readManualHold = async () => ({known:true,held});
+  f.ports.checkPaneCapacity = async () => {held = true;};
+  assert.deepEqual(await checkDependencyStart(f,f.ports),{allowed:false,reason:'dependency'});
+  assert.equal(held,true);
+});
