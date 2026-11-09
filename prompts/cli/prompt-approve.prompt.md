@@ -45,3 +45,15 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before you change
 The [CLI](pdd-cli.prompt.md) routes `pdd approve PROMPT` here. The [runtime client](runtime-client.prompt.md) uses the same view and edit for Try-page approvals.
 
 Use “Runtime interface” when naming the declaration and its global approval status in user messages.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "95359d57e8bfe6c8f7538f01d10054aecb2ac6a5a4b629c3eedc4ce3be7d2a24",
+  "reason": "Prompt excludes a surrogate Runtime operation for filesystem/hash/TTY effects; real authorization is native. Native evidence owners: test/prompt-approve.test.mjs."
+}
+```
+</details>

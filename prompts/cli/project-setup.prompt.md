@@ -40,3 +40,15 @@ Keep every old byte: read the file as bytes and only append. A file that is not 
 ## Dependencies
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) runs it for `pdd setup`.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "274b6bf4022458f053a9b73b25bc16c59505bf8ae40d48218d43bbf458ce12e5",
+  "reason": "Real instruction-file selection and Git exclusion edits need native evidence first. Native evidence owners: test/workflow-setup.test.mjs."
+}
+```
+</details>

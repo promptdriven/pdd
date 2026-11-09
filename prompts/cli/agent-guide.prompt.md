@@ -52,3 +52,364 @@ saved accepts `{id,name,story_path,result}` only after collectSavedTests actuall
 - [Coverage](agent-coverage.prompt.md): required for cumulative product coverage and the fully-tried rule.
 - [Runtime preflight](runtime-preflight.prompt.md): checkInput owns schema validation of pdd-added next fills.
 - [Agent packet](agent-packet.prompt.md): consumer contract for context layout, v8 guidance and 24KiB total request.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+The factory stores its captured configuration and cumulative state in instances using the executor-issued handle. Methods load that state; mutating methods store the updated state under the same handle. The handle is only the transport identity of the existing closure, not a new native argument. Only wire, delivered, saved and close are bound; prepare/decorate, safe file refresh, workspace capability revalidation and authentic received-case evidence remain native. No supplied record authorizes execution or saving. Native evidence owners: test/agent-guide.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "ac6971abcd5cf161f1422187e1b5697eace18355b6433701d28d056a2cd28d21",
+  "entries": [
+    {
+      "operation": "createTryGuide",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string",
+            "description": "JSON text encoding of the environment. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "model": {
+            "type": "string",
+            "description": "JSON text encoding of the model. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "test": {
+            "type": "string",
+            "description": "JSON text encoding of the selected test. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "factory",
+        "type": "TryGuide",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.store"
+      ]
+    },
+    {
+      "operation": "wire",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "reply": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied candidate reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "handle",
+          "reply"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the negotiated wire reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "TryGuide",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.load"
+      ]
+    },
+    {
+      "operation": "delivered",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "description": "JSON text encoding of the current message. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "reply": {
+            "type": "string",
+            "description": "JSON text encoding of the accepted reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "handle",
+          "message",
+          "reply"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "TryGuide",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.load",
+        "instances.store"
+      ]
+    },
+    {
+      "operation": "saved",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "record": {
+            "type": "string",
+            "description": "JSON text encoding of the confirmed saved-case record. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "handle",
+          "record"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "TryGuide",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.load",
+        "instances.store"
+      ]
+    },
+    {
+      "operation": "close",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "TryGuide",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.load",
+        "instances.store"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "instances",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "config"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [
+    {
+      "path": "/entries/0/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/1/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/2/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/3/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/4/input_schema/properties/handle",
+      "convention": "handle"
+    }
+  ],
+  "schema_version": "prompt-runtime.interface.v2",
+  "instance_types": [
+    {
+      "name": "TryGuide",
+      "resource": "instances"
+    }
+  ],
+  "kind": "partial",
+  "draft_gaps": [
+    "createTryGuide needs a native workspace capability and initializes scenario/card/hash readers before its methods can run. What is the supported transport for that capability and the exact initialization port replies? The declared instance transport alone does not establish this."
+  ]
+}
+```
+</details>

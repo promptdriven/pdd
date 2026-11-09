@@ -92,3 +92,162 @@ applying retry-only load, pressure, tool and queue restrictions.
 
 Node filesystem and OS adapters supply bounded local host observations. No hosted
 interpreter binding is declared; native tests cover the public module boundary.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+Only the supplied-data classification, recovery and wake operations are declared. environmentHealthy and machineHealth host/process/queue probes remain native. The previous unbound statement applies to those effects. Native evidence owners: test/autopilot-environment-health.test.mjs, test/autopilot-environment-isolation.test.mjs, test/autopilot-environment-retry.test.mjs, test/autopilot-environment-tick.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "037cfb93505e4bbd349b4222edf0c8fd7842cc6df462183c63a9d1ef11bed825",
+  "entries": [
+    {
+      "operation": "classifyStuckCause",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "runtime": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "cause": {
+            "type": "string",
+            "enum": [
+              "environment",
+              "interpreter",
+              "work"
+            ]
+          }
+        },
+        "required": [
+          "cause"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "environmentRecovery",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "string",
+            "description": "JSON text encoding of the saved run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the recovery shape or null. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "environmentStatus",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "string",
+            "description": "JSON text encoding of the saved run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "environmentWakeTag",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "retry": {
+            "type": "string",
+            "description": "JSON text encoding of the recovery record. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "retry"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "kind": "partial"
+}
+```
+</details>

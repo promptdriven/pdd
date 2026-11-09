@@ -331,3 +331,15 @@ and `stdout`/`stderr` write ports to fake outside effects. Execute resolves `{ex
   calls `onChild(pid)` before awaiting the suite. Native defaults handle signals
   and process-group termination. Status uses the same filesystem, clock and PID
   liveness ports; an unavailable queue read is explicit, never idle evidence.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "ae26f04e24b6320fc947abd5d7e3d782b1ee31d89c1b494f03450100fa2d9061",
+  "reason": "Real child processes, shared locks, affinity and memory admission need native evidence. Native evidence owners: test/test-suite-queue.test.mjs."
+}
+```
+</details>

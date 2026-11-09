@@ -67,3 +67,65 @@ Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for 
 - [Runtime preflight](runtime-preflight.prompt.md): `captureSource`, `findTests` and `interfaceBlocks`.
 - [Workflow results](workflow-results.prompt.md): the batch folder and name rule for pdd's own results.
 - RUNBOOK §2 (Story, test and prompt files), §4 (expected values) and §11 (what an agent may fix).
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+Only fingerprintChanges is declared. storyCard file reads, storyFingerprint native SHA-256/capture and fullCheckPass saved-evidence/current-source association remain native; no supplied fingerprint proves host evidence. Native evidence owners: test/workflow-story-card.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "49edd9535a306d74b67d1a937f089465718b5747aea611e7d082f4e4c1f0655e",
+  "entries": [
+    {
+      "operation": "fingerprintChanges",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "saved": {
+            "type": "string",
+            "description": "JSON text encoding of the approved fingerprint. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "current": {
+            "type": "string",
+            "description": "JSON text encoding of the current fingerprint. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "saved",
+          "current"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "kind": "partial"
+}
+```
+</details>

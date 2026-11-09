@@ -36,3 +36,358 @@ Also export `compareExpectation({expect,run,entry,input,world_before?})`, a stat
 ## Dependencies
 
 Node's built-in util deep equality provides deterministic structural comparisons. The caller supplies the authored scenario and normalized run; no filesystem or provider dependency is required.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+The factory stores its captured configuration and cumulative state in instances using the executor-issued handle. Methods load that state; mutating methods store the updated state under the same handle. The handle is only the transport identity of the existing closure, not a new native argument.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "948f0f2d6fd5f9968436fdfc15435fd6d77680a7dc9fc414f7b3e0fdc5bb8f66",
+  "entries": [
+    {
+      "operation": "createRunJudge",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "string",
+            "description": "JSON text encoding of the authored scenario. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "checkPassed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "factory",
+        "type": "RunJudge",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.store"
+      ]
+    },
+    {
+      "operation": "record",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string",
+            "description": "JSON text encoding of the normalized observed run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "handle",
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the verdict with state, matched, start_matches, items and optional first_difference and step_id. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "RunJudge",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.load",
+        "instances.store"
+      ]
+    },
+    {
+      "operation": "snapshot",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "line": {
+            "type": "string"
+          },
+          "items": {
+            "type": "string",
+            "description": "JSON text encoding of the ordered progress items. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "line",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "RunJudge",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.load"
+      ]
+    },
+    {
+      "operation": "bindings",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "bindings": {
+            "type": "string",
+            "description": "JSON text encoding of the ordered safe input bindings. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "bindings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "RunJudge",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.load"
+      ]
+    },
+    {
+      "operation": "compareExpectation",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expect": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied expectation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "run": {
+            "type": "string",
+            "description": "JSON text encoding of the observed run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "entry": {
+            "type": "string"
+          },
+          "input": {
+            "type": "string",
+            "description": "JSON text encoding of the fill input. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "world_before": {
+            "type": "string",
+            "description": "JSON text encoding of the known fill-start world. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "run",
+          "entry",
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the comparison state, compared, unchecked and optional first_difference. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "instances",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "config"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [
+    {
+      "path": "/entries/0/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/1/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/2/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/3/input_schema/properties/handle",
+      "convention": "handle"
+    }
+  ],
+  "schema_version": "prompt-runtime.interface.v2",
+  "instance_types": [
+    {
+      "name": "RunJudge",
+      "resource": "instances"
+    }
+  ]
+}
+```
+</details>

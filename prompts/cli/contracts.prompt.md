@@ -105,3 +105,15 @@ write happens while merely listing or previewing.
 
 The native discovery/history/write effects are not bound by the expansion
 Runtime entry. Supplied blob replies do not prove host-file or history safety.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "61cef977ce95c9b8dcd7ce1dad57e1a879352fcbb41990582b345aa2857a7c8b",
+  "reason": "Strict source capture and write-time physical identity/migration need native evidence first. Native evidence owners: test/contracts-verification.test.mjs, test/shared-contracts-native.test.mjs, test/shared-contracts.formal.test.mjs."
+}
+```
+</details>

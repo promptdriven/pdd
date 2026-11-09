@@ -106,3 +106,66 @@ can press Run, and omit run; never claim that an action ran. Preserve successful
 run metadata in conversation. No model/effort change or shell/program tools are enabled.
 The page has no Undo, progress strip, Next Fill chips or quick reply chips; advise in
 plain conversation. Never promise those controls.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "bf193a7285e5724781d52e34f205d497a9cd2ab6dd419c1c6ab7865d8583d7a6",
+  "entries": [
+    {
+      "operation": "buildAgentInput",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "string",
+            "description": "JSON text encoding of the scrubbed context. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "entries": {
+            "type": "string",
+            "description": "JSON text encoding of the admitted entries. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "supportsApply": {
+            "type": "boolean"
+          },
+          "supportsRun": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": []
+}
+```
+</details>

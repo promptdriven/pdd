@@ -59,3 +59,82 @@ The agent interprets explicit current-person intent, such as run it, try it, go 
 ordinary explanations, fill requests and automatic results never authorize execution.
 Drop unsupported/malformed run independently, preserving valid say/fill. Never launch
 a program here: the page owns the funded dispatch after its own guards.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+Only parseAgentAuthStatus is declared. Installed-agent discovery, restricted subprocess invocation, cancellation, settings isolation, credential handling and local log writes remain native. Native evidence owners: test/agent-adapters.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "4e6b9b85c958d216ae3a162dd9cbb298605418d615989c6b3cad80f31c5f472e",
+  "entries": [
+    {
+      "operation": "parseAgentAuthStatus",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "stdout",
+              "stderr"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "agent",
+          "result"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "signed_out",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "kind": "partial"
+}
+```
+</details>

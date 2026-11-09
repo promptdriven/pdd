@@ -71,3 +71,15 @@ Usage normalization and formatting are owned by [runtime output](runtime-output.
 
 ## Progress
 A command on the Try can take many seconds. When stderr is a terminal and the call takes more than 2 s, the launcher prints `pdd: running <name> on the Try…` on stderr. With a pipe or an agent it prints nothing extra, so the program's output stays exact.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "31a2d74de4eb7ac53d98d8f4f6d8ddbca33c16fad007ce4698a9643a6ea34fc6",
+  "reason": "Real executable shim, shell streams and session custody need native evidence. Native evidence owners: test/try-doors.test.mjs."
+}
+```
+</details>

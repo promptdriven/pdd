@@ -339,3 +339,28 @@ Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopi
 
 Register autopilot.doctor, prefix autopilot doctor, local autopilot-doctor, no operands or options. Advertise `pdd autopilot doctor` as read-only first-start diagnostics with no AI call. Preserve other forms.
 Completion offers `doctor` only after `autopilot`. The top-level `doctor` command remains unsupported, including its help forms.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+This data-only module has no callable export. Its immutable constants remain required consumer context. The full draft records the missing constant-observation binding as a question and claims no executable entry.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "0cade527400f6ae2f27692435811040f00a6ac86d173dbd0ec4910a94c2a8317",
+  "entries": [],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "draft_gaps": [
+    "The public module exports immutable constants only. Which supported Runtime binding observes those exports without inventing a callable public operation? No constant-reader operation is declared."
+  ]
+}
+```
+</details>

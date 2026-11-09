@@ -73,3 +73,15 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
 
 - Load the complete [Prompting guide](../../docs/prompting-guide.md) for authoring/generation; it owns module contracts and preservation.
 - Runtime: Node `child_process.execFile`, `crypto.randomUUID`, `fs/promises`, `fs.constants`, `path`, `util`, and installed normal Git. Filesystem metadata creation/reads/fsync are helper-owned; execFile is the sole injected port. Tests use disposable real local repositories and injected command failures, with no live GitHub/native actions.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "1eb4eb0c0c5526d70df035b33b6949f9b5f5b26a4580720924e13b613d4c5b37",
+  "reason": "Real Git worktree identity, durable allocation and exclusive claims need native evidence. Native evidence owners: test/workflow-worktree.test.mjs."
+}
+```
+</details>

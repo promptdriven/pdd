@@ -25,6 +25,13 @@ export function interfaceFindings({root, paths = promptPaths(root)}) {
     } catch (error) { return [{code:error.code ?? 'interface-unreadable',path,message:error.message}]; }
   });
 }
+// Presence admission is workspace-wide for CLI owners, without judging unrelated behavior.
+export function cliInterfaceFindings({root}) {
+  const paths = promptPaths(root).filter(path => /^prompts\/cli\/.+\.prompt\.md$/.test(path));
+  const codes = new Set(['interface-missing','pdd-two-interfaces','invalid-json','interface-kind-invalid','native-reason-missing']);
+  return interfaceFindings({root,paths}).filter(item => codes.has(item.code));
+}
+
 export function runtimeCoverage({root, paths = promptPaths(root)}) {
   const visible = new Set(gitFiles(root));
   let checkable = 0, native_only = 0;

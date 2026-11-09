@@ -80,3 +80,15 @@ Usage normalization/formatting/header names are owned by [runtime output](runtim
 
 ## Progress in the pdd window
 Each API call can take many seconds, so the pdd window logs each request on stderr, like a local server: `<METHOD> <path>: running on the Try…` before the call, then `<METHOD> <path>: <status> in N s`, or the error status and its plain reason. Screen requests log only their failures. A busy port stops startup with `pdd: port N is in use by another program. Stop it, or run pdd simulate <story> --serve <N+1>.` (exit 125).
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "8239c7f7dd2cc45790da82fc0555223ff42a93cc61e65c646a4391bb2b1c9877",
+  "reason": "Actual HTTP server, port and socket lifecycle need native evidence. Native evidence owners: test/try-http.test.mjs."
+}
+```
+</details>

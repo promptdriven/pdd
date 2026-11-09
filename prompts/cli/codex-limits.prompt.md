@@ -40,3 +40,84 @@ account again. Unknown returns null metrics. Ignore all unrelated fields.
 Node child_process supplies a bounded subprocess transport. Protocol authority:
 [official App Server reference](https://developers.openai.com/codex/app-server).
 Only the initialization and rate-limit read protocol is required; no model call.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+Only parseCodexLimits is declared. readCodexLimits app-server framing, process termination, output bounds and account transport remain native; no simulated reply proves live account health. Native evidence owners: test/codex-limits.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "52695d14777f4edf60aa080d87663dc504eb2ac5dabb2583310fa5f12e563960",
+  "entries": [
+    {
+      "operation": "parseCodexLimits",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "reply": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied protocol reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "reply"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "limited",
+              "unknown"
+            ]
+          },
+          "resetAt": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usedPercent": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "resetAt",
+          "usedPercent"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "kind": "partial"
+}
+```
+</details>

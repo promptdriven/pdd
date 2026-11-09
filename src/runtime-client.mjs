@@ -3,7 +3,7 @@ import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: 67a58f26d740cc383fa518a0e6daa062308444b1d31ae99d3b5844a300307062).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
-import { interfaceFindings } from './interface-draft.mjs';
+import { interfaceFindings, cliInterfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -26,7 +26,7 @@ import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, project
 import { lintSvgLayouts } from './svg-layout.mjs';
 import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
 
-const localInterfaceProblem = problem => ['interface-missing','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
+const localInterfaceProblem = problem => ['interface-missing','pdd-two-interfaces','invalid-json','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -2646,6 +2646,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   try {
     if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
       const {root,found,normalized} = localSetup(cwd,words);
+      const declarationProblems = cliInterfaceFindings({root});
+      if (declarationProblems.length) {
+        const summary = 'Lint refused CLI Runtime interface declarations. 0 AI calls. No files were sent.';
+        if (context.json) line(ports.stdout,JSON.stringify({repo:root,exit_code:4,lint_state:'refused',problems:declarationProblems,rows:[],summary_line:summary}));
+        else for (const text of [...declarationProblems.map(item => `${item.code}: ${item.message}`),summary]) line(ports.stdout,text);
+        return 4;
+      }
       const selection = selectTests(found,normalized,{native:true});
       if (selection.nativeSelections?.length) {
         if(selection.untested.length)throw new Stop(2,selection.untested.join('\n'));

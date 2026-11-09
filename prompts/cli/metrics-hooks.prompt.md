@@ -9,3 +9,164 @@ Preserve a saved completion before a rerun can replace or clear it, and record e
 ## Dependencies
 
 [Metrics capture](metrics-capture.prompt.md) owns valid event fields and privacy filtering; this module calls `captureObservation`. The caller supplies the saved run, stable source and transition identity, observation time and any authoritative explicit facts. The store port supplies `appendEvents({root,events})`.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+The captureObservation call uses the supplied observation as the callee input. The store resource is the actual appendEvents dependency. Atomic persistence of the caller’s returned run and durable delivery remain native integration obligations.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "9e4b91c0c90a695659c53aef490877a6d8a088ff36e6c8c4cd52f8c353f0fab6",
+  "entries": [
+    {
+      "operation": "journalRunMutation",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "before": {
+            "type": "string",
+            "description": "JSON text encoding of the saved run before mutation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "after": {
+            "type": "string",
+            "description": "JSON text encoding of the run after mutation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "source": {
+            "type": "string"
+          },
+          "observedAt": {
+            "type": "string"
+          },
+          "transitionId": {
+            "type": "string"
+          },
+          "observations": {
+            "type": "string",
+            "description": "JSON text encoding of the explicit observations. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "before",
+          "after",
+          "source",
+          "observedAt",
+          "transitionId"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the returned run including metrics.events. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "drainRunJournal",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "string",
+            "description": "JSON text encoding of the journaled run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the ok/count or ok:false/error drain result. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "store.appendEvents"
+      ]
+    }
+  ],
+  "calls": [
+    {
+      "operation": "captureObservation",
+      "target": "prompts/cli/metrics-capture.prompt.md",
+      "target_operation": "captureObservation",
+      "max_calls": 64
+    }
+  ],
+  "resources": [
+    {
+      "name": "store",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "appendEvents",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "events": {
+                "type": "string",
+                "description": "JSON text encoding of the validated metrics events. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "root",
+              "events"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the store reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": []
+}
+```
+</details>

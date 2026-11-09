@@ -22,8 +22,7 @@ problems even for a current approved prompt before approval's no-op return.
 
 The files view uses `findTests`, `readPrompt`, `promptRefusal`,
 `promptSchemaRefusals` and `preflight`. It must not invent another folder walk,
-parser, contract resolver or test name rule. Selection remains lazy for lint,
-test and approve: an unrelated bad prompt must not refuse selected good work.
+parser, contract resolver or test name rule. Selection remains lazy for test and approve. Lint also applies the runtime client's workspace-wide CLI declaration presence gate; unrelated semantic/hash/schema problems remain outside a named selection.
 The files view deliberately inspects every eligible prompt and discovered test.
 No interface kind is inferred here; a separate interface owner can extend the
 reader's metadata.
@@ -443,3 +442,158 @@ Optional Git-visible root `pdd-bindings.json` is local selection metadata, never
 The root inventory is an explicit exception to source-link acceptance: keep `pdd-bindings.json` and every declaration on strict Git-visible regular paths without symlink ancestors, as owned by [binding inventory](runtime-bindings.prompt.md). Do not read a linked inventory, even if its target is safe. Validate declared native module targets under their separate executable-binding rules: no secrets, symlinks, traversal or missing files; safe source reading does not relax executable bindings. Select entries whose authored Story paths intersect the selected tests' Story paths. Count unique module paths once. A bound module must name a prompt reachable from those selected tests through step entries or declared prompt calls, with a valid executable Runtime interface; a prompt merely included as prose is not bound. An unbound declaration requires a nonblank reason and nonblank port_attempt describing the attempted runtime port and why it did not suffice. Missing explanations are lint problems. Invalid, duplicate or conflicting declarations and unknown Story references are lint problems, not silently ignored coverage. Other Stories' modules do not enter the selected denominator. Expose fresh coverage metadata and diagnostics to the client; never change expected test values.
 
 Binding-boundary repair messages call the declaration a Runtime interface boundary. Keep the service name PDD interpreter and preserve machine-read refusal codes.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+Only JSON/schema/kind decisions and text criterion parsing are declared. Discovery, safe source reads, hash filling, tar capture, physical path/workspace identity and CLI preparation remain native. Native evidence owners: test/agent-project.test.mjs, test/agent-waits-in-one-call.test.mjs, test/approval-chat.test.mjs, test/approval-hash-only.test.mjs, test/approval-lead-fixes.test.mjs, test/autopilot-factory.e2e.test.mjs, test/autopilot-pr1-gate.test.mjs, test/bounded-authored-source.vectors.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "53a08edc005779bd278346c36bc261d1e69800788d2905db2521cb85ebe6d5c5",
+  "entries": [
+    {
+      "operation": "checkInput",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied JSON input. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "schema": {
+            "type": "string",
+            "description": "JSON text encoding of the declared schema. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "index": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input",
+          "schema"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the input-validation refusals and warnings. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "interfaceSchemaProblems",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "iface": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied interface. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "iface"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the ordered schema problems. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "interfaceKindProblems",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "iface": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied interface. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "iface"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the kind problems. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "storyCriteria",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the authored criteria. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "kind": "partial"
+}
+```
+</details>

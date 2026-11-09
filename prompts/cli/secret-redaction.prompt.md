@@ -54,3 +54,15 @@ newly learned values before emitting output that can contain them.
 ## Dependencies
 
 - Native JavaScript strings, regular expressions and URL parsing.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "49b010d4fa545b1630e06b479bc54032d2a2bca6a4b5cd05b587c1619dddf301",
+  "reason": "Process-wide memory-only credential registration and streaming emit callbacks, including withholding undecided chunks, require native JavaScript stream tests; a whole JSON result cannot prove that no intermediate emission leaked a secret. Native evidence owners: test/validation-evidence.test.mjs, test/validation-receipts.test.mjs."
+}
+```
+</details>

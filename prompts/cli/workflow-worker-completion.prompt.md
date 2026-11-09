@@ -14,3 +14,15 @@ The outside-program port starts the listener using the current Node executable, 
 The executable one-shot listener accepts a serialized context or a context file. After worker completion it reads the local Autopilot state for the canonical source root. If enabled, the saved coordinator pane must match the captured coordinator pane, and the listener waits in session `pdd-autopilot` until that pane is idle or done before requesting yield. If disabled, it may request yield for inactive cleanup without waiting. Missing or mismatched state leaves completion unknown. Under the existing run lock the listener checks run ID, area, pane and launch anchor against its captured identity, and supplies that identity and the lock release to yield. Yield rechecks the identity and releases the lock before its completion tick. The listener always releases the lock on exit. Reused panes require independent activity provenance; current done alone does not establish a resumed attempt completed.
 
 Explicit Autopilot start may rearm saved current automatic chats belonging to its repository and coordinator. Resumed chats without saved positive activity still require native working before done; fresh panes or resumed chats with matching saved activity can wait for done. A grace-expired registration or failed native wait remains unknown; tell the person that explicit inspection and `pdd workflow yield` after positive completion evidence are the fallback, without promising a later wake.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "2a368f5fbb7fc55b43cbcf942bd0c8f63e9142e027ed1cf9268f5f461dd6419b",
+  "reason": "Detached listener, native wait and observed activity provenance need native evidence. Native evidence owners: test/workflow-worker-completion.test.mjs."
+}
+```
+</details>

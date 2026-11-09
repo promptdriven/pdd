@@ -32,3 +32,15 @@ Keep locked, dirty, untracked, unpushed, detached, replaced or unknown worktrees
 - [Allocator](workflow-worktree.prompt.md): native generation and verification context for lookupIssueWorktree identity.
 - [Workflow runner](workflow-runner.prompt.md): native generation and verification context for acquireRunLock.
 - [Agent adapters](agent-adapters.prompt.md): native generation and verification context for bounded process execution.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "90dae89f95ba35245b8627cee58f736f3e1bd2cd38cb5bb09a3db708c4bcd930",
+  "reason": "Deletion safety depends on real locks, worktree identity and Git effects. Native evidence owners: test/autopilot-cleanup.test.mjs."
+}
+```
+</details>

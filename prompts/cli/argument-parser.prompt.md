@@ -63,3 +63,354 @@ For the [scope routes](command-catalog.prompt.md#durable-scope-routes), parse ex
 - Native authoring/generation also uses the repository context identified in Authoring above. The runtime-client link in Argument validation identifies ownership of downstream combination checks; parsing never calls it and needs no runtime client/session/token context.
 
 Workflow run parses the catalog origin, decision-id and outcome options as observational metadata and forwards them without granting workflow authority.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "069a025bf231ad52e6885b824915594850415cdf929debf1fd198a79c8ea6ce4",
+  "entries": [
+    {
+      "operation": "parseArgv",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "argv"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "commandId": {
+                "type": "string"
+              },
+              "local": {
+                "type": "string"
+              },
+              "operands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "options": {
+                "type": "object",
+                "properties": {
+                  "--all": {
+                    "type": "boolean"
+                  },
+                  "--json": {
+                    "type": "boolean"
+                  },
+                  "--contract": {
+                    "type": "string"
+                  },
+                  "--extend": {
+                    "type": "boolean"
+                  },
+                  "--refresh": {
+                    "type": "boolean"
+                  },
+                  "--date": {
+                    "type": "string"
+                  },
+                  "--snapshot": {
+                    "type": "string"
+                  },
+                  "--timezone": {
+                    "type": "string"
+                  },
+                  "--at": {
+                    "type": "string"
+                  },
+                  "--expected-source": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "--runs": {
+                    "type": "string"
+                  },
+                  "--checks": {
+                    "type": "string"
+                  },
+                  "--resume-custody": {
+                    "type": "string"
+                  },
+                  "--issue": {
+                    "type": "string"
+                  },
+                  "--kind": {
+                    "type": "string"
+                  },
+                  "--input": {
+                    "type": "string"
+                  },
+                  "--update": {
+                    "type": "boolean"
+                  },
+                  "--discord-channel": {
+                    "type": "string"
+                  },
+                  "--token-command": {
+                    "type": "string"
+                  },
+                  "--destination": {
+                    "type": "string"
+                  },
+                  "--open": {
+                    "type": "boolean"
+                  },
+                  "--repo": {
+                    "type": "string"
+                  },
+                  "--command": {
+                    "type": "string"
+                  },
+                  "--timeout": {
+                    "type": "string"
+                  },
+                  "--reason": {
+                    "type": "string"
+                  },
+                  "--step": {
+                    "type": "string"
+                  },
+                  "--interpreter": {
+                    "type": "boolean"
+                  },
+                  "--blocker": {
+                    "type": "string"
+                  },
+                  "--until": {
+                    "type": "string"
+                  },
+                  "--route": {
+                    "type": "string"
+                  },
+                  "--no-run": {
+                    "type": "boolean"
+                  },
+                  "--agent": {
+                    "type": "string"
+                  },
+                  "--model": {
+                    "type": "string"
+                  },
+                  "--herdr-agent-name": {
+                    "type": "string"
+                  },
+                  "--codex-threads": {
+                    "type": "string"
+                  },
+                  "--base": {
+                    "type": "string"
+                  },
+                  "--adopt-corpus": {
+                    "type": "string"
+                  },
+                  "--draft": {
+                    "type": "boolean"
+                  },
+                  "--through": {
+                    "type": "string"
+                  },
+                  "--origin": {
+                    "type": "string"
+                  },
+                  "--decision-id": {
+                    "type": "string"
+                  },
+                  "--outcome": {
+                    "type": "string"
+                  },
+                  "--test": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "--expect": {
+                    "type": "string"
+                  },
+                  "--summary": {
+                    "type": "string"
+                  },
+                  "--skipped": {
+                    "type": "string"
+                  },
+                  "--workspace": {
+                    "type": "string"
+                  },
+                  "--stage": {
+                    "type": "string"
+                  },
+                  "--said": {
+                    "type": "string"
+                  },
+                  "--dry-run": {
+                    "type": "boolean"
+                  },
+                  "--cancelled": {
+                    "type": "boolean"
+                  },
+                  "--new": {
+                    "type": "boolean"
+                  },
+                  "--lf": {
+                    "type": "boolean"
+                  },
+                  "--cache-clear": {
+                    "type": "boolean"
+                  },
+                  "--details": {
+                    "type": "boolean"
+                  },
+                  "--max-calls": {
+                    "type": "string"
+                  },
+                  "--read": {
+                    "type": "boolean"
+                  },
+                  "--retry": {
+                    "type": "string"
+                  },
+                  "--fill-hash": {
+                    "type": "boolean"
+                  },
+                  "--compact": {
+                    "type": "boolean"
+                  },
+                  "--explain-bindings": {
+                    "type": "boolean"
+                  },
+                  "--files": {
+                    "type": "boolean"
+                  },
+                  "--app-map": {
+                    "type": "string"
+                  },
+                  "--lint": {
+                    "type": "boolean"
+                  },
+                  "--local": {
+                    "type": "boolean"
+                  },
+                  "--screen": {
+                    "type": "string"
+                  },
+                  "--drawing": {
+                    "type": "string"
+                  },
+                  "--request": {
+                    "type": "string"
+                  },
+                  "--automatic": {
+                    "type": "boolean"
+                  },
+                  "--tests": {
+                    "type": "string"
+                  },
+                  "--tab": {
+                    "type": "string"
+                  },
+                  "--cli": {
+                    "type": "boolean"
+                  },
+                  "--shell": {
+                    "type": "boolean"
+                  },
+                  "--save-last": {
+                    "type": "boolean"
+                  },
+                  "--serve": {
+                    "type": "string"
+                  },
+                  "--no-open": {
+                    "type": "boolean"
+                  },
+                  "--stop": {
+                    "type": "boolean"
+                  },
+                  "--no-wait": {
+                    "type": "boolean"
+                  },
+                  "--write": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "commandId",
+              "local",
+              "operands",
+              "options"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "commandId": {
+                "type": "string",
+                "const": "help"
+              },
+              "local": {
+                "type": "string",
+                "const": "help"
+              },
+              "helpPrefix": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "commandId",
+              "local",
+              "helpPrefix"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "errors": [
+        "CommandInputError"
+      ],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": []
+}
+```
+</details>

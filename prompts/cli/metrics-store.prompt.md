@@ -22,3 +22,15 @@ Bundles retain complete selector snapshot headers and member selection events, i
 Every new export declares `scope: "all-retained-repo-events"`: its events and snapshots are the retained records for the exported repository, without a report date or snapshot filter. Preserve the scope of each imported source through later exports. A v1 bundle or nested source without scope remains readable and its scope remains unknown; do not infer it from a later export. When present, scope must be this supported value. Validate top-level and nested scope before any import write.
 
 Module function `validateSnapshot(snapshot, repository)` is the existing canonical selector-snapshot validator exposed for read-only consumers. With a canonical repository name it validates the complete header, permitted event envelope/data fields and values, timestamp/source bindings, selection type/snapshot/repository consistency and unique issue membership using the same validation as bundle import/export. It returns undefined on success and throws on invalid data, without I/O, mutation, storage, process or network effects. Consumers must not substitute a partial second classifier.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "03aca210fe90b23cb346cf52579f1680e654ddb745733a0e560396f4c9ee28b8",
+  "reason": "Prompt explicitly says native-only for now; identity, concurrency, permissions and crash behavior remain native. Native evidence owners: test/metrics-store.test.mjs."
+}
+```
+</details>

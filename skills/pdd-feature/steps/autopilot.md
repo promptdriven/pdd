@@ -16,10 +16,10 @@ Overrides SKILL.md and RUNBOOK §2, §4, §11 and §12:
 
 Keep: unresolved product calls, irreversible actions, `--max-calls`, strict mode, and never sending a failed check again.
 
-Fix the failed check's cause before retrying; two failed rounds do not block work. Keep repairing while a useful correction is available, preserving behavior expectations and required validation, for at most 5 repair rounds in one area (a round is a return to an earlier step that clears later steps; a retry of the same step is not one); pdd refuses a 6th. For a real blocker or at the limit, record cause and next action; take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress; the coordinator continues other eligible work. Never repeat an external action with an unknown outcome.
+Fix the failed check's cause before retrying; two failed rounds do not block work. Keep repairing while a useful correction is available, with correct expectations and required validation, for at most 5 repair rounds in one area (a round is a return to an earlier step that clears later steps; a retry of the same step is not one); pdd refuses a 6th. For a real blocker or at the limit, record cause and next action; take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress; the coordinator continues other eligible work. Never repeat an external action with an unknown outcome.
 
-Executed prompts: draft through pdd. Show coverage; unmapped/conflicting sentences need one grouped person decision with quotes, never delegation. Unused prompts need none.
+Every behavior prompt needs a declaration: full, partial or native-only with reason. Use `pdd interface draft`. Show coverage; unmapped/conflicting sentences need one grouped person decision with quotes, never delegation.
 
-A screen change gets before/after screenshots in the code PR.
+Screens: before/after in code PR.
 
 Full suites/builds follow the [shared queue rule](../../pdd-autopilot/steps/handoff.md).

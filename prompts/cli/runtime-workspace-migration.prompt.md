@@ -30,3 +30,15 @@ Optional native `signal` is the same standard `AbortSignal` accepted by the runt
 - [Workflow evidence owner](workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for `readEvidenceEligibility`, its concrete result and accepted association policy; unavailable is unresolved, never permission.
 
 Host filesystem publication, concurrent writers, state durability, real process controls and receipt byte retention require native verification. No JSON transport for those effects is declared here. Native case drafts name the real operation and faults; their unexecuted results are not hosted passes.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "52fdd5bbe307db550db8d357164c8fa36f99d443b3680b9827924005a8f13d91",
+  "reason": "Actual receipt identity, migration writes and rollback require native evidence. Native evidence owners: test/bounded-workspace-migration.vectors.test.mjs, test/bounded-workspace.formal.test.mjs."
+}
+```
+</details>

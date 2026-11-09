@@ -125,3 +125,15 @@ Before each atomic run publication, journal retained completion facts with stabl
 Capture journal construction consumes pending observations only on success; preserve them and a coverage gap for later retry on failure. Optional metrics syncing never gates the original atomic status publication.
 
 Retain the ordinary injected pathname-write and atomic-rename publication behavior. Capture, delivery, coverage-gap and warning callbacks are best effort; even a throwing warning must not stop ordinary progress or turn a committed rename into failure. Asynchronous drain rejection must be contained. Native status write and rename failures retain their ordinary errors. Optional identity and gap storage use injected filesystem ports for controlled failure verification.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "8c030281ca05dd9449eeb3c2f4efc58b67ac9dabb62b77faf456c9b260f8bfc9",
+  "reason": "Durable callback updates, cross-process locking and atomic publication need native evidence. Native evidence owners: test/approval-chat.test.mjs, test/approval-hash-only.test.mjs, test/approval-lead-fixes.test.mjs, test/approval-merge-races.test.mjs, test/approval-round2.test.mjs, test/autopilot-audit.test.mjs, test/autopilot-claim-expiry.test.mjs, test/autopilot-environment-retry.test.mjs."
+}
+```
+</details>

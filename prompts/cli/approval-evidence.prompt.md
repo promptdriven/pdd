@@ -106,3 +106,279 @@ and messages come from the same read snapshot.
 - [Prompting guide](../../docs/prompting-guide.md): authoring and generation.
 - [Public boundary](public-boundary.prompt.md): authoring and verification; use
   Node built-ins only, with no services or private runtime dependencies.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+The fs resource supplies the existing promises filesystem replies and clock.now supplies ports.now. This checks supplied-session selection and message exclusion only. Authentic session provenance, physical identity and concurrent host snapshots remain native; returned text never approves a gate. Native evidence owners: test/approval-evidence-budget.test.mjs, test/approval-evidence.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "525f1893f4f2b82d1282ffa292d6a9be63ce037e9bbe2a23b6d042f5674330fa",
+  "entries": [
+    {
+      "operation": "readApprovalEvidence",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "description": "JSON text encoding of the native stage identity and bounds. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "gateAskedAt": {
+            "type": "number"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "changes"
+            ]
+          },
+          "ignorePrefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "stage",
+          "gateAskedAt",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the success evidence or ok:false/code/message reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "fs.readdir",
+        "fs.stat",
+        "fs.readFile",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "findNativeSessions",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "description": "JSON text encoding of the native stage identity and bounds. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "stage"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the distinct id/startedAt sessions. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "session_unreadable"
+      ],
+      "resource_operations": [
+        "fs.readdir",
+        "fs.stat",
+        "fs.readFile",
+        "clock.now"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing fs.readdir dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing fs.stat dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readFile",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing fs.readFile dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "now",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "kind": "partial"
+}
+```
+</details>

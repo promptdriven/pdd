@@ -52,3 +52,15 @@ Replace the whole folder, so files that a new version removed do not stay. Copy 
 ## Dependencies
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "40be4b0e4f350479faf9f1d4c11e5d1a56ac779b4d0995bf3d8f41a4130c3f09",
+  "reason": "Host skill ownership, symlink checks and installation writes need native evidence. Native evidence owners: test/gemini-workflow.test.mjs, test/session-skills.test.mjs, test/test-home-isolation.test.mjs, test/workflow-setup.test.mjs."
+}
+```
+</details>

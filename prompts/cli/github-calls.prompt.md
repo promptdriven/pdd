@@ -243,3 +243,15 @@ counts its calls, applies the budget, shows the status line and reads review
 pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)
 uses the ETag cache, the full-last-page rule and the floor guard.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "bb6d426568a091a05fa2a946b250ee6123ff12b4059627bfb44e5b98d3d84338",
+  "reason": "Process adapter accounting and actual CLI calls need native evidence first. Native evidence owners: test/github-calls.test.mjs."
+}
+```
+</details>

@@ -160,11 +160,17 @@ A layout with phase closed normally refuses reopening. Permit it only for its sa
 - Runtime Herdr public workspace/worktree/tab/pane commands and JSON identities, capability baseline 0.9.1 without version pin, supplied by the area-chat command port.
 - Node filesystem/crypto primitives supply canonical identity, SHA-256 label qualification and the private cross-process lock. Durable run custody is supplied by the caller, not reconstructed from a registry.
 
-<details><summary>Runtime interface</summary>
-
 The native module remains unbound to the Interpreter: its callback/checkpoint ports, real filesystem identity and cross-process lock have no declared JSON transport binding. No check-only entry or invented adapter is part of this contract. Native tests must establish allocation, chat dispatch and cleanup effects; an Interpreter pass cannot prove them.
 
+
+<details><summary>Runtime interface</summary>
+
 ```json
-{"status":"draft","prose_sha256":"4caf8e60223b95e7b91e43c74c4eb39db1621bb731386c379625b0740f21826f","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":0},"conventions":[]}
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "bbf99ac7a298c2d7dff3146a221cda61b6467d7cede3468fc0a84586f17f58bf",
+  "reason": "Prompt declares unbound: native callbacks, realpath identity and cross-process lock have no JSON transport binding. Native evidence owners: test/herdr-layout.test.mjs, test/workflow-checkout-ownership.formal.test.mjs, test/workflow-run-owner-layout.test.mjs, test/workflow-stopped-panes.test.mjs."
+}
 ```
 </details>

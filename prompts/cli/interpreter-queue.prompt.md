@@ -100,3 +100,15 @@ Export configureInterpreterTestMode({env,owner,enabled},ports). Use the same que
   defaults. Inject `fs`, `now`, `sleep`, `alive`, `pid`, `uuid`, `acquireLock`,
   `interrupted` and `say` for controlled local behavior. Admission checks the
   deadline and interruption before each update and after lock acquisition.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "cb9a8918631d75cdcf8f8c6c63f8b875a9449d8275fe019d7e2d7d4f7161d2b6",
+  "reason": "Cross-process admission, liveness and cleanup require real concurrency evidence. Native evidence owners: test/interpreter-queue-repair.test.mjs, test/interpreter-queue-runtime.test.mjs, test/interpreter-queue-storage.test.mjs, test/interpreter-queue.test.mjs."
+}
+```
+</details>

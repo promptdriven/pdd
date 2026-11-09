@@ -308,3 +308,355 @@ Features are `ordinary`, `constructor-retained-read`, `method-attachment`,
 these enums do not authorize rediscovering features or applying server policy.
 
 </details>
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+CHECK_STATES is shared constant context, not a callable entry. Each entry names an existing public function. Multi-argument operations use the named fields in native argument order; options is the second argument where declared.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "4260e7d0786b448af4faf8c07ccd01fef3b3eb5c61142f8434d5b735e0b0b393",
+  "entries": [
+    {
+      "operation": "resultOutcome",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "row": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied result row. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "row"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "sent",
+              "passed",
+              "failed",
+              "refused",
+              "partial",
+              "not run"
+            ]
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "outcomeFor",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "JSON text encoding of the server answer. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "options": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied test, steps, kind, timeLimit, sourceFiles and capacityUncertain options. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "answer",
+          "options"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the outcome and optional compatibility view. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "outcomeText",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "JSON text encoding of the outcome. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "hasProgress",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "JSON text encoding of the outcome. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "progressText",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "outcomes": {
+            "type": "string",
+            "description": "JSON text encoding of the outcome array. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "outcomes"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "outcomeDone",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "JSON text encoding of the outcome. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "outcomeOverall",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "outcomes": {
+            "type": "string",
+            "description": "JSON text encoding of the outcome array. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "options": {
+            "type": "string",
+            "description": "JSON text encoding of the interrupted and lintUnknown options. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "outcomes"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "outcomeExitCode",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "outcomes": {
+            "type": "string",
+            "description": "JSON text encoding of the outcome array. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "options": {
+            "type": "string",
+            "description": "JSON text encoding of the interrupted and lintUnknown options. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "outcomes"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "resultOverall",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "outcomes": {
+            "type": "string",
+            "description": "JSON text encoding of the outcome array. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "options": {
+            "type": "string",
+            "description": "JSON text encoding of the aggregate options. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "outcomes"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the selected public aggregate. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": []
+}
+```
+</details>

@@ -52,3 +52,15 @@ an inventory, not a pass verdict. Use injected stdout/stderr ports for output.
 
 - [Shared authored-file reader](runtime-preflight.prompt.md): required generation,
   verification and testing context for all parsing, pairing and refusal rules.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "86a632c0f370c0b637e8d9465443b5fe40fdab9bda8e55723fe98c14a6930f3d",
+  "reason": "Native Git-visible source inspection and the strict reader need native evidence first. Native evidence owners: test/cli.test.mjs."
+}
+```
+</details>

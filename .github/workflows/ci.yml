@@ -35,6 +35,8 @@ jobs:
           command -v zsh
           zsh --version
       - run: npm ci --ignore-scripts
+      - name: Require CLI Runtime interface declarations
+        run: node --test test/cli-interface-declarations.test.mjs
       - name: Run offline tests
         run: |
           set +e

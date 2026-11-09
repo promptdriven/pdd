@@ -37,3 +37,15 @@ Machine-read words keep `check` and `try`, because servers, saved files and scri
 The package may include a licensed, attributed vendored public TOML parser under `src/vendor/` for safe config validation. It requires no npm install or registry access at runtime.
 
 The local metrics routes dispatch to the metrics command; they require no interpreter call.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "61ec60ede3f9add57dbd56675ddb57eea5cc1fec467734fdbdeb50731d234454",
+  "reason": "This is shared native authoring and command-policy context, with no independently owned callable module entry. Real command dispatch, packaging, Git/Herdr effects and credential boundaries require native integration tests; an invented Runtime entry would not establish them. Native evidence owners: test/cli.test.mjs."
+}
+```
+</details>

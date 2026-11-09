@@ -15,3 +15,15 @@ Load the local public `runPdd`, pass process.argv.slice(2), and assign the retur
 ## Dependencies
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "d59961663321b116ee47fd87019de6334021f7ce95f5266a5f5bf431d66b2004",
+  "reason": "Node syntax compatibility and import-before-exit order require a real Node process. Native evidence owners: test/cli-node-version.test.mjs, test/cli-installed-entry.test.mjs."
+}
+```
+</details>

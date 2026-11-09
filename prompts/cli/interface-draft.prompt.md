@@ -26,6 +26,8 @@ Automatic approval accepts only a locally valid draft with no unmapped or confli
 
 ## Inventory results
 
+`cliInterfaceFindings({root})` applies the runtime client's declaration-presence gate to workspace-eligible Git-visible `prompts/cli/*.prompt.md`. Return existing missing/duplicate/JSON/kind/native-reason diagnostics only. Do not widen named-Story schema or hash validation to unrelated CLI prompts. Repository PR tests use this same owner to reject undeclared CLI prompts.
+
 `missingInterfaces(root)` returns sorted paths of workspace prompts with no block. `interfaceFindings({root,paths?})` returns `{code,path,section?,message}` rows for absent, malformed, stale or schema-invalid blocks, including draft gaps. Its default paths are workspace prompts outside nested fixture projects. `runtimeCoverage({root,paths?})` uses the same default scope and returns `{checkable,total,native_only}`. Total counts every selected prompt; checkable counts valid current full or partial blocks with entries; native_only counts valid current native-only declarations. Invalid, stale, missing and incomplete blocks remain only in total. A stale hash must not hide draft gaps: report both findings, so local lint still refuses the unresolved contract. Neither helper makes a network call or claims a server lint pass.
 
 Native test commands for automatic approval are `node --test TEST...`, `npm test` or `npm run SCRIPT`. Node paths must name committed tests (a test/tests directory or a .test/.spec filename). npm scripts must be test or test:* and must exist in the committed package. Require a completed TAP report with a positive test count, all tests passed and zero failures. Retain those native counts with the command and exit code; a no-op or build is not native-test evidence. Run the chosen command as arguments, with no shell interpolation. Hash source bytes without decoding binary files.
@@ -40,3 +42,15 @@ Native test commands for automatic approval are `node --test TEST...`, `npm test
 - [Runtime workspace](runtime-workspace.prompt.md): required for selecting project source and excluding fixtures.
 
 Use “Runtime interface” when naming the declaration in user messages, including its global approval status.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "be123042379062d6353601315fcd5fbb5ad1737574cf2a3c4c597a16e06f6108",
+  "reason": "Drafting and approval provenance require real Git-visible files, exact byte-preserving edits and native test subprocess evidence. Supplied port replies cannot prove those writes or source identities. Native evidence owners: test/interface-draft-completeness.test.mjs, test/interface-draft-diagnostics.test.mjs, test/interface-draft.test.mjs, test/interface-drafting-route.test.mjs."
+}
+```
+</details>

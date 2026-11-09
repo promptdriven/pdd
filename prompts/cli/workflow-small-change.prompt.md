@@ -42,3 +42,15 @@ must derive requests from the full issue and trusted follow-ups, never the plan.
   callers supply the run folder and repository root. Tests use disposable files.
 
 Small-change checklist and Formal check facts remain in detailed text status and JSON run rows. Preserve compact list/all text rows; these views keep existing Runtime coverage lines but do not add the detailed small-change evidence block. The saved evidence remains available through the run detail and JSON.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "ff7bf2fbb3b4f726d9cb006f9046639ddb6966e7f40b18185171db8918e3e83a",
+  "reason": "The checklist reader binds real Git-visible content fingerprints and bounded native file identity. Supplied records cannot prove current source or write custody. Native evidence owners: test/workflow-small-change-scope.test.mjs."
+}
+```
+</details>

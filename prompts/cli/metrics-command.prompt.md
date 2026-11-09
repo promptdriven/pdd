@@ -40,3 +40,15 @@ Replay complete published selector snapshots and fallback capture-gap records in
 When a GitHub read fails, retain an incomplete coverage observation for known issues at that observation time. A later successful read does not erase the earlier gap.
 
 Historical saved-step backfill is a fallback: do not generate a completion already represented by the same run journal fact with matching repository, issue, attempt, step, done status and saved time. Match known areas when both exist; missing area does not prove a difference. Preserve all journal and ledger observations, other statuses and times, and uncovered saved facts. For queue and cohort reports, omit activity counts and direct people to --date for daily activity.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "38f838ab56f35c1d42e22e758c1145516efb1a8701b9487da817ec304438576a",
+  "reason": "Prompt explicitly says native-only for now; repository/selector/ledger bindings are incomplete. Native evidence owners: test/metrics-command.test.mjs."
+}
+```
+</details>

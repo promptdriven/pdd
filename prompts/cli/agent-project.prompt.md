@@ -35,3 +35,432 @@ Save-target advice uses only the exact original selected test association from t
 - [Runtime client](runtime-client.prompt.md) owns state directory and saved batch/reply layouts; this module reads a bounded projection only.
 - [Runtime output](runtime-output.prompt.md) owns summary.json rows and criterion status meaning.
 - Node filesystem/path/crypto/child_process/OS built-ins provide local safe reads, identity and Git visibility.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+Bind bounded Git listing and read-only file observations only. Safe physical discovery, realpath/no-follow identity, workspace capability enforcement and saved evidence eligibility remain native; readAgentScenarios is not declared. Native evidence owners: test/agent-project.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "b568c6293e210ce6a8039a77c789ffb46bf6b1111300e5f3d9c4e48d061407af",
+  "entries": [
+    {
+      "operation": "buildProjectCard",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "story": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied progress. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "previousFingerprint": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entries": {
+            "type": "string",
+            "description": "JSON text encoding of the admitted entries. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "model": {
+            "type": "string",
+            "description": "JSON text encoding of the model. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "scenarios": {
+            "type": "string",
+            "description": "JSON text encoding of the supplied scenarios. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the card result including text, fingerprints, changed, latestCheck, codeExists, nextStep, productRules, saveTarget and reads. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "files.readFileSync",
+        "files.lstatSync",
+        "files.openSync",
+        "files.fstatSync",
+        "files.readSync",
+        "files.closeSync",
+        "program.execFileSync",
+        "compute.hash_utf8"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readFileSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing files.readFileSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "lstatSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing files.lstatSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "openSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing files.openSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "fstatSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing files.fstatSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing files.readSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "closeSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing files.closeSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "program",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "execFileSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "string",
+                "description": "JSON text encoding of the positional arguments to the existing program.execFileSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sha256"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "kind": "partial"
+}
+```
+</details>

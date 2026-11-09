@@ -41,3 +41,15 @@ The journal also accepts route `automatic-check-pass`. Such records have null wo
 ## Dependencies
 
 No other business prompt supplies policy. Native filesystem concurrency, atomic rename, Git common-directory resolution and exact-byte hashing require native acceptance; no Runtime interface or alternate check-only API is declared for these unsupported effects.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "5b1c36e3918d2f091d2cc6001bacda61c007b541e5adeb4fb252e3b7c17deb82",
+  "reason": "Prompt explicitly excludes a surrogate API; real actor identity, locking and atomic journal writes remain native. Native evidence owners: test/approval-lead-fixes.test.mjs, test/approval-round2.test.mjs, test/autopilot-pr1-gate.test.mjs, test/autopilot.test.mjs, test/native-evidence-intake.test.mjs."
+}
+```
+</details>

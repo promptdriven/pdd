@@ -82,3 +82,312 @@ Preserve the current isolated observed-world save operation. It still uses the n
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for Story selection.
 - [Agent judge](agent-judge.prompt.md): required generation/runtime context for per-run comparison and progress.
 - [Prompting guide](../../docs/prompting-guide.md): required authoring context.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+The factory stores its captured configuration and cumulative state in instances using the executor-issued handle. Methods load that state; mutating methods store the updated state under the same handle. The handle is only the transport identity of the existing closure, not a new native argument. Only createTryTools and call("try_open"/"try_state", args) are declared. The actual readTryOwner dependency supplies the owner result; createRunJudge and its bindings/snapshot methods supply local judgment context. Calls use the judge’s opaque factory handle. All try_run/try_check/try_save_case behavior, stdio framing, authentic owner custody, live HTTP/budget effects and filesystem transactions remain native. No callback reply establishes a live effect or closed-editor confirmation. Native evidence owners: test/try-mcp.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "7db4b6932adb58da54ed341f52541f35078ea84ac8ccc721514241bed5ad3a09",
+  "entries": [
+    {
+      "operation": "createTryTools",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "type": "string",
+            "description": "JSON text encoding of the environment. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "factory",
+        "type": "TryTools",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.store"
+      ]
+    },
+    {
+      "operation": "call",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "enum": [
+              "try_open",
+              "try_state"
+            ]
+          },
+          "args": {
+            "type": "object",
+            "properties": {
+              "story": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "handle",
+          "name",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the MCP tool result. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "TryTools",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "instances.load",
+        "instances.store",
+        "client.readTryOwner"
+      ]
+    }
+  ],
+  "calls": [
+    {
+      "operation": "createRunJudge",
+      "target": "prompts/cli/agent-judge.prompt.md",
+      "target_operation": "createRunJudge",
+      "max_calls": 16
+    },
+    {
+      "operation": "bindings",
+      "target": "prompts/cli/agent-judge.prompt.md",
+      "target_operation": "bindings",
+      "max_calls": 16
+    },
+    {
+      "operation": "snapshot",
+      "target": "prompts/cli/agent-judge.prompt.md",
+      "target_operation": "snapshot",
+      "max_calls": 16
+    }
+  ],
+  "resources": [
+    {
+      "name": "instances",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "config"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "client",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readTryOwner",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "story": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "JSON text encoding of the existing owner reply including root, record, test, model, data, data_error and actions. Decode the complete public value before use."
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [
+    {
+      "path": "/entries/0/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/1/input_schema/properties/handle",
+      "convention": "handle"
+    }
+  ],
+  "schema_version": "prompt-runtime.interface.v2",
+  "instance_types": [
+    {
+      "name": "TryTools",
+      "resource": "instances"
+    }
+  ],
+  "kind": "partial"
+}
+```
+</details>

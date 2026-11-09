@@ -91,3 +91,15 @@ projection. Only the current manual person's request can authorize the agent's r
 interpret intent in any wording, never a fixed word list. Automatic run observations
 cannot authorize another action. The bridge never dispatches it; the negotiated page
 uses its ordinary funded action path and guards. Without run capability, omit the field.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "9c8dc6b8429a117bd349ab7b9e5e12afa2f7822758df3bd9b1dca7e1a18fb3be",
+  "reason": "Authenticated bridge, cancellation and socket/process lifecycle need native evidence. Native evidence owners: test/agent-chat.test.mjs."
+}
+```
+</details>

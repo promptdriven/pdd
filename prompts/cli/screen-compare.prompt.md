@@ -27,3 +27,15 @@ Keep one table row per required id/text occurrence in stable reference order, in
 ## Caller navigation
 
 [Check](runtime-client.prompt.md) owns CLI routing, output and exit codes.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "ac80bfd38d256ad81448719a2d37fc5e87470144151371aa6d2bb983f55d8796",
+  "reason": "Real Chrome rendering and DOM observations need native evidence; the formatter alone is not the comparison. Native evidence owners: test/screen-compare.test.mjs."
+}
+```
+</details>

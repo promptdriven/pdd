@@ -27,3 +27,15 @@ with the same input/output contract; policy belongs to those callers.
 ## Dependencies
 
 Node fs and os supply native local observations only. Native tests cover this port.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "f42374b4a5eccdb7aaf6fd07e3329be3de373ffa1abfac10acc3ac985a783952",
+  "reason": "This is the native machine-observation port; native tests cover the port. Native evidence owners: test/machine-resources.test.mjs."
+}
+```
+</details>

@@ -122,3 +122,161 @@ The [GitHub call counter](github-calls.prompt.md) is a navigation-only consumer
 reference; this module does not load it or call it.
 - Native Node filesystem, crypto hashing, path joins and deterministic arithmetic
   are injected at the file and clock boundaries above. No AI/model call is needed.
+
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+
+Only explicit measurement and supplied-data reporting are bound. Native transcript checkpoints, account hashing, session/audit reads, journal durability, CI reservation and actual GitHub accounting remain native. Native evidence owners: test/cost-ledger-repair.test.mjs, test/cost-ledger.test.mjs, test/issue-cost-ledger.vectors.test.mjs.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "f011928cc9944e0b776c087957db6344378db23f94e4cdab12da08d3b53b972b",
+  "entries": [
+    {
+      "operation": "applyCostMeasurement",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "string",
+            "description": "JSON text encoding of the saved run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "input": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "suiteMinutes": {
+                "type": "number"
+              },
+              "personMinutes": {
+                "type": "number"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "merged",
+                  "reverted",
+                  "stuck",
+                  "closed",
+                  "parked"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "at": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "run",
+          "input",
+          "at"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the updated run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "costReport",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "string",
+            "description": "JSON text encoding of the saved runs. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          },
+          "now": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "runs",
+          "now"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "JSON text encoding of the pdd.cost-report.v1 report. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "costStatusLines",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "type": "string",
+            "description": "JSON text encoding of the cost report. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          }
+        },
+        "required": [
+          "report"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [],
+  "kind": "partial"
+}
+```
+</details>

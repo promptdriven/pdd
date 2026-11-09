@@ -1227,3 +1227,19 @@ Local lint findings use a local heading; server findings retain interpreter attr
 User diagnostics name the PDD interpreter as the service; Runtime interface names the declaration. Preserve machine identifiers and server gate text.
 
 When a generic refusal does not identify a field, explain that the PDD interpreter did not identify the Runtime interface field. Preserve the supplied rule, null field and local findings without guessing a field.
+
+## CLI declaration admission
+
+Every Git-visible, workspace-eligible `prompts/cli/*.prompt.md` must have one recognized Runtime interface declaration, including when lint selects a named Story. Before authentication or upload, both local and server lint refuse missing, duplicate, malformed JSON or unsupported-kind declarations with their existing interface codes and the draft recovery command. Full (including implicit full), partial and native-only declarations are admitted by this presence gate; native-only still requires its reason and remains not run. The workspace-wide gate checks declaration presence and kind only for unselected CLI prompts; preserve lazy semantic/hash/schema validation outside the selected closure. Default lint retains its complete workspace interface checks. Repository PR checks apply the same declaration requirement to every CLI prompt, so a newly added or changed undeclared prompt cannot pass. This local preparation is not a hosted lint pass.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "311636293d453060b29ba645b5c7324185dce122d8b62210bf1386cea83522e8",
+  "reason": "Live HTTP, credentials, cancellation, evidence persistence and sockets need native evidence first. Native evidence owners: test/runtime-client-leadfix.test.mjs, test/runtime-client-pause-stop.test.mjs."
+}
+```
+</details>

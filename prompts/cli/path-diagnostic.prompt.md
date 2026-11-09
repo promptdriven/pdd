@@ -14,3 +14,15 @@ For a conflict (the selected executable differs, or another distinct pdd is pres
 
 - Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring. The [CLI](pdd-cli.prompt.md) owns dispatch and output streams.
 - Runtime: Node filesystem, child-process and path primitives provide local discovery and bounded version probes. Package metadata and `bin/pdd.mjs` identify the running pdd.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "draft",
+  "prose_sha256": "e6b049f54d4649343d6a590871c0cc6a0f1807ed59bf74728f83758ee070b4ac",
+  "reason": "PATH, executable identity, symlinks and bounded binary probes require native evidence. Native evidence owners: test/path-diagnostic.test.mjs."
+}
+```
+</details>
