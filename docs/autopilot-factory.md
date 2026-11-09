@@ -42,7 +42,7 @@ the same merge.
 |---|---|
 | Post-merge audit | A closed issue still offers its pending audit. One fresh scripted auditor reproduces parent failure and merge success; its saved OK and issue comment survive a repeated command. BAD creates a real revert branch and open PR, with one alert and an unchanged base. |
 | Small change, bug, feature | One or two PRs reach merge; PR 2 starts stacked on PR 1. |
-| Validation session change | A held native validation keeps its source, full log and child identity after caller loss and a changed fake chat session. A fresh observer reads the same ticket. The custodian saves the nonzero exit and TAP counts. A later pass keeps that failed receipt. |
+| Validation session change | A held native validation keeps its source, bounded secret-safe log and child identity after caller loss and a changed fake chat session. A fresh observer reads the same ticket. The custodian saves the nonzero exit and TAP counts. A later pass keeps that failed receipt. |
 | Restart | Claim, allocation, completed steps and chat session survive; no duplicate publication. |
 | Lost verdict | Timer ticks send nothing again; one explicit synthetic person decision permits one resend. |
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {spawn,execFileSync} from 'node:child_process';
 import {runTestSuite,readSuiteProgress,executeSuite} from '../src/test-suite-queue.mjs';
@@ -44,7 +45,7 @@ test('validation saves full output, source and terminal counts before forwarding
   assert.equal(result.exitCode,7);
   const row=read(f.receipt),log=fs.readFileSync(row.logPath,'utf8');
   assert.ok(log.includes(data));assert.ok(log.includes('stderr-end'));assert.ok(forwarded.includes(data));
-  assert.equal(row.command,command);assert.equal(row.source.head,head);assert.match(row.source.fingerprint,/^[a-f0-9]{64}$/);
+  assert.equal(row.command.includes(command),false);assert.equal(row.commandFingerprint,createHash('sha256').update(command).digest('hex'));assert.equal(row.source.head,head);assert.match(row.source.fingerprint,/^[a-f0-9]{64}$/);
   assert.equal(row.source.error,null);assert.equal(row.source.runId,null);
   assert.equal(row.exitCode,7);assert.equal(row.outcome,'completed');assert.equal(row.signal,null);
   assert.deepEqual(row.counts,{tests:2,suites:0,pass:1,fail:1,cancelled:0,skipped:0,todo:0});
@@ -75,7 +76,7 @@ test('validation custody survives caller loss and a fresh session observes the s
   f.cleanups.push(async()=>{fs.writeFileSync(release,'1');if(caller.exitCode===null&&caller.signalCode===null)caller.kill('SIGTERM');await ended;await until(()=>!fs.existsSync(started)||readSuiteProgress({cwd:f.root,env:f.env},f.ports).state==='finished','owned validation must settle');});
   await until(()=>fs.existsSync(started),'controlled command starts');
   const before=read(f.receipt);assert.ok(before.logPath,'durable full-output path must exist while validation runs');
-  assert.ok(before.recorderPid);assert.ok(before.childPid);assert.equal(before.command,command);
+  assert.ok(before.recorderPid);assert.ok(before.childPid);assert.equal(before.command.includes(command),false);assert.equal(before.commandFingerprint,createHash('sha256').update(command).digest('hex'));
   await until(()=>fs.readFileSync(before.logPath,'utf8').includes('before-session-change'),'output is durable before session ends');
   caller.kill('SIGKILL');assert.equal((await ended).signal,'SIGKILL');
   const observed=readSuiteProgress({cwd:f.root,env:{...f.env,HOME:join(f.root,'next-session')}},f.ports);
@@ -141,4 +142,102 @@ test('native injected spawner retains its ticket and environment when descendant
   for(const key of ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR','PDD_INTERPRETER_QUEUE']) assert.equal(fs.existsSync(environment[key]),true,key);
   const progress=readSuiteProgress({cwd:f.root,env:f.env},{...f.ports,alive:()=>true});
   assert.equal(progress.state,'running');assert.equal(progress.outcome,'unknown');
+});
+
+test('repair 1: synthetic credentials are absent from logs, forwarded output and every receipt write',async t=>{
+  const f=fixture(t), program=join(f.root,'credentials.cjs');
+  const positional='review-only-credential-'+'ab'.repeat(20);
+  const values=[positional,'pair-token-value','pair-key-value','pair-password-value',
+    'ghp_'+'x'.repeat(36),'github_pat_'+'y'.repeat(42),'sk-proj-'+'z'.repeat(40),
+    'AIza'+'a'.repeat(35),'ya29.'+'b'.repeat(40),'url-user','url-password','url-query'];
+  const lines=[`Authorization: Bearer ${positional}`, 'token='+values[1], 'key='+values[2],
+    'password="'+values[3]+'"',...values.slice(4,9),
+    `https://${values[9]}:${values[10]}@example.invalid/test?key=${values[11]}`];
+  fs.writeFileSync(program,`process.stdout.write(${JSON.stringify(lines.join('\n')+'\n')});process.stderr.write('Authorization: Custom '+process.argv[2]+'\\n');`);
+  const writes=[]; const disk={...fs,writeFileSync(path,data,options){if(String(path).includes('ticket-'))writes.push(String(data));return fs.writeFileSync(path,data,options);}};
+  let forwarded='';const output={write(bytes){forwarded+=bytes;}};
+  const command=`${quote(process.execPath)} ${quote(program)} ${quote(positional)}`;
+  const result=await runTestSuite({cwd:f.root,command,env:f.env},{...f.ports,fs:disk,stdout:output,stderr:output,
+    source:()=>({head:'a'.repeat(40),fingerprint:'b'.repeat(64),runId:null,issue:3117,error:`password=${values[3]}`})});
+  assert.equal(result.exitCode,0);
+  const row=read(f.receipt),log=fs.readFileSync(row.logPath,'utf8');
+  assert.ok(log.includes('[redacted]'));assert.ok(writes.length>=3);
+  for (const value of values) for(const saved of [log,forwarded,fs.readFileSync(f.receipt,'utf8'),...writes])
+    assert.equal(saved.includes(value),false,'synthetic credential must be absent');
+  assert.equal(row.commandFingerprint,createHash('sha256').update(command).digest('hex'));
+});
+
+test('repair 1: split credentials never reach disk while a partial line is pending',async t=>{
+  const f=fixture(t),program=join(f.root,'split.cjs'),release=join(f.root,'release'),ready=join(f.root,'ready');
+  const secret='split-only-credential-'+'xy'.repeat(20),prefix=secret.slice(0,32);
+  fs.writeFileSync(program,`const fs=require('node:fs');process.stdout.write('Authorization: Bea');process.stderr.write('password="'+${JSON.stringify(prefix)});fs.writeFileSync(${JSON.stringify(ready)},'1');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);process.stdout.write('rer '+${JSON.stringify(secret)}+'\\n');process.stderr.write(${JSON.stringify(secret.slice(32))}+'"\\n');}},10);`);
+  const running=runTestSuite({cwd:f.root,command:`${quote(process.execPath)} ${quote(program)}`,env:f.env},{...f.ports,stdout:{write(){}},stderr:{write(){}}});
+  f.cleanups.push(async()=>{fs.writeFileSync(release,'1');await running;});
+  await until(()=>fs.existsSync(ready),'split command reaches the partial-line boundary');
+  // Give the parent pipe reader time to receive the first writes.
+  await new Promise(done=>setTimeout(done,100));
+  const row=read(f.receipt);
+  assert.equal(fs.readFileSync(row.logPath,'utf8').includes(prefix),false);
+  fs.writeFileSync(release,'1');assert.equal((await running).exitCode,0);
+  const saved=fs.readFileSync(row.logPath,'utf8');
+  assert.equal(saved.includes(secret),false);assert.equal(saved.includes(prefix),false);
+  assert.ok(saved.includes('[redacted]'));
+});
+
+test('repair 1: large output keeps bounded ends, exact omissions, counts and exit status',async t=>{
+  const f=fixture(t),program=join(f.root,'large.cjs');
+  const data='begin-evidence\n'+('x'.repeat(4095)+'\n').repeat(1024)+'end-evidence\n'+summary;
+  fs.writeFileSync(program,`process.stdout.write(${JSON.stringify(data)});process.exitCode=7;`);
+  const result=await runTestSuite({cwd:f.root,command:`${quote(process.execPath)} ${quote(program)}`,env:f.env},{...f.ports,stdout:{write(){}},stderr:{write(){}}});
+  assert.equal(result.exitCode,7);
+  const row=read(f.receipt),log=fs.readFileSync(row.logPath),part=(1048576-128)/2;
+  assert.ok(log.length<=1048576);assert.ok(fs.statSync(f.receipt).size<=65536);
+  assert.deepEqual(log.subarray(0,part),Buffer.from(data).subarray(0,part));
+  assert.deepEqual(log.subarray(-part),Buffer.from(data).subarray(-part));
+  const omitted=Buffer.byteLength(data)-2*part;
+  assert.match(log.toString(),new RegExp(`\\[${omitted} bytes omitted\\]`));
+  assert.deepEqual(row.evidence,{outputBytes:Buffer.byteLength(data),logBytes:log.length,omittedBytes:omitted,truncated:true});
+  assert.deepEqual(row.counts,{tests:2,suites:0,pass:1,fail:1,cancelled:0,skipped:0,todo:0});
+  assert.equal(row.outcome,'completed');assert.equal(row.source.error!==undefined,true);
+  const previous=fs.readFileSync(f.receipt);
+  assert.equal((await runTestSuite({cwd:f.root,command:'true',env:f.env},{...f.ports,stdout:{write(){}}})).exitCode,0);
+  assert.deepEqual(fs.readFileSync(f.receipt),previous);assert.deepEqual(fs.readFileSync(row.logPath),log);
+});
+
+test('repair 1: oversized unterminated lines are suppressed and final counts remain exact',async t=>{
+  const f=fixture(t),program=join(f.root,'oversized.cjs'),n=4194304;
+  fs.writeFileSync(program,`process.stdout.write(Buffer.alloc(${n},120));process.stdout.write('\\n'+${JSON.stringify(summary)});`);
+  const result=await runTestSuite({cwd:f.root,command:`${quote(process.execPath)} ${quote(program)}`,env:f.env},{...f.ports,stdout:{write(){}}});
+  assert.equal(result.exitCode,0);
+  const row=read(f.receipt),log=fs.readFileSync(row.logPath);
+  assert.ok(log.length<=1048576);assert.equal(row.evidence.omittedBytes,n+1);
+  assert.equal(row.evidence.outputBytes,n+1+Buffer.byteLength(summary));assert.equal(row.evidence.truncated,true);
+  assert.equal(row.counts.tests,2);assert.equal(row.counts.fail,1);
+  assert.match(log.toString(),new RegExp(`\\[${n+1} bytes omitted\\]`));
+});
+
+test('repair 1: receipts and error text are redacted and capped before temporary writes',async t=>{
+  const f=fixture(t),secret='receipt-only-synthetic-credential',writes=[];
+  const error=`token=${secret}\n`+'e'.repeat(200000);
+  const disk={...fs,writeFileSync(path,data,options){if(String(path).includes('ticket-'))writes.push(String(data));return fs.writeFileSync(path,data,options);}};
+  const result=await runTestSuite({cwd:f.root,command:`password=${secret} `+'x'.repeat(200000),env:f.env},{...f.ports,fs:disk,
+    source:()=>({head:'a'.repeat(40),fingerprint:'b'.repeat(64),runId:'r'.repeat(100000),issue:3117,error}),
+    execute:async(_command,options)=>{options.onChild(987654);throw Error(error);},alive:pid=>pid===process.pid});
+  assert.equal(result.exitCode,1);assert.equal(result.message.includes(secret),false);assert.ok(Buffer.byteLength(result.message)<=4096);
+  assert.ok(writes.length>=4);
+  for(const text of [...writes,fs.readFileSync(f.receipt,'utf8')]) {
+    assert.ok(Buffer.byteLength(text)<=65536);assert.equal(text.includes(secret),false);
+    const row=JSON.parse(text);assert.equal(row.source.head,'a'.repeat(40));assert.equal(row.source.fingerprint,'b'.repeat(64));
+    assert.ok(Buffer.byteLength(row.source.error)<=4096);assert.ok(Buffer.byteLength(row.source.runId)<=4096);
+  }
+  assert.equal(read(f.receipt).state,'finished');assert.equal(read(f.receipt).exitCode,1);
+});
+
+test('repair 1: oversized required metadata fails closed before execution',async t=>{
+  const f=fixture(t);let executions=0;
+  const result=await runTestSuite({cwd:f.root,command:'true',env:f.env},{...f.ports,
+    source:()=>({head:'x'.repeat(100000),fingerprint:null,runId:null,issue:null,error:null}),
+    execute:async()=>{executions++;return {exitCode:0};}});
+  assert.equal(executions,0);assert.equal(result.exitCode,1);
+  assert.equal(fs.existsSync(f.receipt),false);
 });

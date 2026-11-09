@@ -2,7 +2,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {proseSha256} from '../src/runtime-preflight.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
 import {existsSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
@@ -369,7 +369,7 @@ test('factory 2b: validation log and child custody survive a session change (#31
     await eventually(()=>existsSync(started),'validation must reach its controlled hold');
     const ticket=queueRows(w.env.PDD_SUITE_QUEUE).at(-1);
     assert.ok(ticket.logPath,'GAP #3117: active validation must save a durable output path');
-    assert.equal(ticket.command,command);assert.equal(ticket.source.runId,run.runId);assert.equal(ticket.source.head,w.git(run.root,'rev-parse','HEAD'));
+    assert.equal(ticket.command.includes(command),false);assert.equal(ticket.commandFingerprint,createHash('sha256').update(command).digest('hex'));assert.equal(ticket.source.runId,run.runId);assert.equal(ticket.source.head,w.git(run.root,'rev-parse','HEAD'));
     assert.ok(ticket.childPid);assert.ok(ticket.recorderPid);assert.ok(ticket.recorderIdentity);
     await eventually(()=>readFileSync(ticket.logPath,'utf8').includes(prefix),'full prefix must be durable before caller loss');
     // This handle belongs to this fixture command. Never recover a PID to signal it.

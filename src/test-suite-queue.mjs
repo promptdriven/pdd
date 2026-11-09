@@ -1,5 +1,6 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: a971f88ae1db279eea4f13ba3871c6e329e18bc343b0db7579146e961739c038).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9939fbc1b7baf7521667a72a652c2c79c4283a4e56c98e43da34b02f898d644d).
 import * as files from 'node:fs';
+import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
@@ -152,7 +153,7 @@ function portsFor(env, ports) {
 }
 function save(p, record) {
   const target = join(p.root, `ticket-${record.ticket}.json`), temp = `${target}.${p.uuid()}.tmp`;
-  try { p.fs.writeFileSync(temp, JSON.stringify(record), { mode: 0o600 }); p.fs.renameSync(temp, target); }
+  try { p.fs.writeFileSync(temp, serializeValidationReceipt(record), { mode: 0o600 }); p.fs.renameSync(temp, target); }
   finally { try { p.fs.unlinkSync(temp); } catch {} }
 }
 function records(p) {
@@ -201,14 +202,14 @@ function pausedTime(all, since, now) {
 export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports = {}) {
   let p, all;
   try { p = portsFor(env, ports); all = records(p); }
-  catch (error) { return { state: 'unavailable', reason: error.message, pausedMs: 0 }; }
+  catch (error) { return { state: 'unavailable', reason: safeEvidenceText(error.message), pausedMs: 0 }; }
   const own = all.filter(row => row.cwd === resolve(cwd));
   if (!own.length) return null;
   const row = own.findLast(row => row.state !== 'finished') ?? own.at(-1);
   return { ticket: row.ticket, state: row.state, position: row.state === 'waiting' ? positionOf(all, row) : null,
     queuedAt: row.queuedAt, startedAt: row.startedAt, finishedAt: row.finishedAt, reason: row.reason,
     pausedMs: pausedTime(own, since, p.now()),
-    ...Object.fromEntries(['command','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','counts','outcome'].map(key=>[key,row[key] ?? null])) };
+    ...Object.fromEntries(['command','commandFingerprint','evidence','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','counts','outcome'].map(key=>[key,row[key] ?? null])) };
 }
 export function suiteStatusWords(suite) {
   return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`
@@ -227,13 +228,17 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     row = await underLock(p, () => {
       const all = records(p), ticket = (all.at(-1)?.ticket ?? 0) + 1;
       const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
-      Object.assign(record, {command, source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),
+      Object.assign(record, {command:'[redacted]', commandFingerprint:createHash('sha256').update(command).digest('hex'), source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),
         logPath:join(p.root,`validation-${ticket}.log`), receiptPath:join(p.root,`ticket-${ticket}.json`),
         recorderPid:null, recorderIdentity:null, exitCode:null, signal:null, counts:null, outcome:'running'});
+      // Validate the receipt before creating even an empty log.
+      serializeValidationReceipt(record);
       p.fs.writeFileSync(record.logPath, '', {mode:0o600,flag:'wx'});
-      save(p, record); return record;
+      try { save(p, record); }
+      catch (error) { try { p.fs.unlinkSync(record.logPath); } catch {} throw error; }
+      return record;
     });
-    if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; full output: ${row.logPath}`);
+    if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; output evidence: ${row.logPath}`);
     let lastPosition;
     for (;;) {
       const position = await underLock(p, () => {
@@ -282,19 +287,19 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       row.exitCode = confirmed ? result.exitCode : null; row.signal = result.signal ?? null;
       row.outcome = confirmed ? 'completed' : 'unknown';
       row.state = confirmed ? 'finished' : 'running'; row.finishedAt = confirmed ? p.now() : null;
-      row.reason = result.reason ?? (!confirmed ? 'Test suite descendant ownership is unknown.' : result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null);
+      row.reason = result.reason == null ? (!confirmed ? 'Test suite descendant ownership is unknown.' : result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null) : safeEvidenceText(result.reason);
       save(p, row);
     }
-    if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; full output: ${row.logPath}`);
-    return { exitCode: result.ownershipConfirmed === false ? 1 : result.exitCode, message: row.reason ?? 'Full test suite finished.' };
+    if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; output evidence: ${row.logPath}`);
+    return { exitCode: result.ownershipConfirmed === false ? 1 : result.exitCode, message: row.reason ? safeEvidenceText(row.reason) : 'Full test suite finished.' };
   } catch (error) {
     // Setup cannot have a child. Once execution starts, keep the reservation
     // unless the reported child group is confirmed dead.
     if (p && row && (!executionStarted || row.state === 'waiting' || row.childPid && !p.alive(-row.childPid))) {
-      row.state = 'finished'; row.finishedAt = p.now(); row.exitCode = 1; row.outcome = 'completed'; row.reason = `Test suite failed: ${error.code ?? error.message}`;
+      row.state = 'finished'; row.finishedAt = p.now(); row.exitCode = 1; row.outcome = 'completed'; row.reason = safeEvidenceText(`Test suite failed: ${error.code ?? error.message}`);
       try { save(p, row); } catch {}
     }
-    return { exitCode: 1, message: `Shared test suite queue failed: ${error.code ?? error.message}` };
+    return { exitCode: 1, message: safeEvidenceText(`Shared test suite queue failed: ${error.code ?? error.message}`) };
   } finally {
     if (environmentRoot && !keepEnvironment) p.fs.rmSync(environmentRoot, {recursive:true, force:true});
   }
@@ -332,7 +337,7 @@ export async function executeSuite(command, { cwd, env, timeoutMs, onChild, onOu
         if (live === false) { ownershipConfirmed = true; break; }
         if (attempt < 100) await (ports.sleep ?? delay)(20);
       }
-      done(ownershipConfirmed ? {...result,ownershipConfirmed:true} : {exitCode:1,signal:result.signal ?? null,
+      done(ownershipConfirmed ? {...result,...(result.reason == null ? {} : {reason:safeEvidenceText(result.reason)}),ownershipConfirmed:true} : {exitCode:1,signal:result.signal ?? null,
         reason:'Test suite descendants could not be confirmed stopped.',ownershipConfirmed:false});
     };
     child.once('error', error => { void finish({exitCode:1, reason:`Test suite could not start: ${error.code ?? error.message}`}); });

@@ -855,13 +855,25 @@ Queue admission still uses the caller's queue selectors. Each ticket records
 If private folder setup fails before execution starts, the ticket finishes with
 the failure reason and releases its slot. Any allocated private folders are removed.
 
-The native CLI prints a receipt path and a full-output log path in the shared
+The native CLI prints a receipt path and an output-evidence log path in the shared
 queue for each attempt. The compatibility runner keeps its lifecycle output; its
-receipts are in the same queue. The receipt stores the explicit command, cwd, starting Git head and
+receipts are in the same queue. The receipt stores a redacted command, its SHA-256 fingerprint, cwd, starting Git head and
 worktree fingerprint, matching workflow run, owned recorder and child, terminal
 exit and signal, and complete TAP summary counts when available. Missing counts
-stay unknown. Logs and receipts use private file permissions. Explicit command
-values and command output are retained; inherited environment values are not.
+stay unknown. Logs and receipts use private file permissions. Commands are saved as
+`[redacted]` because positional arguments can hold secrets. Execution uses the
+original command. Credentials in output and error text are redacted before any
+save or forwarding, including credentials split across output chunks.
+
+Each log is limited to 1 MiB. Overflow keeps its beginning and end with an exact
+`N bytes omitted` marker. A pending output line is limited to 256 KiB; a larger
+line is omitted in full with its byte count. Each receipt is limited to 64 KiB,
+with free-text fields limited to 4 KiB. Required source and ownership metadata
+that cannot fit prevents execution. The `evidence` fields report raw output
+bytes, saved log bytes, omitted bytes and whether truncation occurred. Counts
+and exit status use the complete process stream, including when storage is
+truncated. Ordinary secret replacements do not count as omitted bytes. These
+limits apply per attempt; earlier attempts remain available.
 
 The recorder keeps the same validation running if its calling session disappears.
 A later `pdd workflow status` reads its saved progress without running the command

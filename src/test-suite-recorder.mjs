@@ -1,7 +1,8 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: a971f88ae1db279eea4f13ba3871c6e329e18bc343b0db7579146e961739c038).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9939fbc1b7baf7521667a72a652c2c79c4283a4e56c98e43da34b02f898d644d).
 // This process keeps validation evidence when the calling chat disappears.
 import * as fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
+import {serializeValidationReceipt, redactingLines, validationLog, safeEvidenceText} from './validation-evidence.mjs';
 import {executeSuite} from './test-suite-queue.mjs';
 
 let started = false;
@@ -17,13 +18,28 @@ process.on('message', async message => {
   const {command, record, environmentRoot, ...options} = message.start;
   const save = () => {
     const temp = `${record.receiptPath}.${randomUUID()}.tmp`;
-    try { fs.writeFileSync(temp, JSON.stringify(record), {mode:0o600}); fs.renameSync(temp,record.receiptPath); }
+    try { fs.writeFileSync(temp, serializeValidationReceipt(record), {mode:0o600}); fs.renameSync(temp,record.receiptPath); }
     finally { try { fs.unlinkSync(temp); } catch {} }
+  };
+  const log = validationLog(bytes=>fs.writeFileSync(record.logPath,bytes,{mode:0o600}),
+    bytes=>fs.appendFileSync(record.logPath,bytes));
+  record.evidence = log.evidence;
+  let safeParts = [], suppressed = 0;
+  const filters = Object.fromEntries(['stdout','stderr'].map(stream=>[stream,redactingLines((text,omitted)=>{
+    safeParts.push(text); suppressed += omitted;
+  })]));
+  const flush = stream => {
+    if (!safeParts.length) return;
+    const text = safeParts.join('');
+    log.add(text,suppressed);
+    safeParts = []; suppressed = 0;
+    send({stream,bytes:Buffer.from(text).toString('base64')});
   };
   let pending = '', summary = {}, complete = null, tap = false, plan = false;
   const keys = ['tests','suites','pass','fail','cancelled','skipped','todo'];
   const output = (stream, bytes) => {
-    fs.appendFileSync(record.logPath,bytes);
+    log.evidence.outputBytes += bytes.length;
+    filters[stream].write(bytes); flush(stream);
     if (stream === 'stdout') {
       // Summary lines are short. Never retain a large, unterminated output line.
       for (const part of bytes.toString('utf8').split(/(?<=\n)/)) {
@@ -47,24 +63,25 @@ process.on('message', async message => {
         } else if (pending.length > 256) pending = '!';
       }
     }
-    send({stream,bytes:bytes.toString('base64')});
+
   };
   let result;
   try {
     result = await executeSuite(command, {...options,startGate:true,onOutput:output,
       onChild: pid => { record.childPid = pid; save(); }});
+    for (const stream of ['stdout','stderr']) { filters[stream].end(); flush(stream); }
     record.exitCode = result.exitCode; record.signal = result.signal ?? null;
     record.outcome = result.ownershipConfirmed === false ? 'unknown' : 'completed';
     record.exitCode = result.ownershipConfirmed === false ? null : result.exitCode;
     record.counts = record.outcome === 'completed' && !pending ? complete : null;
   } catch (error) {
-    result = {exitCode:1,reason:`Validation recorder failed: ${error.code ?? error.message}`};
+    result = {exitCode:1,reason:safeEvidenceText(`Validation recorder failed: ${error.code ?? error.message}`)};
     record.exitCode = null; record.signal = null; record.outcome = 'unknown'; record.counts = null;
   }
   try {
     if (environmentRoot && record.outcome === 'completed') fs.rmSync(environmentRoot,{recursive:true,force:true});
     record.state = record.outcome === 'completed' ? 'finished' : 'running'; record.finishedAt = record.state === 'finished' ? Date.now() : null;
-    record.reason = result.reason ?? (result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null);
+    record.reason = result.reason == null ? (result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null) : safeEvidenceText(result.reason);
     save();
     send({result:{...result,record}});
   } catch (error) {

@@ -1,6 +1,7 @@
+import {redactSecrets} from './secret-redaction.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-guide.prompt.md (sha256: 490563a320dee141b683e3fbfa512b0107a4fcb7fe5bd68cf0f84fb71f9a0732).
+// Generated from prompts/cli/agent-guide.prompt.md (sha256: 8fa6f82da595f762dcf680e548a5d010c1a737a662722ae78a37af30c013df9c).
 import {createHash} from 'node:crypto';
 import {buildProjectCard,readAgentScenarios} from './agent-project.mjs';
 import {createRunJudge,compareExpectation} from './agent-judge.mjs';
@@ -18,9 +19,7 @@ function progress(items){const marks={pass:'✓',fail:'✗',differs:'~',tried:'~
 const SECRET=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
 function clean(value,secrets){
  if(typeof value==='string'){
-  for(const secret of secrets)if(typeof secret==='string'&&secret)value=value.split(secret).join('[redacted]');
-  value=value.replace(/https?:\/\/[^\s"'<>]+/g,text=>{try{const url=new URL(text);let changed=false;if(url.username||url.password){url.username='';url.password='';changed=true;}for(const key of [...url.searchParams.keys()])if(SECRET.test(key)||/^(?:key|auth|signature)$/i.test(key)){url.searchParams.set(key,'[redacted]');changed=true;}return changed?url.href:text;}catch{return text.replace(/(https?:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi,'$1[redacted]@');}});
-  return value.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g,'[redacted]').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g,'[redacted]').replace(/\b(?:Bearer|Basic)\s+\S+/gi,'[redacted]').replace(/\b(token|password|secret|api[_-]?key|authorization|cookie|credential)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,'$1=[redacted]').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g,'');
+  return redactSecrets(value,secrets);
  }
  if(Array.isArray(value))return value.map(x=>clean(x,secrets));
  if(object(value)){let path=value.path;try{path=decodeURIComponent(path);}catch{}const secretPath=typeof path==='string'&&SECRET.test(path);return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,SECRET.test(k)||(secretPath&&['expected','got','actual'].includes(k))?'[redacted]':clean(v,secrets)]));}

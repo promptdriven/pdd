@@ -76,7 +76,8 @@ workflow. Hold it after it emits more than a terminal tail. End its calling
 process and change the fake chat session while validation is running. A fresh
 workflow status process must find the same ticket, source, log and owned child.
 Release the validation once. Its full stdout/stderr, nonzero exit and complete
-TAP counts must survive in the saved receipt. Assert one command invocation,
+TAP counts must survive in the saved receipt. Command identity follows the
+shared queue contract: a redacted command and its original command fingerprint. Assert one command invocation,
 no duplicate ticket, no signal to a recovered process, and unchanged receipt
 bytes after later observations. Finish the workflow with a fresh successful
 validation; the failed attempt stays available. Use only the factory's private
