@@ -1,13 +1,15 @@
+import { runtimeCoverage } from './interface-draft.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/runtime-bindings.prompt.md (sha256: 5b44de22d54982cc69e3bb046c106a1b1b908e37ea32ef66e3db988f2c465d81).
+// Generated from prompts/cli/runtime-bindings.prompt.md (sha256: 49685dd41853a95fed83cbb240651e13625233abd3ac66323aa6d99be51502c5).
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { PreflightError, readPrompt, isSecretPath, sourceFilePort,gitFiles } from './runtime-preflight.mjs';
 
-export function bindingCoverage({ root, found, selected }) {
+export function bindingCoverage({ root, found, selected, includeRuntime = false }) {
   const workspace=loadRuntimeWorkspace({root});
   const controlVisible=new Set(gitFiles(root));
-  const unavailable = { available: false, bound: null, total: null, modules: [] };
+  const runtime = includeRuntime ? {runtime:runtimeCoverage({root})} : {};
+  const unavailable = { available: false, bound: null, total: null, modules: [], ...runtime };
   const fail = (path, why) => { throw Object.assign(new PreflightError(4, `pdd-bindings.json: ${path}: ${why}`), { bindingInventory: true }); };
   const regular = path => {
     if (typeof path !== 'string' || !path || path.includes('\\') || path.startsWith('/') || path.split('/').some(p => !p || p === '.' || p === '..')) fail(String(path), 'use an existing repository-relative regular Git-visible path');
@@ -56,5 +58,5 @@ export function bindingCoverage({ root, found, selected }) {
     }
     modules.push({ path: item.module, state: bound ? 'bound' : 'unbound', ...(bound ? {} : { reason: item.reason, port_attempt: item.port_attempt }) });
   }
-  return { available: true, bound: modules.filter(m => m.state === 'bound').length, total: modules.length, modules };
+  return { ...runtime, available: true, bound: modules.filter(m => m.state === 'bound').length, total: modules.length, modules };
 }

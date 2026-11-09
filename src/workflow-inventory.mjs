@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-inventory.prompt.md (sha256: b7409ec03bc368797def415b308791235617599ed0048c307196e15ccac8a8a0).
+// Generated from prompts/cli/workflow-inventory.prompt.md (sha256: 9e1ac0278c6f4a754546cafc39a35f3f1df4457497f54b4f03c7850ee749652b).
 import { execFile as callbackExec } from 'node:child_process';
 import { promisify } from 'node:util';
 

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/contract-refs.prompt.md (sha256: 6bb0382ab17f4e58e0e6d156ac6d9ab995f2237d1a2808f2f900e5f6ef961834).
+// Generated from prompts/cli/contract-refs.prompt.md (sha256: 53dc4ec3596e90571eaccdea7496e433ac72e035f95912624766439a7d257a17).
 // Numbers remain tokens until serialization, including values outside binary64.
 class JsonNumber { constructor(text) { this.text = text; Object.freeze(this); } }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof JsonNumber);

@@ -384,6 +384,17 @@ attempt-local inputs; this module owns capture policy, not product composition.
 
 </details>
 
+## Runtime interface kind
+
+A behavior prompt must have one Runtime interface block. `kind` is `full`, `partial` or `native-only`. An absent kind means full. Refuse any other kind. Full and partial use the existing entry, schema and limits rules. Partial admits only the declared operations; it never claims full behavior coverage. A native-only block has status, prose_sha256, kind and a nonblank reason that names the native effect that bound ports cannot fake. It needs no entries or limits. Empty reasons are refused before approval or checking. Checkers review the reason against RUNBOOK §21; a generic claim of complexity does not justify it. A local parser validates presence, not the truth of the reason.
+
+Missing blocks produce `interface-missing` and the exact command `pdd interface draft <PROMPT>` (quote a path with spaces). Expose the same finding in local and server lint, including repositories with no Stories. The draft command owns unresolved draft gaps; such gaps are refusals, never a clean lint result.
+
+During preflight, a selected test that reaches a valid native-only entry or called prompt is not run. Keep the reason and the path. Do not require an executable operation for this declaration. Never send that scenario to the Runtime or show it as passed. Validate every reached declaration before choosing not run, so malformed declarations still refuse. Discover reachable declarations from all authored step entry paths and declared calls before scenario validation can return early, including stale declarations. A native-only declaration always excludes the scenario from upload. Retain local criterion/check and declaration refusals with the native-only path and reason; an invalid scenario is refused, never passed. Do not change criterion rules here. Keep schema/limits lint independent of prose
+freshness, and allow the approval owner to review and refill a stale prompt.
+Preflight validates the status and hash of each reachable native declaration
+before omission.
+
 ## Dependencies
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in policy and permission outcomes.
