@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: de1cffc757e6eaffb1fcddd8f8e997690528cae3fd4fd39dc6d1f2ea3ea35b42).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: db93b16e0fcfd6daa9c60fb122395f9e68753dbd9f634cfcec07cf0066fd13d7).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -148,7 +148,7 @@ function proseInterface(text, transportOnly=false) {
   const iface={kind:'full',status:'draft',prose_sha256:'',entries:[{operation:operation[1],input_schema:objectSchema({[operation[3]]:input}),result_schema:objectSchema({[result[2]]:{type:result[1]==='numeric'?'number':result[1]}})}],calls:[],resources:[],limits:{max_steps:4,max_model_calls:2},conventions:[]};
   if(!/\b(?:throw|throws|refuse|refused|reject|rejects|error|errors|exception)\b/i.test(text) || errors.length && [...text.matchAll(/\bcode\b/g)].length===errors.length) iface.entries[0].errors=[...new Set(errors)];
   const coverage=proseCoverage(text,transport[0],errors);
-  for (const key of ['input_schema','result_schema']) iface.entries[0][key].description=coverage.filter(row=>row.pointers.includes('/entries/0/'+key)).map(row=>row.sentence).join(' ');
+  for (const key of ['input_schema','result_schema']) iface.entries[0][key].description=coverage.filter(row=>row.pointers.includes('/entries/0/'+key) || key==='input_schema' && row.pointers.length>0).map(row=>row.sentence).join(' ');
   return {iface,coverage};
 }
 function declarationError(pointer,rule) {
@@ -344,37 +344,100 @@ const schemaMeaning=value=>{
   if(Array.isArray(schema.oneOf)) schema.oneOf=schema.oneOf.map(schemaMeaning);
   return schema;
 };
-function completenessCoverage(sources,expanded) {
+// Type requirements qualify retained prose. Ambiguous bindings remain review work.
+const hasType=(schema,type)=>schema?.type===type || type==='number' && schema?.type==='integer' || schema?.oneOf?.some(item=>hasType(item,type));
+function sentenceTypes(sentence,entry) {
+  let conflicting=false,unresolved=false;
+  for(const token of sentence.matchAll(/\b(Number|String|Boolean|numeric|number|string|boolean|integer)\b/g)) {
+    const before=sentence.slice(0,token.index),after=sentence.slice(token.index+token[0].length);
+    if(/non-$/.test(before)) continue;
+    // Quantities such as "a whole number" are not transport type declarations.
+    if(token[0]==='number' && /\bwhole\s+$/i.test(before) || token[0]==='integer' && /\bsafe\s+$/i.test(before)) continue;
+    const left=before.split(/;|\band\b/i).at(-1),right=after.split(/;|\band\b/i)[0];
+    const clause=left+token[0]+right;
+    const input=/\b(?:input|takes?|accepts?)\b/i.test(clause),result=/\b(?:result|output|returns?|returned)\b/i.test(clause);
+    const schemas=input===result ? ['input_schema','result_schema'] : [input?'input_schema':'result_schema'];
+    const names=[...clause.matchAll(/`([\w$]+)`/g)].map(match=>match[1]);
+    const named=schemas.flatMap(key=>names.flatMap(name=>entry?.[key]?.properties?.[name] ? [entry[key].properties[name]] : []));
+    let target=named.length===1 ? named[0] : null;
+    if(!names.length && input!==result) {
+      const fields=Object.values(entry?.[schemas[0]]?.properties ?? {});
+      if(fields.length===1) target=fields[0];
+    }
+    if(!target) {unresolved=true;continue;}
+    const type=token[0].toLowerCase()==='numeric'?'number':token[0].toLowerCase();
+    if(!hasType(target,type)) conflicting=true;
+  }
+  return {conflicting,unresolved};
+}
+// This is review evidence, not a proof that arbitrary prose has been compiled.
+function sentenceCoverage(sources,expanded) {
+  const described=[];
+  const visit=(value,pointer)=>{
+    if(!object(value)) return;
+    if(typeof value.description==='string') described.push({pointer,meaning:value});
+    for(const [key,child] of Object.entries(value)) {
+      const next=pointer+'/'+key.replaceAll('~','~0').replaceAll('/','~1');
+      if(Array.isArray(child)) child.forEach((item,i)=>visit(item,next+'/'+i));
+      else visit(child,next);
+    }
+  };
+  visit(expanded,'');
   return sources.flatMap((source,index)=>{
     const prose=proseText(source.text),expected=proseInterface(prose,true)?.iface;
     const declaration=transportDeclaration(prose);
     const entryIndex=expected ? expanded.entries?.findIndex(entry=>entry.operation===expected.entries[0].operation) : -1;
-    const actual=expanded.entries?.[entryIndex];
-    const errors=actual?.errors ?? [];
-    return proseCoverage(prose,declaration?.[0],errors).map(row=>{
-      let pointers=row.pointers;
-      // None is dependency syntax, not authority to discard declared effects.
-      if(row.sentence==='None.') pointers=['/calls','/resources'];
-      const exported=/^Export `([\w$]+)\([^`]*\)`\.$/.exec(row.sentence);
-      if(exported) {
-        const at=expanded.entries?.findIndex(entry=>entry.operation===exported[1]);
-        pointers=at>=0 ? [`/entries/${at}/operation`] : [];
-      } else pointers=pointers.filter(pointer=>{
-        if(pointer==='/calls' || pointer==='/resources') return Array.isArray(expanded[pointer.slice(1)]) && expanded[pointer.slice(1)].length===0;
-        if(!actual || !expected) return false;
-        const key=pointer.split('/').at(-1);
-        if(key==='operation') {
-          const binding=/^Public binding: module function `([\w$]+)(?:\([^`]*\))?`/.exec(row.sentence);
-          return actual.operation===(binding?.[1] ?? expected.entries[0].operation);
-        }
-        if(key==='errors') return expected.entries[0].errors?.every(code=>errors.includes(code));
-        return isDeepStrictEqual(schemaMeaning(actual[key]),schemaMeaning(expected.entries[0][key]));
-      }).map(pointer=>pointer.replace('/entries/0/',`/entries/${entryIndex}/`));
-      // Whole sentences need every promised field, not a surviving subset.
-      if(pointers.length!==row.pointers.length && !exported && row.sentence!=='None.') pointers=[];
-      return {...row,pointers,...(index ? {source:source.path} : {})};
+    const actual=expanded.entries?.[entryIndex] ?? (expanded.entries?.length===1 ? expanded.entries[0] : undefined);
+    // None is dependency syntax, not a claim about effects.
+    const content=prose.replace(/^(## Dependencies\s*\n)\s*None\.\s*$/m,'');
+    const rows=proseCoverage(content,declaration?.[0],actual?.errors ?? []);
+    const multipleTransports=rows.filter(row=>transportDeclaration(row.sentence)).length>1;
+    return rows.map(row=>{
+      const sentence=row.sentence;
+      let mappings=[];
+      let {conflicting,unresolved}=sentenceTypes(sentence,multipleTransports?undefined:actual);
+      const ownDeclaration=transportDeclaration(sentence);
+      const ownExpected=ownDeclaration && (ownDeclaration[0]===declaration?.[0] ? expected : proseInterface(sentence,true)?.iface);
+      const ownIndex=ownDeclaration ? expanded.entries?.findIndex(entry=>entry.operation===ownDeclaration[1]) : -1;
+      const ownActual=expanded.entries?.[ownIndex];
+      const binding=/^Public binding: module function `([\w$]+)(?:\([^`]*\))?`/.exec(sentence);
+      if(binding && !expanded.entries?.some(entry=>entry.operation===binding[1])) conflicting=true;
+      if(ownDeclaration && ownExpected) {
+        unresolved=false;
+        conflicting=!ownActual || ['input_schema','result_schema'].some(key=>!isDeepStrictEqual(schemaMeaning(ownActual[key]),schemaMeaning(ownExpected.entries[0][key])));
+        if(!conflicting) mappings=['operation','input_schema','result_schema'].map(key=>({pointer:`/entries/${ownIndex}/${key}`,meaning:ownActual[key]}));
+      }
+      if(/^(?:There are |This is pure behavior: )?no external resources, operating-system commands(?:,| or) (?:or )?(?:saved data|persistent state)\.$/i.test(sentence)) {
+        conflicting=!!(expanded.calls?.length || expanded.resources?.length);
+        if(!conflicting && Array.isArray(expanded.calls) && Array.isArray(expanded.resources)) mappings=['calls','resources'].map(key=>({pointer:'/'+key,meaning:expanded[key]}));
+      }
+      if(!conflicting && !unresolved && !mappings.length) mappings=described.filter(({meaning})=>{
+        // A whole sentence must occur in a retained description. Substrings of longer clauses do not qualify.
+        return proseCoverage(meaning.description).some(row=>row.sentence===sentence);
+      });
+      if(conflicting) mappings=[];
+      return {sentence,status:conflicting?'conflicting':mappings.length?'mapped':'unmapped',pointers:mappings.map(item=>item.pointer),mappings,...(index ? {source:source.path} : {})};
     });
   });
+}
+export function contractCoverage({root,path,text,iface}) {
+  const files=sourceFilePort(root);
+  text ??= files.read({path}).content;
+  iface ??= readPrompt(root,new Set(gitFiles(root)),path).interface;
+  return sentenceCoverage(draftSources(root,path,text),expandedInterface(path,iface,files));
+}
+function coverageQuestions(coverage,next_step) {
+  return coverage.filter(row=>row.status!=='mapped').map(row=>({
+    pointer:/\b(?:input|locale)\b/i.test(row.sentence) ? '/entries/0/input_schema' : /\b(?:result|output|flag)\b/i.test(row.sentence) ? '/entries/0/result_schema' : '/resources',
+    sentence:row.sentence,status:row.status,
+    question:`${row.status}: "${row.sentence}". Should the prose or the declaration change, or do you accept the authored contract as written?`,next_step
+  }));
+}
+export function coverageView(coverage) {
+  return ['Contract coverage (review evidence):',...coverage.map(row=>`${row.status}: ${JSON.stringify(row.sentence)}${row.source ? ' ('+row.source+')' : ''}`+(row.mappings.length ? '\n'+row.mappings.map(item=>`  ${item.pointer}: ${JSON.stringify(item.meaning)}`).join('\n') : ''))];
+}
+function coverageDecision(coverage) {
+  return 'Decide the contract for these sentences:\n'+coverage.filter(row=>row.status!=='mapped').map(row=>`  ${row.status}: ${JSON.stringify(row.sentence)}`).join('\n')+'\nShould the prose change, should the declaration change, or do you accept the authored contract as written? Use pdd approve PROMPT after a person decides.';
 }
 function expandedInterface(path,iface,files) {
   const candidate='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface)+'\n```\n</details>';
@@ -440,7 +503,11 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         const block=blocks[0];
         if(block && !extend && !refresh) {
           if(contract) throw Error('Use --extend to add declarations or --refresh to replace an existing block.');
-          rows.push({path,state:'existing'});continue;
+          const iface=readPrompt(root,visible,path).interface;
+          const coverage=contractCoverage({root,path,text,iface});
+          const questions=questionsFor(iface);
+          for(const question of coverageQuestions(coverage,recovery(path))) {const existing=questions.find(item=>item.question===question.question);if(existing) Object.assign(existing,question);else questions.push(question);}
+          rows.push({path,state:'existing',prose_coverage:coverage,...(questions.length ? {questions,next_step:recovery(path)} : {})});continue;
         }
         if(!block && (extend || refresh)) throw Error('Draft the missing interface before extending or refreshing it.');
         if(!block && /<summary[^>]*>\s*(?:<strong[^>]*>\s*)?Runtime\s+interface/i.test(text)) throw Error('The Runtime interface block is malformed. Fix it before drafting.');
@@ -453,17 +520,16 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         if(!inference) completeContract(expanded);
         const questions=questionsFor(iface,interfaceSchemaProblems(expanded));
         if(inference && !questions.length) completeContract(expanded);
-        const coverage=completenessCoverage(sources,expanded);
-        for(const [i,row] of coverage.entries()) if(!row.pointers.length) {
-          const pointer=/\b(?:input|locale)\b/i.test(row.sentence) ? '/entries/0/input_schema' : /\b(?:result|output|flag)\b/i.test(row.sentence) ? '/entries/0/result_schema' : '/resources';
-          questions.push({pointer,question:`Sentence ${i+1}: Map this unresolved contract sentence to a complete declaration: "${row.sentence}"`});
-        }
+        const coverage=sentenceCoverage(sources,expanded);
+        const reviewQuestions=coverageQuestions(coverage,recovery(path));
         if(iface.kind==='full') delete iface.kind;
         const inferredBudget=inference?.defaultBudget===true;
+        if(inferredBudget) questions.push(...reviewQuestions);
         if(questions.length) {
           iface.kind='partial';
           iface.draft_gaps=questions.map(item=>item.pointer+': '+item.question);
         }
+        if(!inferredBudget) questions.push(...reviewQuestions);
         // All whitespace outside the block is original prose, including its final newline.
         const render=()=>{if(extend) return text.replace(block[0],()=>block[0].replace(block[1],()=>extendBody(block[1],previous,iface)));const rendered='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface,null,2)+'\n```\n</details>';return block ? text.replace(block[0],()=>rendered) : text+rendered;};
         iface.prose_sha256=proseSha256(render());
@@ -478,7 +544,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
       row.problems ??= interfaceFindings({root,paths:[row.path]});
       row.lint_clean=row.problems.length===0;
       if(row.state==='existing' && row.problems.length) {
-        const iface=readPrompt(root,visible,row.path).interface;row.questions=questionsFor(iface);row.next_step=recovery(row.path);
+        const iface=readPrompt(root,visible,row.path).interface;row.questions ??= questionsFor(iface);row.next_step=recovery(row.path);
       }
       if(row.problems.length && !row.questions?.length) {
         row.questions=row.problems.map(item=>({pointer:item.section ?? '/',question:item.rule ?? item.message}));
@@ -487,7 +553,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
     }
     const summary={drafted:rows.filter(row=>row.state==='drafted').length,existing:rows.filter(row=>row.state==='existing').length,lint_clean:rows.filter(row=>row.lint_clean).length,refused:rows.filter(row=>row.problems.length).length,total:rows.length};
     const exit_code=summary.refused ? 4 : 0;
-    stdout.write(json ? JSON.stringify({exit_code,summary,rows})+'\n' : [...rows.map(row=>`${row.path}: ${row.state}; ${row.lint_clean ? 'lint clean' : row.problems.map(item=>`${item.code}: ${item.message}`).join('; ')}`+(row.questions?.length ? '\n'+row.questions.map(item=>`Question ${item.pointer}: ${item.question}`).join('\n') : '')+(row.next_step ? `\nNext: ${row.next_step}` : '')+(row.approval_note ? `\n${row.approval_note}\nInterface diff:\n- ${row.interface_diff.before}\n+ ${row.interface_diff.after}\nUnchanged: ${row.interface_diff.unchanged.join(', ')}` : '')+(row.draft_budget ? `\nDraft budget (command default, needs review): ${JSON.stringify(row.draft_budget.limits)}` : '')),`Interfaces: ${summary.drafted} drafted, ${summary.existing} existing, ${summary.lint_clean} lint clean, ${summary.refused} refused. 0 AI calls.`].join('\n')+'\n');
+    stdout.write(json ? JSON.stringify({exit_code,summary,rows})+'\n' : [...rows.map(row=>`${row.path}: ${row.state}; ${row.lint_clean ? 'lint clean' : row.problems.map(item=>`${item.code}: ${item.message}`).join('; ')}`+(row.prose_coverage ? '\n'+coverageView(row.prose_coverage).join('\n') : '')+(row.questions?.length ? '\n'+row.questions.map(item=>`Question ${item.pointer}: ${item.question}`).join('\n') : '')+(row.next_step ? `\nNext: ${row.next_step}` : '')+(row.approval_note ? `\n${row.approval_note}\nInterface diff:\n- ${row.interface_diff.before}\n+ ${row.interface_diff.after}\nUnchanged: ${row.interface_diff.unchanged.join(', ')}` : '')+(row.draft_budget ? `\nDraft budget (command default, needs review): ${JSON.stringify(row.draft_budget.limits)}` : '')),`Interfaces: ${summary.drafted} drafted, ${summary.existing} existing, ${summary.lint_clean} lint clean, ${summary.refused} refused. 0 AI calls.`].join('\n')+'\n');
     return exit_code;
   } catch(error) {stderr.write(`${error.message}\n`);return 2;}
 }
@@ -523,12 +589,15 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     if(blocks.length!==1) throw Error('Draft a Runtime interface before automatic approval.');
     const records=drafts(root),iface=JSON.parse(blocks[0][1]),record=records[path];
     if(!record || record.mode || iface.status!=='draft' || iface.kind==='native-only' || interfaceFindings({root,paths:[path]}).length || !iface.entries?.length)
-      throw Error('Automatic approval needs a complete draft made by pdd interface draft.');
+      throw Error('Automatic approval needs a valid draft made by pdd interface draft.');
     if(sha256(JSON.stringify(iface))!==record.interface_sha256 || proseSha256(text)!==record.prose_sha256 || record.original_sha256!==sha256(text.replace(blocks[0][0],'')))
       throw Error('The draft changed. Ask a person to approve the new contract.');
     const head=git(root,['rev-parse','HEAD']).trim();
     if(sha256(git(root,['show',`${record.head}:${path}`]))!==record.original_sha256)
       throw Error('The committed prompt changed or this draft includes new behavior. Ask a person.');
+    const coverage=contractCoverage({root,path,text,iface});
+    stdout.write(coverageView(coverage).join('\n')+'\n');
+    if(coverage.some(row=>row.status!=='mapped')) throw Error(coverageDecision(coverage));
     const before=sourceSnapshot(root),committed=git(root,['ls-tree','-r','--name-only','-z',record.head]).split('\0').filter(Boolean);
     for(const name of new Set([...Object.keys(before),...committed])) {
       if(name.startsWith('.pdd/')) continue;
@@ -588,7 +657,7 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     const next=approvePromptText(text);
     if(!next) throw Error('The prompt could not be approved safely.');
     const evidence={id:(ports.randomUUID ?? randomUUID)(),route:'automatic-check-pass',actor:approvalActor(ports.env ?? process.env),at:(ports.now ?? Date.now)(),words:null,
-      prompts:[{path,proseSha256:record.prose_sha256,kind:iface.kind ?? 'full'}],checks:{native:{command:tests,exit_code:native.code,counts:nativeCounts},prompt:result,head,source:before,draft:record}};
+      prompts:[{path,proseSha256:record.prose_sha256,kind:iface.kind ?? 'full'}],coverage,checks:{native:{command:tests,exit_code:native.code,counts:nativeCounts},prompt:result,head,source:before,draft:record}};
     try {
       writeFileSync(file,next);
       await recordPromptApproval({commonDir,evidence},ports);

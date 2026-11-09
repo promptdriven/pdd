@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 575bf69d23ce9194a9b75524b9b36e8455b32044d5aadea446e0ebc12edb38f2).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 3f6fecd07a8071c6c60e8b5547ddd53a8b85f653582db120764986953182dc4b).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -241,7 +241,9 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
   }
   const iface = prompt.interface, current = iface.prose_sha256 === hash;
   if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
-  for (const row of [...describeInterface(path, iface), ...interfaceView(root,path,text), ...proseView(root, path, text)]) line(stdout, row);
+  const {contractCoverage,coverageView}=await import('./interface-draft.mjs');
+  const coverage=contractCoverage({root,path,text,iface});
+  for (const row of [...describeInterface(path, iface), ...coverageView(coverage), ...(coverage.some(row=>row.status!=='mapped') ? ['Coverage decision: amend the prose, amend the declaration, or accept the authored contract as written. Answer yes below only to accept all quoted sentences as written.'] : []), ...interfaceView(root,path,text), ...proseView(root, path, text)]) line(stdout, row);
   if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
   if (said === undefined) stdout.write(`Approve ${path}? y/n `);
   const answer = said === undefined ? await answers.ask() : "yes";

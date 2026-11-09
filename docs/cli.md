@@ -1153,7 +1153,7 @@ A clean local lint is not a server lint or a prompt check. Setup offers this com
 when it finds missing blocks. It never approves them.
 
 
-Complete drafts omit the redundant `kind: full` field so the strict Runtime
+Locally valid authored drafts omit the redundant `kind: full` field so the strict Runtime
 parser can read them; a missing kind means full. Partial local drafts retain
 `kind: partial` and their questions.
 
@@ -1168,16 +1168,22 @@ Numeric inputs remain numbers even if the function rejects fractions. A contract
 that explicitly requests representative JSON rejection shapes can use a disjoint
 `oneOf` for number, string, boolean, null, arrays of numbers and empty objects.
 This transport does not cover arbitrary nested JavaScript objects.
-The JSON row includes `prose_coverage`: each sentence has its draft field pointers.
-Only supported whole sentences have mappings. Each unmapped sentence is quoted
-in its own question and keeps the draft partial. Recognized formatting rules stay
-in schema descriptions. Local lint alone cannot establish completeness.
-This gate applies to prose, embedded JSON, dependency JSON, `--contract`,
-`--refresh` and `--extend`. It reads prompt prose and declared context and checks
-each mapping against the final declaration after shared `$contract` expansion.
-Supplying JSON does not resolve an unmapped sentence. Such a draft stays partial
-with its quoted question and next step. Import, refresh and extension validate
-expanded schema copies and preserve authored references in the saved block.
+The JSON row includes local `lint_clean` and a `prose_coverage` report. A draft
+never claims completeness. Each quoted contract sentence is `mapped`, `unmapped`
+or `conflicting`. Mappings name exact fields and their retained values in
+`mappings` (`pointer` and `meaning`); `pointers` lists the same fields. A description
+can retain prose meaning, but cannot override a contradictory schema type.
+Unknown meaning stays unmapped. Each unresolved sentence has a review question
+and a next step. This report is evidence for review, not proof of behavior.
+
+The report covers prose, embedded JSON, dependency JSON, `--contract`, `--refresh`
+and `--extend`, including declared context after shared `$contract` expansion.
+Valid authored JSON is accepted as the author's declaration even when coverage
+needs review. Coverage does not make it partial or rewrite its fields. Extension
+preserves approved declaration bytes. Prose inference with unresolved meaning
+stays partial. Local lint is not Runtime admission: Runtime lint must pass before
+an executable draft is used. Import, refresh and extension validate expanded
+schema copies and preserve authored references in the saved block.
 
 For complex prose, each incomplete result has `questions` with `pointer` and
 `question`, and `next_step`. Answer the questions in a Git-visible JSON contract
@@ -1224,7 +1230,13 @@ only `invalid-interface`, pdd reports any local schema findings separately. When
 there is no local finding, it says that the Runtime did not identify the field.
 No inferred cause is presented as a server diagnosis.
 
-The automatic approval route requires a complete draft from this command,
+The approval view shows the current coverage report. If any sentence is unmapped
+or conflicting, it asks one grouped question with the quoted sentences: amend the
+prose, amend the declaration, or accept the authored contract as written. A person
+must decide. Delegated approval cannot answer this question.
+
+The automatic approval route requires a valid draft from this command with no
+unmapped or conflicting contract sentence in its freshly computed report,
 unchanged committed prose, code and tests, passing existing native tests, and full
 prompt-check results on current source. It records `automatic-check-pass` with the
 command, results and source hashes. New behavior requires a person.

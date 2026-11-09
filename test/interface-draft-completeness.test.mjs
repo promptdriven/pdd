@@ -30,11 +30,11 @@ async function draft(f,args=[]) {
   assert.ok(stdout.text,stderr.text);
   return {code,row:JSON.parse(stdout.text).rows[0]};
 }
-function partial(f,result,sentence) {
-  assert.equal(result.code,4,'UNMAPPED_SENTENCE_ACCEPTED_AS_COMPLETE');
+function review(f,result,sentence,{inferred=false}={}) {
+  assert.equal(result.code,inferred?4:0,'AUTHORED_CONTRACT_BLOCKED_BY_COVERAGE');
   assert.equal(result.row.state,'drafted');
-  assert.equal(iface(f).kind,'partial');
-  assert.equal(result.row.lint_clean,false);
+  assert.equal(iface(f).kind,inferred?'partial':undefined);
+  assert.equal(result.row.lint_clean,!inferred);
   assert.deepEqual(result.row.prose_coverage?.find(row=>row.sentence===sentence)?.pointers,[],'UNMAPPED_SENTENCE_LEDGER_MISSING');
   assert.equal(result.row.questions.filter(q=>q.question.includes('"'+sentence+'"')).length,1,'UNMAPPED_SENTENCE_QUESTION_COUNT');
   assert.ok(result.row.next_step?.includes('--refresh --contract'));
@@ -44,22 +44,22 @@ for(const claim of ['The input object must contain a string `locale`.',sentence]
   test('3130 repair 2: embedded JSON reconciles supplementary prose: '+claim,async t=>{
     const text=prose.replace('## Percentage format',claim+'\n\n## Percentage format')+fence(original);
     const f=setup(t,text),result=await draft(f);
-    partial(f,result,claim);
+    review(f,result,claim);
     const saved=read(f),again=await draft(f);
-    assert.equal(again.code,4);assert.equal(read(f),saved);assert.deepEqual(again.row.questions,result.row.questions);
+    assert.equal(again.code,0);assert.equal(read(f),saved);assert.deepEqual(again.row.questions,result.row.questions);
   });
 
 test('3130 repair 2: dependency JSON cannot suppress prompt effects',async t=>{
   const text=prose.replace('## Percentage format',sentence+'\n\n## Percentage format').replace('## Dependencies\n\nNone.','## Dependencies\n\n[Interface](../contracts/interface.json).');
   const f=setup(t,text,{'contracts/interface.json':original});
-  partial(f,await draft(f),sentence);
+  review(f,await draft(f),sentence);
 });
 
 test('3130 repair 2: declared context prose is covered on contract import',async t=>{
   const claim='Compliance records persist after each invocation.';
   const f=setup(t,'# Contract\n\n## Dependencies\n\n[Policy](../contracts/policy.md).\n',{'contracts/policy.md':'# Policy\n\n'+claim+'\n','contracts/interface.json':original});
   const result=await draft(f,['--contract','contracts/interface.json']);
-  partial(f,result,claim);
+  review(f,result,claim);
   assert.equal(result.row.prose_coverage.find(row=>row.sentence===claim).source,'contracts/policy.md');
 });
 
@@ -73,7 +73,8 @@ for(const route of ['import','refresh','extend']) {
     const result=await draft(f,args);
     assert.equal(result.code,0,'SHARED_SCHEMA_REJECTED_BEFORE_EXPANSION');
     assert.equal(result.row.state,'drafted');assert.equal(result.row.lint_clean,true);
-    assert.ok(result.row.prose_coverage.length);assert.ok(result.row.prose_coverage.every(row=>row.pointers.length));
+    assert.ok(result.row.prose_coverage.length);assert.ok(result.row.prose_coverage.some(row=>row.status==='unmapped'));
+    for(const row of result.row.prose_coverage) assert.equal(row.status==='mapped',row.pointers.length>0);
     assert.deepEqual(iface(f).entries[0].input_schema,value.entries[0].input_schema);
     assert.equal(Object.hasOwn(iface(f),'kind'),false);
     if(route==='extend') {
@@ -95,7 +96,7 @@ for(const route of ['import','refresh','extend']) {
   });
 }
 
-test('3130 repair 2: every draft route uses the same sentence completeness gate',async t=>{
+test('3130 repair 2: every draft route reports unresolved sentence coverage',async t=>{
   const rows=[];
   for(const route of ['prose','embedded','dependency','import','refresh','extend']) {
     let text=prose.replace('## Percentage format',sentence+'\n\n## Percentage format');
@@ -109,9 +110,9 @@ test('3130 repair 2: every draft route uses the same sentence completeness gate'
       if(route==='extend') args.push('--contract','contracts/add.json');
     }
     const f=setup(t,text,files),result=await draft(f,args),ledger=result.row.prose_coverage;
-    rows.push({route,code:result.code,kind:iface(f).kind,unmapped:ledger?.filter(row=>!row.pointers.length).map(row=>row.sentence),questions:result.row.questions?.filter(q=>q.question.includes('"'+sentence+'"')).length,recovery:result.row.next_step?.includes('--refresh --contract')===true});
+    rows.push({route,code:result.code,kind:iface(f).kind,unmapped:ledger?.find(row=>row.sentence===sentence)?.status==='unmapped',questions:result.row.questions?.filter(q=>q.question.includes('"'+sentence+'"')).length,recovery:result.row.next_step?.includes('--refresh --contract')===true});
   }
-  assert.deepEqual(rows,rows.map(({route})=>({route,code:4,kind:'partial',unmapped:[sentence],questions:1,recovery:true})),'DRAFT_ROUTE_BYPASSED_COMMON_GATE');
+  assert.deepEqual(rows,rows.map(({route})=>({route,code:route==='prose'?4:0,kind:route==='prose'?'partial':undefined,unmapped:true,questions:1,recovery:true})),'DRAFT_ROUTE_BYPASSED_COMMON_GATE');
 });
 
 for(const mismatch of ['input','result','operation'])
@@ -121,8 +122,8 @@ for(const mismatch of ['input','result','operation'])
     if(mismatch==='result') value.entries[0].result_schema.properties.text={type:'boolean'};
     if(mismatch==='operation') value.entries[0].operation='other';
     const f=setup(t,prose+fence(value)),result=await draft(f);
-    assert.equal(result.code,4,'UNRELATED_DECLARATION_COUNTED_AS_COVERAGE');
-    assert.equal(iface(f).kind,'partial');
+    assert.equal(result.code,0,'AUTHORED_CONTRACT_BLOCKED_BY_COVERAGE');
+    assert.equal(iface(f).kind,undefined);
     const transport=result.row.prose_coverage?.find(row=>row.sentence.includes('In the Runtime interface'));
     assert.ok(transport);assert.deepEqual(transport.pointers,[]);
     assert.ok(result.row.questions.some(q=>q.question.includes(transport.sentence)));
@@ -132,7 +133,7 @@ test('3130 repair 2: coverage uses the expanded referenced schema',async t=>{
   const value=structuredClone(original);value.entries[0].input_schema={$contract:'contracts/shapes.json#/input'};
   const wrong=object({locale:{type:'string'}});
   const f=setup(t,prose+fence(value),{'contracts/shapes.json':{input:wrong}}),result=await draft(f);
-  assert.equal(result.code,4,'EXPANDED_SCHEMA_MISMATCH_COUNTED_AS_COVERAGE');assert.equal(iface(f).kind,'partial');
+  assert.equal(result.code,0,'AUTHORED_CONTRACT_BLOCKED_BY_COVERAGE');assert.equal(iface(f).kind,undefined);
   const transport=result.row.prose_coverage?.find(row=>row.sentence.includes('In the Runtime interface'));
   assert.ok(transport);assert.deepEqual(transport.pointers,[]);
 });
@@ -142,6 +143,6 @@ for(const route of ['prose','embedded'])
     const claim='Public binding: module function `other(x)` in `src/other.js`, exported from `other`.';
     const text=prose.replace('## Percentage format',claim+'\n\n## Percentage format')+(route==='embedded'?fence(original):'');
     const f=setup(t,text),result=await draft(f);
-    partial(f,result,claim);
+    review(f,result,claim,{inferred:route==='prose'});
     assert.deepEqual(iface(f).entries.map(entry=>entry.operation),['formatPercent']);
   });
