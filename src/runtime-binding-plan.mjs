@@ -1,51 +1,51 @@
-// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 8328fa8793373a5fbaf0e363222ffb7380f4d6e9dcbd81f39e6525a582424963).
-import { posix } from 'node:path';
-import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
+// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 612a35dd24ce56bd81dc925f509945f9779346867ddc1c2a6386376a1f9b4bdb).
 
 const rows = value => Array.isArray(value) ? value : [];
-const invalid = detail => { throw Object.assign(Error(`binding-boundary-invalid: ${detail}`), {code:'binding-boundary-invalid'}); };
-export function runtimeBoundary(storyPath, text) {
-  const markdown = markdownSectionText(text);
-  const sections = [...markdown.matchAll(/^##[ \t]+Runtime boundary[ \t]*\r?\n([\s\S]*?)(?=^#{1,2}[ \t]|$(?![\s\S]))/gm)];
-  if (!sections.length) return null;
-  if (sections.length !== 1) invalid('declare one Runtime boundary section');
-  // Validate whole declarations before asking the shared discovery parser for
-  // destinations. Its permissive discovery mode alone cannot certify a boundary.
-  const destination = String.raw`(?:<[^<>\n]+>|[^\s()<>"']+)`;
-  const title = String.raw`(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?`;
-  const inline = new RegExp(String.raw`^\[[^\[\]\n]*\]\([ \t]*${destination}${title}[ \t]*\)$`);
-  const definition = new RegExp(String.raw`^\[[^\[\]\n]+\]:[ \t]*${destination}${title}[ \t]*$`);
-  const reference = /^\[[^\[\]\n]+\](?:\[[^\[\]\n]*\])?$/;
-  const definitions = markdownDefinitions(markdown), destinations = [];
-  // Use authored section bytes for admission: a masked example must refuse,
-  // rather than silently disappearing beside a valid declaration.
-  const section = sections[0], start = section.index + section[0].length - section[1].length;
-  for (const row of text.slice(start,start + section[1].length).split(/\r?\n/)) {
-    const line = row.trim().replace(/^(?:[-+*]|\d+[.)])[ \t]+/, '');
-    if (!line) continue;
-    if (definition.test(line)) continue;
-    if (!inline.test(line) && !reference.test(line)) invalid('unsupported Runtime boundary declaration');
-    const parsed = markdownLinks(line,definitions);
-    if (parsed.length !== 1) invalid('unresolved or unsupported Runtime boundary link');
-    destinations.push(parsed[0]);
+const boundaryNote = (notes, reason) => {
+  notes.push({code:'boundary-not-applied',reason,message:reason === 'legacy-syntax'
+    ? 'boundary not applied: use the pdd-boundary block'
+    : `boundary not applied: ${reason}; full dependency closure is required`});
+  return null;
+};
+export function runtimeBoundary(storyPath, text, {notes=[]}={}) {
+  const lines = text.split(/\r?\n/);
+  // Admission is deliberately stricter than Markdown discovery. Count even
+  // unsupported/example markers so uncertain declarations never yield a subset.
+  const markers = lines.flatMap((line,index)=>/[`~]{3,}[ \t]*pdd-boundary\b/.test(line) ? [index] : []);
+  if (!markers.length) return boundaryNote(notes,/runtime boundary/i.test(text) ? 'legacy-syntax' : 'missing-block');
+  if (markers.length !== 1) return boundaryNote(notes,'duplicate-blocks');
+  const start = markers[0];
+  let fence = null, uncertain = false;
+  for (let index=0;index<start;index++) {
+    const line=lines[index], match=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (match && match[1][0] === fence.char && match[1].length >= fence.length && !match[2].trim()) fence=null;
+    } else if (match) fence={char:match[1][0],length:match[1].length};
+    else if (/<(?:[!?]|\/?[A-Za-z])/.test(line)) uncertain=true;
   }
-  const paths = destinations.map(destination => {
-    const raw = destination.split('#')[0];
-    if (!raw || /[:\\%]/.test(raw) || raw.startsWith('/')) invalid('use relative local prompt links');
-    const path = posix.normalize(posix.join(posix.dirname(storyPath), raw));
-    if (path.startsWith('../') || !path.endsWith('.prompt.md')) invalid('use in-repository .prompt.md paths');
-    return path;
-  });
-  if (!paths.length) invalid('name the executable prompts with Markdown links');
+  const end=lines.indexOf('```',start+1);
+  if (lines[start] !== '```pdd-boundary' || fence || uncertain || end < 0
+      || start > 0 && lines[start-1].trim() || end+1 < lines.length && lines[end+1].trim()) {
+    return boundaryNote(notes,'unsupported-syntax');
+  }
+  // Reject HTML after the block too: an enclosing/raw example is not authority.
+  if (/<(?:[!?]|\/?[A-Za-z])/.test(lines.slice(end+1).join('\n'))) return boundaryNote(notes,'unsupported-syntax');
+  const paths=lines.slice(start+1,end);
+  if (!paths.length || paths.some(path=>!/^[A-Za-z0-9_./-]+\.prompt\.md$/.test(path)
+      || path.split('/').some(part=>!part || part==='.' || part==='..'))) return boundaryNote(notes,'invalid-path');
+  if (/runtime boundary/i.test(text)) boundaryNote(notes,'legacy-syntax');
   return [...new Set(paths)].sort();
 }
 
-export function buildBindingPlan({test, storyText, prompts}) {
-  const boundary = runtimeBoundary(test.storyPath, storyText), steps = [], edges = [], problems = [];
+export function buildBindingPlan({test, storyText, prompts, dependencyPaths=[], boundaryState}) {
+  const notes=[];
+  const boundary = boundaryState ? boundaryState.boundary : runtimeBoundary(test.storyPath,storyText,{notes});
+  if (boundaryState) notes.push(...boundaryState.notes);
+  const steps = [], edges = [], problems = [];
   const allowed = path => boundary === null || boundary.includes(path);
   for (const step of rows(test.doc?.steps)) {
     if (!step || typeof step.entry_path !== 'string') continue;
-    const closure = new Set(), pending = [step.entry_path, ...(boundary ?? [])];
+    const closure = new Set(), pending = [step.entry_path, ...(boundary ?? dependencyPaths)];
     for (let index = 0; index < pending.length; index++) {
       const path = pending[index];
       if (closure.has(path)) continue;
@@ -79,17 +79,18 @@ export function buildBindingPlan({test, storyText, prompts}) {
         const rename = candidates.some(candidate=>candidate.kind==='simulation' && ['wrong-name','wrong-operation'].includes(candidate.cause)
           && (candidate.name.startsWith(`${resource.name}.`) || candidate.name.endsWith(`.${operation.name}`)));
         const repair = state !== 'missing' ? null : rename ? `Fix the fixture name or operation to ${key}.`
-          : `Add a binding for ${key}; if this module is context only, declare the Story Runtime boundary.`;
+          : `Add a binding for ${key}; if this module is context only, declare the Story pdd-boundary block.`;
         edges.push({step_id:step.step_id,prompt_path:path,resource:resource.name,operation:operation.name,key,state,candidates,repair});
       }
     }
   }
-  return {schema_version:'pdd.binding-plan.v1',test:test.path,story:test.storyPath,boundary,steps,edges,problems};
+  return {schema_version:'pdd.binding-plan.v1',test:test.path,story:test.storyPath,boundary,notes,steps,edges,problems};
 }
 
 export function bindingPlanLines(plan) {
-  return [`Bindings: ${plan.test}; boundary: ${plan.boundary?.join(', ') ?? 'entry and Runtime calls'}`,
+  return [`Bindings: ${plan.test}; boundary: ${plan.boundary?.join(', ') ?? 'full dependency closure'}`,
     ...plan.edges.map(edge=>`${edge.step_id}: ${edge.prompt_path}: ${edge.key}: ${edge.state}; considered: ${edge.candidates.map(candidate=>`${candidate.kind} ${candidate.name} (${candidate.cause})`).join(', ') || 'none'}${edge.repair ? `; repair: ${edge.repair}` : ''}`),
+    ...(plan.notes ?? []).map(note=>`${note.code}: ${note.message}`),
     ...plan.problems.map(problem=>`${problem.step_id}: ${problem.prompt_path}: ${problem.code}; repair: correct the declared boundary or Runtime call target.`)];
 }
 

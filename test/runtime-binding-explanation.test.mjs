@@ -30,7 +30,7 @@ function setup(t,{boundary=false,wrong=false,steps=1,outside=true}={}) {
     editPrompt(f,OTHER,iface=>{iface.resources=[resource('files',['read'])];iface.entries[0].operation='changeRun';});
   }
   editPrompt(f,PLACE,iface=>{iface.resources=[resource('dispatch',['changeRun'])];},outside?'[Runner](runner.prompt.md)':'');
-  if(boundary)appendFileSync(join(f.repo,STORY),'\n## Runtime boundary\n\n[CLI](../prompts/place_order.prompt.md)\n');
+  if(boundary)appendFileSync(join(f.repo,STORY),'\n```pdd-boundary\nprompts/place_order.prompt.md\n```\n');
   const doc=JSON.parse(read(f,TEST));
   doc.simulation={[wrong?'dispatch.change':'dispatch.changeRun']:fixture};
   doc.steps=Array.from({length:steps},(_,index)=>({...doc.steps[0],step_id:`action-${index+1}`}));
@@ -77,10 +77,10 @@ test('3135: declared boundary omits outside executable edges and projects contex
   assert.equal(capture.files.find(row=>row.path===OTHER).size,context.bytes.length);
 });
 
-test('3135: unscoped closure follows calls while context entry candidates remain outside execution',t=>{
+test('3135: unscoped full dependency closure includes context resources and calls',t=>{
   const f=setup(t),plan=getPlan(f);assert.ok(plan,'3135_PLAN_MISSING');
-  assert.deepEqual(plan.steps[0].closure,[PLACE]);
-  assert.ok(plan.edges[0].candidates.some(row=>row.name===`${OTHER}#changeRun`&&row.cause==='not-in-dependency-closure'));
+  assert.deepEqual(plan.steps[0].closure,[PLACE,OTHER].sort());
+  assert.equal(plan.edges.find(row=>row.key==='files.read').state,'missing');
   editPrompt(f,PLACE,iface=>{iface.calls=[{operation:'runner',target:OTHER,max_calls:1}];});
   const called=getPlan(f);assert.deepEqual(called.steps[0].closure,[PLACE,OTHER].sort());
   assert.equal(called.edges.find(row=>row.key==='files.read').state,'missing');
@@ -94,10 +94,13 @@ test('3135: an actual call crossing the Story boundary refuses before any paid w
   assert.match(ports.stderr.text,/out-of-boundary/);
 });
 
-for(const body of ['', '[Outside](../../outside.prompt.md)', '[Remote](https://example.invalid/a.prompt.md)', '[Wrong](../prompts/file.txt)', '[Encoded](../prompts/%2e%2e/private.prompt.md)'])
-  test(`3135: malformed boundary refuses locally (${body||'empty'})`,t=>{
-    const f=setup(t);appendFileSync(join(f.repo,STORY),`\n## Runtime boundary\n\n${body}\n`);
-    assert.throws(()=>captureSource(f.repo,{tests:[TEST]}),error=>error.code==='binding-boundary-invalid','3135_INVALID_BOUNDARY');
+for(const body of ['', '../../outside.prompt.md', 'https://example.invalid/a.prompt.md', 'prompts/file.txt', 'prompts/%2e%2e/private.prompt.md'])
+  test(`3135: malformed block keeps full closure (${body||'empty'})`,t=>{
+    const f=setup(t);appendFileSync(join(f.repo,STORY),`\n\x60\x60\x60pdd-boundary\n${body}\n\x60\x60\x60\n`);
+    const plan=getPlan(f);
+    assert.equal(plan.boundary,null,'3135_INVALID_BOUNDARY_FALLBACK');
+    assert.ok(plan.notes.some(note=>note.code==='boundary-not-applied'&&note.reason==='invalid-path'));
+    assert.equal(plan.edges.find(edge=>edge.key==='files.read').state,'missing');
   });
 
 test('3135: step override wins and wrong resource names remain explicit candidates',t=>{

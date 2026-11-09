@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2566dd51b8cd22cb41009c42476f02dfe9b0625a15c927fdce281b17fa913da0).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 928009c02955048b50a8b1985b205be8be710b4b83c345d73e3d0d0f80d09f21).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -1470,7 +1470,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     const selected = tests ?? named.map(test=>test.path);
     for (const path of selected) add(path, 'Selected test',path.endsWith('.prompt.md')?'context':isStoryPath(path)?'story':'test');
     if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }
-    const storyTests = new Map();
+    const storyTests = new Map(), boundaries = new Map();
     let siblingsAdded = false;
     for (let index = 0; index < queue.length || !siblingsAdded; index++) {
       if (index === queue.length && !siblingsAdded) {
@@ -1521,9 +1521,23 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
             walk(map);
           } else {
             if (role === 'story') {
-              let boundary;
-              try { boundary = runtimeBoundary(path,text); }
-              catch (error) { throw Object.assign(new PreflightError(4,error.message),{code:error.code}); }
+              const notes=[];
+              let boundary=runtimeBoundary(path,text,{notes});
+              if (boundary) {
+                try {
+                  // Validate all members before admitting any boundary-only source.
+                  for (const member of boundary) {
+                    requireRuntimePath(workspace,{path:member,from:path,chain:chains.get(path)??[]});
+                    bytes(inspect(member,path));
+                  }
+                } catch (error) {
+                  if (reader.unstable || error === unstableSource) throw error;
+                  boundary=null;
+                  notes.push({code:'boundary-not-applied',reason:'unreadable-path',
+                    message:'boundary not applied: unreadable-path; full dependency closure is required'});
+                }
+              }
+              boundaries.set(path,{boundary,notes});
               for (const member of boundary ?? []) add(member,path);
             }
             for (const raw of markdownContext(text)) { const context = contextPath(raw, path, visible); if (context) add(context, path); }
@@ -1555,8 +1569,16 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       let doc; try { doc=JSON.parse(bytes(file).toString('utf8')); } catch { continue; }
       if (!doc?.story_path || !Array.isArray(doc.steps)) continue;
       try {
+        const reached=new Set(), pending=[path,...shared];
+        for (let index=0;index<pending.length;index++) {
+          const dependency=pending[index];
+          if (reached.has(dependency)) continue;
+          reached.add(dependency);pending.push(...(edges.get(dependency)??[]));
+        }
         bindingPlans.push(buildBindingPlan({test:{path,storyPath:doc.story_path,doc},
-          storyText:bytes(inspect(doc.story_path,path)).toString('utf8'),prompts:bindingPrompts}));
+          storyText:bytes(inspect(doc.story_path,path)).toString('utf8'),prompts:bindingPrompts,
+          dependencyPaths:[...reached].filter(dependency=>dependency.endsWith('.prompt.md')).sort(),
+          boundaryState:boundaries.get(doc.story_path)}));
       } catch (error) { throw Object.assign(new PreflightError(4,error.message),{code:error.code}); }
     }
     const scoped = bindingPlans.filter(plan=>plan.boundary !== null);

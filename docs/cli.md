@@ -1273,30 +1273,38 @@ closure. Exit 4 means a binding is missing; exit 0 means the local plan has no
 missing binding. This command does not establish a service compatibility pass.
 It reads no token, sends no request, and saves no batch or queue ticket.
 
-A Story can set its executable scope with local prompt links:
+A Story can narrow its executable scope with one dedicated block:
 
-```markdown
-## Runtime boundary
-
-[CLI](../prompts/cli.prompt.md)
+````markdown
+```pdd-boundary
+prompts/cli.prompt.md
 ```
+````
 
-List the entry prompt and every executable Runtime call target. Each declared
-member adds its resource requirements even when no Runtime call reaches it.
-Use one Markdown link per line, optionally as a list item. Titled inline links,
-angle destinations and full, collapsed or shortcut reference links are supported;
-reference definitions can appear anywhere in the Story. Unsupported or unresolved
-declarations refuse with `binding-boundary-invalid`, without accepting a partial
-boundary. Ordinary links in prompt dependencies still provide source context.
-For this declared scope,
-context outside the boundary keeps its prose in the upload but omits its Runtime
-interface. Files on disk do not change. A real call outside the boundary refuses
-locally; expand the boundary only if the Story requires that behavior. Selecting
-several Stories retains the union of their boundaries. A required edge included
-by any selected Story remains required. Each plan keeps its own Story boundary.
-A Story without this section retains ordinary source capture and prevents
-interface removal from the combined upload. The workspace permission boundary
-still applies to all reads.
+Use the exact opening and closing fence lines shown above, with blank lines or
+file ends beside the block. List one repository-relative prompt path per line,
+including the entry and every executable Runtime call target. Paths use letters,
+digits, underscores, hyphens, dots and slashes, with no whitespace, blank lines,
+empty/dot/parent components, fragments, escapes or Markdown link syntax. Each
+listed member adds its resources even when no Runtime call reaches it.
+
+Only this block can narrow the closure. Markdown links, headings and reference
+definitions elsewhere never remove an edge. A Story with no block, two blocks,
+an invalid path or an unreadable member keeps its full dependency closure,
+including context resource requirements. The plan includes a named
+`boundary-not-applied` note with the reason. A `Runtime boundary` heading without
+a valid block gives `boundary not applied: use the pdd-boundary block`. Unsupported
+fences, blocks inside fenced examples and uncertain HTML contexts also keep the
+full closure. No partial block is applied.
+
+With a valid block, context outside the boundary keeps its prose in the upload
+but omits its Runtime interface. Files on disk do not change. An actual call
+outside an applied boundary refuses locally with `binding-boundary-invalid`;
+expand the block only if the Story requires that behavior. Several Stories keep
+the union of their boundaries and each Story's own plan. Adding a Story cannot
+remove another Story's required edge. A Story whose boundary is not applied
+prevents interface removal from the combined upload. Workspace permissions still
+apply to all required reads.
 
 Fix the smallest named cause: correct the fixture resource/operation key, add
 the required binding, or declare the Story boundary. Step overrides replace

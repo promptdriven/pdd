@@ -23,6 +23,25 @@ When the person asks you to report a problem with pdd itself, follow
 | `user_stories/<story>.md` | One story: first one line "As a …, I want …, so that …" in the words of the issue (the PR shows it as the user story), then a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
 | `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` with a folder named `tests` or `test` anywhere in its path, not only as the direct parent (`tests/`, `test/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
+A Story can narrow its executable closure only with one dedicated block:
+
+````markdown
+```pdd-boundary
+prompts/place_order.prompt.md
+```
+````
+
+List repository-relative prompt paths, one per line, including every entry and
+Runtime call target. Use exact fence lines separated from other content by blank
+lines. The [Story boundary format](docs/cli.md#explain-resource-bindings) gives the
+complete path and admission rules. Markdown links, headings and reference
+examples do not narrow scope. No block, duplicate blocks, an invalid/unreadable
+path or ambiguous syntax keeps the full dependency closure, including context
+resources, and adds a named `boundary-not-applied` plan note. A `Runtime boundary`
+heading alone gives `boundary not applied: use the pdd-boundary block`. Only a
+valid block permits interface projection; actual Runtime calls across it refuse.
+Combined selections keep every selected Story's required edge.
+
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
 Across its steps, the test file must check every criterion of its story.
 

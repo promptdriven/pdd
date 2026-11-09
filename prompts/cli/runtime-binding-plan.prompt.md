@@ -6,29 +6,45 @@ authorizes additive public exports and Story boundary syntax. Preserve existing
 fixtures and expectations; fixtures win by exact `resource.operation` key after
 per-step overrides, never by fuzzy matching or a different module's entry name.
 
-Export `runtimeBoundary(storyPath,text)`: return null without a declaration,
-otherwise a sorted unique nonempty list of repository-relative `.prompt.md`
-paths from Markdown links in the Story's `## Runtime boundary` section. Resolve
-relative links from the Story, remove fragments, reject outside paths, URLs,
-backslashes, duplicate sections and empty declarations with an Error whose code
-is `binding-boundary-invalid`. Only this explicit declaration establishes a
-boundary; ordinary English cannot silently exclude an executable dependency.
-Use the shared repository Markdown link parser for inline links (including titles
-and angle destinations) and full, collapsed or shortcut reference links, with
-definitions anywhere in the Story. Accept standalone links, optionally in list
-items, and reference definitions in the section. Refuse any unsupported or
-unresolved declaration with binding-boundary-invalid; never accept a partial list.
+Export `runtimeBoundary(storyPath,text,{notes=[]}={})`: return a sorted unique
+nonempty list of repository-relative `.prompt.md` paths only from one dedicated
+block. The opening line is exactly three backticks followed by `pdd-boundary`;
+the closing line is exactly three backticks. Require blank lines or document
+ends beside the block. Each content line is a literal repository-relative POSIX
+prompt path; no blank lines, links, titles, fragments, whitespace, absolute paths,
+backslashes, URL escapes, empty/dot/parent components or other syntax. Only
+letters, digits, underscores, hyphens, dots and slashes are accepted in paths.
+The block must be outside other fenced examples. Fail closed if HTML markup
+makes its context uncertain, or any additional/unsupported boundary fence is
+present. Tag-like, comment, declaration and processing-instruction openers make
+context uncertain even without matched closers. Do not use Markdown links, headings or reference definitions as scope
+authority. Heading spellings, closing ATX markers, titled links and raw HTML
+reference examples cannot remove an edge.
 
-Export `buildBindingPlan({test,storyText,prompts})`, where test is the selected
-{path,storyPath,doc}, and prompts is a Map of safely read path to parsed Runtime
-interface. Do no I/O. For each step in order follow its entry and transitive
-Runtime calls, once per path. A declared boundary also seeds every explicitly
-included member in each step, so its resources and calls remain required even
-when it is reached only as context. Never treat an ordinary Markdown context
-link as a call.
+On zero blocks, duplicate blocks, malformed/ambiguous syntax or invalid paths,
+return null and append one named note {code,reason,message}. code is
+`boundary-not-applied`; reason identifies missing-block, legacy-syntax,
+duplicate-blocks, unsupported-syntax or invalid-path. Legacy Runtime boundary
+headings are advisory only: message is `boundary not applied: use the
+pdd-boundary block`. If a valid block coexists with a legacy heading, apply only
+the block and emit the legacy note; the heading cannot alter membership. Other messages name the reason and say full dependency
+closure is required. No partial declaration can narrow. Caller-side safe reading
+must validate every member before applying any boundary; an unreadable, unsafe
+or outside-resolving member cancels narrowing and adds the same named note with
+reason unreadable-path. Keep ordinary required-source failures authoritative.
+
+Export `buildBindingPlan({test,storyText,prompts,dependencyPaths,boundaryState})`,
+where test is {path,storyPath,doc}, prompts is a Map of safely read path to parsed
+Runtime interface, dependencyPaths is the selected test's full prompt dependency
+closure, and optional boundaryState is the caller-validated {boundary,notes}.
+Without boundaryState parse the Story locally. Do no I/O. Without an applied
+boundary seed every prompt in dependencyPaths as well as each step entry; full
+required context remains executable, including its resources. With a boundary
+seed all declared members. For each step in order follow transitive Runtime
+calls once per path. Never interpret an ordinary Markdown link as an actual call.
 Require entries and call targets to be in a declared boundary. Return exactly
 schema_version (`pdd.binding-plan.v1`), test (path), story (path), boundary (paths
-or null), steps, edges and problems. steps contains {step_id,closure} with sorted
+or null), notes (the named boundary notes), steps, edges and problems. steps contains {step_id,closure} with sorted
 executable paths. problems contains {step_id,prompt_path,code} for
 out-of-boundary or unavailable interfaces. Do not claim complete closure on a
 problem. Resource edges are in step, path and declaration order, each with
@@ -48,7 +64,8 @@ a valid supplied fixture must never get an invented mismatch.
 
 Export `bindingPlanLines(plan)` rendering one line per edge with step, prompt,
 key, state, candidate names and causes, plus the repair when missing and all
-closure problems. No truncation that hides missing edges.
+closure problems and boundary notes. Label an unscoped plan as full dependency
+closure. Repairs name the pdd-boundary block. No truncation that hides missing edges.
 
 Export `bindingRefusals(plan,compatibility)`: for every reported missing resource
 edge return {step_id,prompt_path,key,cause,candidates,repair}. Use the exact local
@@ -58,11 +75,6 @@ not-in-dependency-closure. Otherwise retain the candidate mismatch or
 binding-missing. A disagreement asks the compatibility owner to inspect fixture
 selection; no false pass, invented rejection cause or automatic retry. This is
 client evidence, separate from the server verdict.
-
-## Dependencies
-
-- [Markdown links](runtime-markdown.prompt.md): required shared destination and
-  reference-definition parsing for boundary declarations.
 
 Callers supply authored Story text and safely parsed interfaces. Use standard
 path arithmetic; all filesystem, Git and service access belongs to callers.

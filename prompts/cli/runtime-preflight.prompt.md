@@ -397,23 +397,27 @@ before omission.
 
 ## Story runtime boundary (#3135)
 
-A Story may declare one `## Runtime boundary` section containing Markdown links
-to the complete set of executable prompt paths, relative to that Story. This is
-an explicit check scope, not an operating-system workspace permission. The
-binding-plan owner parses it. Missing/empty/unsafe declarations refuse locally.
-Every entry and transitive Runtime call target must be within it; refuse a
-crossing rather than hide an actual call. Without this declaration keep existing
-source selection. Linked prompts outside the declared executable boundary remain
-required source context but their Runtime interface blocks are omitted from the
-effective upload. Their authored bytes are unchanged. This prevents context-only
-modules from adding resource requirements. The effective manifest, hashes and tar
-must describe these projected bytes. Load every declared member and its required
-context through the same safe source capture. For a combined selection, keep the
-union of the selected Stories' boundaries: an interface included by any Story
-stays executable, and adding a Story must never remove a required edge. Retain
-each Story's own boundary and plan. A Story without a boundary preserves ordinary
-source capture, so its presence prevents interface projection. Each Story still
-refuses its own entry or call crossings before upload.
+Only the strict dedicated `pdd-boundary` fenced block owned by the binding-plan
+prompt can narrow a Story's executable closure. Markdown headings, links and
+reference definitions are advisory, including closing-ATX headings and HTML
+examples. Parse a declaration without discovering dependencies from its prose.
+Safely inspect and read all declared paths before adding any of them as boundary
+members. A missing, unreadable, outside-resolving or workspace-denied member
+cancels the whole boundary; keep full ordinary dependency capture and a named
+`boundary-not-applied` plan note with reason `unreadable-path`. Preserve source
+snapshot retries and ordinary required-source refusal rules. Zero, duplicate or
+unsupported blocks likewise keep full closure with the owner's named note.
+
+Each fallback plan includes the selected test's full transitive prompt dependency
+closure, including context resources, without borrowing unrelated Stories' paths.
+Every entry and actual Runtime call target must be inside an applied boundary;
+refuse a crossing rather than hide an actual call. Linked prompts outside a valid
+boundary keep their prose but omit their Runtime interface from the effective
+upload; authored bytes stay unchanged. Manifest, hashes and tar describe the
+projected bytes. Load every valid declared member and required context through
+safe capture. Combined selections retain the union of valid boundaries. Each
+Story keeps its own plan; adding a Story cannot remove a required edge. Any
+fallback Story prevents interface projection in the combined upload.
 
 ## Dependencies
 

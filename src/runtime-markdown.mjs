@@ -188,4 +188,3 @@ export function markdownSectionText(text) {
   flush();
   return parts.join('') + text.slice(copied);
 }
-

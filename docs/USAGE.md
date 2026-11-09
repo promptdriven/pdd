@@ -433,6 +433,13 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 | 3 | unknown or still running | Run `pdd test --read` later. Never send it again. |
 | 2 | command error | Run `pdd test --help`. |
 
+The optional Story scope uses one exact `pdd-boundary` fenced block with
+repository-relative prompt paths, one per line. See the [Story boundary
+format](cli.md#explain-resource-bindings). Links and headings never narrow scope.
+Without one valid block, pdd keeps the full dependency closure and gives a named
+`boundary-not-applied` note. Duplicate blocks or an unreadable path also keep the
+full closure.
+
 Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
 
 The interpreter address is set in one place in pdd. You do not need to set it.
