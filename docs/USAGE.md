@@ -249,7 +249,7 @@ The command returns at once. It prints where the run is and the commands to open
 4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
 5. At a gate, the chat shows you the result and asks you. Then it stops and waits. It waits as long as you need.
 6. When you approve, pdd starts a new chat for the next area. That chat gets the results of the area that you approved.
-7. After the last step of an area with a PR gate, pdd opens its required approval gate first when present; otherwise it pushes the branch and opens the PR.
+7. After the last step of an area with a PR gate, pdd pushes the branch and opens the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate.
 8. You review and merge the PRs on GitHub. When `pdd workflow status` sees the merge, the run is completed.
 
 With Claude Code, the first chat can ask you once to trust the new worktree folder. This happens when your clone's folder is not trusted in Claude Code yet. `pdd workflow run` prints a hint. Open the chat with `pdd workflow open 42` and answer the question.
