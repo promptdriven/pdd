@@ -490,3 +490,62 @@ test('factory 12: stopped legacy runs free a full shared budget for a second rep
   assert.ok(w.herdr.panes.includes(busy),'foreign-busy-pane-survives-resume');
   assert.deepEqual(w.leadActions,[]);assert.deepEqual(second.leadActions,[]);
 });
+
+test('factory 3129: held subjects have zero automatic GitHub writes and worker deliveries in every state', async t => {
+  const rows = [];
+  for (const state of ['open','running','parked','closed-audit','group-member','group-umbrella','dependency-node']) {
+    const w = await factoryWorld(t);
+    if (['running','parked','closed-audit','group-member','group-umbrella'].includes(state)) await w.begin();
+    else await w.start();
+    const key = `https://github.com/${w.repository}/issues/17`;
+    if (state === 'closed-audit') {
+      const a = scriptedAgent(w); await a.finish(); await a.merge();
+      assert.equal(w.record().state,'completed');
+    }
+    if (state === 'parked') {
+      await scriptedAgent(w).until(run=>run.area===1);
+      await w.command(['workflow','status','17']);
+      await w.command(['workflow','park','--reason','Waiting for PDD issue #99999','--blocker','pdd','--until','#99999'],{cwd:w.record().root});
+      await w.tick();
+      assert.equal(w.record().parking?.phase,'parked');
+    }
+    if (state.startsWith('group-')) {
+      w.github.add(18,{title:'Same group',body:'Shares the root cause.',created:w.time-1000,updated:w.time-1000});
+      const saved = w.state(), other = key.replace('/17','/18');
+      saved.githubIntake = {at:w.time,eligible:[other],claims:[],groups:[{area:'cli',rootCause:'shared',umbrella:state==='group-member'?other:key,members:[key,other]}]};
+      writeFileSync(w.stateFile,JSON.stringify(saved));
+      w.github.limit=100;w.github.remaining=90;w.github.graphqlRemaining=90;
+      // Keep the cached intake current while the GitHub share defers refresh.
+      const {githubLedger} = await import('../src/github-calls.mjs');
+      const {dirname} = await import('node:path');
+      const config = JSON.parse(readFileSync(join(w.cwd,'pdd.json'),'utf8'));
+      config.autopilot.github={share:1,floor:0};writeFileSync(join(w.cwd,'pdd.json'),JSON.stringify(config));
+      for(let n=0;n<3;n++) githubLedger({root:dirname(w.stateFile),repository:w.repository}).record({at:w.time,api:'rest',purpose:'dependencies',status:200,resource:'core',remaining:90,limit:100,resetAt:w.time+3600000});
+    }
+    if (state === 'dependency-node') {
+      const saved = w.state();
+      saved.dependencyPending = {requested:[key]};
+      writeFileSync(w.stateFile,JSON.stringify(saved));
+    }
+    // A current check may finish and save. The manual custody route must wait.
+    w.suiteProgress = {state:'running'};
+    await w.github.gh(['issue','edit','17','--add-label','pdd:manual']);
+    const github = w.github.gh, herdr = w.herdr.herdr, writes = [], deliveries = [];
+    w.github.gh = async (args,options) => {
+      const methodAt=args.indexOf('--method');
+      const write=args[0]==='api' ? methodAt>=0 && !['GET','HEAD'].includes(args[methodAt+1]) && (!args.includes('graphql') || /\bmutation\b/.test(options?.input ?? ''))
+        : ['issue','pr'].includes(args[0]) && ['comment','edit','create','close','reopen','merge'].includes(args[1]);
+      if (write) writes.push(args);
+      return github(args,options);
+    };
+    const panes = new Set(w.herdr.panes.filter(p=>p.cwd!==w.cwd).map(p=>p.pane_id));
+    w.herdr.herdr = async args => {
+      if (args[0]==='pane' && args[1]==='run' && args[3].includes('codex') || args[0]==='agent' && args[1]==='prompt' && panes.has(args[2])) deliveries.push(args);
+      return herdr(args);
+    };
+    await w.tick();
+    assert.ok(w.state().manualIssues?.includes(17),state);
+    rows.push({state,writes:writes.length,deliveries:deliveries.length});
+  }
+  assert.deepEqual(rows,rows.map(row=>({...row,writes:0,deliveries:0})));
+});

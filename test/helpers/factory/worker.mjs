@@ -21,7 +21,7 @@ process.on('message',async m=>{
   if(m.reply) {const p=pending.get(m.reply);pending.delete(m.reply);if(m.error)p.reject(Object.assign(Error(m.error.message),m.error));else p.resolve(m.value);return;}
   if(!m.start)return;
   try {
-    const {base,cwd,packageRoot,stateRoot,stateDir,layoutDirectory,env,argv,stdin,operation,stateFile,now,installedPddCapabilities}=m.start;
+    const {base,cwd,packageRoot,stateRoot,stateDir,layoutDirectory,env,argv,stdin,operation,stateFile,now,installedPddCapabilities,suiteProgress}=m.start;
     let time=now,stdout='',stderr='';const epoch=performance.now();
     Date.now=()=>time+Math.floor(performance.now()-epoch);
     globalThis.fetch=async(url,opts={})=>{
@@ -29,7 +29,7 @@ process.on('message',async m=>{
       const r=await rpc('fetch',String(url),{method:opts.method,payload});return new Response(r.body,{status:r.status,headers:r.headers});
     };
     const out={write:s=>{stdout+=s;return true;}},err={write:s=>{stderr+=s;return true;}};
-    const ports={...(installedPddCapabilities === undefined ? {} : {installedPddCapabilities}),...healthyMachine,...isolatedCheckCapacity(base,{taskset:null}),queueRoot:env.PDD_SUITE_QUEUE,env,stateRoot,autopilotStateRoot:stateRoot,stateDir,layoutDirectory,now:()=>time,
+    const ports={...(suiteProgress ? {readSuiteProgress:()=>suiteProgress} : {}),...(installedPddCapabilities === undefined ? {} : {installedPddCapabilities}),...healthyMachine,...isolatedCheckCapacity(base,{taskset:null}),queueRoot:env.PDD_SUITE_QUEUE,env,stateRoot,autopilotStateRoot:stateRoot,stateDir,layoutDirectory,now:()=>time,
       sleep:async ms=>{time+=ms;await rpc('sleep',ms);},
       execFile:(...a)=>rpc('exec',...a),run:(...a)=>rpc('exec',...a),
       herdr:(...a)=>rpc('herdr',...a),workflowHerdr:(...a)=>rpc('herdr',...a),

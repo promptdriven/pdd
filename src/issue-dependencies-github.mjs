@@ -3,7 +3,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 029190450a41b4a320a052655af83964451027a0f422d7c0d9088daa5dce1e14).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: a43f1a42566bb6e769de2cb1f0f461779c5e322012174780aab4097dac2d3375).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -75,7 +75,7 @@ function spawnRead(file, args, options = {}) {
 const notModified = text => /^HTTP\/\S+\s+304\b/.test(String(text ?? ''));
 
 function service(cwd, ports) {
-  const exec = ports.execFile ?? execute;
+  const exec = guardAutomaticGithubWrites(ports.execFile ?? execute, ports, {cwd, repository:ports.issueTarget?.repository, issue:ports.issueTarget?.issue, manualCustody:ports.manualCustody});
   async function run(file, args, input, purpose, conditional = false, repository, guard = ports.githubFloor) {
     let r;
     try { r = await exec(file, args, { ...(cwd ? { cwd } : {}), ...(input === undefined ? {} : { input }), ...(purpose ? { purpose } : {}), ...(repository ? { repository } : {}) }); }
@@ -114,7 +114,7 @@ function service(cwd, ports) {
     let transportInvoked = false;
     const executeRequest = async () => {
       const target = /^repos\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)(?:[/?]|$)/.exec(endpoint);
-      if (write && purpose !== 'claims' && target && !await issueEffectAllowed({repository:target[1],issue:Number(target[2]),cwd},ports)) throw Error('manual-hold');
+      if (write && !ports.manualCustody && target && !await issueEffectAllowed({repository:target[1],issue:Number(target[2]),cwd},ports)) throw Error('manual-hold');
       if (checkOwnership && !await checkOwnership()) throw Error('sort-owner-changed');
       if (checkOwnership && ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
       transportInvoked = true;
@@ -125,7 +125,7 @@ function service(cwd, ports) {
     if (mutation && ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
     let raw;
     try { raw = mutation && ports.admitMutation ? await ports.admitMutation(executeRequest) : await executeRequest(); }
-    catch (error) { if (trackUnsent) error.sortUnsent = !transportInvoked; throw error; }
+    catch (error) { if (trackUnsent) error.sortUnsent = error.code === 'manual-hold' || !transportInvoked; throw error; }
     const boundary = raw.search(/\r?\n\r?\n/), header = boundary >= 0 ? raw.slice(0, boundary) : '';
     const body = boundary >= 0 ? raw.slice(boundary).trim() : raw;
     const status = Number(header.match(/^HTTP\/\S+\s+(\d+)/m)?.[1] ?? 200);
@@ -1093,7 +1093,7 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
 // The owning coordinator sets one top-level tick member (a time) of its own winning
 // claim comment. It edits nothing else and no other comment.
 async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorId, machine, at }, ports) {
-  const i = info(claim?.issue), s = service(cwd, ports);
+  const i = info(claim?.issue), s = service(cwd, {...ports,issueTarget:i ? {repository,issue:i.issue} : undefined});
   if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
     || !claim.labelEventId || claim.active !== true || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !Number.isFinite(time(at))) return null;
   const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`, comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value;
@@ -1129,7 +1129,7 @@ export async function recoverCoordinatorClaim({ cwd = '', repository, claim, coo
   };
   if (!await checkHold()) return skipped;
   // No cached snapshot or conditional comment body supplies recovery authority.
-  const freshPorts = { ...livePorts, githubCache: null, dependencyReads: undefined };
+  const freshPorts = { ...livePorts, issueTarget:{repository,issue:i.issue}, githubCache: null, dependencyReads: undefined };
   const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, freshPorts), s = service(cwd, freshPorts);
   const readWinner = () => winningClaim(repository, claim.issue, github, livePorts.authority, time(at), true);
   const matches = current => current && current.machine === machine && current.commentId === claim.commentId && current.labelEventId === claim.labelEventId;
@@ -1633,6 +1633,49 @@ export async function issueEffectAllowed({repository, issue, cwd = '', localOnly
   }
 }
 
+// One native write boundary. The supplied transport remains the only effect port.
+export function guardAutomaticGithubWrites(execute, ports, context = {}) {
+  return async (file, args, options = {}) => {
+    if (file !== 'gh' || context.personDirected === true || options.manualCustody === true || context.manualCustody === true) return execute(file,args,context.manualCustody === true ? {...options,manualCustody:true} : options);
+    let repository = context.repository ?? options.issueTarget?.repository, issue, comment, write = false, issueWrite = false;
+    if (args[0] === 'api') {
+      const endpoint = args.find(arg => arg === 'graphql' || /^(?:https:\/\/api.github.com\/)?repos\//.test(arg));
+      const methodAt = args.findIndex(arg => ['--method','-X'].includes(arg));
+      const method = methodAt >= 0 ? args[methodAt+1] : args.some(arg => ['-f','-F','--field','--raw-field','--input'].includes(arg)) ? 'POST' : 'GET';
+      write = method !== 'GET' && method !== 'HEAD';
+      if (endpoint === 'graphql') {
+        const query = String(options.input ?? '') + args.filter(arg=>String(arg).startsWith('query=')).join(' ');
+        write = issueWrite = /\bmutation\b/.test(query);
+        issue = context.issue ?? options.issueTarget?.issue;
+      }
+      const target = /repos\/([^/]+\/[^/]+)\/(issues|pulls)\/([^/?]+)(?:[/?]|$)/.exec(endpoint ?? '');
+      if (target) {
+        repository = target[1]; issueWrite = true;
+        if (/^[1-9]\d*$/.test(target[3])) issue = Number(target[3]);
+        else if (target[3] === 'comments') comment = endpoint;
+      }
+    } else if (['issue','pr'].includes(args[0]) && ['comment','edit','close','reopen','merge','create'].includes(args[1])) {
+      write = issueWrite = true;
+      const target = args[2], url = /github.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/(\d+)/.exec(target ?? '');
+      const repoAt = args.findIndex(arg => ['-R','--repo'].includes(arg));
+      repository = url?.[1] ?? (repoAt >= 0 ? args[repoAt+1] : repository);
+      issue = url ? Number(url[2]) : /^[1-9]\d*$/.test(target ?? '') ? Number(target) : context.issue ?? options.issueTarget?.issue;
+    }
+    if (write && issueWrite) {
+      if (comment) {
+        const reply = await execute('gh',['api',comment],{...options,input:undefined});
+        let value; try { value = JSON.parse(String(reply.stdout).replace(/^HTTP\/[\s\S]*?\r?\n\r?\n/,'')); } catch { throw Object.assign(Error('Unresolved issue write target'),{code:'manual-hold'}); }
+        const target = /repos\/([^/]+\/[^/]+)\/(?:issues|pulls)\/(\d+)$/.exec(value.issue_url ?? value.pull_request_url ?? '');
+        repository = target?.[1] ?? (context.issue ? context.repository : options.issueTarget?.repository); issue = target ? Number(target[2]) : context.issue ?? options.issueTarget?.issue;
+      }
+      const targets = [{repository,issue}, ...(context.issue ? [{repository:context.repository,issue:context.issue}] : [])];
+      for (const target of targets) if (!await issueEffectAllowed({...target,cwd:options.cwd ?? context.cwd},ports))
+        throw Object.assign(Error('Manual issue authority holds GitHub write'),{code:'manual-hold'});
+    }
+    return execute(file,args,context.issue ? {...options,issueTarget:{repository:context.repository,issue:context.issue}} : options);
+  };
+}
+
 async function saveRecord({ repository, issue, value, type }, supplied) {
   const i = info(issue);
   if (!repositoryName(repository) || !i || i.comment || !sameRepo(i.repository, repository)) fail('invalid-review');
@@ -1757,7 +1800,7 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
   const skipped = {state: 'skipped'}, i = info(claim?.issue);
   if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !runId || !branch
     || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !claim.commentId || !claim.labelEventId) return skipped;
-  const live = createDependencyReadPorts({cwd}, ports), fresh = {...live, githubCache: null, dependencyReads: undefined};
+  const live = createDependencyReadPorts({cwd}, ports), fresh = {...live, issueTarget:{repository,issue:i.issue}, githubCache: null, dependencyReads: undefined};
   const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, fresh), s = service(cwd, fresh);
   const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`;
   const comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value, record = claimRecord(comment?.body);

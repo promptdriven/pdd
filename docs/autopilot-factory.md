@@ -19,7 +19,11 @@ a local bare origin. Git is restricted to file transport. The private service
 executables cannot call a real agent or GitHub. Service ports model GitHub REST
 and GraphQL, Herdr panes and sessions, and interpreter responses. Interpreter
 requests use an in-memory fetch port. No service socket is needed. Worker sockets
-are denied. Tests do not read a person's agent credentials or machine queues.
+are denied. A manual hold matrix counts GitHub writes and worker deliveries for
+open, running, parked, closed audit, group member, umbrella and dependency-node
+subjects. A running check retains custody while this matrix checks zero automatic
+effects. Separate native tests add the hold during startup fetch and route cached
+group work to a held retained run. Tests do not read a person's agent credentials or machine queues.
 
 The scripted worker reads the bundled workflow and each selected step brief. It
 writes a small constant-value project, records completed steps through the CLI,

@@ -9,8 +9,8 @@ import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
-import { readDependencySnapshot, createDependencyReadPorts, issueEffectAllowed, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 68629ff595937f5ac311bdedd310fb5c97d65c59fb27d748d6835df3e4bb09a0).
+import { readDependencySnapshot, createDependencyReadPorts, issueEffectAllowed, guardAutomaticGithubWrites, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a1a87acac4ed8d582a5f0e51155e87a1867ac0ae5a26723cc10177b2b1b4679e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -29,7 +29,7 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
-import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
+import { startChat, submitWorker, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
@@ -47,7 +47,7 @@ import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from '
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
-const automaticEffectAllowed = (run, p, localOnly = true) => !run?.automaticOrigin && !p.manualHold || issueEffectAllowed({repository:run.repo,issue:run.number,cwd:run.sourceRoot ?? run.root,localOnly}, p);
+const automaticEffectAllowed = (run, p, localOnly = true) => p.personDirected === true || !run?.automaticOrigin && !p.manualHold || issueEffectAllowed({repository:run.repo,issue:run.number,cwd:run.sourceRoot ?? run.root,localOnly}, p);
 export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry', 'route-interface-drafting', 'issue-3129', 'manual-label', 'route-manual-label']);
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -125,9 +125,10 @@ function describePaneOwners(rows, ports) {
 }
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
+  const personDirected = ports.personDirected === true;
   // The native runner records each gh call in the GitHub call ledger of its repository.
   const execFile = ports.execFile ?? nativeGithubCounter((file, args, options = {}) => execute(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...options }), { env });
-  return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
+  return { ...ports, env, personDirected, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}), describePaneOwners: ports.describePaneOwners ?? (rows=>describePaneOwners(rows,ports)), sweepIdle: ports.sweepIdle ?? (options => sweepIdleRuns(options, {...ports, progressGuard: undefined})), sweepFinished: ports.sweepFinished ?? (options => tidyRuns(options, {...ports, progressGuard: undefined})) };
 }
 // This run lock is independent of the shared Herdr layout lock. Never wait on a live owner.
@@ -220,7 +221,7 @@ function protectProgress(run,p,{approval=false,validate}={}) {
   p.progressGuard=check;
   const inspect=()=>{const latest=readRun(run.runDir);if(!latest||runIdentity(latest)!==runIdentity(run))throw Object.assign(Error('The selected workflow run is missing or was replaced'),{code:'workflow_progress_refused'});check(latest);};
   p.inspectProgress=inspect;
-  const exec=p.execFile,herdr=herdrCommand(p);
+  const exec=guardAutomaticGithubWrites(p.execFile,p,{repository:run.repo,issue:run.number,cwd:run.sourceRoot ?? run.root,personDirected:p.personDirected || !run.automaticOrigin && !p.manualHold}),herdr=herdrCommand(p);
   p.execFile=async(file,args,options)=>{
     if((file==='git'&&['add','commit','push','checkout','switch','branch'].includes(args[0])) || (file==='gh'&&args[0]==='pr'&&['create','edit'].includes(args[1])))inspect();
     if (file === 'git' && args[0] === 'push' || file === 'gh' && (args[0] === 'pr' && ['create','edit','comment'].includes(args[1]) || args.includes('--method') && ['POST','PATCH','DELETE'].some(method => args.includes(method))))
@@ -742,6 +743,7 @@ function validAutomaticContext(value) {
 async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgentName, codexThreads, base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, through, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const automatic = coordinator !== undefined || Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT');
+  p.personDirected = !automatic && p.personDirected;
   if (Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) {
     let environmentContext;
     try { environmentContext = JSON.parse(p.env.PDD_AUTOPILOT_CONTEXT); } catch { return fail('Invalid automatic start context.'); }
@@ -848,6 +850,8 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
       return fail(`Could not fetch --base ${baseBranch} from origin. Check that origin has this branch and Git can fetch it, then run again. No new run was started.`);
     }
   }
+  const startAllowed = () => !automatic || issueEffectAllowed({repository:binding.repository,issue:number,cwd:context.toplevel},p);
+  if (!await startAllowed()) return fail('Automatic start deferred: manual-authority.');
   let adoption, adoptionSnapshot, declarationBytes, frozenFolder;
   try {
   if(adoptCorpus !== undefined) {
@@ -871,6 +875,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
     // Unknown capacity is not evidence of a full server. Startup retains its
     // normal durable recovery path if Herdr itself is unavailable.
   }
+  if (!await startAllowed()) return fail('Automatic start deferred: manual-authority.');
   const runId = randomUUID();
   if (existing?.pr?.length && !ended(existing)) await refreshPr(existing, p);
   if (existing) {
@@ -896,6 +901,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
     try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
     catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
   }
+  if (!await startAllowed()) return fail('Automatic start deferred: manual-authority.');
   p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
@@ -3166,6 +3172,7 @@ function armCurrentAutomaticChat(run, p) {
 }
 
 async function startNextChat(run, p, packageRoot) {
+  await submitWorker(run,p,async()=>{});
   if (run.parking) commitRun(run, p, fresh => {fresh.parking.phase = 'waking';});
   const area = run.areas[run.area], original = structuredClone(run);
   let prior = lastChat(run, area.name);
@@ -3207,6 +3214,7 @@ async function startNextChat(run, p, packageRoot) {
     if (saved && !chat.startUnconfirmed && !reusedPane) armCurrentAutomaticChat(run, p);
     return run.chats.at(-1);
   } catch (error) {
+    if (error?.code === 'workflow_progress_refused' && error.chat) saveChatObservations(original,prior,error.chat,p,{error,phase:'start'});
     if (['workflow_progress_refused', 'workflow_run_save_failed'].includes(error?.code)) throw error;
     if (error.chat?.area === area.name) run.chats.push(error.chat);
     saveChatObservations(original, prior, error.chat, p, { error, phase: 'start' });
@@ -3917,6 +3925,7 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
 // Journal custody and FIFO delivery to the current area chat: the person's answer or change request, or (notice) a pdd
 // notice with its exact text. A notice has no answer/change effect and no retry command; the next delivery sends it first.
 async function deliverRequest(run, text, p, notice = false) {
+  if (!await automaticEffectAllowed(run,p)) return fail('Manual issue authority holds request admission.');
   const selectedIdentity=runIdentity(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
   const retryRequested = !notice && isPersonRetry(run, text);
@@ -4000,8 +4009,8 @@ Nothing was sent to the chat.` };
           throw error;
         }
       };
-      const sent = await sendToChat(chat, message, { ...p, herdr: guardedHerdr, beforeSubmit: async () => {
-        if (custodyFailed) return false;
+      const sent = await sendToChat(chat, message, { ...p, run, herdr: guardedHerdr, beforeSubmit: async () => {
+        if (custodyFailed || !await automaticEffectAllowed(latest(),p)) return false;
         if (personRetry && await personRetryRefusal(latest(), entry.text, p, true)) return false;
         if (entry.kind !== 'notice' && await environmentWakeAllowed(latest(), entry.text, p) === false) return false;
         if (p.beforeDeliverySubmit && !await p.beforeDeliverySubmit()) return false;

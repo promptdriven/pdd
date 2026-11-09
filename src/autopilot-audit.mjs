@@ -1,5 +1,5 @@
-import {issueEffectAllowed} from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 768552e896446d31725e20a9907e5ab3c38c96f6477e989011a32cc990aaee6b).
+import {issueEffectAllowed, guardAutomaticGithubWrites} from './issue-dependencies-github.mjs';
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: b77c8ead66f37ab07ae8374e4f9c0cfa077d1970fc6ad12f038811e3ed965297).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -148,7 +148,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
   const config = await (ports.readConfig ?? (root => read(fs,join(root,'pdd.json'),{})))(cwd);
   if(config.autopilot?.audit === false) return {exitCode:0,message:'Post-merge audit disabled for this repository.'};
   if(config.autopilot?.mode !== 'auto') return fail('repository is not in auto mode.');
-  const execute = ports.execFile ?? runAgentProcess;
+  const execute = guardAutomaticGithubWrites(ports.execFile ?? runAgentProcess,ports,{repository:run.repo,issue:run.number,cwd});
   let publications = 0, reservedHere = false, auditorStarted = false;
   const command = async (program,args,options={}) => {
     const publication = program === 'git' && args[0] === 'push' || program === 'gh' && (args.includes('POST') || args.includes('PATCH') || args[0] === 'pr' && args[1] === 'create');

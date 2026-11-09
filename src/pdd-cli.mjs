@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: f49b786e556b7b11f68a827cae214c698a713dd546e8b6d20448910bf304f9f4).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 155eb494851a359b69aac75296d9b0e819758f12f318db37d915f5364d81104b).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -222,7 +222,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot, ...(plan.local === 'workflow-suite' ? {env} : {}) }, { say: text => line(plan.local === 'workflow-suite' ? stdout : stderr, text), ...(['workflow-run', 'workflow-open', 'workflow-yield','workflow-tidy','workflow-resend'].includes(plan.local) ? { env } : {}), ...(plan.local === 'workflow-resend' ? {stdin} : {}) });
+        const result = await runner[name]({ ...input, cwd, packageRoot, ...(plan.local === 'workflow-suite' ? {env} : {}) }, { say: text => line(plan.local === 'workflow-suite' ? stdout : stderr, text), env, personDirected: !Object.hasOwn(env,'PDD_AUTOPILOT_CONTEXT') && !env.PDD_AGENT_SESSION && !env.CLAUDECODE && !env.CODEX_THREAD_ID, ...(plan.local === 'workflow-resend' ? {stdin} : {}) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);

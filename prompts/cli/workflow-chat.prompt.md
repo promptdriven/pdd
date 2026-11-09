@@ -382,7 +382,22 @@ Use the [layout owner's legacy cleanup exception](workflow-herdr-layout.prompt.m
 
 Export countReasons(kept) to count the reason fields, mergeReasonCounts(...groups) to sum reason-to-count mappings, and reasonWords(counts) to format sorted `reason count` pairs separated by comma-space (empty is `none`). Cleanup returns counts by retained reason as reasonCounts in addition to existing results. Pane-budget errors include retained counts by reason from the latest finished/idle sweeps, without double counting repeated passes over the same class.
 
+## Automatic worker submission boundary
+
+Export `submitWorker(run, ports, action)`. Every fresh launch, resume, restart
+and prompt submission goes through it immediately before native transport, after
+capacity, readiness, checkpoint and other waits. Use the shared dependency-reader
+issue effect gate for the run's repository and issue when the run has automatic
+origin or the caller carries automatic hold context. Refuse held or unknown
+authority with `workflow_progress_refused` before action. A refused submission
+is definitely unsent. Saved work, pending requests and native session custody stay
+available. A caller explicitly marked `personDirected:true` retains manual
+workflow behavior. `sendToChat` accepts the owning run as `ports.run`; coordinator
+messages without a worker run retain their existing behavior.
+
 ## Dependencies
+
+- [Shared issue effect gate](issue-dependencies-github.prompt.md#issue-effect-gate): required generation and testing selection for `issueEffectAllowed` over normalized authority ports; native authority acquisition stays with that owner.
 
 - [Shared suite queue](test-suite-queue.prompt.md): required selector context for launch and resume environments.
 
@@ -399,7 +414,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"c7ae567825c77710b336da5584757491d63f177a93885019ad4458eb215bfa2f","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"0cd85145a590576e05c06a996b564bf6b4150bedcf8277691dc44d761b4b2418","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 

@@ -9,7 +9,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 6074dfdb39d1455bac2ba42a8f20444288fffaaa56cedd100f46a6784ee95e99).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: f6d819f412a29d3e82af625879eb3bf4b1b88f84edfa8cbee052e1522c015d37).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -29,7 +29,7 @@ import { tidyRuns } from './workflow-runner.mjs';
 import { paneUsage, ensurePaneBudget } from './workflow-chat.mjs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, issueEffectAllowed, readManualHold, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, issueEffectAllowed, guardAutomaticGithubWrites, readManualHold, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, advanceAutomaticPr1, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
 import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict, savedLostCheck, savedCheckCause } from './workflow-results.mjs';
@@ -108,8 +108,11 @@ function portsFor(state, ports) {
   const githubRoot = ports.githubRoot ?? (typeof state?.stateFile === 'string' ? dirname(state.stateFile) : githubStateRoot(env, ports.stateRoot)), ledgers = new Map();
   const ledger = () => { const repo = state?.repo; if (typeof repo !== 'string' || !repo) return null; if (!ledgers.has(repo)) ledgers.set(repo, githubLedger({ root: githubRoot, repository: repo })); return ledgers.get(repo); };
   const execute = countGithubCalls(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { ledger, now });
-  const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
-  return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
+  const p = { ...ports, env, run, execute, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now, personDirected:false };
+  p.execute = guardAutomaticGithubWrites(execute, p, {repository:state?.repo,cwd:state?.cwd});
+  if (ports.execFile) p.execFile = guardAutomaticGithubWrites(ports.execFile, p, {repository:state?.repo,cwd:state?.cwd});
+  p.checked = async (command,args,options) => {const result = await p.execute(command,args,options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout;};
+  return p;
 }
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'PDD_INTERPRETER_QUEUE', 'PDD_INTERPRETER_CONCURRENCY'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 function checkCapacityWords(state, p) {
@@ -1718,7 +1721,7 @@ async function runTick(stateFile, ports, completion) {
             releaseParkedClaim: current => !remoteAllowed() ? {state:'deferred'} : (p.releaseParkedClaim ?? releaseParkedClaim)({cwd:state.cwd, repository:state.repo,
               claim:{...current.automaticOrigin.claim, issue:current.issue.url, coordinatorId:state.coordinatorId, machine:state.machine},
               coordinatorId:state.coordinatorId, machine:state.machine, runId:current.runId, branch:current.branch},
-              {...worker, execFile:async (file, args, options) => p.execute(file, args, {...options, purpose:'claims'})})
+              {...worker, manualCustody:true, execFile:async (file, args, options) => p.execute(file, args, {...options, purpose:'claims',manualCustody:true})})
           }));
         } catch (error) { p.warn(`Manual custody held for #${run.number}: ${line(error.message)}`); }
       }
@@ -2098,9 +2101,18 @@ async function runTick(stateFile, ports, completion) {
         const group = (state.githubIntake?.groups ?? []).find(group => group.members?.some(key => Number(/\/issues\/(\d+)$/.exec(key)?.[1]) === item.number));
         const retained = group && existing.find(run => !['completed', 'cancelled'].includes(run.state) && group.members.includes(run.issue?.url));
         if (!retained && !state.parking?.wakePending?.length) continue;
+        let groupHeld = false;
         if (retained) {
           const request = `Issue #${item.number} belongs to this run's root-cause group. Keep it with this run and its saved work.\n${JSON.stringify(item)}`;
-          await p.scanAction(() => changeRun({ref: String(retained.number), cwd: state.cwd, packageRoot: state.packageRoot, text: request}, {...p, queueOnly: Boolean(retained.parking), requestKey: `group:${retained.runId}:${item.number}`, execFile: p.execFile ?? (async (file, args, options) => p.execute(file, args, options))}));
+          if (!await issueAllowed(state,p,retained.number,true)) groupHeld = true;
+          const joined = groupHeld ? null : await p.scanAction(() => changeRun({ref: String(retained.number), cwd: state.cwd, packageRoot: state.packageRoot, text: request}, {...p, queueOnly: Boolean(retained.parking), personDirected:false, requestKey: `group:${retained.runId}:${item.number}`, execFile: p.execFile ?? (async (file, args, options) => p.execute(file, args, options))}));
+          if (joined && joined.exitCode !== 0) groupHeld = true;
+        }
+        if (groupHeld) {
+          work.splice(work.indexOf(item),1);
+          const selected = selections.find(row=>row.number===item.number);
+          if (selected) {selected.state='waiting';selected.reasons=['group-manual-authority'];}
+          continue;
         }
         work.splice(work.indexOf(item), 1); delete pending[item.number];
         const selected = selections.find(row => row.number === item.number);

@@ -1311,6 +1311,17 @@ in `manualSuppressions` entries `{number,reason}`. Reasons are `manual` or
 `authority-unknown`; deferred reads alone add no suppression without a signal.
 The public audit command enforces the gate through the audit owner. Public `add` checks every target before repository label creation and again before each issue label write; held targets stay unmarked.
 
+## Shared automatic effect ports
+
+Install the dependency reader's shared automatic GitHub write port around every
+native execution route used by a tick, including injected execution ports. Carry
+the shared hold observation and safety reader through it. Preserve the dedicated
+manual custody release path. Retained group work checks the retained run's issue,
+as well as the incoming member; a hold keeps the member pending for later
+eligible handling, with selection reason `group-manual-authority` and no fresh
+claim offer for that member. Worker delivery uses the chat owner's submission boundary via
+the runner. Keep existing route checks for status reasons.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.

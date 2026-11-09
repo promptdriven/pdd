@@ -91,6 +91,12 @@ against a held issue and counts zero effects after all rows execute. The same
 unchanged tests must detect the repair base at assertions, not startup failures.
 Use repository fakes and real native workflow/Git paths; no live service calls.
 
+The manual hold regression matrix spies on the GitHub execution and worker
+submission ports. A factory tick over open, running, parked, closed audit, group
+member, umbrella and dependency-node subjects makes zero automatic issue writes
+and worker deliveries while held. Native regressions also add a hold during
+post-admission fetch and route cached group work to a held retained run.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.
