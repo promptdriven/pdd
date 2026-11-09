@@ -361,6 +361,91 @@ test('base integration: verify then formal then change charges each merged sourc
   assert.deepEqual(refused.done, beforeThird.done); assert.deepEqual(refused.stepHistory, beforeThird.stepHistory);
 });
 
+function advanceEmptyBase(f, run) {
+  f.git(f.source, 'commit', '--allow-empty', '-qm', 'Base metadata only');
+  f.git(f.source, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  f.git(run.root, 'merge', '--no-edit', 'refs/remotes/origin/main');
+}
+
+test('base integration: mixed returns after an empty base advance keep the second merge available', async t => {
+  const { f, run, done, edit } = await publishingRun(t, { rounds: { build: 2 } });
+  const accepted = async step => {
+    const result = await done(step, step === 'formal' ? 'failed formal' : step);
+    assert.equal(result.exitCode, 0, result.message);
+  };
+  edit(); await accepted('change'); await accepted('verify'); await accepted('formal');
+  const originalChange = f.record().done.change;
+  advanceBase(f, run, 1);
+  await accepted('verify'); await accepted('formal');
+  const beforeEmpty = f.record();
+  advanceEmptyBase(f, run);
+  await accepted('verify'); await accepted('formal');
+  const afterEmpty = f.record();
+  assert.equal(afterEmpty.done.verify.integrationSource.tree, beforeEmpty.done.verify.integrationSource.tree);
+  assert.notEqual(afterEmpty.done.verify.integrationSource.base, beforeEmpty.done.verify.integrationSource.base);
+  assert.deepEqual(afterEmpty.done.change, originalChange, 'old results keep their real source');
+  assert.deepEqual(afterEmpty.integrationRounds, { build: 1 });
+  assert.deepEqual(afterEmpty.repairRounds, { build: 2 });
+  await accepted('change');
+  assert.deepEqual(f.record().integrationRounds, { build: 1 }, 'the same tree must not be charged again');
+  assert.deepEqual(f.record().repairRounds, { build: 2 });
+  for (const step of ['change', 'verify', 'formal']) {
+    assert.ok(f.record().stepHistory.some(row => row.step === step
+      && JSON.stringify(row.record) === JSON.stringify(afterEmpty.done[step])));
+  }
+  advanceBase(f, run, 2); await accepted('change');
+  assert.deepEqual(f.record().integrationRounds, { build: 2 }, 'a new tree charges even with no later records');
+  assert.deepEqual(f.record().repairRounds, { build: 2 });
+  const beforeThird = f.record(); advanceBase(f, run, 3);
+  assert.equal((await done('change')).exitCode, 1);
+  const refused = f.record();
+  assert.equal(refused.state, 'stuck'); assert.equal(refused.integrationLimit.area, 'build');
+  assert.deepEqual(refused.integrationRounds, { build: 2 });
+  assert.deepEqual(refused.repairRounds, { build: 2 });
+  assert.deepEqual(refused.done, beforeThird.done); assert.deepEqual(refused.stepHistory, beforeThird.stepHistory);
+  assert.equal((await done('formal')).exitCode, 1);
+});
+
+test('base integration: charged trees stay free across every mixed return order and empty base advances', async t => {
+  const orders = [
+    ['change', 'verify', 'formal'], ['change', 'formal', 'verify'],
+    ['verify', 'change', 'formal'], ['verify', 'formal', 'change'],
+    ['formal', 'change', 'verify'], ['formal', 'verify', 'change'],
+  ];
+  for (const order of orders) await t.test(order.join(' -> '), async t => {
+    const { f, run, done, edit } = await publishingRun(t, { rounds: { build: 2 } });
+    const accepted = async step => {
+      const result = await done(step, step === 'formal' ? 'failed formal' : step);
+      assert.equal(result.exitCode, 0, result.message);
+    };
+    edit(); await accepted('change'); await accepted('verify'); await accepted('formal');
+    for (let n = 1; n <= 2; n++) {
+      advanceBase(f, run, n);
+      await accepted(n === 1 ? 'verify' : order[0]);
+      assert.deepEqual(f.record().integrationRounds, { build: n }, 'the first return charges the new tree');
+      await accepted('verify'); await accepted('formal');
+      const charged = f.record();
+      advanceEmptyBase(f, run); await accepted('verify'); await accepted('formal');
+      assert.equal(f.record().done.verify.integrationSource.tree, charged.done.verify.integrationSource.tree);
+      assert.notEqual(f.record().done.verify.integrationSource.base, charged.done.verify.integrationSource.base);
+      for (const step of order) {
+        await accepted(step);
+        assert.deepEqual(f.record().integrationRounds, { build: n }, 'step order must not charge the same tree twice');
+        assert.deepEqual(f.record().repairRounds, { build: 2 });
+        assert.equal(f.record().integrationLimit, undefined);
+      }
+      // Change can clear both checks. Record their snapshots before the next merge.
+      await accepted('verify'); await accepted('formal');
+    }
+    const beforeThird = f.record(); advanceBase(f, run, 3);
+    assert.equal((await done('change')).exitCode, 1);
+    assert.deepEqual(f.record().integrationRounds, { build: 2 });
+    assert.deepEqual(f.record().repairRounds, { build: 2 });
+    assert.deepEqual(f.record().done, beforeThird.done);
+    assert.deepEqual(f.record().stepHistory, beforeThird.stepHistory);
+  });
+});
+
 for (const rounds of [0, 2]) for (const step of ['verify', 'change']) {
   test(`base integration: source-identical base advance is free for ${step} after ${rounds} integrations`, async t => {
     const { f, run, done, edit } = await publishingRun(t, { rounds: { build: 2 } });

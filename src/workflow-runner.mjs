@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d2d4501bcba5e8242de88cd93e0f652dac2189bc47b6060de6f566abb47f8a83).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5965e4ff9de6cc3f17845322424f10e3afd3814288d8c0007199d3190e2465df).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2670,8 +2670,7 @@ async function integrationSource(run, p) {
 async function baseIntegration(run, area, step, source, p) {
   const from = run.done[step]?.integrationSource;
   if (!source || !from || ![from.head, from.base, from.tree].every(commitSha)
-    || from.base === source.base || !area.steps.includes(step) || !run.done[step]
-    || !area.steps.slice(area.steps.indexOf(step) + 1).some(item => run.done[item])) return null;
+    || from.base === source.base || !area.steps.includes(step) || !run.done[step]) return null;
   try {
     await rawGit(p, run.root, 'merge-base', '--is-ancestor', from.base, source.base);
     await rawGit(p, run.root, 'merge-base', '--is-ancestor', from.head, source.head);
@@ -2681,7 +2680,7 @@ async function baseIntegration(run, area, step, source, p) {
   } catch { return null; }
 }
 function accountedIntegration(run, area, source) {
-  return Boolean(source && run.integrationSources?.[area.name]?.some(saved => saved.base === source.base && saved.tree === source.tree));
+  return Boolean(source && run.integrationSources?.[area.name]?.some(saved => saved.tree === source.tree));
 }
 const repairLimitReason = name => `Repair limit reached in ${name}: take the stuck path`;
 // The way out is a person's: a stuck run is still active, so a new automatic start waits until it is cancelled.
