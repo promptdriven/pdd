@@ -68,3 +68,8 @@ This test does not call the process-replay test. It does not run the source
 repository's full suite. Its fixture project has one native test, which runs
 through the native shared suite queue. The source repository's public suite is a
 separate check.
+
+The first-start scenario uses a fresh repository with a stale executable pdd on
+PATH and no agent sign-in. Doctor reports both failures and start returns the
+same report. No coordinator state, pane, timer, claim, PR or interpreter job is
+created. Programs and account reads use controlled ports.

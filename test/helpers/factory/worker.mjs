@@ -1,3 +1,5 @@
+import * as doctorFiles from 'node:fs';
+import {healthyDoctorPorts} from '../doctor-fixture.mjs';
 // Generated from prompts/test/autopilot-factory.prompt.md.
 // A new native process for each command/tick. Only external ports cross IPC.
 import net from 'node:net';
@@ -41,6 +43,11 @@ process.on('message',async m=>{
       armCoordinatorIdle:()=>{},wait:async()=>{},
       warn:s=>rpc('warning',s),sendAlert:input=>rpc('alert',input),sendDigest:async()=>({exitCode:0}),
       runtimeHealth:()=>rpc('runtimeHealth'),
+      doctorPorts:input=>env.PDD_FACTORY_DOCTOR==='1'?{
+        ...healthyDoctorPorts(input),files:doctorFiles,
+        run:(...a)=>rpc('doctorExec',...a),selectAgent:undefined,
+        runtimeHealth:()=>rpc('runtimeHealth'),
+      }:healthyDoctorPorts(input),
     };
     const workflowRunner=Object.fromEntries(Object.entries(runner).map(([k,v])=>[k,typeof v==='function'?(input,p)=>v(input,{...ports,...p,env:p?.env??env}):v]));
     let code;

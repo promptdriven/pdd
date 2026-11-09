@@ -1,3 +1,4 @@
+import {runAutopilotDoctor} from './autopilot-doctor.mjs';
 import {auditMerge, pendingAudits} from './autopilot-audit.mjs';
 import {collectRouteQuestions, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
@@ -2261,6 +2262,18 @@ async function localCosts(input, ports, state = {}) {
 }
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, checks, resumeCustody, issues = [] } = input;
+  if (command === 'doctor' || command === 'start') {
+    const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input) : ports.doctorPorts ?? ports;
+    if (command === 'start') {
+      // Preserve invalid-location admission before probing accounts or services.
+      const env = input.env ?? process.env;
+      try { await gitRoot({env, execute:(file,args,options)=>
+        (doctorPorts.run ?? runAgentProcess)(file,args,{cwd:input.cwd,env,timeoutMs:10000,...options})}); }
+      catch (error) { return bad(error.message); }
+    }
+    const diagnostics = await runAutopilotDoctor(input, doctorPorts);
+    if (command === 'doctor' || diagnostics.exitCode !== 0) return diagnostics;
+  }
   let state = { cwd: input.cwd, environment: keepEnv(input.env ?? process.env) };
   let p = portsFor(state, { ...ports, env: input.env });
   let controlLock, releaseAdmission;

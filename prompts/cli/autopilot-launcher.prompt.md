@@ -1296,6 +1296,19 @@ Load [audit policy](autopilot-audit.prompt.md) as required context.
 
 Before allocating a missing coordinator workspace, request one pane through the same bounded finished/idle workflow sweeps used for worker admission. Reconcile same-repository, same-folder, same-machine older coordinator runs through live stable-claim recovery before final pane admission and worker filtering. Claim recovery failure is retried; proven transfer uses the workflow owner's normal handover path. Pane-budget reclamation can also reclaim blocked runs of another repository through that repository's enabled owner and guarded claim recovery. It never assigns those runs to the requesting repository. Retained pane reasons appear in the pane hold warning.
 
+## First-start diagnostics (#3125)
+
+Dispatch doctor to [the doctor owner](autopilot-doctor.prompt.md), required native
+generation and verification context. Start first retains the existing Git-folder validation in the C locale: an invalid
+location returns the existing repository error without other probes. For valid
+repository invocations, before any start state write, admission lock,
+timer change, workspace allocation, claim or GitHub mutation, run that same doctor
+with the input environment and injected ports. On a required failure return its
+complete multi-line report unchanged. Doctor bypasses all launcher state reads and
+writes and the GitHub ledger. Successful start retains existing readiness, saved
+profile/custody, base, admission and delegation checks. A doctor pass alone grants
+no approval or merge authority.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.

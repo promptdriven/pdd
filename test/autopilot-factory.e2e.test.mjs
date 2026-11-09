@@ -351,3 +351,25 @@ test('factory 12: stopped legacy runs free a full shared budget for a second rep
   assert.ok(w.herdr.panes.includes(busy),'foreign-busy-pane-survives-resume');
   assert.deepEqual(w.leadActions,[]);assert.deepEqual(second.leadActions,[]);
 });
+
+
+test('factory 3125: fresh repo with stale PATH and no agent sign-in refuses start without effects',async t=>{
+  const w=await factoryWorld(t);
+  put(w.base,'bin/pdd','#!/bin/sh\nif [ "$1" = --version ]; then echo 0.1.15; else echo "pdd setup"; fi\n');
+  const {chmodSync}=await import('node:fs');chmodSync(join(w.base,'bin/pdd'),0o700);
+  const commands=w.github.commands.length,issues=JSON.stringify([...w.github.issues]),panes=w.herdr.panes.length;
+  const opts={env:{PDD_FACTORY_DOCTOR:'1'},allowFailure:true};
+  const doctor=await w.command(['autopilot','doctor'],opts);
+  const start=await w.command(['autopilot','start'],opts);
+  assert.equal(doctor.code,1,'doctor must diagnose stale PATH and missing agent sign-in');
+  assert.match(doctor.stderr,/FAIL path:.*0\.1\.15.*; fix: .*autopilot doctor/);
+  assert.match(doctor.stderr,/FAIL agent:.*; fix: .*codex.*login/);
+  assert.equal(start.code,1,'preflight must refuse a first start');
+  assert.equal(start.stderr,doctor.stderr,'start must use the same doctor report');
+  assert.equal(existsSync(w.stateFile),false);assert.equal(existsSync(w.stateRoot),false);
+  assert.equal(w.herdr.panes.length,panes);assert.equal(w.github.prs.length,0);
+  assert.equal(JSON.stringify([...w.github.issues]),issues);assert.equal(w.interpreter.posts.length,0);
+  const reads=w.github.commands.slice(commands);
+  assert.ok(reads.every(({args})=>args[0]==='repo'||args[0]==='auth'||args[0]==='api'&&!args.includes('POST')));
+  assert.ok(!existsSync(join(w.home,'.config/systemd')));
+});

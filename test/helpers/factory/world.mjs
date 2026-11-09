@@ -128,6 +128,16 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
           else if(m.method==='herdr')value=await externalHerdr(...m.args);
           else if(m.method==='sessions')value=await w.herdr.findNativeSessions(...m.args);
           else if(m.method==='warning')w.warnings.push(m.args[0]);
+          else if(m.method==='doctorExec') {
+            const [file,args,opts]=m.args;
+            if(file.startsWith(join(base,'bin')+'/')) {
+              value=await new Promise(resolve=>execFile(file,args,{cwd:opts.cwd,env:w.env,encoding:'utf8'},(e,stdout,stderr)=>resolve({code:e?.code??0,stdout,stderr})));
+            } else if(file==='gh' && args[0]==='--version')value={code:0,stdout:'gh version 2.60',stderr:''};
+            else if(file==='codex')value={code:1,stdout:'Not logged in',stderr:''};
+            else if(file==='claude')value={code:1,stdout:JSON.stringify({loggedIn:false}),stderr:''};
+            else if(file==='systemctl'||file==='loginctl')value={code:0,stdout:file==='loginctl'?'yes':'',stderr:''};
+            else value=await w.execute(file,args,opts);
+          }
           else if(m.method==='runtimeHealth')value={state:w.interpreter.mode==='refused'?'unavailable':'healthy',detail:'factory interpreter program'};
           else if(m.method==='alert'){w.alerts.push(m.args[0]);value={exitCode:0};}
           else if(m.method==='sleep'){w.time+=Math.min(m.args[0],1000);await new Promise(r=>setTimeout(r,1));}

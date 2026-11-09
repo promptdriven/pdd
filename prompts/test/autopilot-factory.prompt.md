@@ -69,6 +69,8 @@ permitted for the damaged record. Keep the shared audit authority intact.
 
 Include a complete pane budget held by several stopped runs. Each has several area chats in one worktree, no saved session IDs, an old layout without createdWorkspaceId and an older coordinator ID for the same machine and folder. Hide Herdr IDs so bounded native discovery must prove the correct sessions. Start a second repository's coordinator and its first workflow run against the shared Herdr service; both must obtain panes through native reclamation. Verify the first run has a live area chat before waking the held runs. Later clear the blockers and resume every held run with its own current-area UUID. Assert screens exist before closes, saved sessions match each area, claim recovery preserves each admitted claim era, and foreign workspaces and busy agents survive. Use only disposable homes, config, queues and service fakes; select a unique throwaway session name for the harness.
 
+Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr and interpreter fakes. An executable stale pdd earlier on PATH and missing Codex sign-in must produce PATH and agent failure lines with concrete commands; start returns the identical diagnostics and creates no state, timers, panes, claims, GitHub writes or interpreter jobs. Supply doctor ports for existing factory starts so no real machine/account read escapes.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.
