@@ -1,5 +1,5 @@
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
-import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
+import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext, pacedSortWrites } from './issue-sort-github.mjs';
 // Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 9847c321e2f0f7e89e8499973f4897b5244eb7461990af5e3bab29651b6f784d).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -326,6 +326,36 @@ function rawGithub(cwd, ports) {
       if (result.errors?.length || row?.state !== 'CLOSED' || closer?.__typename !== 'PullRequest' || closer.merged !== true
         || !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*$/.test(closer.url ?? '')) return { url: '' };
       return { url: closer.url };
+    },
+    relationSubIssueState: async ({repository,parent,child}) => {
+      let cursor = `repos/${repository}/issues/${parent}/sub_issues?per_page=100`; const seen = new Set(); let present = false;
+      while (cursor) { if (seen.has(cursor)) throw Error('Repeated sub-issue cursor'); seen.add(cursor); const page = await s.api(cursor, 'GET', undefined, undefined, repository, true); if (!Array.isArray(page.value)) throw Error('Incomplete sub-issue page'); present ||= page.value.some(x => info(x.html_url)?.key === `https://github.com/${repository.toLowerCase()}/issues/${child}`); cursor = page.next; }
+      const history = await allPages(github,repository,'timeline',parent,undefined,true);
+      if (history.some(x => /(?:sub.?issue).*(?:remov|delet)|(?:remov|delet).*(?:sub.?issue)/i.test(String(x.event ?? '')))) return 'removed';
+      return present ? 'present' : 'absent';
+    },
+    duplicateTimeline: async ({ repository, issue }) => {
+      const [owner, name] = repository.split('/'); let cursor = null; const events = [], seen = new Set();
+      do {
+        if (seen.has(cursor)) throw Error('Repeated timeline cursor'); seen.add(cursor);
+        const query = `query($owner:String!,$name:String!,$issue:Int!,$cursor:String) { repository(owner:$owner,name:$name) { issue(number:$issue) { url timelineItems(first:100,after:$cursor,itemTypes:[MARKED_AS_DUPLICATE_EVENT,UNMARKED_AS_DUPLICATE_EVENT]) { nodes { __typename ... on MarkedAsDuplicateEvent { id createdAt actor { login } canonical { ... on Issue { url } } duplicate { ... on Issue { url } } } ... on UnmarkedAsDuplicateEvent { id createdAt actor { login } canonical { ... on Issue { url } } duplicate { ... on Issue { url } } } } pageInfo { hasNextPage endCursor } } } } }`;
+        const value = (await s.api('graphql', 'POST', JSON.stringify({query,variables:{owner,name,issue,cursor}}), undefined, repository, true)).value;
+        const row = value.data?.repository?.issue, page = row?.timelineItems;
+        if (value.errors?.length || info(row?.url)?.key !== `https://github.com/${repository.toLowerCase()}/issues/${issue}` || !Array.isArray(page?.nodes) || typeof page.pageInfo?.hasNextPage !== 'boolean') throw Error('Incomplete duplicate timeline');
+        events.push(...page.nodes); cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+        if (page.pageInfo.hasNextPage && (typeof cursor !== 'string' || !cursor)) throw Error('Incomplete duplicate timeline');
+      } while (cursor);
+      return events;
+    },
+    duplicateActor: async ({repository}) => {
+      const actor = (await s.api('user', 'GET', undefined, undefined, repository, true)).value?.login;
+      if (!actor) throw Error('Actor unavailable');
+      const permission = (await s.api(`repos/${repository}/collaborators/${encodeURIComponent(actor)}/permission`, 'GET', undefined, repository, true)).value?.permission;
+      if (!['admin','maintain','write'].includes(permission)) throw Error('Actor lacks write permission');
+      return actor;
+    },
+    markDuplicate: async ({repository, duplicate, canonical, checkOwnership}) => {
+      await s.api(`repos/${repository}/issues/${duplicate}/comments`, 'POST', JSON.stringify({body:`Duplicate of #${canonical}`}), undefined, repository, checkOwnership);
     },
     addBlocker: async ({ repository, issue, blockerId }) => {
       if (!/^[1-9][0-9]*$/.test(blockerId)) throw Error('Invalid REST issue identity');
@@ -1639,4 +1669,116 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
   if (ports.admitEffect && !await ports.admitEffect()) return pending('Automatic control changed before confirmation');
   const saved = await saveDependencyReview({ repository, issue: target.key, review: { ...raw, continuation: reviewId, outcome: 'complete', effects: 'confirmed' } }, ports);
   return saved.state === 'saved' ? { state: 'confirmed', added, warnings } : pending('The confirmed continuation is not yet observed');
+}
+
+// Reproduced bug relations use the same live graph and trust owners as intake.
+export async function applyReproducedBugRelations({ cwd = '', repository, issue, relations }, supplied = {}) {
+  const positive = n => Number.isSafeInteger(n) && n > 0;
+  const exact = (x, keys) => object(x) && Object.keys(x).sort().join(',') === [...keys].sort().join(',');
+  const safePath = p => typeof p === 'string' && p && !isAbsolute(p) && !/[\\\0]/.test(p) && p.split('/').every(x => x && x !== '.' && x !== '..');
+  if (!repositoryName(repository) || !positive(issue) || !Array.isArray(relations)) throw Error('invalid-input');
+  for (const r of relations) {
+    if (!exact(r, ['issue','classification','quote','source','effect']) || !positive(r.issue) || r.issue === issue || !['needs','same cause','same class','duplicate','related'].includes(r.classification) || typeof r.quote !== 'string' || !r.quote.trim() || !object(r.source) || !sameRepo(r.source.repository, repository) || typeof r.source.revision !== 'string' || !r.source.revision.trim()) throw Error('invalid-input');
+    const s = r.source;
+    if (!(s.kind === 'issue' && exact(s,['kind','repository','issue','revision']) && positive(s.issue) && [issue,r.issue].includes(s.issue) || s.kind === 'comment' && exact(s,['kind','repository','issue','comment','revision']) && positive(s.comment) && [issue,r.issue].includes(s.issue) || s.kind === 'code' && exact(s,['kind','repository','path','revision']) && safePath(s.path))) throw Error('invalid-input');
+    const e = r.effect;
+    if (!(exact(e,['kind']) && e.kind === 'none' || exact(e,['kind','dependent','blocker']) && e.kind === 'blocked-by' && positive(e.dependent) && positive(e.blocker) || exact(e,['kind','parent','child']) && e.kind === 'sub-issue' && positive(e.parent) && positive(e.child) || exact(e,['kind','duplicate','canonical']) && e.kind === 'duplicate' && positive(e.duplicate) && positive(e.canonical))) throw Error('invalid-input');
+  }
+  const ports = createDependencyReadPorts({cwd}, supplied), github = ports.github[LIVE_GITHUB] ?? ports.github;
+  const key = n => `https://github.com/${repository.toLowerCase()}/issues/${n}`;
+  const result = (index,status,reason = '') => ({index,status,reason});
+  const holdAll = why => ({outcomes: relations.map((_,i) => result(i,'held',why))});
+  const evidence = async r => {
+    const s = r.source; let row;
+    if (s.kind === 'code') {
+      const locator = {key:`https://github.com/${repository.toLowerCase()}/blob/HEAD/${s.path.split('/').map(encodeURIComponent).join('/')}`};
+      if (supplied.relationEvidence) row = await supplied.relationEvidence.read({cwd,repository,source:s});
+      else row = await readLocator(locator,cwd,repository,createDependencyReadPorts({cwd},supplied));
+    } else {
+      const observed = parse((await ports.evidence.read({cwd,repository,issues:[key(s.issue)]})).json);
+      row = observed.requirements?.find(x => x.key === key(s.issue) + (s.kind === 'comment' ? `#issuecomment-${s.comment}` : '') && x.authority === 'trusted');
+    }
+    return row?.revision === s.revision && typeof row.text === 'string' && row.text.includes(r.quote);
+  };
+  try { for (const r of relations) if (!await evidence(r)) return holdAll('Evidence is unavailable, changed, untrusted or does not contain the quote'); }
+  catch { return holdAll('Evidence is unavailable, changed, untrusted or does not contain the quote'); }
+  const write = pacedSortWrites(ports,{cwd,repository});
+  const outcomes = [];
+  const checkpoint = supplied.checkpoint;
+  const checkOwnership = async numbers => {
+    const owners = parse((await ports.owners.read({repository,issues:[...new Set([issue,...numbers])].map(key)})).json);
+    if (!Array.isArray(owners.claims)) return false;
+    const expected = supplied.relationClaim, own = owners.claims.find(c => c.issue === key(issue) && c.active);
+    return !!expected && !!own && owners.localOwner === expected.coordinatorId && own.owner === expected.coordinatorId && own.coordinatorId === expected.coordinatorId && own.machine === expected.machine && own.commentId === expected.commentId && own.labelEventId === expected.labelEventId && !owners.claims.some(c => c.active && c.issue !== key(issue));
+  };
+  for (let index = 0; index < relations.length; index++) {
+    const r = relations[index], e = r.effect;
+    if (e.kind === 'none') { outcomes.push(result(index,'none')); continue; }
+    const values = e.kind === 'blocked-by' ? [e.dependent,e.blocker] : e.kind === 'sub-issue' ? [e.parent,e.child] : [e.duplicate,e.canonical];
+    if (values[0] === values[1] || (e.kind !== 'sub-issue' && values.some(n => ![issue,r.issue].includes(n))) || (e.kind === 'sub-issue' && ![issue,r.issue].includes(e.child)) || e.kind === 'blocked-by' && r.classification !== 'needs' || e.kind === 'duplicate' && r.classification !== 'duplicate') { outcomes.push(result(index,'held','Invalid relation choice or endpoints')); continue; }
+    if (!checkpoint?.read || !checkpoint?.write) { outcomes.push(result(index,'held','Durable dispatch checkpoint unavailable')); continue; }
+    let prior;
+    try { prior = await checkpoint.read({index,effect:e}); } catch { outcomes.push(result(index,'held','Dispatch checkpoint unavailable')); continue; }
+    const uncertain = prior?.state === 'dispatching' || prior?.state === 'unknown';
+    if (prior?.state === 'applied' || prior?.state === 'failed') { outcomes.push(prior.outcome ?? result(index,prior.state,prior.state === 'failed' ? 'Previous dispatch failed' : '')); continue; }
+    let dispatched = false, duplicateBefore = new Set();
+    try {
+      if (!await evidence(r) || !await checkOwnership(values)) { outcomes.push(result(index,'held','Evidence or ownership changed')); continue; }
+      const raws = await Promise.all(values.map(async n => parse((await github.issue({repository,issue:n,safety:true})).json)));
+      if (raws.some((row,i) => row.state !== 'open' || info(row.html_url)?.key !== key(values[i]) || !/^[1-9][0-9]*$/.test(String(row.id ?? '')))) { outcomes.push(result(index,'held','Endpoint is unavailable or not open')); continue; }
+      if (e.kind === 'sub-issue' && !/^Class:/.test(raws[0].title ?? '')) { outcomes.push(result(index,'held','Selected parent is not an open Class issue')); continue; }
+      let observed;
+      if (e.kind === 'blocked-by') {
+        const {snapshot} = await readDependencySnapshot({cwd,repository}, {...supplied,snapshotStore:null});
+        const validation = validateDependencyChange({snapshot,dependent:key(e.dependent),blocker:key(e.blocker)});
+        if (validation.reason === 'duplicate') observed = 'present';
+        else if (!snapshot.complete || !validation.allowed) { outcomes.push(result(index,'held',`Dependency ${validation.reason}`)); continue; }
+        const history = await allPages(github,repository,'timeline',e.dependent,undefined,true);
+        if (history.some(x => { const removed = blockedByRemoval(x); return removed === null || removed === key(e.blocker); })) { outcomes.push(result(index,'held','Dependency was removed by a person')); continue; }
+      } else if (e.kind === 'sub-issue') {
+        if (!github.relationSubIssueState) { outcomes.push(result(index,'held','Sub-issue history unavailable')); continue; }
+        observed = await github.relationSubIssueState({repository,parent:e.parent,child:e.child});
+      } else {
+        const actor = await github.duplicateActor({repository});
+        const events = await github.duplicateTimeline({repository,issue:e.duplicate});
+        if (!Array.isArray(events)) throw Error('Incomplete duplicate timeline');
+        duplicateBefore = new Set(events.map(x => x.id));
+        const matches = events.filter(x => info(x?.canonical?.url)?.key === key(e.canonical) && info(x?.duplicate?.url)?.key === key(e.duplicate));
+        if (events.some(x => !x?.id || !x.createdAt || !x.actor?.login || !info(x.canonical?.url) || !info(x.duplicate?.url))) throw Error('Incomplete duplicate timeline');
+        matches.sort((a,b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+        const last = matches.at(-1);
+        if (last?.__typename === 'UnmarkedAsDuplicateEvent') { outcomes.push(result(index,'held','Duplicate was unmarked')); continue; }
+        if (last?.__typename === 'MarkedAsDuplicateEvent') observed = 'present';
+        if (uncertain && observed === 'present' && last.actor.login.toLowerCase() !== actor.toLowerCase()) observed = undefined;
+      }
+      if (observed === 'removed') { outcomes.push(result(index,'held','Relationship was removed by a person')); continue; }
+      if (observed === 'present' && !uncertain) { outcomes.push(result(index,'already-present','Relationship already exists')); continue; }
+      if (uncertain) { outcomes.push(result(index,'unknown','Prior dispatch remains unconfirmed')); break; }
+      await write(async () => {
+        if (!await evidence(r) || !await checkOwnership(values)) throw Object.assign(Error('Evidence or ownership changed'),{unsent:true});
+        const fresh = await Promise.all(values.map(async n => parse((await github.issue({repository,issue:n,safety:true})).json)));
+        if (fresh.some((row,i) => row.state !== 'open' || info(row.html_url)?.key !== key(values[i]) || String(row.id) !== String(raws[i].id))) throw Object.assign(Error('Endpoint changed'),{unsent:true});
+        if (e.kind === 'blocked-by') { const {snapshot} = await readDependencySnapshot({cwd,repository},{...supplied,snapshotStore:null}); const valid = validateDependencyChange({snapshot,dependent:key(e.dependent),blocker:key(e.blocker)}); const history = await allPages(github,repository,'timeline',e.dependent,undefined,true); if (!snapshot.complete || !valid.allowed || history.some(x => { const removed = blockedByRemoval(x); return removed === null || removed === key(e.blocker); })) throw Object.assign(Error('Graph changed'),{unsent:true}); }
+        if (e.kind === 'duplicate') { await github.duplicateActor({repository}); const events = await github.duplicateTimeline({repository,issue:e.duplicate}); if (!Array.isArray(events) || events.length !== duplicateBefore.size || events.some(x => !duplicateBefore.has(x.id))) throw Object.assign(Error('Duplicate history changed'),{unsent:true}); }
+        if (e.kind === 'sub-issue' && await github.relationSubIssueState({repository,parent:e.parent,child:e.child}) !== 'absent') throw Object.assign(Error('Sub-issue history changed'),{unsent:true});
+        await checkpoint.write({index,effect:e,state:'dispatching'}); dispatched = true;
+        if (e.kind === 'blocked-by') await github.addBlocker({repository,issue:e.dependent,blockerId:String(raws[1].id)});
+        else if (e.kind === 'sub-issue') await github.ensureSortLink({repository,issue:e.parent,childId:String(raws[1].id),kind:'sub',checkOwnership:() => checkOwnership(values)});
+        else await github.markDuplicate({repository,duplicate:e.duplicate,canonical:e.canonical,checkOwnership:() => checkOwnership(values)});
+      });
+      let confirmed = false;
+      if (e.kind === 'blocked-by') { const {snapshot:snap} = await readDependencySnapshot({cwd,repository},{...supplied,snapshotStore:null}); confirmed = snap.complete && snap.edges.some(x => x.dependent === key(e.dependent) && x.blocker === key(e.blocker)); }
+      else if (e.kind === 'sub-issue') confirmed = await github.relationSubIssueState({repository,parent:e.parent,child:e.child}) === 'present';
+      else { const actor = await github.duplicateActor({repository}); const events = await github.duplicateTimeline({repository,issue:e.duplicate}); const matches = events.filter(x => info(x?.canonical?.url)?.key === key(e.canonical) && info(x?.duplicate?.url)?.key === key(e.duplicate)).sort((a,b) => Date.parse(a.createdAt)-Date.parse(b.createdAt)); confirmed = matches.at(-1)?.__typename === 'MarkedAsDuplicateEvent' && !duplicateBefore.has(matches.at(-1)?.id) && matches.at(-1)?.actor?.login?.toLowerCase() === actor.toLowerCase(); }
+      const outcome = confirmed ? result(index,'applied') : result(index,'unknown','Mutation readback is unconfirmed');
+      await checkpoint.write({index,effect:e,state:outcome.status,outcome}); outcomes.push(outcome);
+      if (!confirmed) break;
+    } catch (error) {
+      const outcome = result(index,!dispatched ? 'held' : 'unknown',!dispatched ? 'Required safety observation unavailable or changed' : 'Mutation or readback is uncertain');
+      if (dispatched) try { await checkpoint.write({index,effect:e,state:'unknown',outcome}); } catch { /* retain dispatching */ }
+      outcomes.push(outcome); if (dispatched) break;
+    }
+  }
+  while (outcomes.length < relations.length) outcomes.push(result(outcomes.length,'held','Earlier mutation is unresolved'));
+  return {outcomes};
 }
