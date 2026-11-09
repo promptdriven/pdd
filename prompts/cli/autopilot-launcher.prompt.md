@@ -855,6 +855,10 @@ per wait, and every path ends in a wake or in the stuck rule:
 | Health `healthy`, a run used its wake | A `runtime-stuck` rule, also during an open outage; it is never the test |
 | No open outage, health `healthy` | Waits from one or many issues are no outage: offer each run one `retry` |
 
+Add a waiting issue to an incident's saved issue list only after the alert owner
+confirms delivery with exit code 0. A failed or thrown delivery stays eligible
+for the existing incident retry route.
+
 An offered wake is a `runtime-ready` time rule with one reason line: the run
 number, why it wakes (`one retry`, `the test` or the interpreter back), and the exact
 text for `pdd workflow changes N`. That text starts with
@@ -1346,47 +1350,6 @@ unavailability. A binding-missing/missing-binding reason or refusal, or matched
 missing-binding compatibility state, parks as binding. Preserve independent
 person questions and explicit blockers.
 
-## Manual authority observation
-
-Manual authority reads and releases obey retry and reserve waits, rechecking budget after remote calls and before the first automatic gate pass; saved confirmed holds suppress automatic work while reads are deferred. Unknown authority suppresses work but cannot itself establish a confirmed person hold. A confirmed clearance resumes the saved park under its prior blocker or the ordinary wake route; uncertain release custody is reconciled first.
-
-Each tick extends its shared observation to every effect target before work:
-include closed issues of completed/cancelled audit runs, group umbrellas and
-members, all dependency nodes, recovery targets, environment waits and incident
-alert subjects. Observe once per issue, independent of coordinator lifetime or
-issue state. Enforce the GitHub reader's shared issue effect gate immediately
-before every issue effect, including direct alerts, admission sweeps and audit
-offers. Pass the same gate context to native owners. Observe repository health
-while holds suppress issue alerts; retain incidents and pending audit evidence.
-Status retains confirmed issue numbers and also shows unknown authority reasons
-in `manualSuppressions` entries `{number,reason}`. Reasons are `manual` or
-`authority-unknown`; deferred reads alone add no suppression without a signal.
-The public audit command enforces the gate through the audit owner. Public `add` checks every target before repository label creation and again before each issue label write; held targets stay unmarked.
-
-For grouped missing-route issues, check each retained route record using its
-numeric run issue number before reservation and again before publication. The
-record's issue URL is display evidence, not a numeric gate input. Keep held or
-unknown subjects pending; a confirmed-clear subject can use the existing route.
-
-Read-only selection uses the shared observation from a validated same-tick issue
-list (including a successful conditional 304) or current normalized snapshot.
-Do not eagerly safety-read every saved cached issue before that observation can
-be seeded. Observe actual pre-list effect subjects, retained runs, claims and
-saved suppressions first. Missing or failed observations stay unknown. Keep fresh
-uncached safety reads immediately before every actual admission, write or
-delivery, after waits. Record manual label safety reads with purpose issues.
-
-## Shared automatic effect ports
-
-Install the dependency reader's shared automatic GitHub write port around every
-native execution route used by a tick, including injected execution ports. Carry
-the shared hold observation and safety reader through it. Preserve the dedicated
-manual custody release path. Retained group work checks the retained run's issue,
-as well as the incoming member; a hold keeps the member pending for later
-eligible handling, with selection reason `group-manual-authority` and no fresh
-claim offer for that member. Worker delivery uses the chat owner's submission boundary via
-the runner. Keep existing route checks for status reasons.
-
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
@@ -1444,13 +1407,3 @@ the runner. Keep existing route checks for status reasons.
 Use [automatic base selection](autopilot-base.prompt.md) for automatic runs. Each explicit start refreshes saved state.defaultBranch from one repository metadata read including defaultBranchRef, even when a default is already saved or Autopilot is already enabled. A failed read refuses startup rather than using the saved default. An old saved state without a default gets one metadata read on its next tick. Never add a metadata read per ordinary tick. Select state.baseBranch from the local config and this cached default at start and tick. Start, status and status --all show the selected base; status reads saved values only and makes no GitHub call for it. Include baseBranch in each work packet and tell the coordinator to use it for automatic starts, never to derive a base from documents. A changed selection at start or tick must be delivered even when issues are unchanged, so a repository default changed between starts reaches the coordinator and agrees with the base selected by a new automatic workflow run.
 
 Catalog command `check-base` receives issues `[RUN, PR]`. Resolve the saved run with resolveRun, then call checkAutopilotBase with the saved run and PR through this launcher's counted process port. Return its result unchanged. This read-only command does not require a running coordinator, timer or agent. It supplies the pre-merge guard and post-merge base audit.
-
-## Manual issue custody (#3129)
-
-At the start of each tick, before automatic effects, observe the current `pdd:manual` hold for every issue the tick may touch. Include current active runs, same-machine runs from older coordinators that recovery may adopt, cached issue subjects, intake subjects and every graph node with pending dependency effects. Share one observation per issue within the tick, extending it before effects when intake or the issue list discovers another subject. Runs require the fresh dependency-reader observation before recovery. Intake can seed `observation:{held,known}` from its normalized snapshot; a current issue-list response can establish clearance from absent labels. A saved cached row alone cannot clear a hold. Supply this observation through the optional `manualHold.read({repository,issue,observation?})` port to dependency intake. Check suppression again at each resume, nudge, wake, claim offer, dependency mutation, sort and ordinary comment boundary; a previously filtered list is not effect admission. The dependency reader owns fresh mutation safety reads. A confirmed hold suppresses automatic work for that issue. Unknown evidence also suppresses it until a fresh observation succeeds, preserving any earlier confirmed hold without confirming an unknown-only issue. A read deferred by an existing retry or reserve wait retains saved confirmations and cached manual-label signals; deferral alone does not create a new hold for other local maintenance. A failed attempted authority read suppresses automatic work. Preserve the existing budget-wait behavior for issues without a manual signal. Confirmed manual holds retain the dedicated manual parking path. A known clearance removes both the suppression and confirmation, including when checking cached issues after an old run has ended. Allow busy agents and checks to finish; never force-close a busy chat. For a held run from an older coordinator, use the guarded manual parking custody path instead of ordinary recovery or resume. Once idle, park and release the claim through that path, retaining the run, branch, PRs and files for a person. Recheck the hold at release; unknown evidence retains custody. Show each confirmed held issue once in status. Removing the label restores the retained run under the clearance and custody rules below.
-
-For an own claim heartbeat only, a verified matching comment and claim record can carry the existing local-maintenance reserve deferral through every nested write guard. Bind the private proof to the exact repository, issue, comment endpoint and lastSeen update. Confirmed holds, manual-label signals and failed reads still block it. An unknown observation without explicit deferred evidence cannot use this exception. Normal heartbeats retain fresh safety reads. Other claim updates and automatic writes retain ordinary admission.
-
-Do not eagerly read saved intake claims that the tick will not act on. Observe their subjects when shared current intake data or an actual claim effect requires it. When a coordinator is busy, skip per-subject pre-wake safety reads; the ordinary wake owner must retain both fresh authority checks after idle admission and immediately before submission. Do not acknowledge undelivered or newly held work.
-
-For a multi-issue semantic delivery, use the shared issueEffectsAllowed gate. Its fresh native authority read batches up to 25 issue label connections in one GraphQL query per boundary, without saved data or conditional responses. Match each returned repository/issue URL and number; only a complete valid labels connection without pdd:manual establishes clearance. A manual signal, partial connection, wrong identity, missing row or failed batch uses the ordinary fresh issue/timeline authority reader. Keep per-issue shared suppression and onManualHold updates. Injected single-issue safety readers and custom GitHub ports retain their existing behavior. The launcher supplies the batch reader to intake and repeats it at idle delivery and final transport. No saved batch authorizes a later boundary or a write.

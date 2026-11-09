@@ -257,10 +257,6 @@ async function launcher(t) {
       if (command === 'git') return { code: 0, stdout: cwd + '\n', stderr: '' };
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
-      if (command === 'gh' && args[0] === 'api' && /^repos\/owner\/repo\/issues\/[1-9]\d*$/.test(args.find(arg => String(arg).startsWith('repos/')) ?? '')) {
-        const number = Number(args.find(arg => String(arg).startsWith('repos/')).split('/').at(-1));
-        return {code:0,stdout:'HTTP/2.0 200 OK\r\n\r\n'+JSON.stringify(f.issues.find(row => row.number === number) ?? {number,labels:[]}),stderr:''};
-      }
       if (command === 'gh' && args[0] === 'api') return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
       throw Error(`unexpected process ${command} ${args}`);
@@ -584,7 +580,7 @@ test('the interpreter alert kind is one incident per repository and machine', as
   const env = { HOME: dir, XDG_CONFIG_HOME: join(dir, 'config') }, sent = [];
   mkdirSync(join(dir, 'config', 'pdd'), { recursive: true });
   writeFileSync(join(dir, 'config', 'pdd', 'autopilot-alerts.json'), JSON.stringify({ v: 1, service: 'slack', url: 'https://hooks.slack.com/services/T/B/x' }));
-  const ports = { readManualHold:async () => ({known:true,held:false}), stateRoot: join(dir, 'state'), hostname: () => 'host-a', repository: async () => ({ nameWithOwner: 'owner/repo' }), http: async ({ body }) => { sent.push(body.text); return { status: 200, text: 'ok' }; } };
+  const ports = { stateRoot: join(dir, 'state'), hostname: () => 'host-a', repository: async () => ({ nameWithOwner: 'owner/repo' }), http: async ({ body }) => { sent.push(body.text); return { status: 200, text: 'ok' }; } };
   const call = (issue, kind, fields) => runAutopilotAlerts({ action: 'alert', cwd: dir, env, issue, kind, text: JSON.stringify(fields) }, ports);
   const fields = { cause: 'The interpreter down', tried: 'retries', need: 'nothing now' };
   assert.equal((await call('12', 'interpreter', fields)).exitCode, 0);

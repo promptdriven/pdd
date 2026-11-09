@@ -1,5 +1,4 @@
-import { issueEffectAllowed } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 27ebebac17b84507cbe965cf7b0786571e4787c3cc6280902637142d5d05bcae).
+// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 7b10f3e6725b8945b62f7c7d0a5d766a3717a902eda351238a71df998507bcca).
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -51,7 +50,6 @@ export function validateSortBatch({ snapshot, prepared, issues, sorts }) {
   const current = new Map([...snapshot.issues, ...snapshot.inputs].map(x => [x.key, x.revision]));
   for (const record of sorts) {
     const issue = snapshot.issues.find(x => x.key === record.issue), old = prepared.issues.find(x => x.key === record.issue);
-    if (issue?.holds?.includes('pdd:manual')) throw Error('input-changed');
     if (JSON.stringify(selectedSort(snapshot, issue)) === JSON.stringify(record)) continue;
     const ids = (old?.sorts ?? []).filter(x => x.authority !== 'outsider');
     const superseded = new Set(ids.filter(x => x.intact && validSort(x.record)).flatMap(x => x.record.base));
@@ -139,7 +137,6 @@ export async function currentSortIssue({ cwd, repository, snapshot, route }, por
 async function sortOwnership({ repository, route, areas }, ports) {
   // Keep these observations after all potentially long evidence reads. The native
   // update calls this again inside its mutation guard, after any admission wait.
-  if (!await issueEffectAllowed({repository, issue:Number(route.issue.split('/').pop()), cwd:ports.cwd}, ports)) return false;
   const owners = parse((await ports.owners.read({ repository, issues: [route.issue] })).json);
   const raw = parse((await ports.github.issue({ repository, issue: Number(route.issue.split('/').pop()) })).json);
   const labels = Array.isArray(raw.labels) ? raw.labels.map(x => typeof x === 'string' ? x : x.name) : null;
@@ -274,7 +271,6 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode }, p
   for (const group of saved.filter(x => !x.merged && x.umbrella)) {
     const umbrella = snapshot.issues.find(x => x.key === group.umbrella);
     if (umbrella?.state !== 'completed' || umbrella.authority !== 'trusted' || !ports.github.sortMergedFix) continue;
-    if (!await issueEffectAllowed({repository, issue:Number(group.umbrella.split('/').pop()), cwd}, ports)) continue;
     const result = await ports.github.sortMergedFix({ repository, issue: Number(group.umbrella.split('/').pop()) });
     if (!result.url) continue;
     group.merged = result.url;
@@ -284,8 +280,6 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode }, p
   const current = async group => {
     if (ports.settings && (await ports.settings.read({ cwd, repository })).mode !== mode) return false;
     if (!snapshot.complete) return false;
-    for (const key of new Set([...group.members, group.umbrella].filter(Boolean)))
-      if (!await issueEffectAllowed({repository, issue:Number(key.split('/').pop()), cwd}, ports)) return false;
     const plan = sortPlan({ snapshot });
     return group.members.length > 0 && (await Promise.all(group.members.filter(issue => !(issue === group.umbrella && snapshot.issues.find(x => x.key === issue)?.execution === 'running')).map(issue => {
       const route = plan.routes.find(x => x.issue === issue);
@@ -303,7 +297,6 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode }, p
         && JSON.stringify(group.notified ?? []) !== JSON.stringify(group.members);
       if (!needsCreation && !needsNote) continue;
       if (needsCreation && snapshot.issues.filter(x => x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(`<!-- pdd-issue-group:v1 ${group.rootCause} -->`)).length > 1) continue;
-      if (!await current(group)) continue;
       if (++operations > 10) break;
       if (needsCreation) {
         const marker = `<!-- pdd-issue-group:v1 ${group.rootCause} -->`;
@@ -313,7 +306,7 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode }, p
         if (recovered.length === 1) group.umbrella = recovered[0].key;
         else {
           if (!ports.github.createSortUmbrella || !ports.github.withSortGroupAdmission) continue;
-          const umbrella = await ports.github.withSortGroupAdmission({ repository, rootCause: group.rootCause, write, checkOwnership:() => current(group) }, async () => {
+          const umbrella = await ports.github.withSortGroupAdmission({ repository, rootCause: group.rootCause, write }, async () => {
             // A second machine may have completed after our snapshot. Recover under
             // shared admission, before any new issue POST.
             const live = await liveSortUmbrellas({ repository, rootCause: group.rootCause }, ports);
@@ -323,7 +316,7 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode }, p
             const body = `Shared cause: ${group.rootCause}.\nOne fix: correct this shared cause once for all linked member requirements.\n\n${group.members.map(issue => `- ${issue}\n${(plan.routes.find(x => x.issue === issue)?.evidence ?? []).join('\n')}`).join('\n')}\n\n${marker}`;
             const created = await write(async () => {
               if (!await current(group)) return null;
-              return ports.github.createSortUmbrella({ repository, title: `Global fix: ${group.rootCause}`, body, checkOwnership:() => current(group) });
+              return ports.github.createSortUmbrella({ repository, title: `Global fix: ${group.rootCause}`, body });
             });
             if (created === null) return '';
             const value = parse(created.json);
@@ -339,7 +332,7 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode }, p
       if (needsNote) {
         const result = await write(async () => {
           if (!await current(group)) throw Error('sort-owner-changed');
-          return ports.github.appendComment({ repository, issue: Number(group.umbrella.split('/').pop()), checkOwnership:() => current(group),
+          return ports.github.appendComment({ repository, issue: Number(group.umbrella.split('/').pop()),
             body: `Group members (${group.rootCause}):\n${group.members.map(x => `- ${x}`).join('\n')}\n\n<!-- pdd-issue-route:v1 -->\n<!-- group-${hash(JSON.stringify(group.members))} -->` });
         });
         if (!parse(result.json).id) throw Error('sort-write-pending');

@@ -239,8 +239,6 @@ Code space is the PDD compiler: your agent writes the code from the approved pro
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Prompt tests` lines and the report links.
 2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
-An issue with `pdd:manual` added by a repository writer is kept for a person. Autopilot does not claim it. If it is already claimed, the current work finishes or saves before the claim is released; the branch, PRs and run files remain. Removing the label makes it eligible again. Configured author trust alone does not grant permission to apply this label.
-
 The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
 
 ## Commands

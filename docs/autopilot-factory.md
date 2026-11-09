@@ -19,11 +19,7 @@ a local bare origin. Git is restricted to file transport. The private service
 executables cannot call a real agent or GitHub. Service ports model GitHub REST
 and GraphQL, Herdr panes and sessions, and interpreter responses. Interpreter
 requests use an in-memory fetch port. No service socket is needed. Worker sockets
-are denied. A manual hold matrix counts GitHub writes and worker deliveries for
-open, running, parked, closed audit, group member, umbrella and dependency-node
-subjects. A running check retains custody while this matrix checks zero automatic
-effects. Separate native tests add the hold during startup fetch and route cached
-group work to a held retained run. Tests do not read a person's agent credentials or machine queues.
+are denied. Tests do not read a person's agent credentials or machine queues.
 
 The scripted worker reads the bundled workflow and each selected step brief. It
 writes a small constant-value project, records completed steps through the CLI,
@@ -58,7 +54,6 @@ the same merge.
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |
 | Closing capacity | Absent starting panes gain confirmed close records. A working agent defers parking. A done current chat saves its screen and session before close. Retained cleanup names its retry cause, and a closing reservation blocks new starts at the run cap. |
 | Stopped panes across repositories | A full shared pane budget is reclaimed from stopped runs without saved session IDs or workspace-creation fields. Same-machine coordinator claims are recovered. A second repository starts its coordinator and first workflow run. Every held run then resumes its own current session. |
-| Manual issues | A manual label excludes intake. A claimed run releases saved work and the issue becomes eligible after label removal. An installed capability wakes a run waiting for it. |
 | Capacity and queues | Pane and check-slot waits recover; dead holders release reservations without resending an uncertain request. |
 | Claim transfer | The old coordinator cannot continue the current chat or publish after another machine takes the claim. |
 | Base integration | A clean base merge uses the separate bounded integration counter, retains failed evidence and needs fresh validation before merge. |

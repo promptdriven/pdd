@@ -417,7 +417,6 @@ test('3091 confirmed parked occupancy backfills native admission and refuses a d
   const repository = held.repo, issue = `https://github.com/${repository}/issues/18`, revision = 'a'.repeat(64);
   const coordinator = {repository, coordinatorId: 'park-owner', machine: 'park-machine', activation: 1, runs: 1, claim: {commentId: '1', labelEventId: '2'}};
   const ports = {
-    readManualHold:f.ports.readManualHold,
     settings: {read: async () => ({mode: 'auto', activation: 1, runs: 1})},
     owners: {read: async () => ({json: JSON.stringify({...owners, localOwner: 'park-owner', claims: [{issue, owner: 'park-owner', coordinatorId: 'park-owner', machine: 'park-machine', commentId: '1', labelEventId: '2', active: true}]})})},
     snapshots: {read: async () => ({snapshot: {repository, complete: true, issues: [{key: issue, nodeId: '18', title: 'Independent work', revision, state: 'open', authority: 'trusted', assignees: [], conditions: [], execution: 'idle', holds: []}], edges: [], reviews: [{id: 'r', issue, authority: 'trusted', intact: true, outcome: 'complete', analysis: 'Independent', base: [], continuation: '', inputs: [{key: issue, revision}], candidates: [{key: issue, revision}], dependencies: [], questions: [], effects: 'none'}], impacts: [], inputs: []}})},

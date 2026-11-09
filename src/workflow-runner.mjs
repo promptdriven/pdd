@@ -9,8 +9,8 @@ import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
-import { readDependencySnapshot, createDependencyReadPorts, issueEffectAllowed, guardAutomaticGithubWrites, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0495cddf81fa50e3314354463f0b38a2c39b380863ceee75fa5d6de38e26710e).
+import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2a47f692dd11eae221b5f2cce66e2f7b276ca9098512e2ef5061a53fb191ba1e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -29,7 +29,7 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
-import { startChat, submitWorker, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
+import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
@@ -48,8 +48,7 @@ import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from '
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
-const automaticEffectAllowed = (run, p, localOnly = true) => p.personDirected === true || !run?.automaticOrigin && !p.manualHold || issueEffectAllowed({repository:run.repo,issue:run.number,cwd:run.sourceRoot ?? run.root,localOnly}, p);
-export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry', 'route-interface-drafting', 'route-code-only-checker', 'issue-3129', 'manual-label', 'route-manual-label']);
+export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry', 'route-interface-drafting', 'route-code-only-checker']);
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -126,10 +125,9 @@ function describePaneOwners(rows, ports) {
 }
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
-  const personDirected = ports.personDirected === true;
   // The native runner records each gh call in the GitHub call ledger of its repository.
   const execFile = ports.execFile ?? nativeGithubCounter((file, args, options = {}) => execute(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...options }), { env });
-  return { ...ports, env, personDirected, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
+  return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}), describePaneOwners: ports.describePaneOwners ?? (rows=>describePaneOwners(rows,ports)), sweepIdle: ports.sweepIdle ?? (options => sweepIdleRuns(options, {...ports, progressGuard: undefined})), sweepFinished: ports.sweepFinished ?? (options => tidyRuns(options, {...ports, progressGuard: undefined})) };
 }
 // This run lock is independent of the shared Herdr layout lock. Never wait on a live owner.
@@ -222,15 +220,13 @@ function protectProgress(run,p,{approval=false,validate}={}) {
   p.progressGuard=check;
   const inspect=()=>{const latest=readRun(run.runDir);if(!latest||runIdentity(latest)!==runIdentity(run))throw Object.assign(Error('The selected workflow run is missing or was replaced'),{code:'workflow_progress_refused'});check(latest);};
   p.inspectProgress=inspect;
-  const exec=guardAutomaticGithubWrites(p.execFile,p,{repository:run.repo,issue:run.number,cwd:run.sourceRoot ?? run.root,personDirected:p.personDirected || !run.automaticOrigin && !p.manualHold}),herdr=herdrCommand(p);
+  const exec=p.execFile,herdr=herdrCommand(p);
   p.execFile=async(file,args,options)=>{
     if((file==='git'&&['add','commit','push','checkout','switch','branch'].includes(args[0])) || (file==='gh'&&args[0]==='pr'&&['create','edit'].includes(args[1])))inspect();
-    if (file === 'git' && args[0] === 'push' || file === 'gh' && (args[0] === 'pr' && ['create','edit','comment'].includes(args[1]) || args.includes('--method') && ['POST','PATCH','DELETE'].some(method => args.includes(method))))
-      if (!await automaticEffectAllowed(run,p,false)) throw Object.assign(Error('Manual issue authority holds publication.'),{code:'workflow_progress_refused'});
     return exec(file,args,options);
   };
   p.commandPorts={...p.commandPorts,execFile:p.execFile};
-  p.herdr=async args=>{if(['create','run','prompt'].includes(args[1])) {inspect();if (!await automaticEffectAllowed(run,p)) throw Object.assign(Error('Manual issue authority holds worker delivery.'),{code:'workflow_progress_refused'});}return herdr(args);};
+  p.herdr=async args=>{if(['create','run','prompt'].includes(args[1]))inspect();return herdr(args);};
   return ()=>{approval=false;validate=undefined;};
 }
 const sameGate = (current, selected) => (!current || !selected) ? current === selected : ['area','kind','at'].every(key=>current[key]===selected[key]) && (!selected.id || current.id===selected.id);
@@ -744,7 +740,6 @@ function validAutomaticContext(value) {
 async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgentName, codexThreads, base, adoptCorpus, coordinator, draft = false, origin, decisionId, outcome, through, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const automatic = coordinator !== undefined || Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT');
-  p.personDirected = !automatic && p.personDirected;
   if (Object.hasOwn(p.env, 'PDD_AUTOPILOT_CONTEXT')) {
     let environmentContext;
     try { environmentContext = JSON.parse(p.env.PDD_AUTOPILOT_CONTEXT); } catch { return fail('Invalid automatic start context.'); }
@@ -851,8 +846,6 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
       return fail(`Could not fetch --base ${baseBranch} from origin. Check that origin has this branch and Git can fetch it, then run again. No new run was started.`);
     }
   }
-  const startAllowed = () => !automatic || issueEffectAllowed({repository:binding.repository,issue:number,cwd:context.toplevel},p);
-  if (!await startAllowed()) return fail('Automatic start deferred: manual-authority.');
   let adoption, adoptionSnapshot, declarationBytes, frozenFolder;
   try {
   if(adoptCorpus !== undefined) {
@@ -876,7 +869,6 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
     // Unknown capacity is not evidence of a full server. Startup retains its
     // normal durable recovery path if Herdr itself is unavailable.
   }
-  if (!await startAllowed()) return fail('Automatic start deferred: manual-authority.');
   const runId = randomUUID();
   if (existing?.pr?.length && !ended(existing)) await refreshPr(existing, p);
   if (existing) {
@@ -902,7 +894,6 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
     try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
     catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
   }
-  if (!await startAllowed()) return fail('Automatic start deferred: manual-authority.');
   p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
@@ -1882,7 +1873,6 @@ async function commitPublicationFiles(run, p, lines, promptGuard = null) {
 }
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
 async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
-  if (!await automaticEffectAllowed(run,p,false)) return fail('Manual issue authority holds publication.');
   if (run.draft !== undefined && typeof run.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
   const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title) || `Issue #${run.number}`;
   if (existing) {
@@ -2386,7 +2376,6 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area];
   const owner = {cwd, coordinatorId, machine};
-  if (!await automaticEffectAllowed(run,p)) return done('Manual issue authority holds PR 1.');
   if (!automaticPr1Eligible(run, owner, p)) return done('Automatic PR 1 gate skipped.');
   const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), storyDecision: recordedStoryDecision(run), area, index: run.area, branch: run.branch});
   let publicationGate;
@@ -3178,7 +3167,6 @@ function armCurrentAutomaticChat(run, p) {
 }
 
 async function startNextChat(run, p, packageRoot) {
-  await submitWorker(run,p,async()=>{});
   if (run.parking) commitRun(run, p, fresh => {fresh.parking.phase = 'waking';});
   const area = run.areas[run.area], original = structuredClone(run);
   let prior = lastChat(run, area.name);
@@ -3220,7 +3208,6 @@ async function startNextChat(run, p, packageRoot) {
     if (saved && !chat.startUnconfirmed && !reusedPane) armCurrentAutomaticChat(run, p);
     return run.chats.at(-1);
   } catch (error) {
-    if (error?.code === 'workflow_progress_refused' && error.chat) saveChatObservations(original,prior,error.chat,p,{error,phase:'start'});
     if (['workflow_progress_refused', 'workflow_run_save_failed'].includes(error?.code)) throw error;
     if (error.chat?.area === area.name) run.chats.push(error.chat);
     saveChatObservations(original, prior, error.chat, p, { error, phase: 'start' });
@@ -3931,7 +3918,6 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
 // Journal custody and FIFO delivery to the current area chat: the person's answer or change request, or (notice) a pdd
 // notice with its exact text. A notice has no answer/change effect and no retry command; the next delivery sends it first.
 async function deliverRequest(run, text, p, notice = false) {
-  if (!await automaticEffectAllowed(run,p)) return fail('Manual issue authority holds request admission.');
   const selectedIdentity=runIdentity(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
   const retryRequested = !notice && isPersonRetry(run, text);
@@ -4015,8 +4001,8 @@ Nothing was sent to the chat.` };
           throw error;
         }
       };
-      const sent = await sendToChat(chat, message, { ...p, run, herdr: guardedHerdr, beforeSubmit: async () => {
-        if (custodyFailed || !await automaticEffectAllowed(latest(),p)) return false;
+      const sent = await sendToChat(chat, message, { ...p, herdr: guardedHerdr, beforeSubmit: async () => {
+        if (custodyFailed) return false;
         if (personRetry && await personRetryRefusal(latest(), entry.text, p, true)) return false;
         if (entry.kind !== 'notice' && await environmentWakeAllowed(latest(), entry.text, p) === false) return false;
         if (p.beforeDeliverySubmit && !await p.beforeDeliverySubmit()) return false;
@@ -4171,7 +4157,6 @@ export const recoverAutomaticRunOwner = saveGuard((args, ports) => lockedMutatio
   const owner = currentParkingOwner(run,p,{allowOlder:true});
   if (!owner || owner.coordinatorId !== input.coordinatorId || owner.machine !== input.machine) return skip();
   if (run.automaticOrigin.coordinatorId === owner.coordinatorId) return skip();
-  if (!await automaticEffectAllowed(run,p)) return skip();
   const result = await recoverParkingOwner(run,owner,p);
   return result ? {...done(''),recovery:'recovered',claim:result.claim} : skip();
 }));
@@ -4186,7 +4171,6 @@ export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {},
     const owner = currentParkingOwner(run, p, {allowOlder:true});
     if (!owner || !validSavedAutomaticOrigin(run) || readRunOwnership(run.runDir, p) || explicitlyStopped(run, p)
       || ['parked', 'waking', 'releasing'].includes(run.parking?.phase)) continue;
-    if (!await automaticEffectAllowed(run,p,true)) continue;
     const blocker = idleParkingBlocker(run, p.now(), graceMs);
     if (!blocker) continue;
     const result = await parkBlockedRun({ref: String(run.number), cwd: run.sourceRoot,
@@ -4219,7 +4203,6 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
       release = acquireRunLock(run.runDir);
       const latest = readRun(run.runDir);
       if (!latest || latest.runId !== run.runId) continue;
-      if (!await automaticEffectAllowed(latest,p,true)) continue;
       const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
         ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
       closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
@@ -4789,7 +4772,6 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
-  if (automaticResume && !await automaticEffectAllowed(run,p)) return {...done(''),recovery:'held'};
   if (run.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
@@ -5087,7 +5069,6 @@ export const nudgeIdleRun = saveGuard((args, ports) => lockedMutation(args, port
     && validSavedAutomaticOrigin(fresh) && fresh.automaticOrigin.coordinatorId === input.coordinatorId
     && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd);
   if (!owned(run) || run.parking || layoutClosing(run) || chat?.closed) return skipped();
-  if (!await automaticEffectAllowed(run,p)) return skipped();
   // The saved stop survives a failed alert handoff or process restart. The alert
   // service owns retries and delivered/unconfirmed deduplication on later ticks.
   if (run.state === 'stuck' && run.chatIdleLimit)
@@ -5175,19 +5156,6 @@ function replaceParkingBlocker(run, blocker, interpreterBatch, interpreterCheck,
 export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
   const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
   const skipped = reason => ({...done(''), recovery: 'skipped', ...(reason ? {reasonCounts:{[reason]:1}} : {})});
-  if (input.manualClear && !await automaticEffectAllowed(run,p,true)) return skipped('manual-authority');
-  if (input.manualClear && run?.parking?.blocker?.kind === 'manual' && !run.parking.releaseAttempted
-    && (run.parking.phase === 'parked' || run.parking.phase === 'releasing' && run.parking.releaseAttempted === false) && currentParkingOwner(run, p)) {
-    commitRun(run, p, fresh => {
-      const previous = fresh.parking.manualPrevious;
-      fresh.parking.phase = 'parked';
-      delete fresh.parking.manualHold;
-      delete fresh.parking.manualPrevious;
-      if (previous) Object.assign(fresh.parking, previous);
-      else fresh.parking.manualCleared = true;
-    });
-    return {...done(''), recovery: 'parked'};
-  }
   if (!run || ended(run) || !validSavedAutomaticOrigin(run)
     || run.automaticOrigin.machine !== input.machine
     || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || ['waking', 'releasing'].includes(run.parking?.phase)) return skipped();
@@ -5196,23 +5164,14 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'stuckCause', 'environmentRetry', 'automaticOrigin', 'progressAt', 'updatedAt', 'chatIdleLimit', 'chatResumeLimit']
     .some(key => !sameFact(run[key], input.expected[key]))) return skipped();
   if (input.idleGraceMs !== undefined && (!currentParkingOwner(run, p, {allowOlder:true}) || !idleParkingBlocker(run, p.now(), input.idleGraceMs))) return skipped();
-  if (!input.manualHold && !await automaticEffectAllowed(run,p,true)) return skipped('manual-authority');
-  if (input.manualHold) {
-    const chat = currentChat(run);
-    if (continuationCheckHeld(run,p) || !chat || !chat.closed?.confirmedAt && !idleAgent(chat,await chatSession(chat,{...p,run}))) return skipped();
-  }
   if (run.automaticOrigin.coordinatorId !== input.coordinatorId) {
     const owner = currentParkingOwner(run, p, {allowOlder:true});
     if (owner?.coordinatorId !== input.coordinatorId) return skipped('claim-unavailable');
-    try { if (!await recoverParkingOwner(run, owner, {...p,manualCustody:input.manualHold === true})) return skipped(ended(run) ? 'claim-transferred' : 'claim-unavailable'); }
+    try { if (!await recoverParkingOwner(run, owner, p)) return skipped(ended(run) ? 'claim-transferred' : 'claim-unavailable'); }
     catch { return skipped('claim-unavailable'); }
   }
   if (run.parking?.phase === 'parked') {
     commitRun(run, p, fresh => {
-      if (input.manualHold && fresh.parking.blocker?.kind !== 'manual') {
-        const {blocker, text, personWait, interpreterWait, interpreterGate, interpreterCheck} = fresh.parking;
-        fresh.parking.manualPrevious = structuredClone({blocker, text, personWait, interpreterWait, interpreterGate, interpreterCheck});
-      }
       replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch, input.interpreterCheck, p.now());
       if (continuationCheckHeld(fresh, p)) fresh.parking.checkHeld = true;
       else delete fresh.parking.checkHeld;
@@ -5231,12 +5190,6 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   const activeChat = currentChat(run), live = activeChat ? await chatSession(activeChat, {...p, run}) : null;
   const agentBusy = live?.alive && !['idle','done'].includes(live.status);
   if (agentBusy && run.parking) return retainClosing('agent-busy');
-  const manualIdle = async fresh => {
-    const chat = currentChat(fresh);
-    if (chat?.closed?.confirmedAt) return true;
-    return Boolean(chat && idleAgent(chat, await chatSession(chat, {...p, run:fresh})));
-  };
-  if (input.manualHold && !await manualIdle(run) || !input.manualHold && !await automaticEffectAllowed(run,p,true)) return skipped('manual-authority');
   if (!input.blocker) return skipped();
   const snapshot = {state: run.state, area: run.area, gate: run.gate, question: run.question, done: run.done,
     blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, stuckCause: run.stuckCause, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin,
@@ -5255,7 +5208,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   cleanupUpdatedAt = parked.updatedAt; cleanupProgressAt = parked.progressAt;
   const result = await closeFinishedChats(copy, {...p, force: !agentBusy, graceMs: 0, reason: 'park', beforeClose: async () => {
     const fresh = readRun(run.runDir);
-    if (!unchanged(fresh) || !currentParkingOwner(fresh, p) || continuationCheckHeld(fresh, p) || input.manualHold && !await manualIdle(fresh) || !input.manualHold && !await automaticEffectAllowed(fresh,p,true))
+    if (!unchanged(fresh) || !currentParkingOwner(fresh, p) || continuationCheckHeld(fresh, p))
       throw Object.assign(Error('Parking custody changed before close'), {code: 'workflow_progress_refused'});
   }, checkpoint: async (chat, layout) => {
     if (continuationCheckHeld(readRun(run.runDir), p)) throw Object.assign(Error('Check process custody changed'), {code: 'workflow_progress_refused'});
@@ -5302,13 +5255,8 @@ export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, 
     && sameFact(fresh.automaticOrigin, run?.automaticOrigin) && fresh.root === run?.root
     && !continuationCheckHeld(fresh, p);
   if (!current(run) || typeof p.releaseParkedClaim !== 'function') return skipped();
-  const manual = input.manualHold || run.parking.manualHold === true || run.parking.blocker?.kind === 'manual';
-  const attempted = row => row.parking.releaseAttempted === true || row.parking.phase === 'releasing' && row.parking.releaseAttempted !== false;
-  if (manual && !attempted(run) && !await p.manualHoldConfirmed?.(run)) return skipped();
-  if (!conditionalCommit(run, p, current, fresh => {if (manual && fresh.parking.phase === 'parked') fresh.parking.releaseAttempted = false; fresh.parking.phase = 'releasing'; if (manual) fresh.parking.manualHold = true;})) return skipped();
-  if (!current(readRun(run.runDir)) || manual && !attempted(readRun(run.runDir)) && !await p.manualHoldConfirmed?.(readRun(run.runDir))) return skipped();
-  if (manual && p.manualReleaseReady && !await p.manualReleaseReady()) return skipped();
-  if (manual && !conditionalCommit(run, p, current, fresh => {fresh.parking.releaseAttempted = true;})) return skipped();
+  if (!conditionalCommit(run, p, current, fresh => {fresh.parking.phase = 'releasing';})) return skipped();
+  if (!current(readRun(run.runDir))) return skipped();
   const remote = await p.releaseParkedClaim(readRun(run.runDir));
   if (remote?.state !== 'released' || !current(readRun(run.runDir))) return skipped();
   const local = await releaseIssueClaim({cwd: input.cwd, issueNumber: run.number, runId: run.runId}, p);
@@ -5325,7 +5273,6 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
     || run.parking?.at !== input.at || !['parked', 'waking'].includes(run.parking.phase)) return skipped();
   if (run.cancelled?.state === 'handed-over') return fail(await chatContinuationOwnership(run, p));
   if (ended(run) || explicitlyStopped(run, p)) return skipped();
-  if (!await automaticEffectAllowed(run,p)) return skipped();
   const ownership = await chatContinuationOwnership(run, p);
   if (ownership) return fail(ownership);
   if (input.expectedBlocker) {

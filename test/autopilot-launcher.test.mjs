@@ -1055,8 +1055,7 @@ test('time rules retry failed delivery and discard refreshed pending events', as
 
 test('time rule uses cached comment activity and never adds a GitHub query on unchanged ticks', async t => {
   const f = await fixture(t);
-  // Manual authority is a separate port; this test measures comment caching.
-  f.ports.readManualHold = async () => ({known:true,held:false}); const changedAt = f.time;
+  const changedAt = f.time;
   f.issues = [issue(105, { labels: [{ name: 'pdd:working' }], comments: 1, updated_at: new Date(changedAt).toISOString() })];
   f.issueComments = { 105: [{ id: 1, body: 'Claim refreshed on this machine', user: { login: 'owner' }, created_at: new Date(changedAt).toISOString(), updated_at: new Date(changedAt + hour / 2).toISOString() }] };
   await f.invoke('start'); f.prompts.length = 0; f.status = 304;
@@ -2303,8 +2302,6 @@ for(const boundary of ['disabled','foreign-repository','foreign-checkout','forei
 
 test('audit tick discovers completed runs through the injected Git executor', async t => {
   const f = await fixture(t);
-  // Isolate local run discovery from the separate manual authority reader.
-  f.ports.readManualHold = async () => ({known:true,held:false});
   assert.equal((await f.invoke('start')).exitCode, 0);
   const state = f.state(), commonDir = join(f.cwd, '.git'), runDir = join(commonDir, 'pdd', 'runs', '17');
   mkdirSync(runDir, {recursive: true});
@@ -2495,11 +2492,4 @@ test('start: guarded cleanup reclaims a finished workflow shell after its chat h
   assert.equal(result.exitCode,0,result.message);
   assert.equal(w.herdr.panes.length,paneCount-1);
   assert.ok(!w.herdr.paneOf(run.layout));
-});
-
-test('3129 public add does not label held issues', async t => {
-  const f = await fixture(t);
-  f.ports.readManualHold = async () => ({known:true,held:true});
-  await f.invoke('add',{issues:['12','15']});
-  assert.equal(f.ack.length,0);
 });

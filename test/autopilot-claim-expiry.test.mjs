@@ -855,34 +855,3 @@ test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most 
     assert.doesNotMatch(rules[0].reason, /changed approach/);
   }
 });
-
-for (const boundary of ['matching','other-issue','other-repository','new-hold']) test(`heartbeat target proof: ${boundary}`, async () => {
-  const service = commentService([{id:901,user:{login:'owner'},body:claimBody()}]);
-  const {guardAutomaticGithubWrites} = await import('../src/issue-dependencies-github.mjs');
-  const current = {repository:repo,issue:7,held:false};
-  let commentReads = 0;
-  const readManualHold = async ({repository,issue}) => ({known:repository===current.repository && issue===current.issue,held:current.held});
-  const transport = async (file,args,options) => {
-    const response = await service.execFile(file,args,options);
-    const methodAt = args.indexOf('--method'), method = methodAt < 0 ? 'GET' : args[methodAt+1];
-    if (method==='GET' && args.includes(`repos/${repo}/issues/comments/901`)) {
-      commentReads++;
-      const raw = JSON.parse(response.stdout.replace(/^HTTP\/[\s\S]*?\r?\n\r?\n/,''));
-      if (boundary==='other-issue') raw.issue_url=`https://api.github.com/repos/${repo}/issues/8`;
-      if (boundary==='other-repository') raw.issue_url='https://api.github.com/repos/other/project/issues/7';
-      if (boundary==='new-hold') current.held=true;
-      response.stdout=(args.includes('--include')?'HTTP/2.0 200 OK\r\n\r\n':'')+JSON.stringify(raw);
-    }
-    return response;
-  };
-  const execFile = guardAutomaticGithubWrites(transport,{readManualHold});
-  const action = () => refreshClaimHeartbeat({repository:repo,claim:ownClaim(),coordinatorId:'coordinator-a',machine:'machine-a',at:at(NOW)},{execFile,readManualHold});
-  if (boundary==='matching') {
-    assert.equal((await action()).state,'refreshed');
-    assert.equal(commentReads,1);
-    assert.equal(service.patches.length,1);
-  } else {
-    await assert.rejects(action(),{code:'manual-hold'});
-    assert.equal(service.patches.length,0);
-  }
-});

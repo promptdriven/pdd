@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ed9955df120882339a9ba6b15d32502025ceb4f2d4551c1eac16d98b08f20436).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 09dd048bd02275b49d06e674c8ffed1bd8325bd8fad9d53038b820f431bbff65).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -29,7 +29,7 @@ import { tidyRuns } from './workflow-runner.mjs';
 import { paneUsage, ensurePaneBudget } from './workflow-chat.mjs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, issueEffectAllowed, issueEffectsAllowed, guardAutomaticGithubWrites, readManualHold, readManualHolds, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, advanceAutomaticPr1, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
 import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict, savedLostCheck, savedCheckCause } from './workflow-results.mjs';
@@ -68,16 +68,6 @@ function save(file, value) {
   try { writeFileSync(temp, JSON.stringify(value), { mode: 0o600 }); renameSync(temp, file); }
   finally { try { unlinkSync(temp); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
 }
-const issueAllowed = (state, p, number, localOnly = false) => issueEffectAllowed({repository:state.repo, issue:Number(number), cwd:state.cwd, localOnly}, p);
-const issueAction = (state, p, number, action, held = {exitCode:0, recovery:'held'}) =>
-  p.scanAction(async () => await issueAllowed(state, p, number) ? action() : held);
-const localIssueAction = (state,p,number,action) => p.scanAction(async () => await issueAllowed(state,p,number,true) ? action() : {exitCode:0,recovery:'held'});
-async function sendIssueAlert(state, p, stateRoot, input) {
-  if (!await issueAllowed(state, p, input.issue,true)) return {exitCode:1, held:true};
-  const send = p.sendAlert ?? (input => runAutopilotAlerts({action:'alert',cwd:state.cwd,env:p.env,...input},
-    {...p,...p.alertPorts,execFile:p.execFile ?? ((file,args,options) => p.execute(file,args,options)),repository:async () => ({nameWithOwner:state.repo}),stateRoot,now:p.now}));
-  return send(input);
-}
 async function settings(state, p) {
   const result = await runAutopilot({ action: 'setup', interactive: false, inRepo: true }, {
     cwd: state.cwd,
@@ -108,11 +98,8 @@ function portsFor(state, ports) {
   const githubRoot = ports.githubRoot ?? (typeof state?.stateFile === 'string' ? dirname(state.stateFile) : githubStateRoot(env, ports.stateRoot)), ledgers = new Map();
   const ledger = () => { const repo = state?.repo; if (typeof repo !== 'string' || !repo) return null; if (!ledgers.has(repo)) ledgers.set(repo, githubLedger({ root: githubRoot, repository: repo })); return ledgers.get(repo); };
   const execute = countGithubCalls(async (command, args, options = {}) => run(command, args, { cwd: state.cwd, env, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024, ...options }), { ledger, now });
-  const p = { ...ports, env, run, execute, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now, personDirected:false };
-  p.execute = guardAutomaticGithubWrites(execute, p, {repository:state?.repo,cwd:state?.cwd});
-  if (ports.execFile) p.execFile = guardAutomaticGithubWrites(ports.execFile, p, {repository:state?.repo,cwd:state?.cwd});
-  p.checked = async (command,args,options) => {const result = await p.execute(command,args,options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout;};
-  return p;
+  const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
+  return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
 const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'PDD_INTERPRETER_QUEUE', 'PDD_INTERPRETER_CONCURRENCY'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 function checkCapacityWords(state, p) {
@@ -372,8 +359,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     coordinatorId: state.coordinatorId, machine: state.machine});
   const parking = {
     now: p.now,
-    list: async () => await listRuns({cwd: state.cwd, cancelled: true}, worker),
-    held: run => p.manualHolds?.has(run.number),
+    list: () => listRuns({cwd: state.cwd, cancelled: true}, worker),
     checkProgress: async run => {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
       if (busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
@@ -416,14 +402,13 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       }
       return p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run, interpreterBatch, interpreterCheck}, worker));
     },
-    wake: (run, rule) => localIssueAction(state, p, run.number, () => wakeParkedRun({...args(run), at: run.parking.at,
+    wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
       text: rule?.text ?? (['pdd', 'pdd-route'].includes(run.parking.blocker.kind)
         ? `The installed PDD contains ${run.parking.blocker.until}. ${run.parking.blocker.until === '#2897' ? 'The PR 1 re-entry and current-main integration route now exists.' : 'The required fix is available.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
       {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
-      if (blocker.kind === 'manual') return run.parking.manualCleared === true;
       if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
       if (['unknown','binding'].includes(blocker.kind)) return hasParkedReply(run, worker);
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
@@ -468,7 +453,8 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return false;
     },
     alertUnknown: async run => {
-      const send = input => sendIssueAlert(state, p, state.stateFile ? dirname(state.stateFile) : stateRoot, input);
+      const send = p.sendAlert ?? (input => runAutopilotAlerts({action: 'alert', cwd: state.cwd, env: p.env, ...input},
+        {...p.alertPorts, repository: async () => ({nameWithOwner: state.repo}), stateRoot: dirname(state.stateFile), now: p.now}));
       try {return (await send({issue: String(run.number), kind: 'stuck', text: JSON.stringify({
         cause: run.parkReason ?? 'No named blocker is saved.', tried: 'Kept the run, claim and saved work.', need: 'Identify the blocker before continuing.'})}))?.exitCode === 0;}
       catch {return false;}
@@ -494,10 +480,6 @@ async function routeQuestionsTick(state, p, config, runs, localOnly) {
   if (localOnly || config.mode !== 'auto') return;
   for (const group of state.routeQuestions.groups) {
     if (group.count < 2 || group.issue) continue;
-    const subjects = state.routeQuestions.records.filter(row => group.recordIds.includes(row.id));
-    let allowed = true;
-    for (const row of subjects) if (!await issueAllowed(state,p,row.run)) allowed = false;
-    if (!allowed) continue;
     group.issue = {state: 'creating', at: p.now(), url: null};
     if (!await p.scanGuard(latest => {latest.routeQuestions = state.routeQuestions;})) return;
     const records = state.routeQuestions.records.filter(row => group.recordIds.includes(row.id));
@@ -507,14 +489,12 @@ async function routeQuestionsTick(state, p, config, runs, localOnly) {
         + `\n\n<!-- pdd:missing-route:${state.coordinatorId}:${group.kind} -->`};
     try {
       const result = await p.scanAction(async () => {
-        for (const row of records) if (!await issueAllowed(state,p,row.run)) {delete group.issue;return null;}
         if (p.createRouteIssue) return p.createRouteIssue(input);
         const reply = await p.execute('gh', ['api', '--method', 'POST', 'repos/promptdriven/pdd/issues',
           '-f', `title=${input.title}`, '-f', `body=${input.body}`], {purpose: 'dependencies'});
         if (reply.code !== 0) throw Error('Route issue creation did not confirm success.');
         return {url: JSON.parse(reply.stdout).html_url};
       });
-      if (result === null) continue;
       if (!/^https:\/\/github\.com\/promptdriven\/pdd\/issues\/[1-9][0-9]*$/.test(result?.url ?? '')) throw Error('Route issue URL is unconfirmed.');
       group.issue = {...group.issue, state: 'opened', url: result.url};
     } catch {
@@ -548,13 +528,12 @@ async function advanceWaitingPr1Gates(state, p, numbers = null) {
   try { runs = await listRuns({cwd: state.cwd}, workerPorts); }
   catch (error) { p.warn(`PR 1 gate inspection unavailable: ${line(error.message)}`); return reconsider; }
   for (const run of runs) {
-    if (p.manualHolds?.has(run.number)) continue;
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
       || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine
       || run.state !== 'waiting' || run.gate?.kind !== 'approve-pr' || numbers && !numbers.has(run.number)) continue;
     if (run.parking && (run.parking.phase !== 'parked' || run.parking.blocker?.kind !== 'person')) reconsider.add(run.number);
     try {
-      const result = await issueAction(state, p, run.number, () => advanceAutomaticPr1({ref: String(run.number), cwd: state.cwd,
+      const result = await p.scanAction(() => advanceAutomaticPr1({ref: String(run.number), cwd: state.cwd,
         packageRoot: state.packageRoot, coordinatorId: state.coordinatorId, machine: state.machine}, workerPorts));
       if (result.exitCode !== 0) p.warn(`PR 1 gate held for #${run.number}: ${line(result.message)}`);
     } catch (error) { p.warn(`PR 1 gate held for #${run.number}: ${line(error.message)}`); }
@@ -574,22 +553,23 @@ async function resumeStoppedWorkers(state, p, recoveredRuns = null) {
   catch (error) { p.warn(`Stopped-chat inspection unavailable: ${line(error.message)}`); return; }
   for (const run of runs) {
     if (recoveredRuns && !recoveredRuns.has(run.runDir)) continue;
-    if (p.manualHolds?.has(run.number)) continue;
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
       || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine) continue;
     if (run.parking) continue;
     try {
-      const result = await localIssueAction(state, p, run.number, () => resumeStoppedRun({ref: String(run.number), cwd: state.cwd,
+      const result = await p.scanAction(() => resumeStoppedRun({ref: String(run.number), cwd: state.cwd,
         packageRoot: state.packageRoot, coordinatorId: state.coordinatorId, machine: state.machine}, workerPorts));
       if (result.recovery === 'stuck') {
-        const send = input => sendIssueAlert(state, p, state.stateFile ? dirname(state.stateFile) : stateRoot, input);
+        const send = p.sendAlert ?? (input => runAutopilotAlerts({action: 'alert', cwd: state.cwd, env: p.env, ...input},
+          {...p.alertPorts, repository: async () => ({nameWithOwner: state.repo}), stateRoot: dirname(state.stateFile), now: p.now}));
         await send({issue: String(run.number), kind: 'stuck', text: JSON.stringify({cause: result.message,
           tried: 'Three automatic resumes through workflow open in one hour.', need: 'Inspect the stopped chat and resume the run manually.'})});
       } else if (result.exitCode !== 0) p.warn(`Stopped-chat recovery held for #${run.number}: ${line(result.message)}`);
-      const idle = await localIssueAction(state, p, run.number, () => nudgeIdleRun({ref: String(run.number), cwd: state.cwd,
+      const idle = await p.scanAction(() => nudgeIdleRun({ref: String(run.number), cwd: state.cwd,
         packageRoot: state.packageRoot, coordinatorId: state.coordinatorId, machine: state.machine}, workerPorts));
       if (idle.recovery === 'stuck') {
-        const send = input => sendIssueAlert(state, p, state.stateFile ? dirname(state.stateFile) : stateRoot, input);
+        const send = p.sendAlert ?? (input => runAutopilotAlerts({action: 'alert', cwd: state.cwd, env: p.env, ...input},
+          {...p.alertPorts, repository: async () => ({nameWithOwner: state.repo}), stateRoot: dirname(state.stateFile), now: p.now}));
         await send({issue: String(run.number), kind: 'stuck', text: JSON.stringify({cause: idle.message,
           tried: 'Three continue prompts without recorded step progress.', need: 'Inspect the idle agent and continue the run manually.'})});
       } else if (idle.exitCode !== 0) p.warn(`Idle-agent recovery held for #${run.number}: ${line(idle.message)}`);
@@ -679,9 +659,9 @@ async function readEnvironmentWaits(state, p) {
 }
 async function environmentTick(state, p, waits, timeRules, pendingTimes, stateRoot) {
   for (const retry of waits.sort((a, b) => a.at - b.at || a.number - b.number)) {
-    if (!await issueAllowed(state,p,retry.number,true)) continue;
     if (retry.attempts >= ENVIRONMENT_BACKOFF.length) {
-      const send = input => sendIssueAlert(state, p, state.stateFile ? dirname(state.stateFile) : stateRoot, input);
+      const send = p.sendAlert ?? (input => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...input },
+        { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now }));
       try {
         await send({ issue: String(retry.number), kind: 'stuck', text: JSON.stringify({
           cause: `Environment validation failure: ${retry.reason}`,
@@ -734,7 +714,8 @@ async function healthAlerts(state, p, stateRoot) {
     ...Object.values(health.incidents), ...(state.githubIntake?.claims ?? []).map(claim => Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1])),
     ...(state.cachedIssues ?? []).filter(issue => !issue.pull_request).map(issue => issue.number),
   ].filter(number => Number.isSafeInteger(number) && number > 0))];
-  const send = input => sendIssueAlert(state, p, state.stateFile ? dirname(state.stateFile) : stateRoot, input);
+  const send = p.sendAlert ?? (input => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...input },
+    { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now }));
   const alert = async (issue, kind, fields) => {
     try { const reply = await send({ issue: String(issue), kind, text: JSON.stringify(fields) }); return reply?.exitCode === 0; }
     catch { return false; }
@@ -786,10 +767,8 @@ function runtimeWake(wait, kind) {
 // wake or in the stuck rule.
 async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateRoot) {
   const allWaits = (await (p.readRuntimeWaits ?? readRuntimeWaits)(state, p)).sort((a, b) => a.at - b.at || a.number - b.number);
-  const eligibleWaits = [];
-  for (const wait of allWaits) if (await issueAllowed(state,p,wait.number,true)) eligibleWaits.push(wait);
-  const lostWaits = eligibleWaits.filter(wait=>wait.cause === 'unknown');
-  const waits = eligibleWaits.filter(wait=>wait.cause !== 'unknown');
+  const lostWaits = allWaits.filter(wait=>wait.cause === 'unknown');
+  const waits = allWaits.filter(wait=>wait.cause !== 'unknown');
   const saved = state.runtime ?? {}, now = p.now();
   let lostDecision = lostWaits.length ? saved.lostDecision : null;
   const pattern = state.interpreterPattern ?? {streak: 0, seen: {}};
@@ -832,7 +811,8 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   };
   if (!allWaits.length && !outage && !access) return keep();
   const health = await (p.runtimeHealth ?? (async input => (await import('./runtime-client.mjs')).checkRuntimeHealth(input)))({ env: p.env });
-  const send = input => sendIssueAlert(state, p, state.stateFile ? dirname(state.stateFile) : stateRoot, input);
+  const send = p.sendAlert ?? (input => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...input },
+    { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now }));
   const alert = async (number, kind, fields) => { try { return (await send({ issue: String(number), kind, text: JSON.stringify(fields) }))?.exitCode === 0; } catch { /* The alert record is best effort; work goes on. */ } };
   if (health.state === 'healthy' && lostWaits.length) {
     const identity = JSON.stringify(lostWaits.map(w=>[w.number,w.batch]).sort((a,b)=>a[0]-b[0]));
@@ -1180,7 +1160,7 @@ async function currentRecoveryTargetMatches(state, p, verifyRepository = true, s
     return true;
   } catch { return false; }
 }
-async function wake(state, makeText, p, prepare = async () => {}, explicitStartReconcile = false, semanticIdentity = null, capture = async () => {}, effectSubjects = []) {
+async function wake(state, makeText, p, prepare = async () => {}, explicitStartReconcile = false, semanticIdentity = null, capture = async () => {}) {
   if (p.githubFloor?.blocked('core') || p.githubFloor?.blocked('graphql')) return false;
   if (p.scanGuard && !await p.scanGuard()) return false;
   const oldDelivery = state.deliveryIntent, oldReconciliation = state.reconciliationIntent;
@@ -1275,7 +1255,6 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
         if (submitting) {
           await observe('attempted');
           try { reply = await p.scanTransport(async () => {
-            if (!await issueEffectsAllowed({repository:state.repo,issues:effectSubjects,cwd:state.cwd},p)) throw Object.assign(Error('Manual issue authority holds coordinator delivery.'),{code:'agent_blocked'});
             try { return await herdr(args, p); } catch (error) { transportError = error; throw error; }
           }); }
           catch (error) { await observe(['agent_not_found','pane_not_found','agent_blocked'].includes(error?.code) ? 'failed' : 'uncertain'); throw error; }
@@ -1299,7 +1278,6 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
         const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
         if (!withinLaunch()) { expired = true; return false; }
         if (!current || !['idle', 'done'].includes(current.agent_status) || !observeIdentity(current)) return false;
-        if (!await issueEffectsAllowed({repository:state.repo,issues:effectSubjects,cwd:state.cwd},p)) return false;
         try { await prepare(); if (artifact) await artifact.prepare(); } catch { return false; }
         const finalState = read(state.stateFile);
         const finalCustodyMatches = recovering
@@ -1598,6 +1576,7 @@ async function runTick(stateFile, ports, completion) {
       } finally { release(); }
     };
     p.scanTransport = action => p.scanAction(action, state.reconciliationIntent ? 'reconciliation' : 'intent');
+    await healthAlerts(state, p, dirname(stateFile));
     // Native attention summary remains independent of GitHub budgets and AI coordinator activity.
     try {
       const attention = await (p.readAttention ?? ((state, p) => automaticAttention({ repo: state.repo, machine: state.machine }, { env: p.env })))(state, p);
@@ -1617,99 +1596,9 @@ async function runTick(stateFile, ports, completion) {
       return {budget, restLeft};
     };
     let {budget, restLeft} = readBudget();
-    const confirmed = new Set(state.manualIssues ?? []);
-    p.manualHolds = new Set([...(state.manualIssues ?? []),...(state.manualSuppressions ?? []).map(row => row.number)]);
-    const manualObservations = new Map(), deferredManualObservations = new Set();
-    const suppressions = new Map((state.manualSuppressions ?? []).map(row => [row.number,row.reason]));
-    const remoteAllowed = () => { const b = readBudget().budget; return !(state.retryAt > p.now()) && !(b.state === 'reserve' && b.resetAt > p.now()); };
-    const observeManualNow = issue => (p.readManualHold ?? readManualHold)({repository:state.repo, issue, cwd:state.cwd},
-      createDependencyReadPorts({cwd:state.cwd}, {...p, execFile:async (file,args,options) => p.execute(file,args,{...options,purpose:'issues'})}));
-    const observeManual = async ({repository = state.repo, issue, observation}) => {
-      if (repository.toLowerCase() !== state.repo.toLowerCase()) {
-        if (!remoteAllowed()) return {known:false,held:false};
-        const key = `${repository.toLowerCase()}:${issue}`;
-        if (!manualObservations.has(key)) manualObservations.set(key,(p.readManualHold ?? readManualHold)({repository,issue,cwd:state.cwd}, {...p,execFile:(file,args,options) => p.execute(file,args,options)}));
-        return manualObservations.get(key);
-      }
-      const number = Number(issue);
-      if (!manualObservations.has(number)) manualObservations.set(number, (async () => {
-        let hold = observation ?? {known:false, held:false};
-        const deferred = !observation && !remoteAllowed();
-        if (deferred) deferredManualObservations.add(number);
-        if (!observation && !deferred) try {
-          hold = await observeManualNow(number);
-        } catch { /* Unknown authority retains suppression and prior confirmation. */ }
-        const signaled = (state.cachedIssues ?? []).some(row => row.number === number
-          && row.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:manual'));
-        if (hold.known) { if (hold.held) p.manualHolds.add(number); else p.manualHolds.delete(number); }
-        else if (!deferred || signaled || confirmed.has(number)) p.manualHolds.add(number);
-        if (hold.known) { if (hold.held) confirmed.add(number); else confirmed.delete(number); }
-        state.manualIssues = [...confirmed].sort((a,b) => a-b);
-        if (p.manualHolds.has(number)) suppressions.set(number, hold.known && hold.held ? 'manual' : 'authority-unknown');
-        else suppressions.delete(number);
-        state.manualSuppressions = [...suppressions].map(([number,reason]) => ({number,reason}));
-        return hold;
-      })());
-      return manualObservations.get(number);
-    };
-    p.manualHold = {read:observeManual};
-    p.manualRepository = state.repo;
-    p.manualSafetyRead = ({repository,issue,cwd}) => repository.toLowerCase() === state.repo.toLowerCase() ? observeManualNow(issue)
-      : (p.readManualHold ?? readManualHold)({repository,issue,cwd},{...p,execFile:(file,args,options) => p.execute(file,args,options)});
-    p.manualSafetyReadMany = ports.manualSafetyReadMany ?? (input => readManualHolds(input,{...ports,execFile:(file,args,options)=>p.execute(file,args,{...options,purpose:'issues'})}));
-    p.manualReadsDeferred = () => !remoteAllowed();
-    p.manualObservationDeferred = ({repository,issue}) => repository.toLowerCase() === state.repo.toLowerCase() && deferredManualObservations.has(issue) && !p.manualHolds.has(issue);
-    p.onManualHold = ({repository, issue:number, hold}) => {
-      if (repository.toLowerCase() !== state.repo.toLowerCase()) return;
-      // A fresh failed read can add suppression, never fabricate confirmation.
-      if (!hold.known || hold.held) {
-        p.manualHolds.add(number);
-        if (hold.known && hold.held) confirmed.add(number);
-        suppressions.set(number, hold.known && hold.held ? 'manual' : 'authority-unknown');
-      }
-      state.manualIssues = [...confirmed].sort((a,b) => a-b);
-      state.manualSuppressions = [...suppressions].map(([number,reason]) => ({number,reason}));
-    };
-    const worker = {...workflowCleanupPorts(p, ports), autopilotStateFile:stateFile};
-    const allRuns = await (p.listRuns ?? listRuns)({cwd:state.cwd,cancelled:true}, worker);
-    const localRuns = allRuns.filter(run => !['completed','cancelled'].includes(run.state)
-      && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.automaticOrigin?.repository?.toLowerCase() === state.repo.toLowerCase()
-      && run.automaticOrigin?.machine === state.machine && samePath(run.sourceRoot,state.cwd));
-    // Observe both current and recoverable owners before any gate, resume or wake.
-    for (const number of new Set([...allRuns.filter(run => run.repo?.toLowerCase() === state.repo.toLowerCase()).map(run => run.number), ...Object.values(state.health.incidents ?? {}), ...p.manualHolds].filter(number => Number.isSafeInteger(number) && number > 0)))
-      await observeManual({issue:number});
-    await healthAlerts(state, p, dirname(stateFile));
     if (config.mode === 'auto') {
-      for (const run of localRuns) {
-        const hold = await observeManual({issue:run.number});
-        if (!remoteAllowed()) continue;
-        const args = {ref:String(run.number), cwd:state.cwd, packageRoot:state.packageRoot, coordinatorId:state.coordinatorId, machine:state.machine};
-        const parking = parkingPorts(state, p);
-        if (!hold.known || await parking.checkProgress(run)) continue;
-        if (!hold.held && !(run.parking?.phase === 'releasing' && run.parking.releaseAttempted !== false)) {
-          if (run.automaticOrigin.coordinatorId !== state.coordinatorId) continue;
-          await p.scanAction(() => parkBlockedRun({...args, manualClear:true}, worker));
-          continue;
-        }
-        if (!remoteAllowed()) continue;
-        try {
-          if (hold.held) await p.scanAction(() => parkBlockedRun({...args, blocker:{kind:'manual', until:null}, expected:run, manualHold:true}, worker));
-          const fresh = (await listRuns({cwd:state.cwd}, worker)).find(item => item.runId === run.runId);
-          if (!['parked', 'releasing'].includes(fresh?.parking?.phase) || await parking.checkProgress(fresh)) continue;
-          await p.scanAction(() => releaseParkedRun({...args, runId:fresh.runId, at:fresh.parking.at, manualHold:true}, {
-            ...worker, manualReleaseReady: remoteAllowed, manualHoldConfirmed: async current => { if (!remoteAllowed()) return false; const result = await observeManualNow(current.number); return result.known && result.held && remoteAllowed(); },
-            releaseParkedClaim: current => !remoteAllowed() ? {state:'deferred'} : (p.releaseParkedClaim ?? releaseParkedClaim)({cwd:state.cwd, repository:state.repo,
-              claim:{...current.automaticOrigin.claim, issue:current.issue.url, coordinatorId:state.coordinatorId, machine:state.machine},
-              coordinatorId:state.coordinatorId, machine:state.machine, runId:current.runId, branch:current.branch},
-              {...worker, manualCustody:true, execFile:async (file, args, options) => p.execute(file, args, {...options, purpose:'claims',manualCustody:true})})
-          }));
-        } catch (error) { p.warn(`Manual custody held for #${run.number}: ${line(error.message)}`); }
-      }
-      state.manualIssues = [...confirmed].sort((a, b) => a - b);
-      await scanGuard(latest => { latest.manualIssues = state.manualIssues; });
       let reconsider;
-      const gateBudget = readBudget().budget;
-      if (!(state.retryAt > p.now()) && !(gateBudget.state === 'reserve' && gateBudget.resetAt > p.now()))
+      if (!(state.retryAt > p.now()) && !(budget.state === 'reserve' && budget.resetAt > p.now()))
         reconsider = await advanceWaitingPr1Gates(state, p);
       await parkingTick(state, p, config, {localOnly: true});
       if (reconsider?.size) {
@@ -1746,13 +1635,12 @@ async function runTick(stateFile, ports, completion) {
     const stuckFor = claim => p.now() - (typeof claim.stuckSince === 'string' ? Date.parse(claim.stuckSince) : NaN);
     const sendHeartbeats = async (claims, saved) => {
       for (const claim of claims) {
-        if (!await issueAllowed(state,p,Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1]), saved)) continue;
         // After 4 hours stuck the owner stops refreshing, so the claim expires unless the issue leaves pdd:stuck.
         if (stuckFor(claim) >= STUCK_CLAIM_AFTER && !state.parkedNumbers?.includes(Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1])) && !environmentPending.has(Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1]))) continue;
         if (saved && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
         try {
           const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
-            {manualHold:p.manualHold, manualSafetyRead:p.manualSafetyRead, manualRepository:p.manualRepository, manualHolds:p.manualHolds, manualReadsDeferred:p.manualReadsDeferred, manualObservationDeferred:p.manualObservationDeferred, onManualHold:p.onManualHold, execFile:async(file,args,options)=>p.execute(file,args,{purpose:'claims',...options}), admitMutation:action=>p.scanAction(async()=>await issueAllowed(state,p,Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1]),saved) ? action() : {state:'held'})});
+            { execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => p.scanAction(action) });
           if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') claim.lastSeen = beat.lastSeen;
         } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
       }
@@ -1790,7 +1678,7 @@ async function runTick(stateFile, ports, completion) {
         const instruction = artifact.text();
         if (Buffer.byteLength(instruction, 'utf8') > 16384) return { state: 'busy' };
         try {
-          const delivered = await wake(state, () => instruction, p, artifact.prepare, false, state.dependencyPending?.requested ? { kind: 'dependency', requested: state.dependencyPending.requested, ...(again ? { again: again.attempt } : {}) } : null, async () => {}, JSON.parse(requestJson).issues.map(key => Number(/(?:\/issues\/|#)([1-9]\d*)$/.exec(key)?.[1])));
+          const delivered = await wake(state, () => instruction, p, artifact.prepare, false, state.dependencyPending?.requested ? { kind: 'dependency', requested: state.dependencyPending.requested, ...(again ? { again: again.attempt } : {}) } : null);
           if (delivered && !state.recipeDelivered && await scanGuard(latest => { latest.recipeDelivered = true; })) state.recipeDelivered = true;
           return { state: delivered ? 'delivered' : 'busy' };
         }
@@ -1827,7 +1715,7 @@ async function runTick(stateFile, ports, completion) {
       try {
         intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
           { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-          { ...ports, manualHold:p.manualHold, manualSafetyRead:p.manualSafetyRead, manualSafetyReadMany:p.manualSafetyReadMany, onManualHold:p.onManualHold, manualHolds:p.manualHolds, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, sortBudget: async () => githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(config.github) }).state === 'normal', admitMutation: action => p.scanAction(action) });
+          { ...ports, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, sortBudget: async () => githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(config.github) }).state === 'normal', admitMutation: action => p.scanAction(action) });
       } finally { etags.save(); }
       try { p.dependencySnapshot = snapshotStore.load(); } catch { p.dependencySnapshot = null; }
       if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {
@@ -1847,13 +1735,12 @@ async function runTick(stateFile, ports, completion) {
     // Remote proof permits retry if the process died before the local custody write.
     for (const candidate of await (p.listRuns ?? listRuns)({ cwd: state.cwd }, { ...p, execFile: async (file, args, options) => p.execute(file, args, options) })) {
       const origin = candidate.automaticOrigin;
-      if (p.manualHolds?.has(candidate.number)) continue;
       if (!origin || ['completed', 'cancelled'].includes(candidate.state) || origin.machine !== state.machine
         || origin.coordinatorId === state.coordinatorId || origin.repository?.toLowerCase() !== state.repo.toLowerCase()
         || candidate.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(candidate.sourceRoot, state.cwd)
         || !candidate.runDir || !candidate.root || !existsSync(candidate.runDir) || !existsSync(candidate.root)) continue;
       try {
-        const result = await issueAction(state, p, candidate.number, () => recoverAutomaticRunOwner({ref:String(candidate.number),cwd:state.cwd,
+        const result = await p.scanAction(() => recoverAutomaticRunOwner({ref:String(candidate.number),cwd:state.cwd,
           coordinatorId:state.coordinatorId,machine:state.machine}, {...workflowCleanupPorts(p,ports),autopilotStateFile:stateFile}));
         if (result.recovery !== 'recovered') continue;
         const index = observedClaims.findIndex(claim => claim.issue === candidate.issue?.url);
@@ -1882,10 +1769,6 @@ async function runTick(stateFile, ports, completion) {
     if (typeof result.since === 'string') state.issuesSince = result.since; else if (Number.isFinite(result.fullAt)) delete state.issuesSince;
     if (Number.isFinite(result.fullAt)) state.issuesFullAt = result.fullAt;
     state.acknowledged ??= {}; state.commentCache ??= {}; state.seen ??= {}; state.timeSeen ??= {};
-    for (const issue of state.cachedIssues ?? []) if (!issue.pull_request) {
-      const clear = Array.isArray(issue.labels) && !issue.labels.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:manual');
-      await observeManual({issue:issue.number, ...(clear ? {observation:{known:true,held:false}} : {})});
-    }
     cachePullRequests(state);
     const work = [], pending = {}, warnings = [], selections = [], held = new Set();
     const timeRules = [], pendingTimes = {};
@@ -1895,7 +1778,6 @@ async function runTick(stateFile, ports, completion) {
       if(auditConfig.autopilot?.audit !== false) for(const run of await (p.listRuns ?? listRuns)({cwd:state.cwd,cancelled:true},workflowCleanupPorts(p, ports))) {
         if(run.repo?.toLowerCase()!==state.repo.toLowerCase() || run.automaticOrigin?.repository?.toLowerCase()!==state.repo.toLowerCase()
           || run.automaticOrigin?.machine!==state.machine || !samePath(run.sourceRoot,state.cwd)) continue;
-        if (!await issueAllowed(state, p, run.number)) continue;
         const holds=[];
         for(const pr of pendingAudits({run}, {...p,onAuditHold: hold => {
           holds.push(hold);state.auditHolds.push({number:run.number,...hold});
@@ -1976,8 +1858,6 @@ async function runTick(stateFile, ports, completion) {
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];
       if (issue.pull_request || issue.state !== 'open') continue;
-      const authority = await observeManual({issue:issue.number});
-      if (!authority.known || authority.held || p.manualHolds.has(issue.number)) continue;
       const selection = {number:issue.number, inScope:true, state:'unknown', reasons:['readiness-unknown']};
       selections.push(selection);
       try {
@@ -2038,8 +1918,7 @@ async function runTick(stateFile, ports, completion) {
         if (!authorTrusted && !trustedComments.length) {
           selection.state='excluded'; selection.reasons=['no-trusted-issue-or-comment'];
           if (!state.acknowledged[issue.number] && !acknowledged) {
-            if (p.manualHolds.has(issue.number)) continue;
-            const reply = await issueAction(state, p, issue.number, () => p.execute('gh', ['api', '--include', '--method', 'POST', `repos/${state.repo}/issues/${issue.number}/comments`, '-f', `body=${ACK_TEXT}`]));
+            const reply = await p.execute('gh', ['api', '--include', '--method', 'POST', `repos/${state.repo}/issues/${issue.number}/comments`, '-f', `body=${ACK_TEXT}`]);
             if (reply.code !== 0) {
               const failure = response(reply.stdout);
               if (failure.rateLimited) throw Object.assign(Error('GitHub rate limited; waiting until reset.'), { resetAt: failure.resetAt || p.now() + INTERVAL });
@@ -2077,29 +1956,18 @@ async function runTick(stateFile, ports, completion) {
         p.warn(warnings.at(-1));
       }
     }
-    for (let i = timeRules.length - 1; i >= 0; i--) if (p.manualHolds?.has(timeRules[i].number)) timeRules.splice(i, 1);
-    for (const number of p.manualHolds ?? []) { delete pending[number]; for (const key of Object.keys(pendingTimes)) if (key.endsWith(`:${number}`)) delete pendingTimes[key]; }
     // Fresh work leads to a claim and a workflow start, so offer it only where workflows can start.
     // A held issue (pdd:stuck, pdd:code-pending) is not fresh: its reviews and trusted comments still go out.
-    const fresh = work.filter(item => !p.manualHolds.has(item.number) && item.eligible && !held.has(item) && (!item.claimed || item.expiredClaim));
+    const fresh = work.filter(item => item.eligible && !held.has(item) && (!item.claimed || item.expiredClaim));
     if (config.mode === 'auto' && fresh.length) {
       const existing = await parkingPorts(state, p).list();
       for (const item of [...fresh]) {
         const group = (state.githubIntake?.groups ?? []).find(group => group.members?.some(key => Number(/\/issues\/(\d+)$/.exec(key)?.[1]) === item.number));
         const retained = group && existing.find(run => !['completed', 'cancelled'].includes(run.state) && group.members.includes(run.issue?.url));
         if (!retained && !state.parking?.wakePending?.length) continue;
-        let groupHeld = false;
         if (retained) {
           const request = `Issue #${item.number} belongs to this run's root-cause group. Keep it with this run and its saved work.\n${JSON.stringify(item)}`;
-          if (!await issueAllowed(state,p,retained.number,true)) groupHeld = true;
-          const joined = groupHeld ? null : await p.scanAction(() => changeRun({ref: String(retained.number), cwd: state.cwd, packageRoot: state.packageRoot, text: request}, {...p, queueOnly: Boolean(retained.parking), personDirected:false, requestKey: `group:${retained.runId}:${item.number}`, execFile: p.execFile ?? (async (file, args, options) => p.execute(file, args, options))}));
-          if (joined && joined.exitCode !== 0) groupHeld = true;
-        }
-        if (groupHeld) {
-          work.splice(work.indexOf(item),1);
-          const selected = selections.find(row=>row.number===item.number);
-          if (selected) {selected.state='waiting';selected.reasons=['group-manual-authority'];}
-          continue;
+          await p.scanAction(() => changeRun({ref: String(retained.number), cwd: state.cwd, packageRoot: state.packageRoot, text: request}, {...p, queueOnly: Boolean(retained.parking), requestKey: `group:${retained.runId}:${item.number}`, execFile: p.execFile ?? (async (file, args, options) => p.execute(file, args, options))}));
         }
         work.splice(work.indexOf(item), 1); delete pending[item.number];
         const selected = selections.find(row => row.number === item.number);
@@ -2169,14 +2037,13 @@ async function runTick(stateFile, ports, completion) {
           if(events.length) await (p.metricsAppendEvents ?? (input=>appendEvents(input,{commonDir:async()=>context.commonDir})))({root:state.cwd,events});
         } catch { try { const context=await metricsContext(state.cwd); for(const item of work) metricsGap({commonDir:context.commonDir,repo:state.repo,issue:item.number,at:p.now()}); } catch {} if (work.length) metricsWarn('Metrics launch capture incomplete.'); }
       };
-      delivered = await wake(state, () => message(state, work.filter(item => !p.manualHolds.has(item.number)), timeRules.filter(rule => !p.manualHolds.has(rule.number))), p, async () => {}, ports.explicitStartReconcile === true, { kind: 'work', events: Object.fromEntries(Object.entries(pending).map(([key, value]) => [key, value.event])), times: pendingTimes, recipe: !state.recipeDelivered }, capture, [...new Set([...work.map(item => item.number),...timeRules.map(rule => rule.number)])].filter(number => !p.manualHolds.has(number)));
+      delivered = await wake(state, () => message(state, work, timeRules), p, async () => {}, ports.explicitStartReconcile === true, { kind: 'work', events: Object.fromEntries(Object.entries(pending).map(([key, value]) => [key, value.event])), times: pendingTimes, recipe: !state.recipeDelivered }, capture);
       if (delivered) { state.recipeDelivered = true; state.health.recoveryPending = null; Object.assign(state.seen, pending); Object.assign(state.timeSeen, pendingTimes); }
       // Record the delivered 24-hour alert in the own claim comment, so that no machine sends it again.
       if (delivered) for (const claim of longRunning) {
-        if (!await issueAllowed(state,p,Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1]))) continue;
         try {
           await (p.recordLongRunningAlert ?? recordLongRunningAlert)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
-            { execFile: async (file, args, options) => p.execute(file, args, options), admitMutation: action => issueAction(state,p,Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1]),action) });
+            { execFile: async (file, args, options) => p.execute(file, args, options), admitMutation: action => p.scanAction(action) });
         } catch (error) { p.warn(`Long-running alert record deferred for ${claim.issue}: ${line(error.message)}`); }
       }
     }
@@ -2187,7 +2054,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','manualIssues','manualSuppressions','interpreterPattern','auditHolds']) {
+        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','interpreterPattern','auditHolds']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
@@ -2373,7 +2240,7 @@ async function machineStatus(folder, ports, env, cwd) {
     try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
     let coordinator = { state: 'unavailable', reason: 'Herdr is not running' };
     if (serverRunning) { try { coordinator = await coordinatorHealth(state, p); } catch { coordinator = { state: 'unavailable', reason: 'status unreadable' }; } }
-    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state} · ${healthLine(state.health)} · ${parkingWords(state.parking, state.interpreterPattern)}${state.manualIssues?.length ? `\nKept for a person: ${state.manualIssues.map(number => `#${number}`).join(', ')}` : ''}${state.manualSuppressions?.some(row => row.reason === 'authority-unknown') ? `\nManual authority unknown: ${state.manualSuppressions.filter(row => row.reason === 'authority-unknown').map(row => `#${row.number}`).join(', ')}` : ''}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
+    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state} · ${healthLine(state.health)} · ${parkingWords(state.parking, state.interpreterPattern)}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
   }
   return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
 }
@@ -2441,18 +2308,16 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
     }
     if (command === 'status' && input.json) {
-      const folder = stateFolder(ports, p.env), routeQuestions = [], auditHolds = [], manualSuppressions = [];
+      const folder = stateFolder(ports, p.env), routeQuestions = [], auditHolds = [];
       for (const name of existsSync(folder) ? readdirSync(folder) : []) {
         if (!name.endsWith('.json')) continue;
         const saved = read(join(folder, name));
-        if (saved?.manualSuppressions?.length && (input.all || samePath(saved.cwd,input.cwd)))
-          manualSuppressions.push({repository:saved.repo,cwd:saved.cwd,holds:saved.manualSuppressions});
         if (saved?.auditHolds?.length && (input.all || samePath(saved.cwd, input.cwd)))
           auditHolds.push({repository:saved.repo,cwd:saved.cwd,holds:saved.auditHolds});
         if (saved?.routeQuestions && (input.all || samePath(saved.cwd, input.cwd)))
           routeQuestions.push({repository: saved.repo, cwd: saved.cwd, ...saved.routeQuestions});
       }
-      return ok(JSON.stringify({...await localCosts(input, ports), routeQuestions, auditHolds, manualSuppressions}, null, 2));
+      return ok(JSON.stringify({...await localCosts(input, ports), routeQuestions, auditHolds}, null, 2));
     }
     if (command === 'status' && input.all) {
       const status = await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);
@@ -2514,9 +2379,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const local = parkingPorts(state, p);
       const runs = (await local.list()).filter(run => run.automaticOrigin?.coordinatorId === state.coordinatorId);
       const observed = await Promise.all(runs.map(async run => ({...run, checkHeld: await local.checkProgress(run)})));
-      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1, p.now()), state.interpreterPattern) + (state.manualIssues?.length ? `\nKept for a person: ${state.manualIssues.map(number => `#${number}`).join(', ')}` : '');
+      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1, p.now()), state.interpreterPattern);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
-      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}${state.manualSuppressions?.some(row => row.reason === 'authority-unknown') ? `\nManual authority unknown: ${state.manualSuppressions.filter(row => row.reason === 'authority-unknown').map(row => `#${row.number}`).join(', ')}` : ''}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
     }
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }
@@ -2544,17 +2409,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
         if (!match || (match[1] || match[2] || state.repo).toLowerCase() !== state.repo.toLowerCase()) return { exitCode: 2, message: `Use issue numbers or references to ${state.repo} with pdd autopilot add.` };
         numbers.push(match[3]);
       }
-      p.manualSafetyRead = target => (p.readManualHold ?? readManualHold)(target,{...p,execFile:(file,args,options) => p.execute(file,args,options)});
-      const eligible = [];
-      for (const number of numbers) if (await issueAllowed(state,p,number)) eligible.push(number);
-      if (!eligible.length) return ok('Marked 0 issue(s) with pdd:autopilot; manual authority holds the targets.');
       const label = await p.execute('gh', ['api', '--method', 'POST', `repos/${state.repo}/labels`, '-f', 'name=pdd:autopilot', '-f', 'color=5319e7', '-f', 'description=Autopilot may take this old issue']);
       if (label.code !== 0 && !/already_exists/.test(label.stdout + label.stderr)) throw Error('Could not create pdd:autopilot; check gh auth status.');
-      let marked = 0;
-      for (const number of eligible) if (await issueAllowed(state,p,number)) {
-        await p.checked('gh', ['api', '--method', 'POST', `repos/${state.repo}/issues/${number}/labels`, '-f', 'labels[]=pdd:autopilot']);marked++;
-      }
-      return ok(`Marked ${marked} issue(s) with pdd:autopilot.`);
+      for (const number of numbers) await p.checked('gh', ['api', '--method', 'POST', `repos/${state.repo}/issues/${number}/labels`, '-f', 'labels[]=pdd:autopilot']);
+      return ok(`Marked ${issues.length} issue(s) with pdd:autopilot.`);
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status or add.' };
     const readiness = await workflowReadiness(state, p);

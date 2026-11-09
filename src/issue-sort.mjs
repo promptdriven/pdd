@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-sort.prompt.md (sha256: 713c1cf6f2bd9623b6debaab916e1211367a9dfc979ef1ecdba8dcf63b9e47ff).
+// Generated from prompts/cli/issue-sort.prompt.md (sha256: a049bfb1a69bb2d4dc3afcb4885ab7c7cc7ebca04cb93bc936481fc0f1a94965).
 import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea } from './autopilot-areas.mjs';
 const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/.test(x);
@@ -48,7 +48,6 @@ export function sortPlan({ snapshot }) {
   if (!snapshot.sortContext) return { queued, routes, groups };
   const prefix = `https://github.com/${snapshot.repository.toLowerCase()}/issues/`;
   for (const issue of snapshot.issues.filter(x => x.key.startsWith(prefix) && x.state === 'open' && x.authority === 'trusted')) {
-    if (issue.holds?.includes('pdd:manual')) continue;
     const record = selectedSort(snapshot, issue), route = { issue: issue.key, action: 'hold', area: '', owner: '', reason: '', record, umbrella: '', members: [], evidence: record?.status.evidence ?? [] };
     routes.push(route);
     const live = issue.execution !== 'idle' || issue.sortOpenPr === true || issue.holds.some(x => /claim/i.test(x) && !/^Expired claim\b/.test(x));
