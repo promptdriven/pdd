@@ -92,6 +92,18 @@ permitted for the damaged record. Keep the shared audit authority intact.
 
 Include a complete pane budget held by several stopped runs. Each has several area chats in one worktree, no saved session IDs, an old layout without createdWorkspaceId and an older coordinator ID for the same machine and folder. Hide Herdr IDs so bounded native discovery must prove the correct sessions. Start a second repository's coordinator and its first workflow run against the shared Herdr service; both must obtain panes through native reclamation. Verify the first run has a live area chat before waking the held runs. Later clear the blockers and resume every held run with its own current-area UUID. Assert screens exist before closes, saved sessions match each area, claim recovery preserves each admitted claim era, and foreign workspaces and busy agents survive. Use only disposable homes, config, queues and service fakes; select a unique throwaway session name for the harness.
 
+## Small-change scope checker
+
+Include a small-change scope scenario. Independently derive a request inventory
+from a synthetic issue and trusted follow-up, then drop one item and assert a
+checker must-fix. An unsupported exclusion must also fail, while an exclusion
+quoted from an optional request can pass. Exercise native workflow publication
+with a documentation-only structured formal exemption; body, saved status and
+Proof must all show not_applicable with the same reason. Expose stored PR comments to native status reads as GitHub comment objects,
+with trusted author association and a fenced JSON verdict. No real interpreter or
+model calls. A scripted checker models the prescribed comparison; it is not
+proof that an AI checker understands arbitrary prose.
+
 ## Code-only bug checker
 
 Exercise a bug whose base prompt already requires value two while the base code

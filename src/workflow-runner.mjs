@@ -40,6 +40,7 @@ import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
+import {readSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
@@ -1702,6 +1703,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
       promptTests: test ? { result: testResult, pass: /✗/.test(testResult) ? false : /✓/.test(testResult) ? true : null, report: test.reports?.[0] ?? null, current: test.source === 'current' } : null,
       lint: lint ? { result: lintCount ? `${lintCount[1]} of ${lintCount[2]} tests pass` : resultText(lint.summary), pass: lintCount ? Number(lintCount[2]) > 0 && lintCount[1] === lintCount[2] : null } : null,
       replay: replay ? { ...replay, ...(replay.formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}) } : null,
+      ...(run.workflow === 'small-change' && label === 'the PR' ? { checklist: readSmallChangeChecklist(run) } : {}),
       formal, ...(formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}),
       proof: layout === 'code' ? { kind: proofKind, status: pending ? 'pending' : evidence.proofStatus, ...(native ? { passed: Number(native[1]), total: Number(native[2]) } : {}) } : null,
       review: layout === 'code' ? reviewVerdict(run, area) : null, formalStep: area.steps.includes('formal'), formalDone: Boolean(run.done.formal && !run.done.formal.skipped),
@@ -1720,6 +1722,8 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
 function readableTopText(facts, run) {
   let top = readablePrTop(facts);
   if (characters(top.text) > 12_000) top = readablePrTop(facts, { fileLimit: 10 });
+  if (facts.workflow === 'small-change' && facts.single && characters(top.text) > BODY_BUDGET - 4000)
+    throw Object.assign(Error('The complete issue checklist exceeds the PR description budget. Keep every request; shorten evidence references before publishing.'), {code: 'workflow_pr_body_too_large'});
   return { text: hideLocalPaths(redactTry(top.text), run), notes: top.notes.map(note => hideLocalPaths(redactTry(note), run)) };
 }
 
@@ -1769,7 +1773,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   const runtime = publicationRuntime(run, env, label === 'PR 1' ? 'pr1' : 'current').filter(line => !line.replace(`${AGENT_NOTE}: `, '').startsWith('Report') || !shown.some(url => line.includes(` ${url} `)));
   const noted = runtime.some(line => hasReportLink(line, env)) || change && hasReportLink(change, env);
   const replayResult = area.replay_evidence === REPLAY_POLICY ? run.replayEvidence ?? readReplayEvidence(run) : null;
-  const rules = readable?.facts?.records?.rulesToCheck;
+  const rules = run.workflow === 'small-change' && label === 'the PR' ? true : readable?.facts?.records?.rulesToCheck;
   const formal = readable?.facts?.records?.formal ?? (label !== 'PR 1' && area.steps.includes('formal') && !replayResult ? readFormalEvidence(run) : null);
   const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0,rules}), ''] : formal ? [formatFormalEvidence(formal, rules), ''] : [];
   const prefix = [...failing, ...replay, ...promptReturnLines(run)];
@@ -2811,6 +2815,8 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
   if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary)}));}
+  if (run.workflow === 'small-change' && !askArea(run) && ['scope','change','verify','formal'].includes(step))
+    record.smallChange = {checklist: readSmallChangeChecklist(run), formal: readFormalEvidence(run)};
   const applyDone=latest=>{
     if (integration || accounted) {
       if (gitFingerprint(run.root) !== worktree || accountedIntegration(latest, area, source) !== accounted
@@ -4404,12 +4410,17 @@ function savedRuntimeEvidence(run, results = []) {
   const latest = [...(run.pddHistory ?? []), ...Object.values(run.done ?? {}).flatMap(record => record?.pddResults ?? []), ...results]
     .filter(result => ['pdd test','pdd lint'].includes(result?.kind) && result.coverage?.runtime)
     .sort((a,b) => (b.at ?? 0) - (a.at ?? 0))[0];
-  return latest ? {runtimeCoverage:latest.coverage.runtime,nativeOnly:latest.nativeOnly ?? []} : {};
+  const published = run.workflow === 'small-change' && !askArea(run) ? run.pr?.at(-1)?.readable?.facts?.records : null;
+  const smallChange = published ? {checklist: published.checklist, formal: published.formal}
+    : Object.values(run.done ?? {}).filter(record => record.smallChange).sort((a,b) => b.at - a.at)[0]?.smallChange;
+  return {...(latest ? {runtimeCoverage:latest.coverage.runtime,nativeOnly:latest.nativeOnly ?? []} : {}), ...(smallChange ? {smallChange} : {})};
 }
 function runtimeStatusLines(evidence) {
   const value = evidence.runtimeCoverage;
-  return value ? [`Runtime coverage: ${value.checkable} of ${value.total} prompts checkable, ${value.native_only} native-only`,
-    ...(evidence.nativeOnly ?? []).flatMap(row => (row.prompts ?? []).map(prompt => `${row.test} ${row.state}: ${prompt.path}: ${oneLine(prompt.reason)}`))] : [];
+  const scope = evidence.smallChange;
+  const small = scope ? [`Issue checklist: ${scope.checklist?.status ?? 'missing'}`, formatFormalEvidence(scope.formal, true)] : [];
+  return [...small, ...(value ? [`Runtime coverage: ${value.checkable} of ${value.total} prompts checkable, ${value.native_only} native-only`,
+    ...(evidence.nativeOnly ?? []).flatMap(row => (row.prompts ?? []).map(prompt => `${row.test} ${row.state}: ${prompt.path}: ${oneLine(prompt.reason)}`))] : [])];
 }
 
 function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, normal = false, suite = null, interpreter = null, now = null, namingError = null } = {}) {

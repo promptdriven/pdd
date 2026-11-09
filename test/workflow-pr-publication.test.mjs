@@ -1248,7 +1248,7 @@ test('CALLS: a status refresh reads each PR once (with its description, head and
 });
 
 // #3088: use the real publication boundary, local bare origin and this file's fake gh.
-function evidence3088(t, { production = false, fixtureOnly = false, formal, stale = false, malformed = false, extraFiles = 0, unavailableDiff = false } = {}) {
+function evidence3088(t, { production = false, fixtureOnly = false, formal = {result: 'not_applicable', scope: 'Coverage validation', reason: 'No separate runtime rule in this synthetic coverage change', control_outcome: 'not_run'}, stale = false, malformed = false, extraFiles = 0, unavailableDiff = false } = {}) {
   const f = fixture(t);
   f.run.areas = [{ name: 'code', steps: ['scope', 'verify', 'formal'], optional: [], gate: 'pr' }];
   f.run.area = 0; f.run.pr = [];
@@ -1348,6 +1348,10 @@ process.stdout.write(JSON.stringify(result));`;
       writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n',
         `#!/usr/bin/env node\nif (process.argv[2] === 'show' && process.argv[3]?.endsWith(${JSON.stringify(`:${options.path}`)})) { ${failure} }\n`));
     }
+    // Coverage is not a defect proof; record its formal exemption explicitly.
+    writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify({schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
+      source: {kind: 'git-content-v1', sha256: sourceFingerprint(f.root)},
+      formal: {result: 'not_applicable', scope: 'Scenario coverage', reason: 'No changed runtime rule in this synthetic scenario coverage', control_outcome: 'not_run'}}));
     const out = f.invoke('Result: scenario coverage; both snapshots pass.');
     assert.equal(out.exitCode, 0, out.message);
     const pr = f.data().prs[0], saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'))).pr[0];

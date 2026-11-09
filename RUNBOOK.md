@@ -634,6 +634,60 @@ and the rows of each open PR ("Updated <time>"). All the rest (pdd result lines,
 verify.md) stays whole in a closed "Details for tools and audits" section. pdd owns the description: it rewrites the
 part above Details at each status and all of it at each push. Put notes for people in a PR comment.
 
+### Small-change issue checklist
+
+The plan in scope.md lists every requested item from the complete issue and trusted
+follow-up comments. Preserve each item through change and verify. Mark it pending,
+done with concrete evidence, or excluded with a reason and an exact quote from the
+issue that permits exclusion. The run's plan cannot narrow the issue. The fresh
+checker first derives its own request inventory from the original issue and trusted
+follow-ups, then compares it with the checklist and PR diff. Missing requests,
+unjustified exclusions, pending work and unsupported done claims are must-fixes.
+A passing wording/structure test does not prove that a requested behavior is correct.
+
+Save the checklist outside source, at `<run-folder>/small-change-checklist.json`:
+
+```json
+{
+  "schema_version": "pdd.small-change-checklist.v1",
+  "run_id": "<run ID>",
+  "source": {"kind": "git-content-v1", "sha256": "<current content fingerprint>"},
+  "items": [
+    {"id": "R1", "request": "Correct the generated setup instructions",
+     "source": "https://github.com/example/project/issues/17",
+     "quote": "Correct the generated setup instructions", "state": "done",
+     "evidence": "Generated instructions checked with the setup fixture"},
+    {"id": "R2", "request": "Add a picture",
+     "source": "https://github.com/example/project/issues/17",
+     "quote": "Optionally add a picture", "state": "excluded",
+     "exclusion": {"reason": "The issue makes the picture optional",
+                   "quote": "Optionally add a picture"}}
+  ]
+}
+```
+
+This example is synthetic. Item ids are unique and nonblank. Keep source URLs and
+exact request quotes, including trusted comment URLs. Update the fingerprint with
+`sourceFingerprint(root)` from `src/workflow-replay.mjs` after source edits; never
+replace a missing item with a smaller inventory. The native reader validates shape,
+current source and completion evidence. It does not establish semantic coverage or
+judge whether a quote permits exclusion. The independent checker does those checks
+against the issue. The PR shows every item's state, quote and evidence or exclusion.
+Missing checklist evidence waits; malformed/stale evidence and must-fixes block ready.
+
+The structured `formal` block in `replay-evidence.json` (§17 and
+the record contract at `docs/replay-evidence.md`) is the only formal exemption field.
+For documentation-only work, record `result: "not_applicable"`, a specific `scope`
+and `reason`, and `control_outcome: "not_run"`. Use the normal schema_version,
+run_id and current source fingerprint; scenario vectors are not required for this
+standalone block. Do not invent a proof or control. Body, Summary, Proof and saved
+status read the same validated field. A scope/formal note cannot override it.
+Small-change missing formal evidence waits before the formal step, then blocks;
+malformed, stale, failed or not_run evidence cannot say ready. A valid exemption
+means not applicable, never proved. The checker verifies that the diff fits it.
+
+### Agent PR fields
+
 Give pdd the human parts as labeled lines in your `done` summary, one per line. A later line with the same label
 replaces an earlier one, also from a later step of the same PR:
 

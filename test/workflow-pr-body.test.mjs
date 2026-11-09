@@ -96,8 +96,8 @@ test('the formal row is honest: Proved only for a proved record, else the exact 
   assert.equal(formal('failed', { counterexample: '1205' }), '| Formal check (all amounts) | Failed at `1205` | — |');
   assert.equal(formal('not_run'), '| Formal check (all amounts) | Not run: the reason | — |');
   assert.equal(formal('not_applicable'), '| Formal check (all amounts) | Not applicable: the reason | — |');
-  const none = smallChange();
-  assert.equal(row(top(none), 'Formal check'), '| Formal check | Not recorded: pdd has no formal result for this run (see Details) | — |');
+  const none = smallChange(); delete none.records.formal;
+  assert.match(row(top(none), 'Formal check'), /missing/);
   none.fields.result = 'Formal check: Proved (bounded) for every input.';
   assert.doesNotMatch(row(top(none), 'Formal check'), /Proved/, 'An agent claim never fills the formal row.');
 });
@@ -126,8 +126,8 @@ test('a feature PR uses feat and a Planted mistake column; a small change uses P
   assert.equal(feature.split('\n')[0], '✅ Ready to merge');
   assert.equal(readablePrTitle({ layout: 'code', workflow: 'feature', area: 'shelf', statement: 'readers can filter books by author', number: 9, part: 2 }), 'feat(shelf): readers can filter books by author (#9 · part 2: feat)');
   const small = readablePrTop(smallChange());
-  assert.deepEqual(headings(small.text), ['## Summary', '## What changed (+1 −1, 1 file)', '## Proof']);
-  assert.match(small.text, /- \*\*Problem:\*\* The help text says "recieve"\.\n- \*\*Change:\*\* fix\u200b the spelling in `src\/help\.js`\.\n- \*\*Result:\*\* Formal check:[^\n]+Regression tests[^\n]+✓ pass/);
+  assert.deepEqual(headings(small.text), ['## Summary', '## Issue checklist', '## What changed (+1 −1, 1 file)', '## Proof']);
+  assert.match(small.text, /- \*\*Problem:\*\* The help text says "recieve"\.\n- \*\*Change:\*\* fix\u200b the spelling in `src\/help\.js`\.\n- \*\*Result:\*\* Formal check[^\n]+Regression tests[^\n]+✓ pass/);
   assert.ok(small.text.endsWith('**Merge:** waiting for a person to merge. Closes #12.'));
   assert.doesNotMatch(small.text, /PR 1|\*\*Approval:\*\*|## User story/);
   assert.deepEqual(small.notes, ['User story: this run changes no Story file, so this PR has no User story section.']);
@@ -247,9 +247,9 @@ test('M4 ready only with every record: a stale, missing or unfinished record kee
   ]) { const f = ready(); change(f); assert.equal(prStatus(f), status); }
   const none = ready(); none.records.ci = 'none';
   assert.equal(row(top(none), 'Full test suite (CI) on this commit'), '| Full test suite (CI) on this commit | no CI checks configured | — |');
-  const small = smallChange(); small.records.ci = 'passing'; small.records.formalDone = false;
-  assert.equal(prStatus(small), '⏳ Waiting for the formal step');
-  small.records.formalDone = true; assert.equal(prStatus(small), '✅ Ready to merge', 'A small change records only that its formal step ran.');
+  const small = smallChange(); small.records.ci = 'passing'; small.records.formalDone = false; delete small.records.formal;
+  assert.match(prStatus(small), /^⏳/);
+  small.records.formalDone = true; assert.match(prStatus(small), /^⛔/, 'Step completion cannot supply a formal result.');
   const older = pr1Manual7(); older.records.ci = 'passing'; older.records.promptTests.current = false;
   assert.equal(prStatus(older), '⏳ Waiting for prompt tests on the current source');
 });

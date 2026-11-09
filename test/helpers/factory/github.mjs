@@ -41,7 +41,7 @@ export function factoryGithub(w) {
       }
       if(a[1]==='list') return ok(f.prs.filter(pr=>(!a.includes('--head') || pr.headRefName===flag(a,'--head')) && (!a.includes('--search') || pr.body.includes(flag(a,'--search').split('"')[1]))));
       const pr=find(a[2]);assert.ok(pr,`unknown factory PR ${a[2]}`);
-      if(a[1]==='view') return ok(pr);
+      if(a[1]==='view') return ok({...pr,comments:pr.comments.map((body,index)=>({body,authorAssociation:'OWNER',createdAt:new Date(w.time+index).toISOString(),url:`${pr.url}#issuecomment-${index}`}))});
       if(a[1]==='edit') {if(a.includes('--base'))pr.baseRefName=flag(a,'--base');if(a.includes('--body-file')||a.includes('--body'))pr.body=body(a,o);return ok('');}
       if(a[1]==='comment') {pr.comments.push(body(a,o));return ok('');}
       if(a[1]==='merge') {
