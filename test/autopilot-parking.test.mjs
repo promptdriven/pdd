@@ -1388,3 +1388,14 @@ for (const hold of ['paused', 'idle', 'resume']) test(`3091 integration: preserv
   assert.equal(f.record().parking?.phase, 'parked');
   assert.deepEqual(f.record().parking.blocker, {kind: 'account', until: new Date(until).toISOString()});
 });
+
+
+for(const facts of [{reason:{code:'binding-missing'}},{refusals:[{code:'binding-missing'}]},
+  {compatibility:{association:'matched',state:'missing-binding'}}])
+  test(`3135: a completed check with ${Object.keys(facts)[0]} binding refusal parks at its automatic gate`,async t=>{
+    const {f,tick,ports,stateFile}=await setup(t);fullTicks(f,stateFile,ports);
+    const held=f.record();held.state='waiting';held.gate={kind:'approve-pr',area:held.areas[held.area].name};held.done.check='No binding verdict';save(f,held);
+    ports.readRunResults=()=>[{kind:'pdd test',batch:'20261101-120000-abcd',at:f.clock,states:[{test:'tests/value.json',state:'not run',...facts}]}];
+    await tick();assert.equal(f.record().parking?.blocker.kind,'binding','3135_SAVED_RESULT_BINDING');
+    f.tick();await tick();assert.equal(f.record().parking?.blocker.kind,'binding');
+  });

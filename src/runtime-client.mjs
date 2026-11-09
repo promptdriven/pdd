@@ -1,6 +1,7 @@
 import {rememberSecrets} from './secret-redaction.mjs';
+import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 052509645626cb536e8213d1c9791d35bae95c2316184e1a22b0c18d57bea0ae).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 3b64bfcdefa7dfcad24a2f954467ddf797658e8666ba4f6895a3dd223be53179).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -1132,6 +1133,13 @@ function captureIndependent(root, rows, ports, options) {
     return captureIndependent(root,rows,ports,options);
   }
   // Each repeat removes at least one broken row. Nothing is uploaded until the selection is usable.
+  for (const row of rows) {
+    const plan=captured.bindingPlans?.find(plan=>plan.test===row.test);
+    if (plan) {
+      row.binding_plan=plan;
+      if (plan.edges.some(edge=>edge.state==='missing')) for (const message of bindingPlanLines(plan)) line(ports.stderr,message);
+    }
+  }
   return capturedCriteria(rows,captured) ? captureIndependent(root,rows,ports,options) : captured;
 }
 
@@ -1328,7 +1336,7 @@ function batchRecord(context) {
     test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
     rows: rows.map(row => ({ test: row.test, native_only: row.native_only ?? [], story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, recovery_state: row.state, ...resultOutcome(row),
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
-      ...(row.unsent ? { unsent: true } : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
+      ...(row.unsent ? { unsent: true } : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, binding_plan: row.binding_plan, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
@@ -1866,6 +1874,20 @@ function printResult(context, rows, extra = {}) {
   return exitCode;
 }
 
+function runExplainBindings(cwd, words, options, ports) {
+  const {root,found,normalized}=localSetup(cwd,words);
+  const selected=select(found,normalized,root);
+  for (const test of selected) {
+    const problem=discoveryRefusal(test) ?? scenarioShapeRefusal(test.doc,test.path);
+    if (problem) throw Object.assign(new PreflightError(4,`${test.path}: ${problem.message}`),{code:problem.code});
+  }
+  const capture=ports.captureSource(root,{tests:selected.map(test=>test.path),excludeFixtureProjects:words.length===0});
+  const plans=capture.bindingPlans ?? [];
+  const code=plans.some(plan=>plan.problems.length || plan.edges.some(edge=>edge.state==='missing')) ? 4 : 0;
+  line(ports.stdout,options['--json'] ? JSON.stringify({schema_version:'pdd.binding-plans.v1',plans}) : plans.flatMap(bindingPlanLines).join('\n'));
+  return code;
+}
+
 function runFiles(cwd, words, options, ports) {
   const { root, found, normalized } = localSetup(cwd, words);
   const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
@@ -2095,7 +2117,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
   const result = { batch, repo: root, exit_code: exitCode, lint_state: resultOverall(rows).state, ...resultOverall(rows), summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
-    rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only,note:row.note} : {}), ...resultOutcome(row), refusals: row.refusals, ...(row.unsent?{unsent:true}:{}), ...(row.not_checked?.length?{not_checked:row.not_checked}:{}), compatibility: row.compatibility, client_advice: row.client_advice })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
+    rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only,note:row.note} : {}), ...resultOutcome(row), refusals: row.refusals, ...(row.unsent?{unsent:true}:{}), ...(row.not_checked?.length?{not_checked:row.not_checked}:{}), binding_plan: row.binding_plan, ...(row.binding_plan?{binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)}:{}), compatibility: row.compatibility, client_advice: row.client_advice })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), result);
   if (context.json) {
     line(ports.stdout, JSON.stringify(result));
@@ -2111,6 +2133,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   }
   for (const row of rows) out.push(`  ${row.test}  ${outcomeText(row)}${row.note ? `: ${row.note.message}` : ''}`);
   for (const row of rows.filter(row => row.state === 'refused' && row.native_only?.length)) out.push(`  Native-only: ${row.note?.message}`);
+  for (const row of rows.filter(row=>row.binding_plan)) for (const detail of bindingRefusals(row.binding_plan,row.compatibility)) out.push(JSON.stringify(detail));
   for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.story, context.secrets)} / ${cleanText(row.test, context.secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
     `  Client advice: ${JSON.stringify(row.client_advice)}`);
   if (typeof capabilityCoverage === 'boolean') out.push(`Capability inventory complete: ${capabilityCoverage}.`);
@@ -2665,13 +2688,14 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       } catch (error) { throw new Stop(2, error.message); }
     }
     requestedCalls(options['--max-calls']);
-    const modes = ['--read', '--retry', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request'], cwd); }
     const root = repoRoot(cwd);
     if (modes[0] === '--fill-hash') return runFillHash(root, ports, options['--compact'] === true);
+    if (modes[0] === '--explain-bindings') return runExplainBindings(cwd, words, options, ports);
     if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);
     return await withCheckRun(context, async () => {

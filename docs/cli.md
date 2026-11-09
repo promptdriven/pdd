@@ -655,6 +655,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
 | `pdd test --fill-hash` | Fill the hash of draft runtime interfaces. No network |
 | `pdd test --fill-hash --compact` | Fill draft hashes and remove interface JSON formatting whitespace. Preserve values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
+| `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
 | `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
 | `pdd lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
@@ -1315,3 +1316,62 @@ in run discovery before capped admission. Damaged or unreadable earlier audit
 evidence, including an unreadable audit folder, holds before another auditor
 launch. Unknown audit costs retain an explicit coverage marker. Separate machines
 retain separate local cost ledgers.
+
+## Explain resource bindings
+
+Run `pdd test --explain-bindings STORY` before a check to inspect the local
+binding plan. Add `--json` for `pdd.binding-plans.v1` with a `plans` array.
+Each plan names the test, Story, executable closure for each step, and every
+resource operation. Candidates show exact selection, wrong resource name, wrong
+operation, invalid lookup, or a prompt outside the boundary or dependency
+closure. Exit 4 means a binding is missing; exit 0 means the local plan has no
+missing binding. This command does not establish a service compatibility pass.
+It reads no token, sends no request, and saves no batch or queue ticket.
+
+A Story can narrow its executable scope with one dedicated block:
+
+````markdown
+```pdd-boundary
+prompts/cli.prompt.md
+```
+````
+
+Use the exact opening and closing fence lines shown above, with blank lines or
+file ends beside the block. The block must be at top level, outside every other
+fence, list and HTML block. Use only LF or CRLF line ends throughout the Story.
+A bare CR, vertical tab, form feed, U+001C–U+001E, NEL (U+0085), U+2028 or U+2029
+anywhere in the Story keeps the full closure with reason `unsupported-line-ends`
+and the note `boundary not applied: unsupported line ends`. List one
+repository-relative prompt path per line,
+including the entry and every executable Runtime call target. Paths use letters,
+digits, underscores, hyphens, dots and slashes, with no whitespace, blank lines,
+empty/dot/parent components, fragments, escapes or Markdown link syntax. Each
+listed member adds its resources even when no Runtime call reaches it.
+
+Only this block can narrow the closure. Markdown links, headings and reference
+definitions elsewhere never remove an edge. A Story with no block, two blocks,
+an invalid path or an unreadable member keeps its full dependency closure,
+including context resource requirements. The plan includes a named
+`boundary-not-applied` note with the reason. A `Runtime boundary` heading without
+a valid block gives `boundary not applied: use the pdd-boundary block`. Unsupported
+fences, blocks inside fenced examples and uncertain HTML contexts also keep the
+full closure. No partial block is applied.
+
+With a valid block, context outside the boundary keeps its prose in the upload
+but omits its Runtime interface. Files on disk do not change. An actual call
+outside an applied boundary refuses locally with `binding-boundary-invalid`;
+expand the block only if the Story requires that behavior. Several Stories keep
+the union of their boundaries and each Story's own plan. Adding a Story cannot
+remove another Story's required edge. A Story whose boundary is not applied
+prevents interface removal from the combined upload. Workspace permissions still
+apply to all required reads.
+
+Fix the smallest named cause: correct the fixture resource/operation key, add
+the required binding, or declare the Story boundary. Step overrides replace
+same-key scenario bindings. The plan never prints fixture arguments or replies.
+If the service refuses an exact fixture selected locally, the result retains
+both the service report and `binding_diagnostics` with
+`server-binding-disagreement`. Ask the compatibility owner to diagnose selection
+before retrying. A local match never replaces a service refusal with a pass.
+Autopilot parks a saved binding refusal with blocker `binding`. Interpreter
+health alone does not wake it. Use the normal reply/retry route after repair.

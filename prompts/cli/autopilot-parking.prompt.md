@@ -51,6 +51,15 @@ each closing run and these reasons, including closing-retry once cleanup has
 remained incomplete for 60000 ms. The runner owns durable attempt observations.
 This bound triggers a visible retry reason, never permission to close unsafe work.
 
+## Binding refusals (#3135)
+
+Recognize `binding-missing`, `missing-binding`, and an unresolved binding contract
+in a stopped run's current reason as `{kind:"binding",until:null}` before generic
+unknown/interpreter/gate inference. Do not override an explicit independent
+blockedOn or current unanswered person question. This is an application binding
+hold, with no timed retry. Retain it until a bound explicit reply/retry arrives;
+never wake it through interpreter health alone. Display binding in summaries.
+
 ## Dependencies
 
 - [Environment causes](autopilot-environment.prompt.md): required generation/runtime/testing context for eligible environmentRetry and its bounded backoff. No other dependency policy is copied here.
@@ -58,6 +67,6 @@ This bound triggers a visible retry reason, never permission to close unsafe wor
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"ad317b974c589666b7f77274430d434f60a5a8253008d87a0cabc0016913c288","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"ad317b974c589666b7f77274430d434f60a5a8253008d87a0cabc0016913c288","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

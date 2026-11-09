@@ -314,7 +314,7 @@ used by an unselected sibling. Capture instability still uses whole-attempt retr
 - Required Markdown context is declared in `For a source document with the scenario schema, before deriving captured criterion exemptions, validate its effective Story path: it is required, Git-visible, and matches the Story selected by the test-name rule. Preserve `pdd-no-story` and `pdd-story-mismatch` as local per-test refusals with file and hint. Missing authority cannot imply full criterion coverage. Context-only selectors without the scenario schema, such as an entry-path seed, remain usable for source closure selection and establish no criterion coverage.
 
 ## Dependencies`: local inline or reference-style Markdown links, and a backticked file path that leads a dependency list item (optionally followed by a colon and description). A bare declaration must name a directory-qualified file with an extension, or a filename with a common text, data or source-code extension (otherwise use a Markdown link); schema/version labels, dotted API identifiers, regular expressions, commands, absolute/home/environment paths and inline-code mentions inside descriptions or rules are not file declarations. Link destinations remain authoritative even when missing; classification must not depend on whether a descriptive token happens to match a Git file. Resolve links and context paths relative to the declaring file, with repository-root paths accepted when they name Git files. Include linked fragments' whole files, and recurse through dependencies in Markdown context files. Include local image links anywhere in reached Markdown, including SVG mockups, subject to the code-example rule below. Ignore remote URLs and same-file anchors; do not load ordinary navigation links outside Dependencies. Cycles terminate and files appear once. Invalid or escaping paths refuse. Unusual names can use the include list.
-- Code examples do not declare Markdown dependencies: ignore inline/reference-style link and image uses, and reference definitions, inside code spans or backtick/tilde fenced code blocks. A code span closes with a backtick run of the same length. A fence opens with at least three identical backticks or tildes and closes only with the same character and at least its opening length; shorter or different markers remain example content, and an unclosed fence protects the remainder. An in-code reference definition cannot resolve an outside use or override an outside definition. Outside code, retain real links/images and their missing/unsafe-file refusals. The backticked bare file path leading a genuine Dependencies list item remains a declaration; a list item inside a fenced example does not. Apply these distinctions only to discovery, including section boundaries; never rewrite authored or captured bytes.
+- Code examples do not declare Markdown dependencies. Apply the prose masking rules of the [shared Markdown parser](runtime-markdown.prompt.md) before discovering links, images, reference definitions and section boundaries. An in-code definition cannot resolve an outside use or override an outside definition. Outside code, retain real links/images and their missing/unsafe-file refusals. The backticked bare file path leading a genuine Dependencies list item remains a declaration; a list item inside a fenced example does not. Apply these distinctions only to discovery; never rewrite authored or captured bytes.
 - The Dependencies section ends at the next level-one/two Markdown heading or a following `<details><summary>` section headed `Required rules`, `Required module rules`, `Required interface reference` or `Decision path` (case-insensitive, optional `Required`, and an optional colon with a descriptive suffix). Inline emphasis tags (`strong`, `em`, `b`, `i`) and line breaks in those summaries do not change the boundary, including quoted tag attributes containing `>`. Unknown or malformed angle markup does not establish a boundary: retain subsequent dependency declarations and their safety checks. This reads a section name only; never treat it as sanitized HTML or alter captured bytes. Literal HTML section markers inside backtick/tilde fenced examples, inline code or HTML comments are not boundaries; they must not hide a genuine dependency declaration or bypass its missing/unsafe-file refusal. Later rule/reference links and source/test filename list items are not dependency declarations, even when Git contains those files. Other details blocks may wrap genuine dependency declarations and do not end the section. Preserve their inline/reference links, bare file declarations, recursive context and missing/unsafe-file refusals. Image links still apply anywhere in the full reached Markdown. This scopes discovery only; never trim the captured prompt or infer file exclusions from its extension.
 - `appMap` names the app map used by the caller, or null for none. Include that file, all its screen, router, handler and after-operation `prompt_path`s, their dependency closures, and `stylesheets`. App-map paths are repository-relative. Only path-bearing map fields supply dependencies; arbitrary input or saved-state strings do not.
 - Optional root `pdd-source.json` contains only `{"include": ["docs/shared-policy.md", "data/menu.json"]}`. Entries are exact source-readable repository-relative file paths, not folders or globs; reject invalid JSON, unknown keys, non-string entries, absolute paths and traversal. Include these files and their Markdown/prompt dependencies. The config itself is local selection metadata, sent only if explicitly included. No include list can override safety rules or limits.
@@ -395,8 +395,35 @@ freshness, and allow the approval owner to review and refill a stale prompt.
 Preflight validates the status and hash of each reachable native declaration
 before omission.
 
+## Story runtime boundary (#3135)
+
+Only the strict dedicated `pdd-boundary` fenced block owned by the binding-plan
+prompt can narrow a Story's executable closure. Markdown headings, links and
+reference definitions are advisory, including closing-ATX headings and HTML
+examples. Parse a declaration without discovering dependencies from its prose.
+Safely inspect and read all declared paths before adding any of them as boundary
+members. A missing, unreadable, outside-resolving or workspace-denied member
+cancels the whole boundary; keep full ordinary dependency capture and a named
+`boundary-not-applied` plan note with reason `unreadable-path`. Preserve source
+snapshot retries and ordinary required-source refusal rules. Zero, duplicate or
+unsupported blocks likewise keep full closure with the owner's named note.
+
+Each fallback plan includes the selected test's full transitive prompt dependency
+closure, including context resources, without borrowing unrelated Stories' paths.
+Every entry and actual Runtime call target must be inside an applied boundary;
+refuse a crossing rather than hide an actual call. Linked prompts outside a valid
+boundary keep their prose but omit their Runtime interface from the effective
+upload; authored bytes stay unchanged. Manifest, hashes and tar describe the
+projected bytes. Load every valid declared member and required context through
+safe capture. Combined selections retain the union of valid boundaries. Each
+Story keeps its own plan; adding a Story cannot remove a required edge. Any
+fallback Story prevents interface projection in the combined upload.
+
 ## Dependencies
 
+
+- [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.
+- [Markdown links](runtime-markdown.prompt.md): shared link and reference-definition parsing for dependency discovery.
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in policy and permission outcomes.
 
 - [References](contract-refs.prompt.md): required generation and verification
