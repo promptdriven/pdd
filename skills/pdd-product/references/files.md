@@ -22,7 +22,7 @@ person's answer. Give each question a recommended choice and concrete example.
 
 ## Plan: product/plan.md
 
-Use `# Product name: plan`. The small path needs no separate plan.
+Use `# Product name: plan`. A small map with exactly one part needs no separate plan.
 
 | Heading | Columns |
 |---|---|
