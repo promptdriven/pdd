@@ -98,6 +98,12 @@ run, PR and cause. No auditor, repeated audit publication or audit time rule is
 permitted for the damaged record. Keep the shared audit authority intact.
 
 
+The parent alert adapter must give the real alert owner the same injected
+GitHub execution transport as native factory commands. Its manual authority
+reader observes the fake issue labels and timeline. Never substitute an
+always-clear authority result or fall through to a native program. Keep private
+state and fake HTTP delivery, including failed and uncertain replies.
+
 ## Manual issue factory (#3129)
 
 Exercise an issue labeled `pdd:manual` before intake: no claim, sorting or dependency review is allowed. Remove the label and claim it through the normal coordinator path. Add the label while the run owns work, then tick until the saved idle work is released. Its run folder, branch, commits and PRs survive. Removing the label makes it eligible again. A separate run parked for missing #3129 wakes through installed capability evidence, retaining its saved work and independent decisions. Apply labels through the fake GitHub writer and use native commands and workflow state. Replace the coordinator identity after saving a worker native session, remove its stopped panes, add the manual label and tick: no worker resumes, the saved work and safe custody survive, and the hold is reported. Cover saved pending dependency effects and a hold arriving after preparation with real snapshot, graph, intake and effect code. A table over resume, wake, claim, dependency mutation, sort and ordinary comment effects must show zero automatic effects for held issues. Keep guarded custody release separate from ordinary comments.

@@ -172,6 +172,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
             value=await runAutopilotAlerts({...input,env:w.env},{
               stateRoot:join(w.home,'.local/state/pdd/factory-alerts'),hostname:()=> 'factory-machine',now:()=>w.time,
               repository:async()=>({nameWithOwner:w.repository}),
+              execFile:(file,args,options)=>w.execute(file,args,options),
               http:async request=>{w.alertDeliveries.push(request.body.text);return w.alertResponse??{status:200,text:'ok'};},
             });
             w.alertReplies.push(value);
