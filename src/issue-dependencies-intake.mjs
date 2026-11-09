@@ -1,4 +1,5 @@
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: 34888a8a8361eadbf4b9fe6e7beb5b45546e1a76cbcf17f3e83b73b58a53c5f1).
+import {parkingSummary} from './autopilot-parking.mjs';
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: 70283b8cc2c57c55c7903a0eccf07b00a5ed1abb44d71808013701d32402b4f8).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -131,15 +132,21 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     if (!coordinator || coordinator.repository?.toLowerCase() !== repository.toLowerCase() || !coordinator.coordinatorId || owners.localOwner !== coordinator.coordinatorId || !coordinator.machine || !coordinator.claim?.commentId || !coordinator.claim?.labelEventId || !claim || claim.owner !== coordinator.coordinatorId || claim.coordinatorId !== coordinator.coordinatorId || claim.machine !== coordinator.machine || claim.commentId !== coordinator.claim.commentId || claim.labelEventId !== coordinator.claim.labelEventId) return { allowed: false, reason: 'owner' };
     if (settings.activation !== coordinator.activation || settings.runs !== coordinator.runs) return { allowed: false, reason: 'stale' };
     if (owners.runsKnown !== true || !Array.isArray(owners.runs)) return { allowed: false, reason: 'runs' };
-    const occupied = owners.runs.filter(run => !(['waiting', 'paused', 'stuck', 'question'].includes(run.state) && run.occupied === false));
+    const slots = new Map();
+    for (const run of owners.runs) {
+      const key = run.runId || run.issue;
+      const working = run.working ?? (run.occupied === true || parkingSummary([run], 1).working > 0);
+      // A duplicate observation cannot hide working custody.
+      const prior = slots.get(key);
+      slots.set(key, {run, working: working || prior?.working === true});
+    }
+    const occupied = [...slots.values()].filter(slot => slot.working).map(slot => slot.run);
     const runCap = settings.runs ?? settings.capacityRuns;
     if (runCap !== undefined) {
       if (!Number.isSafeInteger(runCap) || runCap < 1) return { allowed: false, reason: 'runs' };
-      const slots = new Map();
-      for (const run of occupied) {
-        slots.set(run.runId || run.issue, run);
-      }
-      if (slots.size + ([...slots.values()].some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > runCap) return { allowed: false, reason: 'runs' };
+      if (occupied.length + (occupied.some(x => selected && issueKey(x.issue) === selected) ? 0 : 1) > runCap) return { allowed: false, reason: 'runs' };
+      const parkedCap = settings.maxParked ?? 2 * runCap;
+      if (!Number.isSafeInteger(parkedCap) || parkedCap < 1 || slots.size - occupied.length >= parkedCap) return {allowed: false, reason: 'parked'};
     }
     if (owners.runs.some(run => selected && issueKey(run.issue) === selected)) return { allowed: false, reason: 'dependency' };
     const copy = structuredClone(snapshot); const subject = copy.issues.find(x => selected && issueKey(x.key) === selected);

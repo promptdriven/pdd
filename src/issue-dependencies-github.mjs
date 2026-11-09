@@ -1,8 +1,9 @@
+import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 9a47a1d5bd797cdb5948a83bca243adebcaffc2b925fd08e28344c716ed59c53).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 2bcaf2bc4a38e4c85015c5e98d744d4a8a0b30a9d2fd5f0f133fcb56291f9df4).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1192,13 +1193,14 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     const runId = run.runId || run.runDir;
     if (typeof runId !== 'string' || !runId) { runsKnown = false; continue; }
     seen.add(runId);
+    const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
+    const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports))
+      || held((ports.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: ports.env}, {now: ports.now ?? Date.now, ...ports.interpreterQueuePorts}));
+    const working = parkingSummary([{...run, checkHeld}], 1).working > 0;
     if (run.parking?.phase === 'parked' && run.layout?.phase === 'closed'
       && run.chats.every(chat => Number.isFinite(chat.closed?.confirmedAt))) {
-      const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
-      const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports))
-        || held((ports.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: ports.env}, {now: ports.now ?? Date.now, ...ports.interpreterQueuePorts}));
       runs.push({issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId,
-        state: 'paused', occupied: checkHeld, parked: !checkHeld});
+        state: 'paused', occupied: checkHeld, parked: !checkHeld, working});
       continue;
     }
     const chat = currentChat(run), state = chatLifecycle(chat); let finishedTurn = false;
@@ -1213,7 +1215,7 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
       if (!live.alive && ['agent_not_found', 'server_not_running'].includes(live.code)
         && ['ended', 'failed'].includes(observed.state)) continue;
     }
-    runs.push({ issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId,
+    runs.push({ issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId, working: checkHeld || working && !finishedTurn,
       state: chat?.startUnconfirmed || (state === 'starting' && !finishedTurn) ? 'starting' : ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown', ...(finishedTurn ? { occupied: false } : {}),
       ...(run.state === 'paused' && run.runtimeWait ? { waiting: 'runtime' } : {}) });
   }
@@ -1315,7 +1317,7 @@ export function createDependencyReadPorts({ cwd = '' } = {}, supplied = {}, scop
     const result = await runAutopilot({ action: 'setup', interactive: false, inRepo: true }, { cwd: root, execFile: ports.execFile });
     if (result.exitCode !== 0 || !state || typeof state.enabled !== 'boolean') throw Error('Current activation unavailable');
     if (state.checkCapacity !== undefined && (!Number.isSafeInteger(state.checkCapacity?.runs) || state.checkCapacity.runs < 1)) throw Error('Current check capacity unavailable');
-    return { ...(state.parking?.wakePending?.length ? {parkingWakePending: state.parking.wakePending} : {}), ...(state.health?.paused === true ? { healthPaused: true } : {}), ...(state.checkCapacity === undefined ? {} : {capacityRuns:state.checkCapacity.runs}), mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }) };
+    return { ...(result.parking?.maxParked === undefined ? {} : {maxParked: result.parking.maxParked}), ...(state.parking?.wakePending?.length ? {parkingWakePending: state.parking.wakePending} : {}), ...(state.health?.paused === true ? { healthPaused: true } : {}), ...(state.checkCapacity === undefined ? {} : {capacityRuns:state.checkCapacity.runs}), mode: state.enabled ? result.mode : 'off', activation: state.activatedAt ?? '', ...(state.runs === undefined ? {} : { runs: state.runs }) };
   } };
   Object.defineProperty(settings, NATIVE_SETTINGS, { value: true });
   ports.settings = supplied.settings?.[NATIVE_SETTINGS] ? settings : supplied.settings ?? settings;
