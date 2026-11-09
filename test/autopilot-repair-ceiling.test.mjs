@@ -17,7 +17,7 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 // keeps its skill's own 2-repair rule, and pdd does not refuse its reruns.
 async function buildArea(t, { automatic }) {
   const f = await fixture(t, { name: 'small-change', agent: 'codex' });
-  f.ports.env = { HOME: f.ports.env.HOME };
+  f.ports.env = { HOME: f.ports.env.HOME, PDD_INTERPRETER_QUEUE: f.ports.env.PDD_INTERPRETER_QUEUE };
   assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
   const run = f.record(); f.tick();
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
@@ -67,7 +67,7 @@ test('repair ceiling: the 5th failed round refuses a 6th in an Autopilot run; a 
 // An Autopilot run that can publish: a live claim on fake GitHub, so that pdd opens the PR.
 async function publishingRun(t, { rounds } = {}) {
   const f = await fixture(t, { name: 'small-change', agent: 'codex' });
-  f.ports.env = { HOME: f.ports.env.HOME };
+  f.ports.env = { HOME: f.ports.env.HOME, PDD_INTERPRETER_QUEUE: f.ports.env.PDD_INTERPRETER_QUEUE };
   assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
   const run = f.record(); f.tick();
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());

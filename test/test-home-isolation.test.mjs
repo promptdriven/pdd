@@ -133,13 +133,16 @@ for (const [file, pattern] of [
   ['metrics-selector.integration.test.mjs', '^selector captures'],
   ['metrics-composition.integration.test.mjs', '^composed launcher'],
   ['autopilot-runtime-outage.test.mjs', '^real path:|^real pdd test:'],
+  ['workspace-evidence-counting.test.mjs', '^2899/2956: owned'],
+  ['workflow-step-results-2922.test.mjs', '^2922 AC'],
+  ['autopilot-repair-ceiling.test.mjs', '^repair ceiling:'],
 ]) test(`focused ${file} leaves caller state and config unchanged`, t => {
   const f = caller(t), before = snapshot(f.home);
   // No preload: this proves focused files load their own isolation. Leave the
   // runtime override absent to exercise the normal HOME fallback as well.
   delete f.env.PDD_STATE_DIR;
   const target = process.env.PDD_TEST_HOME_ROOT ?? root;
-  const result = child(['--test', `--test-name-pattern=${pattern}`, join(target, 'test', file)], f.env, target);
+  const result = child(['--test', '--test-concurrency=8', `--test-name-pattern=${pattern}`, join(target, 'test', file)], f.env, target);
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.deepEqual(snapshot(f.home), before, 'caller-home-leak');
 });

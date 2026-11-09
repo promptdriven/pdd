@@ -70,7 +70,7 @@ export async function setup(t, { completed = true } = {}) {
   };
   f.ports = { execFile, herdr: h.herdr, stateDir, layoutDirectory: join(stateDir, 'layout'), now: () => f.clock,
     sleep: async ms => { f.clock += ms; }, findNativeSessions: h.findNativeSessions,
-    env: { HOME: home }, isTTY: true,
+    env: { HOME: home, PDD_INTERPRETER_QUEUE: join(base, 'interpreter-queue') }, isTTY: true,
     confirm: async question => { f.confirmations.push({ input: 'SYNTHETIC terminal fixture: yes', question }); return true; },
     readRunResults: () => structuredClone(f.results) };
   ok(await startRun({ name: 'bug', issue: '2922', agent: 'codex', cwd: source, packageRoot }, f.ports));

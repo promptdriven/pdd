@@ -72,7 +72,7 @@ with `PDD_TEST_ACCOUNT_HOME`, even if the caller catches the error.
 The helper also blocks filesystem access to the default machine interpreter queue
 with `PDD_TEST_INTERPRETER_QUEUE`, even when the error is caught. A test that
 replaces its environment or starts a native pdd check must carry a private queue
-selector. HOME and TMPDIR alone do not isolate the machine queue.
+selector. HOME and TMPDIR alone do not isolate the machine queue. Fresh fixture environments and narrowed repair-test environments must keep their own PDD_INTERPRETER_QUEUE selector.
 
 The runtime workspace fixture uses `f.env.HOME` for its private home. It leaves
 `<parent>/home` available for tests that need a separate consumer home.
