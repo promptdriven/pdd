@@ -10,6 +10,9 @@ The shell entry selects private home, configuration, runtime state and queue
 folders. It removes its temporary folder when it exits. It has a 890-second
 limit and a five-second termination grace. Any failed scenario returns a nonzero
 status. A candidate gap stays a failing assertion, with its gap name in the output.
+The known gap `claim-transfer-open` is in factory 6: the old coordinator can open
+its current chat after another machine takes the claim. The script names this
+gap and keeps its failure nonzero. This scenario is not a pass.
 
 The test entry is `test/autopilot-factory.e2e.test.mjs`. Each command and timer tick
 runs in a fresh Node process. Native CLI dispatch, workflow definitions, gates,

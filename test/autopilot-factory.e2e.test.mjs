@@ -121,7 +121,7 @@ test('factory 5d: a dead dispatched holder records uncertainty without resending
   await a.merge();assert.deepEqual(w.leadActions,[]);
 });
 
-test('factory 6: another machine takes the claim; the old worker cannot publish',async t=>{
+test('factory 6: another machine takes the claim; the old worker cannot publish [known gap: claim-transfer-open]',async t=>{
   const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
   const before=w.record();w.github.unlabel(17,'pdd:working');w.github.claim(17,{coordinatorId:'another-coordinator',machine:'another-machine'});
   const out=await w.command(['workflow','open','17'],{actor:'old-coordinator',allowFailure:true});
