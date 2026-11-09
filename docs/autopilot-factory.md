@@ -42,6 +42,7 @@ the same merge.
 
 | Group | Required result |
 |---|---|
+| Check plan | A full native check saves target and baseline scope; a saved read retains it. A missing interface blocks paid dispatch. |
 | Small change, bug, feature | One or two PRs reach merge; PR 2 starts stacked on PR 1. |
 | Restart | Claim, allocation, completed steps and chat session survive; no duplicate publication. |
 | Lost verdict | Timer ticks send nothing again; one explicit synthetic person decision permits one resend. |

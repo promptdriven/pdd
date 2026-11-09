@@ -339,7 +339,7 @@ handling and the existing [saved Check intent and continuation policy](#continue
 including its legacy classification; passing lint alone never establishes Check intent.
 
 Order:
-1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A estimates declared work for each step: one entry execution, one use of each declared saved-data resource operation, and prompt-call max_calls multiplied by the target prompt estimate (including its resource operations and calls); cut dependency cycles rather than recursing forever. Conditional operations may use fewer calls. Bound the estimate by the unchanged hard cap; M = the sum of the tests' `max_calls` (cli 12b).
+1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before Check dispatch, use the check scope plan defined below.
 2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). Allocate one new `crypto.randomUUID()` for lint at batch creation and write `batch.json`. Allocate each test's first check UUID only at its first authorized dispatch after the applicable dispatch gates; pending lint allocates no check UUID. Print to stderr `If pdd stops, read the results with: pdd test --read <batch>` after lint passes and right before the first check POST, and again at the end of an exit 3. A pending lint also has a saved result to read: name its batch when the wait limit ends.
 3. Lint: write `<id>.posted` (exclusive create), then POST `/v1/lint` multipart (`request` = `{requestId, source_sha256, complete: true}`, no `paths`; `source` = the tar). When the last `/v1/capacity` answer of this command lists `"lint-tests"` in its `features` array, the request also carries `tests` (the selected test paths that are sent, sorted; never a test refused locally) and `app_maps` (the sorted, distinct union of maps named by the CLI and `app_maps` declared by the selected tests that are sent, or `[]` when neither names a map), so the interpreter lints exactly the tests that pdd found by the [test name rule](runtime-preflight.prompt.md#test-name-rule). Without that feature (an older interpreter, or no capacity answer) the request stays as it is; such an interpreter refuses fields it does not know, and it finds tests in the upload by itself. Read until terminal within the caller wait defined below; there is no independent 120-second lint cap. Judge selected tests through the Outcome contract below.
 4. Checks: validate an explicit --max-calls as a whole number from1 through1000 before sign-in, capture or network effects, including direct runCheck callers. For each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or the preflight default (12 for each step, 18 to 1000). Each remote lint, test and new Simulator setup uses the shared local admission contract below. Hold remaining tests locally only when an explicit local job cap, the per-process upload setting below or confirmed server backpressure requires it; do not reserve a batch slot while its child jobs wait for slots. POST timeout is the earlier 90 s and remaining command budget. Reuse one immutable source Blob per packed tar across all its lint, test, retry and Simulator setup POSTs, preserving exact tar bytes and source hash; multipart request metadata remains distinct for each attempt. Reuse must not copy the source per upload or impose a default job cap.
@@ -912,6 +912,9 @@ refusals. Saved recovery states remain separate from public states.
 
 ## Dependencies
 
+- [Check planning](runtime-check-plan.prompt.md): required for affected Story
+  selection, bounded work, saved scope and target/baseline recovery guidance.
+
 - [Local interface inventory](interface-draft.prompt.md#inventory-results): required generation and verification context for `interfaceFindings` and Runtime coverage. This selection owns the local inventory APIs; automatic approval is a caller of this module and supplies no admission policy here.
 
 - Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
@@ -1126,6 +1129,24 @@ verification. root identifies saved records when comparisonRoot names a merged
 run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
+
+## Check scope plan
+
+Before normal Check dispatch, build the local plan owned by
+[check planning](runtime-check-plan.prompt.md), using the unique same-worktree
+workflow run's baseSha when available. Print its text to stderr once before
+sign-in and lint. Save it as `check_plan` in batch.json and summary.json; restore
+it on saved reads and retries rather than recomputing against later edits.
+JSON results include `check_scope` from that owner's result projection. Text
+results show its separate group states and recovery guidance. Local full-check
+prerequisites stop every paid Check with exit 4 and zero calls; keep existing
+refusals, mark other rows not run and show the named prerequisite once in the
+plan. Preserve all selected rows and existing full-batch gate requirements.
+Replace the old all-Story cost line with this plan's estimate and ceiling.
+The planning owner is required dependency context for these uses.
+Save every selected row, including reused passes with their `cached`,
+`passed_at`, `checks` and `criteria` fields. Saved reads preserve that reuse
+classification without dispatching it again or inventing a sent receipt.
 
 ## Named check results
 

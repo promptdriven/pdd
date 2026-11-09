@@ -573,6 +573,21 @@ separate from approval of draft prompt interfaces.
 
 ## Tests on the PDD interpreter and prompt approval
 
+Before a check, PDD prints one local plan. It lists target Stories, the changed
+paths that affect each Story, and their dependency closures. A full batch also
+lists unrelated Stories as baseline obligations. The plan shows estimated model
+calls and a maximum that includes one restart replacement per test. It does not
+authorize more calls. A full check with a missing interface or undefined call
+bound stops with a named prerequisite and no paid check.
+
+Check JSON and saved batches include `check_plan`. Results also include
+`check_scope`, with separate target and baseline states and recovery guidance.
+A baseline failure stays in the failed full batch. Hand it to its owner; do not
+rerun unchanged target checks to repair it. The classification does not prove
+the failure's age or owner. Required repository full-pass gates still apply.
+Saved reads use the original plan. Without reliable change scope, PDD marks the
+selection as conservative and retains the selected Stories as targets.
+
 `pdd lint`, `pdd test` and `pdd test --files` report broken selected tests first,
 with the file, reason and fix step. Missing or unreadable dependencies and invalid
 test files do not stop other selected tests. The summary counts tests that could

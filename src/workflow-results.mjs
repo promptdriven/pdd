@@ -1,4 +1,5 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 4752d7a2cec58f0e50762d393f8f1070fd2c0be02d8d969f352f35c07c952147).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 7f352af0e1374822cc119e19c2e9e5a73f6698ec38bcf02f373bdad21ab05eaa).
+import {checkPlanResults,checkPlanResultLines} from './runtime-check-plan.mjs';
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';
@@ -71,7 +72,7 @@ export const usableResult = result => result.states?.some(row => row.state === '
 function runtimeEvidence(batch, summary) {
   const coverage = batch.coverage ?? summary?.coverage;
   const nativeOnly = batch.rows.filter(row => Array.isArray(row?.native_only) && row.native_only.length).map(row => ({test:row.test,state:row.state,prompts:row.native_only.filter(item => item && typeof item.path === 'string' && typeof item.reason === 'string').map(item => ({path:item.path,reason:item.reason}))}));
-  return {...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
+  return {...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:checkPlanResults(batch.check_plan,batch.rows)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
 }
 
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
@@ -139,7 +140,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
         stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
-      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence].filter(Boolean).join('; '), stories,
+      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(checkPlanResults(batch.check_plan,batch.rows))].filter(Boolean).join('; '), stories,
       ...identity(batch.rows) });
   }
   if (lint) {

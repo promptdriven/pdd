@@ -6,7 +6,34 @@ import {proseSha256} from '../src/runtime-preflight.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
 import {existsSync,readdirSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {factoryWorld,put,readJson,valuePrompt} from './helpers/factory/world.mjs';
+import {factoryWorld,put,readJson,valuePrompt,scenario} from './helpers/factory/world.mjs';
+
+test('factory 3114: full native check retains baseline scope and blocks missing-interface dispatch',async t=>{
+  const w=await factoryWorld(t);
+  put(w.cwd,'value.prompt.md',valuePrompt(2));
+  for(const name of ['value','baseline']) {
+    put(w.cwd,`user_stories/${name}.md`,'# Value\n\n## Acceptance criteria\n\n1. The value is 2.\n');
+    put(w.cwd,`tests/${name}.json`,{...scenario,story_path:`user_stories/${name}.md`});
+  }
+  await w.command(['test','--fill-hash']);
+  w.git(w.cwd,'add','.');w.git(w.cwd,'commit','-qm','Synthetic full check obligations');
+  put(w.cwd,'user_stories/value.md',readFileSync(join(w.cwd,'user_stories/value.md'),'utf8')+'\n');
+  const checked=await w.command(['test','--json']);
+  const result=JSON.parse(checked.stdout);
+  assert.ok(result.check_plan,'3114_FACTORY_PLAN_MISSING');
+  assert.equal(result.check_plan.stories.find(row=>row.story_path==='user_stories/value.md').role,'target');
+  assert.equal(result.check_plan.stories.find(row=>row.story_path==='user_stories/baseline.md').role,'baseline');
+  assert.equal(result.check_scope.target.state,'passed');assert.equal(result.check_scope.baseline.state,'passed');
+  const saved=await w.command(['test','--read',result.batch,'--json']);
+  assert.deepEqual(JSON.parse(saved.stdout).check_plan,result.check_plan);
+  const sent=w.interpreter.posts.filter(row=>row.command==='check').length;
+  put(w.cwd,'value.prompt.md','# Missing interface\n');
+  const blocked=await w.command(['test','--json'],{allowFailure:true});
+  assert.equal(blocked.code,4);
+  assert.equal(JSON.parse(blocked.stdout).check_plan.prerequisites.length,1);
+  assert.equal(w.interpreter.posts.filter(row=>row.command==='check').length,sent);
+  assert.ok(w.commands.every(row=>!row.argv.includes('approve')));
+});
 
 for(const workflow of ['small-change','bug','feature'])test(`factory 1: ${workflow} reaches merge without lead action`,async t=>{
   const w=await factoryWorld(t,{workflow});await w.begin();
