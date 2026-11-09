@@ -376,7 +376,7 @@ async function trusted(row, state, config, p) {
 // A trusted claim comment that carries a lastSeen heartbeat.
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
-function parkingPorts(state, p, {localOnly = false, wake = false} = {}) {
+function parkingPorts(state, p, {localOnly = false} = {}) {
   const worker = {...p, autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
     const result = await p.execute(file, args, options);
     if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
@@ -387,7 +387,7 @@ function parkingPorts(state, p, {localOnly = false, wake = false} = {}) {
   const parking = {
     now: p.now,
     list: async () => await listRuns({cwd: state.cwd, cancelled: true}, worker),
-    held: run => p.manualHolds?.has(run.number) && (wake || !localOnly || p.manualConfirmed?.has(run.number)),
+    held: run => p.manualHolds?.has(run.number),
     checkProgress: async run => {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
       return busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
@@ -1622,7 +1622,6 @@ async function runTick(stateFile, ports, completion) {
     };
     let {budget, restLeft} = readBudget();
     const confirmed = new Set(state.manualIssues ?? []);
-    p.manualConfirmed = confirmed;
     p.manualHolds = new Set(state.manualIssues ?? []);
     const manualObservations = new Map();
     const remoteAllowed = () => { const b = readBudget().budget; return !(state.retryAt > p.now()) && !(b.state === 'reserve' && b.resetAt > p.now()); };
@@ -1633,10 +1632,14 @@ async function runTick(stateFile, ports, completion) {
       const number = Number(issue);
       if (!manualObservations.has(number)) manualObservations.set(number, (async () => {
         let hold = observation ?? {known:false, held:false};
-        if (!observation && remoteAllowed()) try {
+        const deferred = !observation && !remoteAllowed();
+        if (!observation && !deferred) try {
           hold = await observeManualNow(number);
         } catch { /* Unknown authority retains suppression and prior confirmation. */ }
-        if (!hold.known || hold.held) p.manualHolds.add(number); else p.manualHolds.delete(number);
+        const signaled = (state.cachedIssues ?? []).some(row => row.number === number
+          && row.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:manual'));
+        if (hold.known) { if (hold.held) p.manualHolds.add(number); else p.manualHolds.delete(number); }
+        else if (!deferred || signaled || confirmed.has(number)) p.manualHolds.add(number);
         if (hold.known) { if (hold.held) confirmed.add(number); else confirmed.delete(number); }
         state.manualIssues = [...confirmed].sort((a,b) => a-b);
         await scanGuard(latest => {latest.manualIssues = state.manualIssues;});
