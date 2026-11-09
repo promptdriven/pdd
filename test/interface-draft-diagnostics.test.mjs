@@ -33,6 +33,7 @@ test('generic interface refusal identifies missing diagnostic without guessing a
   assert.equal(result.code, 4);
   const problem = JSON.parse(result.out).problems[0];
   assert.equal(problem.field ?? null, null);
+  assert.equal(typeof problem.hint, 'string', 'MISSING_DIAGNOSTIC_HINT');
   assert.match(problem.hint, /Runtime.*field/i);
 });
 
@@ -48,5 +49,17 @@ test('generic canonical section does not identify a field', async t => {
   assert.equal(result.code, 4);
   const problem = JSON.parse(result.out).problems[0];
   assert.equal(problem.field ?? null, null);
+  assert.equal(typeof problem.hint, 'string', 'MISSING_DIAGNOSTIC_HINT');
   assert.match(problem.hint, /Runtime.*field/i);
+});
+
+for (const json of [true,false]) test(`3130 repair 1: Runtime rule without pointer survives ${json?'JSON':'text'}`,async t=>{
+  const setup=harbor(t),rule='A resource operation must declare arguments_schema.';
+  const fake=await fakeRuntime(t,(entry,f)=>entry.method==='POST' && entry.command==='lint'
+    ? {status:200,json:f.lint(entry.request.requestId,[{path:PLACE,state:'refused',admission_state:'refused',interface:null}],
+      [{code:'invalid-interface',path:PLACE,rule,message:'invalid-interface'}])}:f.normal(entry));
+  const result=await run(setup,fake,{'--lint':true,...(json?{'--json':true}:{})});
+  assert.equal(result.code,4);assert.ok((result.out+result.err).includes(rule),'RUNTIME_RULE_DROPPED');
+  assert.match(result.out+result.err,/Runtime.*field/i);
+  if(json) assert.equal(JSON.parse(result.out).problems[0].field??null,null);
 });

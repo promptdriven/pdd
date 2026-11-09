@@ -4,7 +4,7 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false
 
 ## Runtime interface refusal diagnostics
 
-For Runtime interface refusals, preserve a server-provided field or JSON pointer and its rule in lint and check output, in text and JSON. If `invalid-interface` has no field or pointer, show any supported local schema findings for the named prompt as local advice, without claiming they caused the server refusal. If none are available, say the Runtime did not identify the field and ask the person to inspect the interface or request a detailed Runtime diagnostic. Never guess a rejected field.
+For Runtime interface refusals, preserve a server-provided field or JSON pointer and its rule in lint and check output, in text and JSON. If `invalid-interface` has no field or pointer, show any supported local schema findings for the named prompt as local advice, without claiming they caused the server refusal. If none are available, say the Runtime did not identify the field and ask the person to inspect the interface or request a detailed Runtime diagnostic. Always retain the supplied Runtime rule text, including when no field pointer exists. Show the rule together with a field-unknown note and any separately labeled local findings in text and JSON. Never guess a rejected field.
 
 ## Native lint selection and display (draft)
 

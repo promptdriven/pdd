@@ -1168,10 +1168,17 @@ Numeric inputs remain numbers even if the function rejects fractions. A contract
 that explicitly requests representative JSON rejection shapes can use a disjoint
 `oneOf` for number, string, boolean, null, arrays of numbers and empty objects.
 This transport does not cover arbitrary nested JavaScript objects.
+The JSON row includes `prose_coverage`: each sentence has its draft field pointers.
+Only supported whole sentences have mappings. Each unmapped sentence is quoted
+in its own question and keeps the draft partial. Recognized formatting rules stay
+in schema descriptions. Local lint alone cannot establish completeness.
 
 For complex prose, each incomplete result has `questions` with `pointer` and
 `question`, and `next_step`. Answer the questions in a Git-visible JSON contract
 file, with complete `entries`, `calls`, `resources`, `limits` and `conventions`.
+Authored `draft_gaps` and malformed inferred schemas also produce questions and a
+next step on the first invocation. Repeating the command keeps those questions
+stable.
 Use the resource declarations in [RUNBOOK §21](../RUNBOOK.md#21-fake-the-outside-world)
 for file, network and program ports. Then run:
 
@@ -1193,13 +1200,20 @@ pdd interface draft prompts/example.prompt.md --extend --contract contracts/addi
 
 The fragment can add entries, resources or prompt calls. Existing declarations and
 limits must remain equal; conflicts name their pointer and leave the prompt
-unchanged. The combined block is a draft and needs approval. To reopen a stale
+unchanged. Extension preserves the exact bytes of existing declarations and appends
+new array members. The Runtime format has one global status, so it cannot hold
+mixed approval status. The whole interface becomes draft and requires full
+re-approval. The result declares `approval_scope: "whole-interface"` and includes
+`interface_diff` with before/after JSON and unchanged declaration pointers. The
+approval view shows the scope and interface diff. Historical approval evidence
+stays intact. To reopen a stale
 block without changing its declarations, use `--refresh`. To replace declarations
 for changed behavior, use `--refresh --contract FILE`. These routes keep prose
 bytes and never record approval. Extension and refresh cannot use automatic
 approval provenance for new behavior.
 
-Runtime refusals retain a reported field pointer and rule. If the server gives
+Runtime refusals retain a reported field pointer and rule. A supplied rule also
+stays visible when the field is unknown, beside the field-unknown note. If the server gives
 only `invalid-interface`, pdd reports any local schema findings separately. When
 there is no local finding, it says that the Runtime did not identify the field.
 No inferred cause is presented as a server diagnosis.

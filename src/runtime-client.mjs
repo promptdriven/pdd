@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: a15f3aa832399b748b85c5c13914dd6a8e09ca48faec59f9a692ad9c69179a3a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0a581e39b0ac8b7cc26cbc293ca9370f6c930e2fb56dc6ec339a18651053ef12).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -1170,9 +1170,9 @@ function interfaceDiagnostic(view, raw, root, secrets = []) {
   if (view.code === 'invalid-interface' && !pointer && !view.section?.startsWith('/')) {
     let findings = [];
     try { if (view.path) findings = interfaceFindings({root,paths:[view.path]}).filter(item => item.section?.startsWith('/')); } catch { /* No local diagnosis is available. */ }
-    view.hint = findings.length
+    view.hint = [rule, 'The Runtime did not identify the field.', findings.length
       ? `Local schema findings (not confirmed as the Runtime cause): ${findings.map(item => item.message).join('; ')}`
-      : 'The Runtime did not identify the field. Inspect the interface or request a detailed Runtime diagnostic.';
+      : 'Inspect the interface or request a detailed Runtime diagnostic.'].filter(Boolean).join(' ');
   }
   return view;
 }

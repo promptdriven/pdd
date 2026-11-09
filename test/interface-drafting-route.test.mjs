@@ -56,7 +56,16 @@ test('3130 prose percent drafts an executable number transport and reaches Runti
   const text=prompt(setup),iface=parse(text);
   assert.equal(text.replace(interfaceBlocks(text)[0][0],''),prose);
   assert.equal(iface.prose_sha256,proseSha256(text));assert.equal(Object.hasOwn(iface,'kind'),false);
-  assert.deepEqual(iface.entries[0],{operation:'formatPercent',input_schema:object({basisPoints:{type:'number'}}),result_schema:object({text:{type:'string'}}),errors:['invalid-basis-points']});
+  const {description:inputDescription,...inputSchema}=iface.entries[0].input_schema;
+  const {description:resultDescription,...resultSchema}=iface.entries[0].result_schema;
+  assert.deepEqual({...iface.entries[0],input_schema:inputSchema,result_schema:resultSchema},{operation:'formatPercent',input_schema:object({basisPoints:{type:'number'}}),result_schema:object({text:{type:'string'}}),errors:['invalid-basis-points']});
+  assert.equal(typeof inputDescription,'string');assert.equal(typeof resultDescription,'string');
+  const coverage=result.report.rows[0].prose_coverage;
+  assert.ok(coverage.length>0);assert.ok(coverage.every(row=>row.pointers.length>0));
+  for(const row of coverage) {
+    if(row.pointers.includes('/entries/0/input_schema')) assert.ok(inputDescription.includes(row.sentence));
+    if(row.pointers.includes('/entries/0/result_schema')) assert.ok(resultDescription.includes(row.sentence));
+  }
   assert.deepEqual(iface.limits,{max_steps:4,max_model_calls:2});
   assert.deepEqual(result.report.rows[0].draft_budget,{source:'command-default',limits:{max_steps:4,max_model_calls:2}});
   assert.equal(JSON.parse(readFileSync(join(setup.repo,'.pdd/interface-drafts.json'),'utf8'))[PLACE].mode,'prose');
@@ -224,4 +233,75 @@ test('3130 printed recovery command works from a subdirectory',async t=>{
   const args=row.next_step.split(' ').slice(1).map(word=>word==='FILE'?'../contracts/draft.json':word);
   const recovered=await invoke([...args,'--json']);assert.equal(recovered.code,0,'PRINTED_SUBDIRECTORY_RECOVERY_FAILED');
   assert.equal(parse(prompt(setup)).entries[0].operation,'measure');
+});
+
+for (const extra of [
+  'The input object must contain a string `locale`.',
+  'A file audit record is created on disk.',
+  'Compliance records persist after each invocation.',
+]) test(`3130 repair 1: unmapped prose stays partial: ${extra}`, async t => {
+  const {setup,prose}=formatter(t,'percent');
+  writeFileSync(join(setup.repo,PLACE),prose.replace('## Percentage format',extra+'\n\n## Percentage format'));
+  const first=await draft(setup), row=first.report.rows[0];
+  assert.equal(first.code,4,'UNMAPPED_SENTENCE_ACCEPTED_AS_COMPLETE');
+  assert.equal(parse(prompt(setup)).kind,'partial');
+  assert.ok(Array.isArray(row.prose_coverage),'SENTENCE_COVERAGE_MISSING');
+  assert.deepEqual(row.prose_coverage.find(c=>c.sentence===extra)?.pointers,[]);
+  assert.equal(row.questions.filter(q=>q.question.includes(extra)).length,1,'UNMAPPED_SENTENCE_QUESTION_COUNT');
+  assert.ok(row.next_step?.includes('--refresh --contract'));
+  const saved=prompt(setup), second=await draft(setup);
+  assert.equal(second.code,4);assert.equal(prompt(setup),saved);
+  assert.deepEqual(second.report.rows[0].questions,row.questions,'REPEATED_DRAFT_QUESTIONS_CHANGED');
+});
+
+test('3130 repair 1: authored gaps have recovery on the first and repeated draft',async t=>{
+  const value={...contract('measure'),kind:'partial',draft_gaps:['Choose whether locale is required.']};
+  const setup=harbor(t,repo=>writeFileSync(join(repo,PLACE),'# Contract\n\n```json\n'+JSON.stringify(value)+'\n```\n'));
+  const first=await draft(setup),row=first.report.rows[0],saved=prompt(setup);
+  assert.equal(first.code,4);assert.ok(row.questions?.some(q=>q.question.includes(value.draft_gaps[0])),'AUTHORED_GAP_QUESTION_MISSING');
+  assert.ok(row.next_step?.includes('--refresh --contract'));
+  const second=await draft(setup);assert.equal(second.code,4);assert.equal(prompt(setup),saved);
+  assert.deepEqual(second.report.rows[0].questions,row.questions,'AUTHORED_GAP_DID_NOT_CONVERGE');
+});
+
+for(const schema of [{type:['number','string']},{type:'object',properties:[],required:[],additionalProperties:false}])
+  test(`3130 repair 1: invalid inferred schema has actionable recovery ${JSON.stringify(schema)}`,async t=>{
+    const value=contract('measure');value.entries[0].input_schema=schema;
+    const setup=harbor(t,repo=>writeFileSync(join(repo,PLACE),'# Contract\n\n```json\n'+JSON.stringify(value)+'\n```\n'));
+    const first=await draft(setup),row=first.report.rows[0];
+    assert.equal(first.code,4);assert.ok(row.questions?.length,'INVALID_INFERRED_SCHEMA_HAS_NO_QUESTIONS');
+    assert.ok(row.next_step?.includes('--contract'),'INVALID_INFERRED_SCHEMA_HAS_NO_RECOVERY');
+    const saved=prompt(setup), second=await draft(setup);
+    assert.equal(second.code,4);assert.equal(prompt(setup),saved);
+    assert.deepEqual(second.report.rows[0].questions,row.questions);
+  });
+
+test('3130 repair 1: compact approved extension keeps bytes and discloses full reapproval with a diff',async t=>{
+  for(const committed of [true,false]) {
+  const setup=harbor(t,repo=>{
+    const file=join(repo,PLACE),raw=readFileSync(file,'utf8'),block=interfaceBlocks(raw)[0],value=JSON.parse(block[1]);
+    if(!committed) value.status='draft';
+    writeFileSync(file,raw.replace(block[1],JSON.stringify(value)));
+    save(repo,{entries:[entry('second')]});
+  });
+  if(!committed) writeFileSync(join(setup.repo,PLACE),prompt(setup).replace('"status":"draft"','"status":"approved"'));
+  const before=prompt(setup),oldBody=interfaceBlocks(before)[0][1],old=parse(before),oldEntryBytes=JSON.stringify(old.entries[0]);
+  const result=await draft(setup,['--extend','--contract','contracts/draft.json']),row=result.report.rows[0];
+  assert.equal(result.code,0);assert.ok(prompt(setup).includes(oldEntryBytes),'APPROVED_ENTRY_BYTES_CHANGED');
+  assert.equal(row.approval_scope,'whole-interface','GLOBAL_STATUS_SCOPE_NOT_DISCLOSED');
+  assert.equal(row.interface_diff?.before,oldBody);
+  assert.equal(row.interface_diff?.after,interfaceBlocks(prompt(setup))[0][1]);
+  assert.ok(row.interface_diff.unchanged.includes('/entries/0'));
+  const {runApprove}=await import('../src/prompt-approve.mjs');
+  const {Readable}=await import('node:stream');
+  const stdout=sink(),stderr=sink();
+  const code=await runApprove({words:[PLACE],cwd:setup.repo},{stdout,stderr,stdin:Readable.from(['n\n']),interactive:true});
+  assert.equal(code,1,stderr.text);
+  assert.match(stdout.text,/whole interface.*re-approv/i);
+  assert.ok(stdout.text.includes(oldEntryBytes),'APPROVAL_DIFF_LOST_OLD_BYTES');
+  assert.ok(stdout.text.includes('second'),'APPROVAL_DIFF_LOST_ADDITION');
+  assert.match(stdout.text,/unchanged.*\/entries\/0/i);
+  assert.equal(parse(prompt(setup)).status,'draft');
+  if(!committed) assert.match(stdout.text,/before extension/i);
+  }
 });

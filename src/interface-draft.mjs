@@ -1,8 +1,9 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: f2ba793bcaafd76eef32d07ea69a7b17226f82b6d05c4f787e064aa2de23d4a1).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: ccd7561549a278628fb0a70c649c4d884f78bca04ec8812348e7331920ac480f).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
+import { expandSource } from './contract-refs.mjs';
 import { gitFiles, findTests, readPrompt, promptRefusal, interfaceBlocks, interfaceSchemaProblems, proseSha256, sourceFilePort, sha256 } from './runtime-preflight.mjs';
 import { loadRuntimeWorkspace, allowsRuntimePath, nativeWorkspaceFiles } from './runtime-workspace.mjs';
 
@@ -67,9 +68,9 @@ function jsonDeclarations(text) {
 const objectSchema = properties => ({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
 const objectTransport = schema => object(schema) && (schema.type==='object' || Array.isArray(schema.oneOf) && schema.oneOf.length>0 && schema.oneOf.every(objectTransport));
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-function questionsFor(iface) {
+function questionsFor(iface, problems=interfaceSchemaProblems(iface)) {
   const questions=[];
-  const ask=(pointer,question)=>questions.push({pointer,question});
+  const ask=(pointer,question)=>{if(!questions.some(item=>item.pointer===pointer && item.question===question)) questions.push({pointer,question});};
   if (!Array.isArray(iface.entries) || !iface.entries.length) ask('/entries','Which public operations must this interface expose?');
   for (const [i,entry] of (Array.isArray(iface.entries) ? iface.entries : []).entries()) {
     if (typeof entry?.operation!=='string' || !entry.operation.trim()) ask(`/entries/${i}/operation`,'What is the public operation name?');
@@ -78,7 +79,56 @@ function questionsFor(iface) {
   }
   for (const key of ['calls','resources']) if (!Array.isArray(iface[key])) ask('/'+key,`Which ${key} are used, with their operation bindings and schemas (or explicitly none)?`);
   if (!object(iface.limits)) ask('/limits','What max_steps and max_model_calls execution ceilings should this contract use?');
+  if (iface.draft_gaps !== undefined) {
+    if (!Array.isArray(iface.draft_gaps)) ask('/draft_gaps','Supply a list of unresolved contract questions.');
+    else for (const [i,gap] of iface.draft_gaps.entries()) {
+      const saved=typeof gap==='string' && /^(\/[^:]*): ([\s\S]*)$/.exec(gap);
+      ask(saved ? saved[1] : `/draft_gaps/${i}`,saved ? saved[2] : typeof gap==='string' && gap.trim() ? gap : 'Resolve this malformed draft gap.');
+    }
+  }
+  for (const problem of problems) {
+    if (problem.code==='interface-draft-incomplete') continue;
+    ask(problem.pointer ?? '/',problem.rule);
+  }
+  if (iface.kind==='partial' && !questions.length) ask('/kind','Which contract facts remain unresolved in this partial declaration?');
   return questions;
+}
+
+// Full-sentence grammar: unrecognized clauses never inherit a nearby sentence's mapping.
+function proseCoverage(text, transport, errors) {
+  const sentences=[];
+  // Keep every non-heading character, including an unclosed code span or a sentence without punctuation.
+  const prose=text.replace(/^#{1,6}[^\n]*$/gm,'');
+  for(const paragraph of prose.split(/\n\s*\n/)) {
+    let start=0,quoted=false;
+    for(let i=0;i<paragraph.length;i++) {
+      if(paragraph[i]==='`') quoted=!quoted;
+      if(!quoted && /[.!?]/.test(paragraph[i]) && (i+1===paragraph.length || /\s/.test(paragraph[i+1]))) {
+        const sentence=paragraph.slice(start,i+1).trim();if(sentence) sentences.push(sentence);start=i+1;
+      }
+    }
+    const rest=paragraph.slice(start).trim();if(rest) sentences.push(rest);
+  }
+  const result='/entries/0/result_schema', input='/entries/0/input_schema';
+  const grammar=[
+    [/^(?:In the Runtime interface, |The Runtime interface uses JSON transport: )?operation [\s\S]+\.$/i,s=>['','In the Runtime interface, ','The Runtime interface uses JSON transport: '].some(prefix=>s===prefix+transport),[input,result]],
+    [/^(?:There are |This is pure behavior: )?no external resources, operating-system commands(?:,| or) (?:or )?(?:saved data|persistent state)\.$/i,null,['/calls','/resources']],
+    [/^(?:Throw a |Negative values, fractions, non-number values, NaN, infinities and unsafe integers throw )`RangeError` with `code` equal to `[^`]+`\.$/,s=>errors.some(code=>s.includes('`'+code+'`')),['/entries/0/errors']],
+    [/^Public binding: module function `[^`]+` in `[^`]+`, exported (?:from|at) `[^`]+`\.$/,null,['/entries/0/operation']],
+    [/^(?:It takes a Number of basis points and returns a string|It returns a string|`text` is the returned string)\.$/,null,[input,result]],
+    [/^Its input schema admits representative JSON shapes for rejection; the native function rejects every non-number, including arbitrary JavaScript objects\.$/,null,[input]],
+    // Numeric formatting rules are retained verbatim as result/input descriptions, not executable schema constraints.
+    [/^(?:This module displays a basis-point rate as a percentage beside a price|It owns the percentage format of the library|This module formats downloaded file sizes so they are easy to scan in a list|It owns byte-count formatting)\.$/,null,[result]],
+    [/^This is new behavior authorized by issue #\d+; existing price, duration and word contracts remain unchanged\.$/,null,['/entries/0/operation']],
+    [/^(?:100 basis points equal one percent|Accept a Number only if it is a safe integer|Accept only a nonnegative safe integer Number, including negative zero|Do not coerce inputs|No input is rounded)\.$/,null,[input]],
+    [/^(?:Show the exact rate with two decimal digits and a trailing `%`, without spaces or grouping separators|Use the magnitude for the digits and a leading minus sign for negative rates|Zero, including negative zero, is `0\.00%`|Rates above 100 percent are allowed; do not clamp or round|Use powers of 1,024 for B, KiB, MiB, GiB, TiB and PiB, respectively|Select the largest unit whose size is no greater than the input, capped at PiB; zero uses B|Divide by that unit's size and round down to a whole number|Return its ungrouped decimal digits, one space, and the unit name)\.$/,null,[result]],
+    [/^For example, (?:-?\d+ is `-?[0-9.]+%`(?:, |, and | and )?)+\.$/,null,[result]],
+    [/^For example, (?:[\d, -]+(?:and [\d-]+ )?(?:produce|produces) `[^`]+`(?:, |, and | and )?)+\.$/,null,[result]],
+    [/^Fractions, non-number values, NaN, infinities and unsafe integers are refused\.$/,null,['/entries/0/errors']],
+    [/^(?:Preserve existing helpers and add no dependencies|None)\.$/,null,['/calls','/resources']],
+  ];
+  if(!transport) return sentences.map(sentence=>({sentence,pointers:[]}));
+  return sentences.map(sentence=>({sentence,pointers:grammar.find(([pattern,guard])=>pattern.test(sentence) && (!guard || guard(sentence)))?.[2] ?? []}));
 }
 function proseInterface(text) {
   // This grammar requires explicit transport facts. Business-domain names and examples do not supply types.
@@ -96,18 +146,17 @@ function proseInterface(text) {
   const errors=[...text.matchAll(/\bcode`?\s+equal to\s+`([^`]+)`/g)].map(match=>match[1]);
   const iface={kind:'full',status:'draft',prose_sha256:'',entries:[{operation:operation[1],input_schema:objectSchema({[operation[3]]:input}),result_schema:objectSchema({[result[2]]:{type:result[1]==='numeric'?'number':result[1]}})}],calls:[],resources:[],limits:{max_steps:4,max_model_calls:2},conventions:[]};
   if(!/\b(?:throw|throws|refuse|refused|reject|rejects|error|errors|exception)\b/i.test(text) || errors.length && [...text.matchAll(/\bcode\b/g)].length===errors.length) iface.entries[0].errors=[...new Set(errors)];
-  // A second transport claim or an effect contradicting the pure declaration needs author input.
-  const rest=text.replace(transport[0],'').replace(/Its input schema admits representative JSON shapes for rejection; the native function rejects every non-number, including arbitrary JavaScript objects\./i,'');
-  const sensitive=rest.replace(/(?:There are |This is pure behavior: )?(?:no|neither) external resources, operating-system commands(?:,| or) (?:or )?(?:saved data|persistent state)\./ig,'');
-  const supplementary=/\b(?:also|additionally|in addition|included|flag|flags)\b/i.test(sensitive);
-  if(supplementary || /\b(?:required|optional|properties|fields|schema)\b|\b(?:input|result|output)\s+(?:also\s+)?(?:has|includes|contains|requires|returns)\b/i.test(sensitive)) {
-    delete iface.entries[0].input_schema;delete iface.entries[0].result_schema;
+  const coverage=proseCoverage(text,transport[0],errors);
+  for (const key of ['input_schema','result_schema']) iface.entries[0][key].description=coverage.filter(row=>row.pointers.includes('/entries/0/'+key)).map(row=>row.sentence).join(' ');
+  const unmapped=coverage.filter(row=>!row.pointers.length);
+  if(unmapped.length) {
+    iface.kind='partial';
+    iface.draft_gaps=unmapped.map((row,i)=>{
+      const pointer=/\b(?:input|locale)\b/i.test(row.sentence) ? '/entries/0/input_schema' : /\b(?:result|output|flag)\b/i.test(row.sentence) ? '/entries/0/result_schema' : '/resources';
+      return pointer+': Sentence '+(i+1)+': Map this unresolved contract sentence to a complete declaration: "'+row.sentence+'"';
+    });
   }
-  if(supplementary || /\b(?:writes?|reads?|opens?|appends?|deletes?|executes?|spawns?|fetch(?:es)?|sends?|transmits?|telemetry|remote|service|network|database|callback|ports?)\b/i.test(sensitive) || /\b(?:It|The operation|The module|This module)\s+(?!(?:formats?|displays?|owns?|returns?|takes?|uses?)\b)[a-z]+/.test(sensitive)) {
-    delete iface.resources;delete iface.calls;
-  }
-  if(supplementary) iface.draft_gaps=['Resolve the supplementary contract claim: '+sensitive.split(/(?<=[.!?])\s+/).filter(sentence=>/\b(?:also|additionally|in addition|included|flag|flags)\b/i.test(sentence)).join(' ')];
-  return iface;
+  return {iface,coverage};
 }
 function declarationError(pointer,rule) {
   return Object.assign(Error(`${pointer}: ${rule}`),{code:'interface-contract-invalid',pointer,rule});
@@ -220,6 +269,53 @@ function extendContract(previous, addition) {
   for(const key of ['limits','conventions']) if(Object.hasOwn(addition,key) && !isDeepStrictEqual(previous[key],addition[key])) throw declarationError('/'+key,'An extension must preserve the existing value.');
   return completeContract(merged);
 }
+function preservedPointers(before,after) {
+  return ['entries','calls','resources','instance_types'].flatMap(key=>(before[key] ?? []).flatMap((item,i)=>isDeepStrictEqual(item,after[key]?.[i]) ? [`/${key}/${i}`] : []));
+}
+// Locate JSON value boundaries without reserializing existing declarations.
+function bodyFields(body) {
+  const stringEnd=start=>{let i=start+1;while(i<body.length && body[i]!=='"') i+=body[i]==='\\'?2:1;return i+1;};
+  const whitespace=start=>{while(/\s/.test(body[start] ?? '') && start<body.length) start++;return start;};
+  const fields=new Map();let at=whitespace(0)+1;
+  while((at=whitespace(at))<body.length && body[at]!=='}') {
+    const keyStart=at,keyEnd=stringEnd(at),key=JSON.parse(body.slice(at,keyEnd));
+    at=whitespace(keyEnd)+1;const start=at=whitespace(at);let depth=0;
+    do {
+      const char=body[at];
+      if(char==='"') {at=stringEnd(at);continue;}
+      if(char==='{' || char==='[') depth++;
+      if(char==='}' || char===']') {if(depth===0) break;depth--;}
+      if(char===',' && depth===0) break;
+      at++;
+    } while(at<body.length);
+    let end=at;while(/\s/.test(body[end-1])) end--;
+    if(fields.has(key)) throw declarationError('/'+key,'Duplicate top-level fields cannot be extended safely.');
+    fields.set(key,{keyStart,start,end,separator:at});
+    if(body[at]===',') at++;
+  }
+  return fields;
+}
+function extendBody(body,previous,iface) {
+  const fields=bodyFields(body),edits=[],added=[];
+  for(const [key,value] of Object.entries(iface)) {
+    const span=fields.get(key);
+    if(!span) {added.push(JSON.stringify(key)+':'+JSON.stringify(value));continue;}
+    if(isDeepStrictEqual(previous[key],value)) continue;
+    if(Array.isArray(value) && Array.isArray(previous[key])) {
+      const tail=value.slice(previous[key].length);
+      if(tail.length) edits.push([span.end-1,span.end-1,(previous[key].length?',':'')+tail.map(item=>JSON.stringify(item)).join(',')]);
+    } else edits.push([span.start,span.end,JSON.stringify(value)]);
+  }
+  if(fields.has('kind') && !Object.hasOwn(iface,'kind')) {
+    const span=fields.get('kind');
+    if(body[span.separator]===',') edits.push([span.keyStart,span.separator+1,'']);
+    else {let start=span.keyStart-1;while(/\s/.test(body[start])) start--;edits.push([body[start]===','?start:span.keyStart,span.end,'']);}
+  }
+  if(added.length) edits.push([body.lastIndexOf('}'),body.lastIndexOf('}'),','+added.join(',')]);
+  const next=edits.sort((a,b)=>b[0]-a[0]).reduce((text,[from,to,value])=>text.slice(0,from)+value+text.slice(to),body);
+  if(!isDeepStrictEqual(JSON.parse(next),iface)) throw declarationError('/','Cannot preserve the existing declaration bytes safely.');
+  return next;
+}
 function inferInterface(root,path,text) {
   const files=sourceFilePort(root), sources=[{path,text}];
   // Only declared dependencies can supply schema facts. Never read arbitrary links or code as context.
@@ -232,7 +328,7 @@ function inferInterface(root,path,text) {
   }
   const declarations=sources.flatMap(source=>jsonDeclarations(source.text));
   const candidates=declarations.filter(value=>Array.isArray(value.entries) && value.entries.length
-    && value.entries.every(entry=>typeof entry?.operation==='string' && entry.input_schema && entry.result_schema));
+    && value.entries.every(entry=>typeof entry?.operation==='string'));
   let iface;
   if(candidates.length===1) {
     const value=candidates[0];
@@ -244,7 +340,7 @@ function inferInterface(root,path,text) {
     }
     if(iface.kind==='native-only') throw Error('Drafting cannot choose native-only. Declare and review its reason.');
   } else {
-    if (!candidates.length) { const inferred=proseInterface(text); if(inferred) return {iface:inferred,defaultBudget:true}; }
+    if (!candidates.length) { const inferred=proseInterface(text); if(inferred) return {...inferred,defaultBudget:true}; }
     const named=[...text.matchAll(/\boperation\s+`([\w$]+)`/g)].map(match=>match[1]);
     const operations=[...named,...[...text.matchAll(/\b(?:Export|export|exports)\s+(?:(?:async|module|function)\s+)*`?([A-Za-z_$][\w$]*)\s*\(/g)].map(match=>match[1])];
     // An explicitly owned source file can add clear exported function names, never schemas.
@@ -256,6 +352,11 @@ function inferInterface(root,path,text) {
     iface={kind:'partial',status:'draft',prose_sha256:'',entries:[...new Set(operations)].map(operation=>({operation})),
       draft_gaps:[candidates.length>1 ? 'More than one interface declaration is present; select the owning contract.' : 'Declare complete input_schema and result_schema for each public operation. Review calls, resources and limits against the prompt.']};
   }
+  if(!candidates.length) {
+    const coverage=proseCoverage(text,null,[]);
+    iface.draft_gaps.push(...coverage.map((row,i)=>`/draft_gaps/${i}: Map this unresolved contract sentence to a complete declaration: "${row.sentence}"`));
+    return {iface,coverage,defaultBudget:false};
+  }
   return {iface,defaultBudget:false};
 }
 export async function runInterfaceDraft({words=[],all=false,json=false,cwd=process.cwd(),contract,extend=false,refresh=false}={},ports={}) {
@@ -266,7 +367,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
     const root=rootFor(cwd),workspace=loadRuntimeWorkspace({root}),visible=new Set(gitFiles(root));
     const paths=all ? promptPaths(root) : [...new Set(words.map(word=>relative(root,resolve(cwd,word)).split('\\').join('/')))];
     const files=sourceFilePort(root,visible,workspace);
-    const recovery=path=>`pdd interface draft ${shellWord(relative(cwd,resolve(root,path)).split('\\').join('/'))} --refresh --contract FILE`;
+    const recovery=(path,hasBlock=true)=>`pdd interface draft ${shellWord(relative(cwd,resolve(root,path)).split('\\').join('/'))} ${hasBlock?'--refresh ':''}--contract FILE`;
     // Validate the entire selection before any mutation.
     for(const path of paths) {
       if(!path.endsWith('.prompt.md') || !visible.has(path) || !allowsRuntimePath(workspace,path)) throw Error(`Not a workspace prompt: ${path}`);
@@ -297,31 +398,38 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         const iface=extend ? extendContract(previous,supplied) : supplied ? completeContract(supplied) : refresh ? completeContract(previous) : inference.iface;
         if(iface.kind==='full') delete iface.kind;
         const inferredBudget=inference?.defaultBudget===true;
-        const questions=questionsFor(iface);
+        const candidate='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface)+'\n```\n</details>';
+        const expanded=JSON.parse(interfaceBlocks(expandSource({path,text:candidate,format:'prompt'},files).text)[0][1]);
+        const questions=questionsFor(iface,interfaceSchemaProblems(expanded));
+        if(inference && !questions.length) completeContract(expanded);
         if(questions.length) {
           iface.kind='partial';
-          iface.draft_gaps=[...new Set([...(iface.draft_gaps ?? []),...questions.map(item=>item.pointer+': '+item.question)])];
+          iface.draft_gaps=questions.map(item=>item.pointer+': '+item.question);
         }
         // All whitespace outside the block is original prose, including its final newline.
-        const render=()=>{const rendered='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface,null,2)+'\n```\n</details>';return block ? text.replace(block[0],()=>rendered) : text+rendered;};
+        const render=()=>{if(extend) return text.replace(block[0],()=>block[0].replace(block[1],()=>extendBody(block[1],previous,iface)));const rendered='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface,null,2)+'\n```\n</details>';return block ? text.replace(block[0],()=>rendered) : text+rendered;};
         iface.prose_sha256=proseSha256(render());
         const next=render();
-        records[path]={head:git(root,['rev-parse','HEAD']).trim(),original_sha256:sha256(text),prose_sha256:iface.prose_sha256,interface_sha256:sha256(JSON.stringify(iface)),...(block ? {mode:extend?'extend':'refresh'} : inferredBudget ? {mode:'prose'} : {})};
+        records[path]={head:git(root,['rev-parse','HEAD']).trim(),original_sha256:sha256(text),prose_sha256:iface.prose_sha256,interface_sha256:sha256(JSON.stringify(iface)),...(block ? {mode:extend?'extend':'refresh',...(extend ? {extension_before:block[1]} : {})} : inferredBudget ? {mode:'prose'} : {})};
         writeFileSync(join(root,path),next);
-        rows.push({path,state:'drafted',...(inferredBudget ? {draft_budget:{source:'command-default',limits:iface.limits}} : {}),...(questions.length ? {questions,next_step:recovery(path)} : {})});
+        rows.push({path,state:'drafted',...(inference?.coverage ? {prose_coverage:inference.coverage} : {}),...(extend ? {approval_scope:'whole-interface',approval_note:'The Runtime has one global status; mixed approval status is unavailable. The whole interface needs re-approval.',interface_diff:{before:block[1],after:interfaceBlocks(next)[0][1],unchanged:preservedPointers(previous,iface)}} : {}),...(inferredBudget ? {draft_budget:{source:'command-default',limits:iface.limits}} : {}),...(questions.length ? {questions,next_step:recovery(path)} : {})});
       } catch(error) {rows.push({path,state:'refused',problems:[{code:error.code ?? 'interface-draft-failed',message:error.message,...(error.pointer!==undefined ? {section:error.pointer,rule:error.rule} : {})}]});}
     }
     if(rows.some(row=>row.state==='drafted')) saveDrafts(root,records);
     for(const row of rows) {
       row.problems ??= interfaceFindings({root,paths:[row.path]});
       row.lint_clean=row.problems.length===0;
-      if(row.state==='existing' && row.problems.some(item=>item.code==='interface-draft-incomplete')) {
+      if(row.state==='existing' && row.problems.length) {
         const iface=readPrompt(root,visible,row.path).interface;row.questions=questionsFor(iface);row.next_step=recovery(row.path);
+      }
+      if(row.problems.length && !row.questions?.length) {
+        row.questions=row.problems.map(item=>({pointer:item.section ?? '/',question:item.rule ?? item.message}));
+        row.next_step=recovery(row.path,interfaceBlocks(files.read({path:row.path}).content).length>0);
       }
     }
     const summary={drafted:rows.filter(row=>row.state==='drafted').length,existing:rows.filter(row=>row.state==='existing').length,lint_clean:rows.filter(row=>row.lint_clean).length,refused:rows.filter(row=>row.problems.length).length,total:rows.length};
     const exit_code=summary.refused ? 4 : 0;
-    stdout.write(json ? JSON.stringify({exit_code,summary,rows})+'\n' : [...rows.map(row=>`${row.path}: ${row.state}; ${row.lint_clean ? 'lint clean' : row.problems.map(item=>`${item.code}: ${item.message}`).join('; ')}`+(row.questions?.length ? '\n'+row.questions.map(item=>`Question ${item.pointer}: ${item.question}`).join('\n') : '')+(row.next_step ? `\nNext: ${row.next_step}` : '')+(row.draft_budget ? `\nDraft budget (command default, needs review): ${JSON.stringify(row.draft_budget.limits)}` : '')),`Interfaces: ${summary.drafted} drafted, ${summary.existing} existing, ${summary.lint_clean} lint clean, ${summary.refused} refused. 0 AI calls.`].join('\n')+'\n');
+    stdout.write(json ? JSON.stringify({exit_code,summary,rows})+'\n' : [...rows.map(row=>`${row.path}: ${row.state}; ${row.lint_clean ? 'lint clean' : row.problems.map(item=>`${item.code}: ${item.message}`).join('; ')}`+(row.questions?.length ? '\n'+row.questions.map(item=>`Question ${item.pointer}: ${item.question}`).join('\n') : '')+(row.next_step ? `\nNext: ${row.next_step}` : '')+(row.approval_note ? `\n${row.approval_note}\nInterface diff:\n- ${row.interface_diff.before}\n+ ${row.interface_diff.after}\nUnchanged: ${row.interface_diff.unchanged.join(', ')}` : '')+(row.draft_budget ? `\nDraft budget (command default, needs review): ${JSON.stringify(row.draft_budget.limits)}` : '')),`Interfaces: ${summary.drafted} drafted, ${summary.existing} existing, ${summary.lint_clean} lint clean, ${summary.refused} refused. 0 AI calls.`].join('\n')+'\n');
     return exit_code;
   } catch(error) {stderr.write(`${error.message}\n`);return 2;}
 }
