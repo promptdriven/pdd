@@ -78,7 +78,52 @@ for(const workflow of ['small-change','bug','feature'])test(`factory 1: ${workfl
   const a=scriptedAgent(w);await a.finish();
   assert.equal(w.github.prs.length,workflow==='small-change'?1:2);
   if(workflow!=='small-change')assert.equal(w.github.prs[1].baseRefName,w.github.prs[0].headRefName,'PR 2 starts stacked on open PR 1');
+  if(workflow==='bug') {
+    // A false code-only claim cannot exempt a changed, previously wrong prompt.
+    const pr=w.github.prs[0],body=pr.body;
+    pr.body='Verdict: the prompt is right; the bug is only in the CODE.\n'+body;
+    await assert.rejects(a.merge(),/recorded Story verdict/);
+    assert.equal(w.github.merges.length,0);
+    assert.equal(pr.comments.length,0);
+    pr.body=body;
+  }
   await a.merge();assert.equal(w.record().state,'completed');assert.deepEqual(w.leadActions,[]);
+  if(workflow==='bug') {
+    const verdict=w.github.prs[0].comments.map(c=>{try{return JSON.parse(c);}catch{return null;}}).find(c=>c?.verdict==='PASS');
+    assert.equal(verdict.evidence.codeOnly,false);
+    assert.equal(verdict.evidence.oldPromptExit,1);
+    assert.equal(verdict.evidence.promptVerdict,0);
+  }
+});
+
+test('factory 3131: a code-only bug finishes independent review and merge with unchanged passing prompts',async t=>{
+  const w=await factoryWorld(t,{workflow:'bug',codeOnly:true});await w.begin();
+  const original=w.git(w.cwd,'show','HEAD:value.prompt.md');
+  const a=scriptedAgent(w);await a.finish();
+  assert.ok(w.record().done.review);
+  assert.equal(w.git(w.record().root,'show','HEAD:value.prompt.md'),original);
+  assert.equal(w.github.prs.length,2);
+  assert.match(w.github.prs[0].body,/prompt.*unchanged/i);
+  assert.match(w.github.prs[0].body,/native.*old.*fail/i);
+  const pr=w.github.prs[0],body=pr.body;
+  for(const [replacement,error] of [
+    ['No verdict recorded in this body',/recorded Story verdict/],
+    [body+'\nVerdict: the bug is in the PROMPT.',/conflicting PR Story verdicts/]
+  ]) {
+    pr.body=replacement;await assert.rejects(a.merge(),error);
+    assert.equal(w.github.merges.length,0);assert.equal(pr.comments.length,0);
+  }
+  pr.body=body;
+  await a.merge();
+  assert.equal(w.record().state,'completed');
+  const evidence=w.github.prs[0].comments.map(c=>{try{return JSON.parse(c);}catch{return null;}}).find(c=>c?.verdict==='PASS').evidence;
+  assert.equal(evidence.codeOnly,true);
+  assert.equal(evidence.promptVerdict,0);assert.equal(evidence.oldPromptExit,0);
+  assert.equal(evidence.oldNativeExit,1);assert.equal(evidence.pairedNativeExit,0);
+  assert.ok(evidence.oldNativeOutput.includes('ERR_ASSERTION'));
+  assert.ok(evidence.oldNativeOutput.includes('FACTORY_VALUE'));
+  assert.equal(evidence.oldPromptSha256,evidence.newPromptSha256);
+  assert.deepEqual(w.leadActions,[]);
 });
 
 test('factory 2: machine restart retains claim, work and chat identity to merge',async t=>{

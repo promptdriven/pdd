@@ -79,6 +79,28 @@ permitted for the damaged record. Keep the shared audit authority intact.
 
 Include a complete pane budget held by several stopped runs. Each has several area chats in one worktree, no saved session IDs, an old layout without createdWorkspaceId and an older coordinator ID for the same machine and folder. Hide Herdr IDs so bounded native discovery must prove the correct sessions. Start a second repository's coordinator and its first workflow run against the shared Herdr service; both must obtain panes through native reclamation. Verify the first run has a live area chat before waking the held runs. Later clear the blockers and resume every held run with its own current-area UUID. Assert screens exist before closes, saved sessions match each area, claim recovery preserves each admitted claim era, and foreign workspaces and busy agents survive. Use only disposable homes, config, queues and service fakes; select a unique throwaway session name for the harness.
 
+## Code-only bug checker
+
+Exercise a bug whose base prompt already requires value two while the base code
+returns one. Preserve the prompt bytes through Story, PR 1 and PR 2. Record the
+code-only Story-gate verdict in the run and PR body. A separate checker checkout
+must run the same issue-derived scenario on the old and new prompt snapshots:
+both pass. Run the same native regression on old and new code: old fails its
+value assertion, new passes. Retain snapshot identities, commands, exits and the
+assertion evidence in the verdict. The PR body must state that the prompt is
+unchanged and passing and the old native code fails. Finish independent review
+and merge in the disposable factory without lead intervention.
+
+The scripted checker follows RUNBOOK §14: select this exception only for a bug
+with the recorded code-only Story verdict and byte-identical prompts. A changed
+or wrong prompt still needs old-prompt failure for the issue's reason. Reject a
+false code-only claim, a passing old native test, or a pre-target native crash;
+none can produce a PASS. Preserve exact-head, fresh-check, paired red PR 1 and
+merge rules. Tests must retain the prompt-bug negative control. Separately park
+a saved code-only route wait while the capability is absent, then use the default
+installed capability through the #3112 wake. Wake once, preserving progress,
+route history and independent questions, without approval or a fabricated answer.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

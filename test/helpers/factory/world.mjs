@@ -8,6 +8,7 @@ import {fork,execFileSync,execFile} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {fakeHerdr} from '../fake-herdr.mjs';
+import {proseSha256} from '../../../src/runtime-preflight.mjs';
 import {analysisFor} from '../autopilot-github-world.mjs';
 import {factoryGithub} from './github.mjs';
 import {factoryInterpreter} from './interpreter.mjs';
@@ -21,9 +22,9 @@ export function valuePrompt(value) {
   return `# Value\nReturn the value ${value}.\n\n## Dependencies\n\n<details><summary>Runtime interface</summary>\n\`\`\`json\n${JSON.stringify({status:'draft',prose_sha256:'',entries:[{operation:'value',input_schema:{type:'object',properties:{},required:[],additionalProperties:false},result_schema:{type:'object',properties:{value:{type:'integer'}},required:['value'],additionalProperties:false},errors:[]}],calls:[],resources:[],limits:{max_steps:1,max_model_calls:1},conventions:[]})}\n\`\`\`\n</details>\n`;
 }
 
-export async function factoryWorld(t,{workflow='small-change',repository='example/project',shared}={}) {
+export async function factoryWorld(t,{workflow='small-change',repository='example/project',shared,codeOnly=false}={}) {
   const base=mkdtempSync(join(tmpdir(),'pdd-factory-world-'));
-  const w={repository,sessionName:shared?.sessionName??process.env.PDD_FACTORY_HERDR_SESSION??`pdd-factory-${randomUUID()}`,base,cwd:join(base,'repo'),home:shared?.home??join(base,'home'),remote:join(base,'origin.git'),mergeCheckout:join(base,'merge'),workflow,time:Date.now(),commands:[],warnings:[],alerts:[],packets:[],dependencyRequests:[],seenCalls:0,children:new Set()};
+  const w={repository,codeOnly,sessionName:shared?.sessionName??process.env.PDD_FACTORY_HERDR_SESSION??`pdd-factory-${randomUUID()}`,base,cwd:join(base,'repo'),home:shared?.home??join(base,'home'),remote:join(base,'origin.git'),mergeCheckout:join(base,'merge'),workflow,time:Date.now(),commands:[],warnings:[],alerts:[],packets:[],dependencyRequests:[],seenCalls:0,children:new Set()};
   Object.defineProperty(w,'leadActions',{get:()=>w.commands.filter(c=>!['agent','worker','coordinator','operator','timer','person','other-worker','old-coordinator','resend-child','checker'].includes(c.actor))});
   for(const dir of [w.cwd,w.home,join(base,'bin')])mkdirSync(dir,{recursive:true});
   for(const name of ['gh','herdr','codex','claude','gemini','agy','curl','wget'])writeFileSync(join(base,'bin',name),'#!/bin/sh\necho factory-external-program-denied >&2\nexit 97\n',{mode:0o700});
@@ -32,7 +33,9 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   w.git=(cwd,...a)=>execFileSync('git',a,{cwd,env:w.env,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   w.git(w.cwd,'init','-q','-b','main');w.git(w.cwd,'config','user.email','factory@example.invalid');w.git(w.cwd,'config','user.name','Factory');
   put(w.cwd,'pdd.json',{autopilot:{mode:'auto',trust:['example'],base:'main',parking:{hours:24,maxParked:20}}});
-  put(w.cwd,'value.mjs','export const value = 1;\n');put(w.cwd,'value.prompt.md',valuePrompt(1));
+  put(w.cwd,'value.mjs','export const value = 1;\n');
+  const initialPrompt=valuePrompt(codeOnly?2:1);
+  put(w.cwd,'value.prompt.md',initialPrompt.replace('"prose_sha256":""',`"prose_sha256":"${proseSha256(initialPrompt)}"`));
   put(w.cwd,'CONTRIBUTING.md','Run node --test test/value.test.mjs. Open PRs against main.\n');
   put(w.cwd,'package.json',{type:'module',scripts:{test:'node --test test/value.test.mjs'}});
   w.git(w.cwd,'add','.');w.git(w.cwd,'commit','-qm','Initial synthetic project');

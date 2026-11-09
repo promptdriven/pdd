@@ -590,9 +590,9 @@ ticks. Ticks use the existing action/call budget.
 3. ✗ failed: tell the person "Verdict: the bug is in the PROMPT (its check fails on the issue's case)." Find the
    cause first (section 11, "After a ✗"). Fix the prompt (set draft, fill the hash) and check again: at most 2 fix
    rounds, then ask the person.
-4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." The repo's own tests prove
-   the code fix.
-5. The check report shows before ✗ → after ✓. `pdd simulate <story>` opens with the issue's input ready.
+4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." Keep the correct prompt
+   unchanged. The code-only checker route below proves the code fix.
+5. For a prompt bug the check report shows before ✗ → after ✓; for a code-only bug show before ✓ → after ✓. `pdd simulate <story>` opens with the issue's input ready.
 - If no prompt owns the behavior, say in reproduce: "No prompt exists yet for this behavior, so the bug can only be
   in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." Write the
   prompt from the issue, and write "before: no prompt" in PR 1.
@@ -600,6 +600,28 @@ ticks. Ticks use the existing action/call budget.
 - Keep the change small: change one prompt when you can, and test only the criteria of the bug.
 - PR 1 must not make the repo's own tests fail. Put a new failing code test in PR 2, or mark it `todo` in PR 1.
   Never offer to merge PR 1 while the repo's tests fail on its branch.
+
+**Independent checker: code-only bugs.** Use this route only for a bug with the recorded Story-gate verdict
+"the prompt is right; the bug is only in the CODE". Compare the owning prompt and required context on the old
+and new snapshots: they must be unchanged. Check the same issue-derived Story and expected cases on each
+snapshot. Both prompt checks must pass in full. Apply pdd-check's current-source, fresh-result rules to each;
+unavailable or unverifiable results are no verdict, never an assumed pass.
+
+Independently run the same native regression against the old code and the corrected code, using the same
+expected cases and public boundary. The old code must fail an assertion for the issue's reason and the new
+code must pass. A pre-target crash, setup error, missing test or passing old code is not proof. Keep the exact
+snapshot/head identities, commands, exits and failing assertion in the checker evidence. Replay and formal
+checks in §17, independent review, exact-head suites, approvals and merge rules still apply.
+
+The PR body must state: prompt unchanged and passing on old and new snapshots; native regression fails on
+old code for the bug's reason and passes on the new code. Retain the real report links and counts, native
+old-code proof and limitations. Do not label the old prompt as failing. A wrong or changed prompt uses the
+prompt-bug route: the old prompt must fail the issue case and the corrected prompt must pass. No owning
+prompt uses the existing "before: no prompt" route, never this exception.
+
+Autopilot waits saved as `capability:route-code-only-checker` wake through the installed capability rule
+(#3112). Keep prior verdicts and route history. A wake supplies no approval or checker PASS; revalidate the
+current candidates before a new verdict.
 
 ## 15. PR text
 

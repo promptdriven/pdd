@@ -205,3 +205,27 @@ test('3112 native issue adapter sends one structured PDD issue write through the
   assert.ok(writes[0].some(arg => arg.startsWith('body=') && arg.includes(drafting)));
   assert.equal(state().routeQuestions.groups[0].issue.state, 'opened');
 });
+
+
+test('3131 installed code-only checker wakes a saved route once and keeps independent questions', async t => {
+  const {f, tick, ports, state, warnings} = await setup(t);
+  const question = 'How can a correct unchanged prompt receive a code-only checker verdict?';
+  ask(f, 'Which product cases should the next release include?');
+  assert.equal((await parkAutomaticRun({cwd: f.record().root, route: 'code-only-checker', reason: question}, ports)).exitCode, 0);
+  const original = f.record(); await tick();
+  assert.equal(f.record().parking?.phase, 'parked');
+  assert.equal(f.record().parking.blocker.until, 'capability:route-code-only-checker');
+  delete ports.installedPddCapabilities; // Use installed package evidence, not an override.
+  await tick();
+  assert.equal(f.record().parking, undefined);
+  assert.equal(f.record().routeWait, undefined);
+  assert.deepEqual(f.record().question, original.question);
+  assert.deepEqual(f.record().done, original.done);
+  assert.deepEqual(f.record().approvals, original.approvals);
+  assert.equal(f.record().chats.at(-1).session.id, original.chats.at(-1).session.id);
+  assert.equal(state().routeQuestions.records[0].question, question);
+  assert.equal(f.record().routeReports.length, 1);
+  const launches = () => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run').length;
+  assert.equal(launches(), 1); await tick(); assert.equal(launches(), 1);
+  assert.deepEqual(warnings, []);
+});

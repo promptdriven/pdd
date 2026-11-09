@@ -30,7 +30,11 @@ a provider refusal, and delayed completion.
 
 The scripted coordinator uses native dependency review, gates and claim checks.
 The scripted checker uses a separate checkout of the published head. It runs
-fresh prompt checks and a negative control on the base prompt. A code PR must
+fresh prompt checks and a negative control on the base prompt. For a recorded
+code-only bug, it verifies unchanged prompt bytes and passing checks on both
+snapshots, then independently repeats the native old-code assertion failure and
+new-code pass. The PR body records this evidence. A wrong or changed prompt still
+requires a failing old-prompt check. A code PR must
 pass its native test. PR 1 may contain the failing new native test only when its
 paired code PR passes. The scripted merge actor checks explicit auto-start scope,
 trust, strict mode, the current head, successful checks, and native base checks
@@ -43,6 +47,7 @@ the same merge.
 | Post-merge audit | A closed issue still offers its pending audit. One fresh scripted auditor reproduces parent failure and merge success; its saved OK and issue comment survive a repeated command. BAD creates a real revert branch and open PR, with one alert and an unchanged base. |
 | Check plan | A full native check saves target and baseline scope; a saved read retains it. A missing interface blocks paid dispatch. |
 | Small change, bug, feature | One or two PRs reach merge; PR 2 starts stacked on PR 1. |
+| Code-only bug | An unchanged correct prompt passes on both snapshots; native old code fails for the issue reason and new code passes. Independent review reaches merge. A saved route wait wakes once when the checker capability is installed. |
 | Restart | Claim, allocation, completed steps and chat session survive; no duplicate publication. |
 | Lost verdict | Timer ticks send nothing again; one explicit synthetic person decision permits one resend. |
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |
