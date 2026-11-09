@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
 // #3039: an interpreter outage parks only the runs that need the interpreter, frees their slots, alerts once and recovers by itself.
@@ -131,7 +132,7 @@ test('a result read that fails is an unknown outcome, never "no check ran"', asy
 
 test('savedCheckCause: a check still open, a stale summary after an interrupted retry, or unreadable rows is unknown', t => {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-runtime-cause-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const env = { PDD_STATE_DIR: dir };
+  const env = { HOME: dir, PDD_STATE_DIR: dir };
   const save = (name, { summary, batch }) => {
     const folder = join(dir, 'batches', name); mkdirSync(folder, { recursive: true });
     if (summary) writeFileSync(join(folder, 'summary.json'), JSON.stringify({ batch: name, rows: summary }));

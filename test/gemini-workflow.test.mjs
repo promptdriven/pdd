@@ -55,7 +55,7 @@ test('Gemini shell launch preserves message, configuration, Vertex and model env
  for(const cli of ['gemini','codex'])writeFileSync(join(bin,cli),`#!${process.execPath}\nconsole.log(JSON.stringify({args:process.argv.slice(2),config:process.env.GEMINI_CLI_HOME,project:process.env.GOOGLE_CLOUD_PROJECT,model:process.env.GEMINI_MODEL,marker:process.env.PDD_AGENT_SESSION}));`,{mode:0o755});
  const messageFile=join(root,"start 'message'.md"),message='Use pdd-small-change.\nLiteral $(touch broken) `text`';writeFileSync(messageFile,message);
  const command=chatCommand({agent:'gemini',cwd:root,messageFile,configDir:join(root,'config')});
- const out=JSON.parse(execFileSync('/bin/sh',['-c',command],{cwd:root,env:{PATH:`${bin}:/usr/bin:/bin`,GOOGLE_CLOUD_PROJECT:'test-project',GEMINI_MODEL:'test-model'},encoding:'utf8'}));
+ const out=JSON.parse(execFileSync('/bin/sh',['-c',command],{cwd:root,env:{HOME:root,PATH:`${bin}:/usr/bin:/bin`,GOOGLE_CLOUD_PROJECT:'test-project',GEMINI_MODEL:'test-model'},encoding:'utf8'}));
  assert.deepEqual(out,{args:['--yolo','--prompt-interactive',message],config:join(root,'config'),project:'test-project',model:'test-model',marker:'1'});
  assert.match(chatCommand({agent:'gemini',cwd:root,resumeId:'11111111-1111-4111-8111-111111111111'}),/gemini --yolo --resume '11111111-1111-4111-8111-111111111111'$/);
 });
@@ -65,7 +65,7 @@ test('Gemini start and resume trust the run worktree, so a new worktree never st
  const bin=join(root,'bin');mkdirSync(bin);
  writeFileSync(join(bin,'gemini'),`#!${process.execPath}\nconsole.log(JSON.stringify({trust:process.env.GEMINI_CLI_TRUST_WORKSPACE??null}));`,{mode:0o755});
  const messageFile=join(root,'start.md');writeFileSync(messageFile,'Use pdd-small-change.');
- const launch=command=>JSON.parse(execFileSync('/bin/sh',['-c',command],{cwd:root,env:{PATH:`${bin}:/usr/bin:/bin`},encoding:'utf8'}));
+ const launch=command=>JSON.parse(execFileSync('/bin/sh',['-c',command],{cwd:root,env:{HOME:root,PATH:`${bin}:/usr/bin:/bin`},encoding:'utf8'}));
  assert.deepEqual(launch(chatCommand({agent:'gemini',cwd:root,messageFile})),{trust:'true'});
  assert.deepEqual(launch(chatCommand({agent:'gemini',cwd:root,resumeId:'11111111-1111-4111-8111-111111111111'})),{trust:'true'});
 });
@@ -121,7 +121,7 @@ test('Gemini passes both external folders as separate shell arguments on start a
  for(const options of [{messageFile:join(root,'msg')},{resumeId:'11111111-1111-4111-8111-111111111111'}]) {
   if(options.messageFile)writeFileSync(options.messageFile,'hello');
   const cmd=chatCommand({agent:'gemini',cwd:root,commonDir,sourceRoot,...options});
-  const args=JSON.parse(execFileSync('/bin/sh',['-c',cmd],{env:{PATH:`${bin}:/usr/bin:/bin`},encoding:'utf8'}));
+  const args=JSON.parse(execFileSync('/bin/sh',['-c',cmd],{env:{HOME:root,PATH:`${bin}:/usr/bin:/bin`},encoding:'utf8'}));
   assert.deepEqual(args.slice(0,5),['--yolo','--include-directories',join(commonDir,'pdd/runs'),'--include-directories',`${sourceRoot}.pdd-worktrees`], "Defect: `src/workflow-chat.mjs` launches Gemini without including the external run and worktree folders, so its file tools cannot read them. Separately, startup PATH diagnostics and workflow instructions in `src/path-diagnostic.mjs` and `src/workflow-runner.mjs` suggest long absolute executable commands; such commands have triggered Gemini's safety dialog.");
  }
 });

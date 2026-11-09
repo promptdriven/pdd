@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 // Independent finite checks derived from the six issue-2781 Stories' Rules to check.
 // These domains are synthetic; enumeration establishes only the bounds stated below.
 import test from 'node:test';

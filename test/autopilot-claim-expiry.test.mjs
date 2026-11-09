@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';

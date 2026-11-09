@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 const {adoptReplayCorpus} = await import(process.env.PDD_ADOPTION_MODULE || '../src/workflow-replay.mjs');

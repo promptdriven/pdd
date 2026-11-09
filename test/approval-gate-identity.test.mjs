@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import { legacyManualGates } from './helpers/legacy-manual-gates.mjs';
 import test from 'node:test';
 

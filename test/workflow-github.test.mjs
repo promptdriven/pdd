@@ -1,3 +1,4 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
