@@ -330,8 +330,18 @@ function rawGithub(cwd, ports) {
     relationSubIssueState: async ({repository,parent,child}) => {
       let cursor = `repos/${repository}/issues/${parent}/sub_issues?per_page=100`; const seen = new Set(); let present = false;
       while (cursor) { if (seen.has(cursor)) throw Error('Repeated sub-issue cursor'); seen.add(cursor); const page = await s.api(cursor, 'GET', undefined, undefined, repository, true); if (!Array.isArray(page.value)) throw Error('Incomplete sub-issue page'); present ||= page.value.some(x => info(x.html_url)?.key === `https://github.com/${repository.toLowerCase()}/issues/${child}`); cursor = page.next; }
-      const history = await allPages(github,repository,'timeline',parent,undefined,true);
-      if (history.some(x => /(?:sub.?issue).*(?:remov|delet)|(?:remov|delet).*(?:sub.?issue)/i.test(String(x.event ?? '')))) return 'removed';
+      if (present) return 'present';
+      const [owner,name] = repository.split('/'); let after = null; const cursors = new Set();
+      do {
+        if (cursors.has(after)) throw Error('Repeated sub-issue history cursor'); cursors.add(after);
+        const query = `query($owner:String!,$name:String!,$issue:Int!,$cursor:String) { repository(owner:$owner,name:$name) { issue(number:$issue) { url timelineItems(first:100,after:$cursor,itemTypes:[SUB_ISSUE_REMOVED_EVENT]) { nodes { ... on SubIssueRemovedEvent { id createdAt actor { login } subIssue { url } } } pageInfo { hasNextPage endCursor } } } } }`;
+        const data = (await s.api('graphql','POST',JSON.stringify({query,variables:{owner,name,issue:parent,cursor:after}}),undefined,repository,true)).value;
+        const row = data.data?.repository?.issue, page = row?.timelineItems;
+        if (data.errors?.length || info(row?.url)?.key !== `https://github.com/${repository.toLowerCase()}/issues/${parent}` || !Array.isArray(page?.nodes) || typeof page.pageInfo?.hasNextPage !== 'boolean') throw Error('Incomplete sub-issue history');
+        for (const event of page.nodes) { if (!event.id || !event.actor?.login || !Number.isFinite(Date.parse(event.createdAt)) || !info(event.subIssue?.url)) throw Error('Incomplete sub-issue history'); if (info(event.subIssue.url).key === `https://github.com/${repository.toLowerCase()}/issues/${child}`) return 'removed'; }
+        after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+        if (page.pageInfo.hasNextPage && (typeof after !== 'string' || !after)) throw Error('Incomplete sub-issue history');
+      } while (after);
       return present ? 'present' : 'absent';
     },
     duplicateTimeline: async ({ repository, issue }) => {
@@ -1702,7 +1712,14 @@ export async function applyReproducedBugRelations({ cwd = '', repository, issue,
   };
   try { for (const r of relations) if (!await evidence(r)) return holdAll('Evidence is unavailable, changed, untrusted or does not contain the quote'); }
   catch { return holdAll('Evidence is unavailable, changed, untrusted or does not contain the quote'); }
+  const duplicateEvents = async duplicate => {
+    const rows = await github.duplicateTimeline({repository,issue:duplicate});
+    if (!Array.isArray(rows) || rows.some(x => !['MarkedAsDuplicateEvent','UnmarkedAsDuplicateEvent'].includes(x?.__typename) || !x.id || !Number.isFinite(Date.parse(x.createdAt)) || !x.actor?.login || !info(x.canonical?.url) || !info(x.duplicate?.url)) || new Set(rows.map(x => x.id)).size !== rows.length) throw Error('Incomplete duplicate timeline');
+    for (let i = 1; i < rows.length; i++) if (Date.parse(rows[i].createdAt) < Date.parse(rows[i-1].createdAt)) throw Error('Unordered duplicate timeline');
+    return rows;
+  };
   const write = pacedSortWrites(ports,{cwd,repository});
+  const readGraph = async () => supplied.relationSnapshot ? supplied.relationSnapshot.read({cwd,repository}) : (await readDependencySnapshot({cwd,repository},{...supplied,snapshotStore:null})).snapshot;
   const outcomes = [];
   const checkpoint = supplied.checkpoint;
   const checkOwnership = async numbers => {
@@ -1721,35 +1738,35 @@ export async function applyReproducedBugRelations({ cwd = '', repository, issue,
     try { prior = await checkpoint.read({index,effect:e}); } catch { outcomes.push(result(index,'held','Dispatch checkpoint unavailable')); continue; }
     const uncertain = prior?.state === 'dispatching' || prior?.state === 'unknown';
     if (prior?.state === 'applied' || prior?.state === 'failed') { outcomes.push(prior.outcome ?? result(index,prior.state,prior.state === 'failed' ? 'Previous dispatch failed' : '')); continue; }
-    let dispatched = false, duplicateBefore = new Set();
+    let dispatched = false, mutationAcknowledged = false, duplicateBefore = new Set(), duplicateActor, dispatchAt;
     try {
-      if (!await evidence(r) || !await checkOwnership(values)) { outcomes.push(result(index,'held','Evidence or ownership changed')); continue; }
+      if (!await evidence(r) || !await checkOwnership(values)) { outcomes.push(result(index,uncertain ? 'unknown' : 'held',uncertain ? 'Prior dispatch remains unconfirmed' : 'Evidence or ownership changed')); if (uncertain) break; continue; }
       const raws = await Promise.all(values.map(async n => parse((await github.issue({repository,issue:n,safety:true})).json)));
-      if (raws.some((row,i) => row.state !== 'open' || info(row.html_url)?.key !== key(values[i]) || !/^[1-9][0-9]*$/.test(String(row.id ?? '')))) { outcomes.push(result(index,'held','Endpoint is unavailable or not open')); continue; }
+      if (raws.some((row,i) => row.state !== 'open' || info(row.html_url)?.key !== key(values[i]) || !/^[1-9][0-9]*$/.test(String(row.id ?? '')))) { outcomes.push(result(index,uncertain ? 'unknown' : 'held',uncertain ? 'Prior dispatch remains unconfirmed' : 'Endpoint is unavailable or not open')); if (uncertain) break; continue; }
       if (e.kind === 'sub-issue' && !/^Class:/.test(raws[0].title ?? '')) { outcomes.push(result(index,'held','Selected parent is not an open Class issue')); continue; }
       let observed;
       if (e.kind === 'blocked-by') {
-        const {snapshot} = await readDependencySnapshot({cwd,repository}, {...supplied,snapshotStore:null});
+        const snapshot = await readGraph();
         const validation = validateDependencyChange({snapshot,dependent:key(e.dependent),blocker:key(e.blocker)});
         if (validation.reason === 'duplicate') observed = 'present';
         else if (!snapshot.complete || !validation.allowed) { outcomes.push(result(index,'held',`Dependency ${validation.reason}`)); continue; }
-        const history = await allPages(github,repository,'timeline',e.dependent,undefined,true);
+        const history = observed === 'present' ? [] : await allPages(github,repository,'timeline',e.dependent,undefined,true);
         if (history.some(x => { const removed = blockedByRemoval(x); return removed === null || removed === key(e.blocker); })) { outcomes.push(result(index,'held','Dependency was removed by a person')); continue; }
       } else if (e.kind === 'sub-issue') {
         if (!github.relationSubIssueState) { outcomes.push(result(index,'held','Sub-issue history unavailable')); continue; }
         observed = await github.relationSubIssueState({repository,parent:e.parent,child:e.child});
       } else {
-        const actor = await github.duplicateActor({repository});
-        const events = await github.duplicateTimeline({repository,issue:e.duplicate});
+        const actor = await github.duplicateActor({repository}); duplicateActor = actor;
+        const events = await duplicateEvents(e.duplicate);
         if (!Array.isArray(events)) throw Error('Incomplete duplicate timeline');
         duplicateBefore = new Set(events.map(x => x.id));
         const matches = events.filter(x => info(x?.canonical?.url)?.key === key(e.canonical) && info(x?.duplicate?.url)?.key === key(e.duplicate));
-        if (events.some(x => !x?.id || !x.createdAt || !x.actor?.login || !info(x.canonical?.url) || !info(x.duplicate?.url))) throw Error('Incomplete duplicate timeline');
+        if (events.some(x => !x?.id || !Number.isFinite(Date.parse(x.createdAt)) || !x.actor?.login || !info(x.canonical?.url) || !info(x.duplicate?.url)) || new Set(events.map(x => x.id)).size !== events.length) throw Error('Incomplete duplicate timeline');
         matches.sort((a,b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
         const last = matches.at(-1);
         if (last?.__typename === 'UnmarkedAsDuplicateEvent') { outcomes.push(result(index,'held','Duplicate was unmarked')); continue; }
         if (last?.__typename === 'MarkedAsDuplicateEvent') observed = 'present';
-        if (uncertain && observed === 'present' && last.actor.login.toLowerCase() !== actor.toLowerCase()) observed = undefined;
+        if (uncertain && observed === 'present' && prior.baseline && Array.isArray(prior.baseline.eventIds) && prior.baseline.actor?.toLowerCase() === actor.toLowerCase() && !prior.baseline.eventIds.includes(last.id) && Number.isFinite(Date.parse(prior.baseline.dispatchedAt)) && Date.parse(last.createdAt) >= Date.parse(prior.baseline.dispatchedAt) && last.actor.login.toLowerCase() === actor.toLowerCase()) { const outcome = result(index,'applied'); await checkpoint.write({index,effect:e,state:'applied',outcome}); outcomes.push(outcome); continue; }
       }
       if (observed === 'removed') { outcomes.push(result(index,'held','Relationship was removed by a person')); continue; }
       if (observed === 'present' && !uncertain) { outcomes.push(result(index,'already-present','Relationship already exists')); continue; }
@@ -1757,26 +1774,29 @@ export async function applyReproducedBugRelations({ cwd = '', repository, issue,
       await write(async () => {
         if (!await evidence(r) || !await checkOwnership(values)) throw Object.assign(Error('Evidence or ownership changed'),{unsent:true});
         const fresh = await Promise.all(values.map(async n => parse((await github.issue({repository,issue:n,safety:true})).json)));
-        if (fresh.some((row,i) => row.state !== 'open' || info(row.html_url)?.key !== key(values[i]) || String(row.id) !== String(raws[i].id))) throw Object.assign(Error('Endpoint changed'),{unsent:true});
-        if (e.kind === 'blocked-by') { const {snapshot} = await readDependencySnapshot({cwd,repository},{...supplied,snapshotStore:null}); const valid = validateDependencyChange({snapshot,dependent:key(e.dependent),blocker:key(e.blocker)}); const history = await allPages(github,repository,'timeline',e.dependent,undefined,true); if (!snapshot.complete || !valid.allowed || history.some(x => { const removed = blockedByRemoval(x); return removed === null || removed === key(e.blocker); })) throw Object.assign(Error('Graph changed'),{unsent:true}); }
-        if (e.kind === 'duplicate') { await github.duplicateActor({repository}); const events = await github.duplicateTimeline({repository,issue:e.duplicate}); if (!Array.isArray(events) || events.length !== duplicateBefore.size || events.some(x => !duplicateBefore.has(x.id))) throw Object.assign(Error('Duplicate history changed'),{unsent:true}); }
+        if (fresh.some((row,i) => row.state !== 'open' || info(row.html_url)?.key !== key(values[i]) || String(row.id) !== String(raws[i].id)) || e.kind === 'sub-issue' && !/^Class:/.test(fresh[0].title ?? '')) throw Object.assign(Error('Endpoint changed'),{unsent:true});
+        if (e.kind === 'blocked-by') { const snapshot = await readGraph(); const valid = validateDependencyChange({snapshot,dependent:key(e.dependent),blocker:key(e.blocker)}); const history = await allPages(github,repository,'timeline',e.dependent,undefined,true); if (!snapshot.complete || !valid.allowed || history.some(x => { const removed = blockedByRemoval(x); return removed === null || removed === key(e.blocker); })) throw Object.assign(Error('Graph changed'),{unsent:true}); }
+        if (e.kind === 'duplicate') { await github.duplicateActor({repository}); const events = await duplicateEvents(e.duplicate); if (!Array.isArray(events) || events.length !== duplicateBefore.size || events.some(x => !duplicateBefore.has(x.id))) throw Object.assign(Error('Duplicate history changed'),{unsent:true}); }
         if (e.kind === 'sub-issue' && await github.relationSubIssueState({repository,parent:e.parent,child:e.child}) !== 'absent') throw Object.assign(Error('Sub-issue history changed'),{unsent:true});
-        await checkpoint.write({index,effect:e,state:'dispatching'}); dispatched = true;
+        if (e.kind === 'duplicate') { dispatchAt = (await ports.clock.now({})).iso; if (!Number.isFinite(Date.parse(dispatchAt))) throw Object.assign(Error('Clock unavailable'),{unsent:true}); }
+        await checkpoint.write({index,effect:e,state:'dispatching', ...(e.kind === 'duplicate' ? {baseline:{eventIds:[...duplicateBefore],actor:duplicateActor,dispatchedAt:dispatchAt}} : {})}); dispatched = true;
         if (e.kind === 'blocked-by') await github.addBlocker({repository,issue:e.dependent,blockerId:String(raws[1].id)});
         else if (e.kind === 'sub-issue') await github.ensureSortLink({repository,issue:e.parent,childId:String(raws[1].id),kind:'sub',checkOwnership:() => checkOwnership(values)});
         else await github.markDuplicate({repository,duplicate:e.duplicate,canonical:e.canonical,checkOwnership:() => checkOwnership(values)});
+        mutationAcknowledged = true;
       });
       let confirmed = false;
-      if (e.kind === 'blocked-by') { const {snapshot:snap} = await readDependencySnapshot({cwd,repository},{...supplied,snapshotStore:null}); confirmed = snap.complete && snap.edges.some(x => x.dependent === key(e.dependent) && x.blocker === key(e.blocker)); }
+      if (e.kind === 'blocked-by') { const snap = await readGraph(); confirmed = snap.complete && snap.edges.some(x => x.dependent === key(e.dependent) && x.blocker === key(e.blocker)); }
       else if (e.kind === 'sub-issue') confirmed = await github.relationSubIssueState({repository,parent:e.parent,child:e.child}) === 'present';
-      else { const actor = await github.duplicateActor({repository}); const events = await github.duplicateTimeline({repository,issue:e.duplicate}); const matches = events.filter(x => info(x?.canonical?.url)?.key === key(e.canonical) && info(x?.duplicate?.url)?.key === key(e.duplicate)).sort((a,b) => Date.parse(a.createdAt)-Date.parse(b.createdAt)); confirmed = matches.at(-1)?.__typename === 'MarkedAsDuplicateEvent' && !duplicateBefore.has(matches.at(-1)?.id) && matches.at(-1)?.actor?.login?.toLowerCase() === actor.toLowerCase(); }
+      else { const actor = await github.duplicateActor({repository}); const events = await duplicateEvents(e.duplicate); const matches = events.filter(x => info(x?.canonical?.url)?.key === key(e.canonical) && info(x?.duplicate?.url)?.key === key(e.duplicate)).sort((a,b) => Date.parse(a.createdAt)-Date.parse(b.createdAt)); confirmed = matches.at(-1)?.__typename === 'MarkedAsDuplicateEvent' && !duplicateBefore.has(matches.at(-1)?.id) && Number.isFinite(Date.parse(matches.at(-1)?.createdAt)) && Date.parse(matches.at(-1)?.createdAt) >= Date.parse(dispatchAt) && matches.at(-1)?.actor?.login?.toLowerCase() === actor.toLowerCase(); }
       const outcome = confirmed ? result(index,'applied') : result(index,'unknown','Mutation readback is unconfirmed');
       await checkpoint.write({index,effect:e,state:outcome.status,outcome}); outcomes.push(outcome);
       if (!confirmed) break;
     } catch (error) {
-      const outcome = result(index,!dispatched ? 'held' : 'unknown',!dispatched ? 'Required safety observation unavailable or changed' : 'Mutation or readback is uncertain');
-      if (dispatched) try { await checkpoint.write({index,effect:e,state:'unknown',outcome}); } catch { /* retain dispatching */ }
-      outcomes.push(outcome); if (dispatched) break;
+      const failed = dispatched && !mutationAcknowledged && error.status >= 400 && error.status < 500;
+      const outcome = result(index,!dispatched && !uncertain ? 'held' : failed ? 'failed' : 'unknown',!dispatched && !uncertain ? 'Required safety observation unavailable or changed' : failed ? 'Mutation was rejected' : 'Mutation or readback is uncertain');
+      if (dispatched) try { await checkpoint.write({index,effect:e,state:outcome.status,outcome,...(e.kind === 'duplicate' ? {baseline:{eventIds:[...duplicateBefore],actor:duplicateActor,dispatchedAt:dispatchAt}} : {})}); } catch { /* retain dispatching */ }
+      outcomes.push(outcome); if (dispatched || uncertain) break;
     }
   }
   while (outcomes.length < relations.length) outcomes.push(result(outcomes.length,'held','Earlier mutation is unresolved'));
