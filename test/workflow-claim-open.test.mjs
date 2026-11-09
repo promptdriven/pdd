@@ -43,7 +43,7 @@ async function ready(t, route) {
   }
   f.action = () => route === 'resume' ? resumeStoppedRun(args, f.ports)
     : route === 'wake' ? wakeParkedRun({...args, at: f.record().parking.at}, f.ports)
-      : openRun({...args, cwd: f.record().root, ...(route === 'new' ? {newSession: true} : {}),
+      : openRun({...args, cwd: route === 'parked-open' ? f.source : f.record().root, ...(route === 'new' ? {newSession: true} : {}),
         ...(['area', 'historical'].includes(route) ? {area: f.record().areas[0].name} : {})}, f.ports);
   f.herdr.calls.length = 0;
   return f;
