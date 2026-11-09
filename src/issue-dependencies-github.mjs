@@ -1743,6 +1743,11 @@ export async function applyReproducedBugRelations({ cwd = '', repository, issue,
       if (!await evidence(r) || !await checkOwnership(values)) { outcomes.push(result(index,uncertain ? 'unknown' : 'held',uncertain ? 'Prior dispatch remains unconfirmed' : 'Evidence or ownership changed')); if (uncertain) break; continue; }
       const raws = await Promise.all(values.map(async n => parse((await github.issue({repository,issue:n,safety:true})).json)));
       if (raws.some((row,i) => row.state !== 'open' || info(row.html_url)?.key !== key(values[i]) || !/^[1-9][0-9]*$/.test(String(row.id ?? '')))) { outcomes.push(result(index,uncertain ? 'unknown' : 'held',uncertain ? 'Prior dispatch remains unconfirmed' : 'Endpoint is unavailable or not open')); if (uncertain) break; continue; }
+      if (uncertain && e.kind !== 'duplicate') {
+        if (e.kind === 'blocked-by') await readGraph();
+        else if (github.relationSubIssueState) await github.relationSubIssueState({repository,parent:e.parent,child:e.child});
+        outcomes.push(result(index,'unknown','Prior dispatch remains unconfirmed')); break;
+      }
       if (e.kind === 'sub-issue' && !/^Class:/.test(raws[0].title ?? '')) { outcomes.push(result(index,'held','Selected parent is not an open Class issue')); continue; }
       let observed;
       if (e.kind === 'blocked-by') {
