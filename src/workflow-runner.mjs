@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2dc69fcdff539cff8706fe27ae79413ddc624aa32166ba13c559a08bf064d70e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1ec5ea118b3d05aa4d88c6d07819f9c6a77caac79523c1f92698295fb90e5f16).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2209,9 +2209,13 @@ async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.
     const contract=await storyContract(run,p),paths=await storyContractPaths(run,p);
     const gateId = run.gate.id;
     commitRun(run, p, latest => { if (latest.gate?.id === gateId) {
+      const parkedApproval = latest.parking?.phase === 'parked' && latest.parking.blocker?.kind === 'person'
+        && sameGate(latest.parking.personWait?.gate, latest.gate) && !latest.parking.personWait?.question;
       if (!latest.gate.storyChanges?.length || fingerprintChanges(latest.gate.storySnapshot, current).length) latest.gate.id = p.randomUUID();
       latest.state = 'waiting'; latest.doneAt = null; latest.gate.kind = 'approve-pr';
       latest.gate.storyChanges = changes; latest.gate.storySnapshot = current; latest.gate.promptSnapshot = snapshot; latest.gate.storyContract=contract; latest.gate.storyPaths=paths;
+      // Move only this gate's reservation, so the progress guard can save its new hold.
+      if (parkedApproval) latest.parking.personWait = {gate: latest.gate, question: latest.question ?? null};
     } });
     return done([...lines, `pdd recorded ${step}. The Story, an expected value or the prompt list changed after the person approved the Story, so the Story gate is open again. pdd does not open ${prLabel(run, area)} until the person approves the change.`,
       await cardText(run, p, { changes, results: pddTestLines(run, p) }), cardGate, approvalGuide(run, p.pdd),
