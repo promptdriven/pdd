@@ -2415,9 +2415,9 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
         if (bound.input.reproduced && !bound.completed) {
           const checkpoint = {
             read: ({index}) => run.bugFindings.checkpoints?.[index] ?? null,
-            write: ({index, effect, state, outcome}) => commitRun(run, p, latest => {
+            write: ({index, effect, state, outcome, baseline}) => commitRun(run, p, latest => {
               latest.bugFindings.checkpoints ??= {};
-              latest.bugFindings.checkpoints[index] = { effect, state, ...(outcome ? {outcome} : {}) };
+              latest.bugFindings.checkpoints[index] = { effect, state, ...(outcome ? {outcome} : {}), ...(baseline ? {baseline} : latest.bugFindings.checkpoints[index]?.baseline ? {baseline: latest.bugFindings.checkpoints[index].baseline} : {}) };
             })
           };
           const apply = p.applyReproducedBugRelations ?? applyReproducedBugRelations;
