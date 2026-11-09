@@ -10,6 +10,14 @@ As a maintainer, I want to apply chosen native relations, so that related bug wo
 2. An explicitly selected existing Class parent may receive the selected sub-issue; an explicit duplicate is marked with verified native readback.
 3. Existing links, human removals, graph cycles, ownership, incomplete observations and uncertain mutation outcomes are respected.
 
+## Rules to check
+
+Only an explicitly necessary-before `needs` choice may add a dependency. A cycle, confirmed human removal or undone duplicate must not be recreated. An unknown dispatch must not be resent.
+
+## Must not change
+
+Keep existing trust, ownership and graph rules, approvals, check receipts and non-bug workflow behavior.
+
 ## Native cases for the code step
 
 [Requirement-derived cases](../test/bug-relations/bug-relation-links-cases.json) need native tests against the public workflow and GitHub adapter with injected ports. Native effects and run/PR storage are not Runtime-replayed; no pass is claimed.

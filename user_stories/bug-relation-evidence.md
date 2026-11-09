@@ -10,6 +10,14 @@ As a maintainer, I want to check relation evidence, so that related bug work is 
 2. Missing, changed, inaccessible, unavailable or untrusted evidence holds the batch; a matching quote does not determine a relation.
 3. Evidence and authority are checked again before an effect if observations can have changed.
 
+## Rules to check
+
+Unavailable, untrusted or changed quotes or authority hold the batch; no native mutation may follow until the required current evidence and authority are valid.
+
+## Must not change
+
+Keep existing trust and ownership rules, approvals, check receipts and non-bug workflow behavior.
+
 ## Native cases for the code step
 
 [Requirement-derived cases](../test/bug-relations/bug-relation-evidence-cases.json) need native tests against the public workflow and GitHub adapter with injected ports. Native effects and run/PR storage are not Runtime-replayed; no pass is claimed.

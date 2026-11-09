@@ -10,6 +10,14 @@ As a maintainer, I want to keep reproduced bug findings, so that related bug wor
 2. An empty relation search is recorded honestly; a failed reproduction never invents a cause.
 3. Agent findings remain inert in PR text and never become check results.
 
+## Rules to check
+
+Retain actual findings and distinguish an empty search from an unavailable search. A failed reproduction must not produce a guessed cause.
+
+## Must not change
+
+Keep existing approvals and check receipts separate from agent findings; preserve non-bug workflow behavior.
+
 ## Native cases for the code step
 
 [Requirement-derived cases](../test/bug-relations/bug-findings-record-cases.json) need native tests against the public workflow and GitHub adapter with injected ports. Native effects and run/PR storage are not Runtime-replayed; no pass is claimed.
