@@ -29,7 +29,7 @@ import { tidyRuns } from './workflow-runner.mjs';
 import { paneUsage, ensurePaneBudget } from './workflow-chat.mjs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, readManualHold, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, advanceAutomaticPr1, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
 import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict, savedLostCheck, savedCheckCause } from './workflow-results.mjs';
@@ -386,7 +386,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     coordinatorId: state.coordinatorId, machine: state.machine});
   const parking = {
     now: p.now,
-    list: () => listRuns({cwd: state.cwd, cancelled: true}, worker),
+    list: async () => (await listRuns({cwd: state.cwd, cancelled: true}, worker)).filter(run => !p.manualHolds?.has(run.number)),
     checkProgress: async run => {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
       return busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
@@ -549,6 +549,7 @@ async function advanceWaitingPr1Gates(state, p, numbers = null) {
   try { runs = await listRuns({cwd: state.cwd}, workerPorts); }
   catch (error) { p.warn(`PR 1 gate inspection unavailable: ${line(error.message)}`); return reconsider; }
   for (const run of runs) {
+    if (p.manualHolds?.has(run.number)) continue;
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
       || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine
       || run.state !== 'waiting' || run.gate?.kind !== 'approve-pr' || numbers && !numbers.has(run.number)) continue;
@@ -574,6 +575,7 @@ async function resumeStoppedWorkers(state, p, recoveredRuns = null) {
   catch (error) { p.warn(`Stopped-chat inspection unavailable: ${line(error.message)}`); return; }
   for (const run of runs) {
     if (recoveredRuns && !recoveredRuns.has(run.runDir)) continue;
+    if (p.manualHolds?.has(run.number)) continue;
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
       || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine) continue;
     if (run.parking) continue;
@@ -1618,6 +1620,35 @@ async function runTick(stateFile, ports, completion) {
     };
     let {budget, restLeft} = readBudget();
     if (config.mode === 'auto') {
+      const worker = {...workflowCleanupPorts(p, ports), autopilotStateFile:stateFile};
+      const allRuns = await listRuns({cwd: state.cwd}, worker);
+      p.manualHolds = new Set();
+      const observe = run => (p.readManualHold ?? readManualHold)({repository: state.repo, issue: run.number, cwd: state.cwd},
+        createDependencyReadPorts({cwd: state.cwd}, {...p, execFile: async (file, args, options) => p.execute(file, args, {...options, purpose: 'dependencies'})}));
+      for (const run of allRuns) {
+        if (['completed', 'cancelled'].includes(run.state) || run.automaticOrigin?.coordinatorId !== state.coordinatorId
+          || run.automaticOrigin?.machine !== state.machine || !samePath(run.sourceRoot, state.cwd)) continue;
+        let hold; try { hold = await observe(run); } catch { hold = {known:false}; }
+        if (!hold.known || hold.held) p.manualHolds.add(run.number);
+        if (!hold.known || !hold.held) continue;
+        const args = {ref:String(run.number), cwd:state.cwd, packageRoot:state.packageRoot, coordinatorId:state.coordinatorId, machine:state.machine};
+        const parking = parkingPorts(state, p);
+        if (await parking.checkProgress(run)) continue;
+        try {
+          await p.scanAction(() => parkBlockedRun({...args, blocker:{kind:'manual', until:null}, expected:run, manualHold:true}, worker));
+          const fresh = (await listRuns({cwd:state.cwd}, worker)).find(item => item.runId === run.runId);
+          if (!['parked', 'releasing'].includes(fresh?.parking?.phase) || await parking.checkProgress(fresh)) continue;
+          await p.scanAction(() => releaseParkedRun({...args, runId:fresh.runId, at:fresh.parking.at, manualHold:true}, {
+            ...worker, manualHoldConfirmed: async current => { const result = await observe(current); return result.known && result.held; },
+            releaseParkedClaim: current => (p.releaseParkedClaim ?? releaseParkedClaim)({cwd:state.cwd, repository:state.repo,
+              claim:{...current.automaticOrigin.claim, issue:current.issue.url, coordinatorId:state.coordinatorId, machine:state.machine},
+              coordinatorId:state.coordinatorId, machine:state.machine, runId:current.runId, branch:current.branch},
+              {...worker, execFile:async (file, args, options) => p.execute(file, args, {...options, purpose:'claims'})})
+          }));
+        } catch (error) { p.warn(`Manual custody held for #${run.number}: ${line(error.message)}`); }
+      }
+      state.manualIssues = [...p.manualHolds].sort((a, b) => a - b);
+      await scanGuard(latest => { latest.manualIssues = state.manualIssues; });
       let reconsider;
       if (!(state.retryAt > p.now()) && !(budget.state === 'reserve' && budget.resetAt > p.now()))
         reconsider = await advanceWaitingPr1Gates(state, p);
@@ -1756,6 +1787,7 @@ async function runTick(stateFile, ports, completion) {
     // Remote proof permits retry if the process died before the local custody write.
     for (const candidate of await (p.listRuns ?? listRuns)({ cwd: state.cwd }, { ...p, execFile: async (file, args, options) => p.execute(file, args, options) })) {
       const origin = candidate.automaticOrigin;
+      if (p.manualHolds?.has(candidate.number)) continue;
       if (!origin || ['completed', 'cancelled'].includes(candidate.state) || origin.machine !== state.machine
         || origin.coordinatorId === state.coordinatorId || origin.repository?.toLowerCase() !== state.repo.toLowerCase()
         || candidate.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(candidate.sourceRoot, state.cwd)
@@ -1790,6 +1822,14 @@ async function runTick(stateFile, ports, completion) {
     if (typeof result.since === 'string') state.issuesSince = result.since; else if (Number.isFinite(result.fullAt)) delete state.issuesSince;
     if (Number.isFinite(result.fullAt)) state.issuesFullAt = result.fullAt;
     state.acknowledged ??= {}; state.commentCache ??= {}; state.seen ??= {}; state.timeSeen ??= {};
+    p.manualHolds ??= new Set();
+    for (const issue of state.cachedIssues ?? []) {
+      if (!issue.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:manual')) continue;
+      let hold; try { hold = await (p.readManualHold ?? readManualHold)({repository:state.repo, issue:issue.number, cwd:state.cwd}, createDependencyReadPorts({cwd:state.cwd}, {...p, execFile:async (file,args,options) => p.execute(file,args,{...options,purpose:'dependencies'})})); } catch {hold = {known:false};}
+      if (!hold.known || hold.held) p.manualHolds.add(issue.number);
+    }
+    state.manualIssues = [...p.manualHolds].sort((a,b) => a-b);
+    await scanGuard(latest => {latest.manualIssues = state.manualIssues;});
     cachePullRequests(state);
     const work = [], pending = {}, warnings = [], selections = [], held = new Set();
     const timeRules = [], pendingTimes = {};
@@ -1873,7 +1913,7 @@ async function runTick(stateFile, ports, completion) {
     }
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];
-      if (issue.pull_request || issue.state !== 'open') continue;
+      if (issue.pull_request || issue.state !== 'open' || p.manualHolds?.has(issue.number)) continue;
       const selection = {number:issue.number, inScope:true, state:'unknown', reasons:['readiness-unknown']};
       selections.push(selection);
       try {
@@ -1972,6 +2012,8 @@ async function runTick(stateFile, ports, completion) {
         p.warn(warnings.at(-1));
       }
     }
+    for (let i = timeRules.length - 1; i >= 0; i--) if (p.manualHolds?.has(timeRules[i].number)) timeRules.splice(i, 1);
+    for (const number of p.manualHolds ?? []) { delete pending[number]; for (const key of Object.keys(pendingTimes)) if (key.endsWith(`:${number}`)) delete pendingTimes[key]; }
     // Fresh work leads to a claim and a workflow start, so offer it only where workflows can start.
     // A held issue (pdd:stuck, pdd:code-pending) is not fresh: its reviews and trusted comments still go out.
     const fresh = work.filter(item => item.eligible && !held.has(item) && (!item.claimed || item.expiredClaim));
@@ -2070,7 +2112,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','interpreterPattern','auditHolds']) {
+        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','manualIssues','interpreterPattern','auditHolds']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
@@ -2243,7 +2285,7 @@ async function machineStatus(folder, ports, env, cwd) {
     try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
     let coordinator = { state: 'unavailable', reason: 'Herdr is not running' };
     if (serverRunning) { try { coordinator = await coordinatorHealth(state, p); } catch { coordinator = { state: 'unavailable', reason: 'status unreadable' }; } }
-    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state} · ${healthLine(state.health)} · ${parkingWords(state.parking, state.interpreterPattern)}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
+    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState} · coordinator ${coordinator.state === 'unavailable' ? `unavailable (${coordinator.reason})` : coordinator.state} · ${healthLine(state.health)} · ${parkingWords(state.parking, state.interpreterPattern)}${state.manualIssues?.length ? `\nKept for a person: ${state.manualIssues.map(number => `#${number}`).join(', ')}` : ''}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
   }
   return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
 }
@@ -2346,7 +2388,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const local = parkingPorts(state, p);
       const runs = (await local.list()).filter(run => run.automaticOrigin?.coordinatorId === state.coordinatorId);
       const observed = await Promise.all(runs.map(async run => ({...run, checkHeld: await local.checkProgress(run)})));
-      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1), state.interpreterPattern);
+      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1), state.interpreterPattern) + (state.manualIssues?.length ? `\nKept for a person: ${state.manualIssues.map(number => `#${number}`).join(', ')}` : '');
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
     }

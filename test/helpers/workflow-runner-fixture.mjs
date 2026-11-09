@@ -50,7 +50,7 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
     if (file === 'git') return exec(file, args, { ...opts, encoding: 'utf8' });
     assert.equal(file, 'gh', `Unexpected external program: ${file}`);
     if (args[0] === 'repo' && args[1] === 'view') return { stdout: JSON.stringify({ nameWithOwner: 'example/project', defaultBranchRef: { name: 'main' }, url: 'https://github.com/example/project' }) };
-    if (args[0] === 'api' && args[1] === 'repos/example/project/issues/17') return { stdout: JSON.stringify({ number: 17, html_url: issueUrl, title: 'Use value two', body: 'Value must be two.' }) };
+    if (args[0] === 'api' && args[1] === 'repos/example/project/issues/17') return { stdout: JSON.stringify({ number: 17, html_url: issueUrl, title: 'Use value two', body: 'Value must be two.', labels: [] }) };
     if (args[0] === 'pr' && args[1] === 'create' && f.createError) { const stderr = f.createError; f.createError = null; return { stdout: '', stderr, code: 1 }; }
     if (args[0] === 'pr' && args[1] === 'create') {
       const value = flag => args[args.indexOf(flag) + 1];
@@ -75,7 +75,8 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
   f.prompts = [];
-  f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, queueRoot: join(base, 'suite-queue'), layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, sleep: async ms => { f.clock += ms; }, findNativeSessions: stage => f.herdr.findNativeSessions(stage),
+  // This workflow-only fake has no live GitHub issue transport; it models an unlabelled issue.
+  f.ports = { readManualHold: async () => ({known:true, held:false}), execFile, herdr: f.herdr.herdr, stateDir: state, queueRoot: join(base, 'suite-queue'), layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, sleep: async ms => { f.clock += ms; }, findNativeSessions: stage => f.herdr.findNativeSessions(stage),
     env: { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), PDD_SUITE_QUEUE: undefined, PDD_VM_SUITE_LOCK: undefined, PDD_INTERPRETER_QUEUE: join(base, 'interpreter-queue'), CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };

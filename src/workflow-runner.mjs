@@ -47,7 +47,7 @@ import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from '
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
-export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry', 'route-interface-drafting']);
+export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry', 'route-interface-drafting', 'issue-3129', 'manual-label', 'route-manual-label']);
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -5165,7 +5165,12 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
     });
     return {...done(''), recovery: 'parked'};
   }
-  if (continuationCheckHeld(run, p)) return skipped();
+  const manualIdle = async fresh => {
+    const chat = currentChat(fresh);
+    if (chat?.closed?.confirmedAt) return true;
+    return Boolean(chat && idleAgent(chat, await chatSession(chat, {...p, run:fresh})));
+  };
+  if (continuationCheckHeld(run, p) || input.manualHold && !await manualIdle(run)) return skipped();
   if (!input.blocker) return skipped();
   const snapshot = {state: run.state, area: run.area, gate: run.gate, question: run.question, done: run.done,
     blockedOn: run.blockedOn, runtimeWait: run.runtimeWait, parkReason: run.parkReason, stuckCause: run.stuckCause, environmentRetry: run.environmentRetry, automaticOrigin: run.automaticOrigin,
@@ -5184,7 +5189,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   cleanupUpdatedAt = parked.updatedAt; cleanupProgressAt = parked.progressAt;
   const result = await closeFinishedChats(copy, {...p, force: true, reason: 'park', beforeClose: async () => {
     const fresh = readRun(run.runDir);
-    if (!unchanged(fresh) || !currentParkingOwner(fresh, p) || continuationCheckHeld(fresh, p))
+    if (!unchanged(fresh) || !currentParkingOwner(fresh, p) || continuationCheckHeld(fresh, p) || input.manualHold && !await manualIdle(fresh))
       throw Object.assign(Error('Parking custody changed before close'), {code: 'workflow_progress_refused'});
   }, checkpoint: async (chat, layout) => {
     if (continuationCheckHeld(readRun(run.runDir), p)) throw Object.assign(Error('Check process custody changed'), {code: 'workflow_progress_refused'});
@@ -5219,8 +5224,10 @@ export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, 
     && sameFact(fresh.automaticOrigin, run?.automaticOrigin) && fresh.root === run?.root
     && !continuationCheckHeld(fresh, p);
   if (!current(run) || typeof p.releaseParkedClaim !== 'function') return skipped();
-  if (!conditionalCommit(run, p, current, fresh => {fresh.parking.phase = 'releasing';})) return skipped();
-  if (!current(readRun(run.runDir))) return skipped();
+  const manual = input.manualHold || run.parking.manualHold === true || run.parking.blocker?.kind === 'manual';
+  if (manual && !await p.manualHoldConfirmed?.(run)) return skipped();
+  if (!conditionalCommit(run, p, current, fresh => {fresh.parking.phase = 'releasing'; if (manual) fresh.parking.manualHold = true;})) return skipped();
+  if (!current(readRun(run.runDir)) || manual && !await p.manualHoldConfirmed?.(readRun(run.runDir))) return skipped();
   const remote = await p.releaseParkedClaim(readRun(run.runDir));
   if (remote?.state !== 'released' || !current(readRun(run.runDir))) return skipped();
   const local = await releaseIssueClaim({cwd: input.cwd, issueNumber: run.number, runId: run.runId}, p);
