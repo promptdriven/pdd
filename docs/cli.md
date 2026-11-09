@@ -107,7 +107,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
 | `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
-| `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD with the run and post the evidence once on the issue. BAD opens a revert PR and records one decision alert. Unknown external outcomes require inspection before any retry. |
+| `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
 | `pdd autopilot status [--all] [--json]` | Show this machine's repo, the folder Autopilot works in, selected base, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
@@ -1266,11 +1266,20 @@ missing, damaged or full machine run index also holds it because cost coverage
 is unknown.
 Codex limit reads that are unknown or reached hold without a paid call.
 
-BAD creates a unique revert branch and a PR against the saved base. It never
-pushes directly to that base or merges the revert. A revert conflict records an
-unknown follow-up and alerts for help. Two CONCERN verdicts of the same category
+The saved audit keeps `result.verdict` and Boolean `result.revert` separately.
+BAD with a revert recommendation creates a unique revert branch and a PR against
+the saved base. It never pushes directly to that base or merges the revert. A
+revert conflict records an unknown follow-up and alerts for help. BAD without a
+revert recommendation keeps the merge and reopens or keeps the original issue
+open. One audit comment lists the missing parts from the saved summary and
+evidence. It creates no revert PR or follow-up issue. Both BAD forms send one
+decision alert that states the auditor's recommendation. When it recommends no
+revert, the default choice is to keep the merge and finish the rest. The alert
+also offers `git revert -m 1 MERGE_SHA` on a review branch and a PR against the
+saved base as the other choice. The same command accepts a merge commit or a
+single-parent squash commit. Two CONCERN verdicts of the same category
 from distinct PRs create one process issue in the repository. Publication
-attempts are saved before sending. An uncertain comment, PR, process issue or
+attempts are saved before sending. An uncertain reopen, comment, PR, process issue or
 alert is never blindly repeated after a restart. Audit admission and concern
 records share the machine workflow state root by repository identity, including
 independent local clones. Every indexed repository record must validate and appear

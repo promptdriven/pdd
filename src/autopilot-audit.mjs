@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 0bbc74592a5146cafcf4cf5eec84a3d08650870716ef19e124d370a4643f5e19).
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 0a8e9dd7bd71282056b692f47efb6b223695731c68dad12f9c9b185a3189cd19).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -37,13 +37,14 @@ function validAudit(audit) {
     || Object.hasOwn(audit,'repository') && !/^[\w.-]+\/[\w.-]+$/.test(audit.repository)) return false;
   if (audit.state === 'recorded') {
     if (!validResult(audit.result) || !time(audit.completedAt) || !sessionIdentity(audit.chat.session?.id)) return false;
-  } else if (['result','completedAt','comment','revert','alert','concern'].some(key => Object.hasOwn(audit,key))) return false;
-  for (const key of ['comment','revert','alert']) if (Object.hasOwn(audit,key)) {
+  } else if (['result','completedAt','comment','reopen','revert','alert','concern'].some(key => Object.hasOwn(audit,key))) return false;
+  for (const key of ['comment','reopen','revert','alert']) if (Object.hasOwn(audit,key)) {
     const effect = audit[key];
     if (!object(effect) || !['sending','sent','unknown'].includes(effect.state) || !time(effect.at)
       || effect.state === 'sent' && typeof effect.value !== 'string'
       || Object.hasOwn(effect,'value') && typeof effect.value !== 'string'
-      || key !== 'comment' && audit.result?.verdict !== 'BAD') return false;
+      || key !== 'comment' && audit.result?.verdict !== 'BAD'
+      || key === 'reopen' && audit.result?.revert !== false) return false;
   }
   if (Object.hasOwn(audit,'concern') && (!object(audit.concern)
     || !['sent','unknown'].includes(audit.concern.state) || audit.result?.verdict !== 'CONCERN'
@@ -60,7 +61,7 @@ function auditRecords(fs, folder, local = false) {
     return audit;
   });
 }
-const finished = a => a?.result && a.comment && (a.result.verdict !== 'BAD' || a.revert && a.alert)
+const finished = a => a?.result && a.comment && (a.result.verdict !== 'BAD' || (a.result.revert ? a.revert : a.reopen) && a.alert)
   && (a.result.verdict !== 'CONCERN' || a.concern);
 export function pendingAudits({run}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
@@ -186,7 +187,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
     if(!validAudit(audit) || audit.runId!==run.runId || audit.pr!==Number(pr) || audit.merge!==merge) return fail('audit-evidence-invalid; audit identity differs.');
     fs.mkdirSync(recordsFolder,{recursive:true,mode:0o700});
     audit.repository=run.repo.toLowerCase();
-    if(!shared) for(const key of ['comment','revert','alert']) {
+    if(!shared) for(const key of ['comment','reopen','revert','alert']) {
       try {fs.statSync(`${localFile}.${key}`);if(!audit[key])audit[key]={state:'unknown',at:now()};}
       catch(e) {if(e.code!=='ENOENT')throw e;}
     }
@@ -281,9 +282,11 @@ async function auditMergeOwned({run, pr}, ports = {}) {
       }
       audit.result=parsed.result;audit.state='recorded';audit.completedAt=now();persist();
     }
-    await effect('comment',()=>command('gh',['api','--method','POST',`repos/${run.repo}/issues/${run.number}/comments`,'-f',`body=Audit: ${audit.result.verdict}\n\nPR #${pr}, merge ${audit.merge}\n\n${audit.result.summary}\n\n${audit.result.evidence}\n\n<!-- pdd:audit:${run.runId}:${pr} -->`]));
+    const keepMerge=audit.result.verdict==='BAD' && !audit.result.revert;
+    if(keepMerge) await effect('reopen',()=>command('gh',['api','--method','PATCH',`repos/${run.repo}/issues/${run.number}`,'-f','state=open']));
+    await effect('comment',()=>command('gh',['api','--method','POST',`repos/${run.repo}/issues/${run.number}/comments`,'-f',`body=Audit: ${audit.result.verdict}\n\nPR #${pr}, merge ${audit.merge}\n\nRevert recommendation: ${audit.result.revert}\n\n${keepMerge?'Keep the merge and finish the rest. Missing parts and audit evidence:\n\n':''}${audit.result.summary}\n\n${audit.result.evidence}\n\n<!-- pdd:audit:${run.runId}:${pr} -->`]));
     if(audit.result.verdict === 'BAD') {
-      await effect('revert',async()=>{
+      if(audit.result.revert) await effect('revert',async()=>{
         const checkout=join(run.runDir,'audits',`revert-${pr}`), branch=`pdd/revert-${pr}-${randomUUID()}`;
         await command('git',['clone','--single-branch','--branch',run.baseBranch,'--',`https://github.com/${run.repo}.git`,checkout]);
         await command('git',['switch','-c',branch],{cwd:checkout});
@@ -293,7 +296,15 @@ async function auditMergeOwned({run, pr}, ports = {}) {
         return (await command('gh',['pr','create','--repo',run.repo,'--base',run.baseBranch,'--head',branch,'--title',`Revert #${pr}: post-merge audit BAD`,'--body',`${audit.result.summary}\n\nReverts ${audit.merge}. Audit for issue #${run.number}.\n\n<!-- pdd:audit-revert:${run.runId}:${pr} -->`],{cwd:checkout})).trim();
       });
       await effect('alert',async()=>{
-        const input={action:'alert',cwd,env,issue:String(run.number),kind:'decision',text:JSON.stringify({cause:`Post-merge audit BAD for PR #${pr} (${audit.merge})`,tried:`Saved audit. Revert PR: ${audit.revert?.value ?? audit.revert?.state ?? 'unknown'}.`,need:'Review the revert PR or resolve the saved revert failure.'})};
+        const input={action:'alert',cwd,env,issue:String(run.number),kind:'decision',text:JSON.stringify({
+          cause:`Post-merge audit BAD for PR #${pr} (${audit.merge}). Auditor revert recommendation: ${audit.result.revert}.`,
+          tried:keepMerge
+            ? `Saved audit and missing parts on issue #${run.number}. Issue reopen: ${audit.reopen?.state ?? 'unknown'}. Audit comment: ${audit.comment?.state ?? 'unknown'}.`
+            : `Saved audit. Revert PR: ${audit.revert?.value ?? audit.revert?.state ?? 'unknown'}.`,
+          need:keepMerge
+            ? `Default: keep the merge and finish the rest on issue #${run.number}. Other option: revert on a review branch with git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.`
+            : 'Review the revert PR or resolve the saved revert failure.',
+        })};
         const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
         if(result?.exitCode !== 0) throw Error('Alert unconfirmed');
         return 'recorded';
@@ -320,7 +331,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
         audit=read(fs,file);audit.concern={state:group.issue?.state==='unknown'?'unknown':'sent',kind};persist();
       }
     }
-    const uncertain = ['comment','revert','alert','concern'].some(k=>audit[k] && audit[k].state!=='sent');
+    const uncertain = ['comment','reopen','revert','alert','concern'].some(k=>audit[k] && audit[k].state!=='sent');
     return {exitCode:uncertain?1:0,message:`Audit: ${audit.result.verdict}; PR #${pr}; saved ${file}${uncertain?'; follow-up outcome unknown, inspect before retry':''}.`};
   } catch {if(audit && !audit.result) {audit.state='unknown';persist();}return fail('operation failed; retained evidence needs inspection.');}
 }

@@ -3,7 +3,7 @@
 Own `src/autopilot-audit.mjs`. `auditMerge({run, pr}, ports={})` returns
 `{exitCode,message}`. `pendingAudits({run}, ports={})` returns PR numbers needing
 an audit or a known unsent follow-up. Preserve workflow gates and merge policy.
-This is new behavior authorized by issue #3111 and the build task. No prompt
+This behavior is authorized by issues #3111 and #3138 and the build task. No prompt
 approval is implied. Files, programs, clock, limits and alert delivery use ports.
 
 Only automatic runs in a repository with current `autopilot.mode: auto` qualify.
@@ -52,13 +52,24 @@ Save this result, session, merge/parent identity and time before any follow-up.
 Do not accept other verdicts or a reused session identity from the run's saved
 chats, abandoned chats or earlier audits. Missing/invalid output is unknown.
 
-Post the saved verdict and evidence once on the original issue. BAD opens one
-revert PR against the saved base and sends one decision alert identifying the
-merge and revert result. Clone into private scratch, start a unique revert
+Keep `result.verdict` and Boolean `result.revert` as separate saved fields;
+BAD alone does not recommend a revert. Post the saved verdict, recommendation,
+summary and evidence once on the original issue. For BAD with `revert: false`,
+reopen or keep that issue open once, and use the same comment to list the missing
+parts from the auditor's summary and evidence. Keep the merge; create no revert
+branch, push, PR or follow-up issue. For BAD with `revert: true`, open one
+revert PR against the saved base. Clone into private scratch, start a unique revert
 branch from the current base, revert the pinned merge (mainline 1 for a merge
 commit), push only that branch and create a PR; never push to the base, force
 push or merge the revert. Conflicts are a saved failure with one alert for human
-help. Repeated CONCERNs of the same kind from two distinct audited PRs in the
+help. Both BAD forms send one decision alert identifying the merge and explicitly
+stating the auditor's Boolean revert recommendation. With false, name keeping
+the merge and finishing the rest as the default choice, report the issue reopen
+outcome, and offer reverting as the other choice with `git revert -m 1 MERGE_SHA`
+on a review branch and a PR against the saved base. With true, report the revert
+PR or saved failure and ask for review. Preserve earlier revert and alert
+reservations from legacy false-recommendation records without repeating them;
+an existing revert is never a reason to create another. Repeated CONCERNs of the same kind from two distinct audited PRs in the
 repository create one process issue in that repository. Serialize repository
 concern bookkeeping; retain a stable marker and all contributing identities.
 
@@ -111,8 +122,11 @@ conditional fields below. `pr` is an integer; merge/parent are commit SHAs;
 or unknown. `chat` has agent, configDir (string or null), startedAt, optional
 root (the private checkout) and optional session `{id}`. A recorded result adds
 `result` with the auditor shape above and `completedAt`. Publication fields
-`comment`, `revert`, `alert` each have state (sending/sent/unknown), at, and
+`comment`, `reopen`, `revert`, `alert` each have state (sending/sent/unknown), at, and
 `value` on success (command stdout, revert URL or recorded alert marker).
+`reopen` is present only for BAD with `result.revert: false`; it reserves the
+original issue's state=open update. Reopen failures remain unknown and appear
+in the decision alert. Never retry uncertain reopen or other publications.
 `concern` has state (sent/unknown) and kind. Absent publication fields are unsent.
 
 The shared concern file has repository, kind, records and optional issue.
@@ -123,7 +137,8 @@ when confirmed. Once reserved it never creates another issue automatically.
 `pendingAudits` considers only saved automatic PRs with state merged. Return
 absent audits and recorded verdicts with absent required follow-ups, in saved
 PR order. Reserved/unknown auditors and uncertain publications never cause a
-new paid launch. Separate run attempts cannot reuse an audit record.
+new paid launch. BAD requires comment and alert, plus revert when recommended
+or reopen otherwise. Separate run attempts cannot reuse an audit record.
 Discovery isolates each audit's evidence failures. A malformed JSON value, invalid
 record or mismatched attempt is a hold, never an absent audit. An unreadable file
 or folder also holds. Omit held PRs from the returned numbers and call optional
@@ -162,6 +177,6 @@ hold, never absence. Legacy local reservation files also prevent resend.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"approved","prose_sha256":"af5461a253428814cf910ea8f4fed93fcd5d074f89bdf455255bfb8ef8f99c3c","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"29610a18b4740c1207ff0aa38ef424517026fff8b8dd4a1f2cb7aefecae9616b","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

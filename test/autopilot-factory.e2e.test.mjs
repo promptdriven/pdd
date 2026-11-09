@@ -426,6 +426,26 @@ test('factory 10: BAD audit creates a real revert PR and never changes the base'
 });
 
 
+test('factory 10b: BAD without revert keeps the merge and reopens one issue once',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
+  const pr=w.github.prs[0],merged=w.git(w.remote,'rev-parse','main'),issues=w.github.issues.size;
+  w.github.close(17);assert.equal(w.github.issues.get(17).state,'closed');
+  w.auditVerdict='BAD';w.auditRevert=false;w.auditSummary='Missing synthetic scope coverage';
+  const comments=w.github.issues.get(17).comments.length;
+  await w.command(['autopilot','audit','17',String(pr.number)],{actor:'coordinator'});
+  const saved=readJson(join(w.record().runDir,'audits',`${pr.number}.json`));
+  assert.equal(saved.result.verdict,'BAD');assert.equal(saved.result.revert,false);assert.equal(saved.revert,undefined);assert.equal(saved.reopen.state,'sent');
+  assert.equal(w.github.issues.get(17).state,'open');assert.equal(w.github.prs.length,1);assert.equal(w.github.issues.size,issues);
+  assert.equal(w.git(w.remote,'rev-parse','main'),merged);assert.equal(w.git(w.remote,'show','main:value.mjs'),'export const value = 2;');
+  const comment=w.github.issues.get(17).comments.at(-1);assert.ok(comment.body.includes(w.auditSummary));assert.ok(comment.body.includes(merged));
+  const alerts=w.alerts.filter(a=>a.kind==='decision');assert.equal(alerts.length,1);assert.match(alerts[0].text,/recommendation: false/i);
+  const alert=JSON.parse(alerts[0].text);assert.match(alert.need,/default.*keep.*merge.*finish/i);assert.ok(alert.need.includes(`git revert -m 1 ${merged}`));
+  await w.command(['autopilot','audit','17',String(pr.number)],{actor:'coordinator'});
+  assert.equal(w.github.prs.length,1);assert.equal(w.github.issues.size,issues);assert.equal(w.github.issues.get(17).comments.length,comments+1);
+  assert.equal(w.alerts.filter(a=>a.kind==='decision').length,1);assert.equal(w.auditCalls.length,1);
+  assert.equal(w.github.commands.filter(c=>c.args.includes('PATCH')&&c.args.includes('state=open')).length,1);assert.deepEqual(w.leadActions,[]);
+});
+
 test('factory 11: damaged audit evidence holds while new work is delivered',async t=>{
   const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();await a.merge();
   const pr=w.github.prs[0];

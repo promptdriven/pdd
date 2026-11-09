@@ -53,9 +53,14 @@ repairs the named declaration, a fresh check must reach a verdict.
 
 9. An automatic merge starts a fresh scripted auditor through the native audit
    command, saves OK with parent/merge evidence and posts the verdict once. A
-   repeat command reuses the saved result without launching another agent. A BAD
-   verdict creates a real revert branch and PR, preserves the remote base and
-   records one alert.
+   repeat command reuses the saved result without launching another agent. BAD
+   with a revert recommendation creates a real revert branch and PR, preserves
+   the remote base and records one alert. BAD without that recommendation keeps
+   the merge, reopens the original issue with one audit comment naming the gaps,
+   and records one alert stating the recommendation, default keep-and-finish
+   choice and manual revert command. Repeated commands create no extra PR,
+   issue, comment or alert for either form. Save verdict and recommendation
+   separately and retain the remote base for both.
 
 Every scenario records its actual commands and useful structural observations.
 Include #3132: absent panes (including a starting chat), a done current chat,

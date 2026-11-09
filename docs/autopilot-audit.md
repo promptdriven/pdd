@@ -41,7 +41,13 @@ OK requires the original problem solved, scope and tests sound, and real gates.
 CONCERN means an acceptable change with a named process weakness. Use CONCERN
 for unavailable reproduction; never call it OK. BAD means unsolved, wrong or
 harmful behavior or a fake gate. Explain the revert recommendation. The native
-coordinator opens a revert PR for BAD and never pushes directly to the base.
+coordinator saves the verdict and recommendation separately. For BAD with a
+revert recommendation, it opens a revert PR. For BAD without that recommendation,
+it keeps the merge and reopens the original issue with the missing parts in one
+audit comment. Its decision alert states your recommendation and names keeping
+the merge and finishing the rest as the default when you recommend no revert.
+It also gives a manual revert command as the other choice. It never pushes
+directly to the base.
 
 Audit discovery holds a damaged or unreadable evidence record with a named cause.
 `pdd autopilot status` shows the run, PR and cause. Other issue selection and
