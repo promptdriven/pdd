@@ -579,6 +579,10 @@ lists unrelated Stories as baseline obligations. The plan shows estimated model
 calls and a maximum that includes one restart replacement per test. It does not
 authorize more calls. A full check with a missing interface or undefined call
 bound stops with a named prerequisite and no paid check.
+This is local issue work. Repair the named interface or call bound, then run a
+fresh `pdd test`. A saved read or `pdd test --retry BATCH` returns the local
+result and repair guidance with exit 4. It keeps the batch history and sends no
+paid work. An interpreter wait cannot repair a local prerequisite.
 
 Check JSON and saved batches include `check_plan`. Results also include
 `check_scope`, with separate target and baseline states and recovery guidance.

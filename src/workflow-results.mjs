@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 7f352af0e1374822cc119e19c2e9e5a73f6698ec38bcf02f373bdad21ab05eaa).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 89fc97879f304c9daa0671b4c84ef8e2aec2a45af3cf588e4273d73f2a62fd04).
 import {checkPlanResults,checkPlanResultLines} from './runtime-check-plan.mjs';
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -187,7 +187,7 @@ export function checkCause(rows) {
   if (!Array.isArray(rows) || !rows.length) return 'none';
   if (!open.length) return 'passed';
   const codes = row => (Array.isArray(row.refusals) ? row.refusals : []).map(item => item?.code);
-  if (open.some(row => row.state === 'failed' || row.reason?.code === 'broken-test' || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
+  if (open.some(row => row.state === 'failed' || ['broken-test','check-plan-prerequisite'].includes(row.reason?.code) || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
   if (open.some(row => ['not run', 'partial'].includes(row.state) && signIn(row))) return 'access';
   // An unknown answer that names the AI provider failure is a known end with no verdict.
   const provider = row => row.state === 'partial' && (SERVICE_REFUSALS.has(row.reason?.code) || SERVICE_REFUSALS.has(row.provider?.code) || codes(row).length > 0 && codes(row).every(code => SERVICE_REFUSALS.has(code)));

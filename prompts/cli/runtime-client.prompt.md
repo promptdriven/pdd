@@ -1142,6 +1142,13 @@ results show its separate group states and recovery guidance. Local full-check
 prerequisites stop every paid Check with exit 4 and zero calls; keep existing
 refusals, mark other rows not run and show the named prerequisite once in the
 plan. Preserve all selected rows and existing full-batch gate requirements.
+Give every blocked nonpassing row the local note code `check-plan-prerequisite`, with the
+planning owner's named repair guidance in their note/reason. Preserve this cause
+through saved rows and JSON/text reads. It is issue work, never a service failure.
+A quiet local-only read returns rows to its caller. Retry of a local-only batch
+returns its saved result (exit 4 for full-check prerequisites), names the repair
+and asks for a fresh check. It neither signs in nor dispatches work, replaces the
+batch, or changes its historical plan/rows.
 Replace the old all-Story cost line with this plan's estimate and ceiling.
 The planning owner is required dependency context for these uses.
 Save every selected row, including reused passes with their `cached`,

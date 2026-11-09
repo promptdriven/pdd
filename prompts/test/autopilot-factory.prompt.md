@@ -24,6 +24,10 @@ unrelated baseline obligation. Assert a saved plan before dispatch, separate
 target/baseline result groups, and the same classification on a saved read. A
 missing interface must block paid dispatch with one named prerequisite. Retain
 the ordinary workflow gates; this scenario needs no synthetic approval action.
+For missing interfaces, missing entry limits, missing nested call bounds and
+recursion, exercise saved reads and the supported retry command. Keep the named
+local repair cause and batch history, with no paid dispatch. After the owner
+repairs the named declaration, a fresh check must reach a verdict.
 
 1. Small change to one merged PR; bug and feature to merged PR 1 and PR 2.
 2. Restart during work: retained claim, run, completed steps and native chat

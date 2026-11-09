@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 419a17c900702e4865897e448abd6b23835ff7df5f6da2db88eb2f92fdd5aed7).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 052509645626cb536e8213d1c9791d35bae95c2316184e1a22b0c18d57bea0ae).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -2278,6 +2278,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   if (saved.local_only === true && saved.rows.length && saved.rows.every(row => row.unsent && ['refused','not_run'].includes(row.state) && !row.request_ids?.length)) {
     Object.assign(context,{localOnly:true,batch:name,intent:saved.intent,coverage:saved.coverage,rows:saved.rows,warnings:saved.warnings ?? [],
       capture:{sha256:saved.source_sha256},startedAt:Date.parse(saved.created_at),lint:saved.lint});
+    if (quiet) return saved.rows;
     return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,saved.lint?.problems ?? []) : printResult(context,saved.rows);
   }
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
@@ -2412,6 +2413,7 @@ async function runRetry(context, name, options) {
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
   if (context.intent !== undefined && context.intent !== 'check') throw new Stop(2, 'The saved batch has no Check intent. Start a fresh selected pdd test.');
+  if (context.localOnly) return () => printResult(context, rows);
   if (context.interrupted || ports.now() >= context.deadline) return () => printResult(context, rows);
   const capture = Array.isArray(context.capture.sources) ? context.capture : context.ports.captureSource(context.root, { tests: sentTests(rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd test instead.');
@@ -3218,8 +3220,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
     base:runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD'});
   for (const value of checkPlanLines(context.checkPlan)) line(ports.stderr, value);
   if (!words.length && context.checkPlan.prerequisites.length) {
-    for (const row of rows) if (row.state === 'ready') Object.assign(row,{state:'not_run',calls:0,phase:'local',
-      note:{code:'check-plan-prerequisite',message:'Resolve the named check-plan prerequisite before the full check. No checks were sent.'}});
+    const note = {code:'check-plan-prerequisite',message:checkPlanResults(context.checkPlan,rows).guidance};
+    for (const row of rows) {
+      if (row.state === 'ready') Object.assign(row,{state:'not_run',calls:0,phase:'local'});
+      if (row.state !== 'passed') row.note = note;
+    }
     context.warnings.push('Full check blocked by a check-plan prerequisite. 0 AI calls. No checks were sent.');
     saveLocalNativeResult(context,rows,'check');
     printResult(context,rows);

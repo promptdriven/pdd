@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: a46477e522fe2286ce5e228ae4a08dff43d34ff1a8dbbbb32cdfcf4c9f029007).
+// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: cf07c6448be58ffbe329b760fe7c3e22062aab6fefdb61039f37c14431a4a068).
 import { spawnSync } from 'node:child_process';
 import { captureSource, readPrompt, sourceFilePort } from './runtime-preflight.mjs';
 import { resultOutcome } from './runtime-outcome.mjs';
@@ -117,7 +117,8 @@ export function checkPlanResults(plan, rows) {
     return {tests,passed,failures,unresolved,state:!tests.length?'none':failures.length?'failed':unresolved.length?'not_run':'passed'};
   };
   const target = group('target'), baseline = group('baseline');
-  const guidance = target.failures.length ? `Repair target failures: ${target.failures.join(', ')}. Keep baseline results separate.`
+  const guidance = plan.full && plan.prerequisites?.length ? `Repair local check-plan prerequisites: ${plan.prerequisites.map(item=>`${item.code}: ${item.path} ${item.field}`).join('; ')}. Repair the named interface or call bound, then run a fresh pdd test check. No checks were sent; saved reads and retries cannot repair these local prerequisites.`
+    : target.failures.length ? `Repair target failures: ${target.failures.join(', ')}. Keep baseline results separate.`
     : target.unresolved.length ? 'Read the saved batch for unresolved target checks; do not resend uncertain work.'
     : baseline.failures.length || baseline.unresolved.length ? `Target checks passed. Hand off baseline obligations: ${[...baseline.failures,...baseline.unresolved].join(', ')}. Keep the failed or incomplete full batch and required full-pass gates. Do not rerun unchanged target checks or change their expectations to repair baseline work. Read the saved batch for unresolved checks; baseline age and ownership are not proved.`
     : 'Selected checks passed; required repository gates still apply.';
