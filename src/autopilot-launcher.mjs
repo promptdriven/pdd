@@ -869,7 +869,7 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
 // The packet's interpreter fact while an outage or an access problem is open.
 function runtimePacket(runtime) {
   const { outage, access } = runtime ?? {};
-  const problem = access ? `The interpreter cannot be checked (${access.detail}): a sign-in or setup problem that a person must fix. ${access.fix} Autopilot sent one interpreter-access alert. Waiting runs stay parked and resend nothing; after 4 hours each follows the stuck rule.` : '';
+  const problem = access ? `The interpreter cannot be checked (${access.detail}): a sign-in or setup problem that a person must fix. ${access.fix} Autopilot sent one interpreter-access alert. Waiting runs stay parked and resend nothing. After 4 hours other waiting runs follow the stuck rule; lost-verdict runs stay parked for a person decision.` : '';
   if (outage) return { state: outage.probe ? 'testing' : 'unavailable', since: new Date(outage.since).toISOString(),
     note: `${outage.probe ? `The interpreter answers again; run #${outage.probe.number} is the test, and the other waiting runs wake after its check reaches a verdict.` : 'The interpreter is unavailable.'} Keep other work moving: code, native tests, CI, merges, dependency reviews and claims. New issues may start; a worker parks only at its interpreter check with pdd workflow park --interpreter.${problem ? ` ${problem}` : ''}` };
   if (access) return { state: 'access', since: new Date(access.since).toISOString(), detail: access.detail, note: `${problem} Keep other work moving.` };

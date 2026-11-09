@@ -840,7 +840,7 @@ access problem and wakes in the launcher state as `runtime`. While an outage or
 access problem is open, the packet has `runtime: {state, since, note}` with
 state `unavailable`, `testing` or `access`; the note says to keep other work
 moving and that new issues may start and park only at their interpreter check, and
-for `access` names the fix and the 4-hour limit. Send alerts through
+for `access` names the fix and the 4-hour limit for ordinary waits. Its note explicitly keeps lost-verdict waits parked for a person decision, matching the alert and native wake rules. Send alerts through
 [Autopilot alerts](autopilot-alerts.prompt.md) `runAutopilotAlerts` with this
 repository and the state root of this launcher (an injectable `sendAlert` port,
 or `alertPorts` for its HTTP); an alert failure never stops the tick.
