@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1fdebeaf1286e33b43acafbb13b558159e666cf8634495089553ff49ced6e979).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d2d4501bcba5e8242de88cd93e0f652dac2189bc47b6060de6f566abb47f8a83).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2680,6 +2680,9 @@ async function baseIntegration(run, area, step, source, p) {
     return { reason: `Saved base ${run.baseBranch} advanced from ${from.base} to ${source.base}; the issue tree is unchanged by the merge.`, from, to: source };
   } catch { return null; }
 }
+function accountedIntegration(run, area, source) {
+  return Boolean(source && run.integrationSources?.[area.name]?.some(saved => saved.base === source.base && saved.tree === source.tree));
+}
 const repairLimitReason = name => `Repair limit reached in ${name}: take the stuck path`;
 // The way out is a person's: a stuck run is still active, so a new automatic start waits until it is cancelled.
 const repairRefusal = (name, step, rounds, number) => `pdd refused ${rounds ? 'another repair round' : `${step}`}: the ${name} area of this Autopilot run has had ${REPAIR_ROUNDS} repair rounds. pdd did not record ${step}; the run is stuck ("${repairLimitReason(name)}"). Take the stuck path: add pdd:stuck, write one comment with the cause, send one stuck alert, keep the claim and progress, and let the coordinator continue with other issues. Do not retry it. To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.`;
@@ -2739,14 +2742,16 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const worktree = Object.hasOwn(run, 'automaticOrigin') ? gitFingerprint(run.root) : null;
   const source = Object.hasOwn(run, 'automaticOrigin') ? await integrationSource(run, p) : null;
   const integration = source ? await baseIntegration(run, area, step, source, p) : null;
-  if (integration && (run.integrationRounds?.[area.name] ?? 0) >= INTEGRATION_ROUNDS) {
+  const accounted = accountedIntegration(run, area, source);
+  const chargeIntegration = integration && integration.from.tree !== source.tree && !accounted;
+  if (chargeIntegration && (run.integrationRounds?.[area.name] ?? 0) >= INTEGRATION_ROUNDS) {
     commitRun(run, p, latest => {
       if (ended(latest) || latest.area !== run.area || gitFingerprint(run.root) !== worktree || !equalFact(latest.done[step]?.integrationSource, integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
       latest.state = 'stuck'; latest.parkReason = integrationLimitReason(area.name); latest.integrationLimit = { area: area.name, step, at: p.now() };
     });
     return fail(integrationRefusal(area.name, step, run.number));
   }
-  if (!integration && repairRound(run, area, step, worktree) === REPAIR_REFUSED) {
+  if (!integration && !accounted && repairRound(run, area, step, worktree) === REPAIR_REFUSED) {
     commitRun(run, p, latest => {
       if (ended(latest) || latest.area !== run.area || repairRound(latest, area, step, worktree) !== REPAIR_REFUSED) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
       latest.state = 'stuck'; latest.parkReason = repairLimitReason(area.name); latest.repairLimit = { area: area.name, step, at: p.now() };
@@ -2778,13 +2783,18 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
   if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary)}));}
   const applyDone=latest=>{
-    if (integration) {
+    if (integration || accounted) {
+      if (gitFingerprint(run.root) !== worktree || accountedIntegration(latest, area, source) !== accounted
+        || integration && !equalFact(latest.done[step]?.integrationSource, integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+    }
+    if (chargeIntegration) {
       const used = latest.integrationRounds?.[area.name] ?? 0;
-      if (used >= INTEGRATION_ROUNDS || gitFingerprint(run.root) !== worktree || !equalFact(latest.done[step]?.integrationSource, integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+      if (used >= INTEGRATION_ROUNDS) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
       latest.integrationRounds = { ...latest.integrationRounds, [area.name]: used + 1 };
+      latest.integrationSources = { ...latest.integrationSources, [area.name]: [...(latest.integrationSources?.[area.name] ?? []), source] };
       lines.push(`Base integration round ${used + 1} of ${INTEGRATION_ROUNDS} in the ${area.name} area. ${integration.reason}`);
     }
-    const round=integration ? null : repairRound(latest,area,step,worktree);
+    const round=integration || accounted ? null : repairRound(latest,area,step,worktree);
     if(round===REPAIR_REFUSED)throw Object.assign(Error('The run changed; look again.'),{code:'workflow_progress_refused'});
     if(round){latest.repairRounds={...latest.repairRounds,[area.name]:round};lines.push(`Repair round ${round} of ${REPAIR_ROUNDS} in the ${area.name} area of this Autopilot run.`);}
     endRuntimeWait(latest);

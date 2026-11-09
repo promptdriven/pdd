@@ -200,6 +200,8 @@ test('factory 9: base refresh retains failed evidence and reaches merge without 
   assert.equal(nativeFailure.status,1);assert.match(nativeFailure.stdout+nativeFailure.stderr,/FACTORY_BASE_READY/);
   const failed=await w.command(baseCheck,{cwd:w.record().root,allowFailure:true});
   assert.equal(failed.code,1);
+  const failedTicket=queueRows(w.env.PDD_SUITE_QUEUE).at(-1);
+  assert.equal(failedTicket.state,'finished');assert.match(failedTicket.reason,/status 1\b/);
   await w.command(['workflow','done','verify','--summary','Failed base validation; retain this evidence'],{cwd:w.record().root});
   await w.command(['workflow','done','formal','--summary','Formal validation needs the current base'],{cwd:w.record().root});
   const before=w.record(),issue=w.git(before.root,'show','HEAD:value.mjs');
@@ -215,7 +217,8 @@ test('factory 9: base refresh retains failed evidence and reaches merge without 
   assert.equal(refreshed.done.verify,undefined);assert.equal(refreshed.done.formal,undefined);
   assert.ok(refreshed.stepHistory.some(row=>row.step==='verify'&&row.record.summary===before.done.verify.summary));
   assert.equal((await w.command(baseCheck,{cwd:before.root})).code,0);
-  assert.equal(failed.code,1,'the earlier failed result remains available');
+  assert.deepEqual(readJson(join(w.env.PDD_SUITE_QUEUE,`ticket-${failedTicket.ticket}.json`)),failedTicket,
+    'the persisted failed result survives a succeeding command');
   await a.finish();assert.equal(w.record().repairRounds,undefined);
   assert.notEqual(w.record().done.verify.worktreeSha256,before.done.verify.worktreeSha256);
   await a.merge();assert.deepEqual(w.leadActions,[]);

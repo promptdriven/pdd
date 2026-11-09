@@ -320,6 +320,73 @@ test('base integration: repeating verify after a pure base merge also uses the i
   assert.deepEqual(f.record().integrationRounds, { build: 1 }, 'a defect cannot reset integration history');
 });
 
+test('base integration: verify then formal then change charges each merged source once per area', async t => {
+  const { f, run, done, edit } = await publishingRun(t, { rounds: { build: 2 } });
+  edit(); await done('change'); await done('verify'); await done('formal', 'failed formal');
+  const original = f.record();
+  advanceBase(f, run, 1);
+  assert.equal((await done('verify')).exitCode, 0);
+  const verified = f.record();
+  assert.deepEqual(verified.integrationRounds, { build: 1 });
+  assert.deepEqual(verified.done.change.integrationSource, original.done.change.integrationSource,
+    'the earlier step must keep its actual source identity');
+  assert.notDeepEqual(verified.done.verify.integrationSource, original.done.verify.integrationSource);
+  await done('formal', 'failed formal on integrated source');
+  assert.equal((await done('verify')).exitCode, 0, 'repeated verify is free');
+  await done('formal', 'failed formal on same source');
+  const beforeChange = f.record();
+  assert.equal((await done('change')).exitCode, 0);
+  const changed = f.record();
+  assert.deepEqual(changed.integrationRounds, { build: 1 }, 'one merge costs one integration across steps');
+  assert.deepEqual(changed.repairRounds, { build: 2 }, 'repeating change on accounted source is free');
+  assert.deepEqual(changed.done.change.integrationSource, verified.done.verify.integrationSource);
+  for (const step of ['change', 'verify', 'formal']) {
+    assert.ok(changed.stepHistory.some(row => row.step === step
+      && JSON.stringify(row.record) === JSON.stringify(beforeChange.done[step])), 'retain replaced and cleared source evidence');
+  }
+  await done('verify'); advanceBase(f, run, 2);
+  const second = await done('change');
+  assert.equal(second.exitCode, 0, second.message);
+  assert.deepEqual(f.record().integrationRounds, { build: 2 });
+  assert.deepEqual(f.record().repairRounds, { build: 2 });
+  await done('verify'); await done('formal', 'failed formal at ceiling');
+  assert.equal((await done('change')).exitCode, 0, 'accounted source stays free at the ceiling');
+  await done('verify', 'failed before third merge');
+  const beforeThird = f.record(); advanceBase(f, run, 3);
+  assert.equal((await done('change')).exitCode, 1);
+  const refused = f.record();
+  assert.equal(refused.state, 'stuck'); assert.equal(refused.integrationLimit.area, 'build');
+  assert.deepEqual(refused.integrationRounds, { build: 2 });
+  assert.deepEqual(refused.repairRounds, { build: 2 });
+  assert.deepEqual(refused.done, beforeThird.done); assert.deepEqual(refused.stepHistory, beforeThird.stepHistory);
+});
+
+for (const rounds of [0, 2]) for (const step of ['verify', 'change']) {
+  test(`base integration: source-identical base advance is free for ${step} after ${rounds} integrations`, async t => {
+    const { f, run, done, edit } = await publishingRun(t, { rounds: { build: 2 } });
+    edit(); await done('change');
+    for (let n = 1; n <= rounds; n++) {
+      await done('verify'); advanceBase(f, run, n);
+      assert.equal((await done('change')).exitCode, 0);
+    }
+    await done('verify'); await done('formal', 'failed formal');
+    const before = f.record();
+    f.git(f.source, 'commit', '--allow-empty', '-qm', 'Base metadata only');
+    f.git(f.source, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    f.git(run.root, 'merge', '--no-edit', 'refs/remotes/origin/main');
+    assert.equal((await done(step)).exitCode, 0);
+    const after = f.record();
+    assert.equal(after.done[step].worktreeSha256, before.done[step].worktreeSha256);
+    assert.equal(after.done[step].integrationSource.tree, before.done[step].integrationSource.tree);
+    assert.notEqual(after.done[step].integrationSource.base, before.done[step].integrationSource.base);
+    assert.deepEqual(after.integrationRounds, before.integrationRounds);
+    assert.deepEqual(after.repairRounds, { build: 2 }); assert.equal(after.integrationLimit, undefined);
+    assert.equal(after.done.formal, undefined);
+    assert.ok(after.stepHistory.some(row => row.step === 'formal'
+      && JSON.stringify(row.record) === JSON.stringify(before.done.formal)));
+  });
+}
+
 for (const kind of ['committed defect', 'dirty source', 'missing snapshot', 'unavailable merge']) {
   test(`base integration: ${kind} cannot claim a base-only exemption`, async t => {
     const { f, run, done, edit } = await publishingRun(t, { unavailableMerge: kind === 'unavailable merge' });
