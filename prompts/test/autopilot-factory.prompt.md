@@ -7,8 +7,10 @@ todo, catch-and-pass, or change an expected outcome to fit the candidate.
 
 Run the native CLI dispatch, launcher ticks, workflow runner and durable stores
 against a disposable project. Use real Git commits, branches, worktrees and a
-local bare origin. Only external services and agent reasoning are fake. GitHub
-must retain mutations and answer REST, GraphQL, claims, PR head/check readback
+local bare origin. Only external services and agent reasoning are fake.
+Alert fakes return the real alert port's `{exitCode,message}` shape and delivery
+confirmation. Saving an incident can return zero even if delivery fails.
+GitHub must retain mutations and answer REST, GraphQL, claims, PR head/check readback
 and merge requests. Reject unsupported service operations. The interpreter must
 support verdict, no verdict, refusal and delayed completion. Scripted workers
 read the actual bundled workflow and step briefs and use public done, gate,

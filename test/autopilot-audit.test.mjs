@@ -13,6 +13,12 @@ import {fixture} from './helpers/workflow-runner-fixture.mjs';
 
 const merge='a'.repeat(40),parent='b'.repeat(40);
 const result = (verdict='OK') => ({verdict,kind:verdict==='CONCERN'?'missing-reproduction':'',summary:'Synthetic audit observation',evidence:'1. Parent fails and merge passes.\n2. Scope retained.\n3. Observable cases.\n4. Old test fails.\n5. Native evidence.\n6. Checks retained.\n7. Gates confirmed.',revert:verdict==='BAD'});
+// runAutopilotAlerts saves incidents with exitCode 0 even when delivery fails.
+const alertReply=(w,input)=>({exitCode:0,message:w.alertFailure
+  ? `Alert recorded for #${input.issue} ${input.kind}; delivery failed (HTTP 503). pdd autopilot status shows it. Continue other work.`
+  : w.uncertain==='alert'
+    ? `Alert recorded for #${input.issue} ${input.kind}; delivery unconfirmed (no reply). It may have arrived, so it is not sent again. pdd autopilot status shows it. Continue other work.`
+    : `Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`});
 async function world(t) {
   const f=await fixture(t);f.ports.skipMetricsDelivery=true;assert.equal((await f.run()).exitCode,0);
   const run=f.record();run.agent='codex';delete run.launchProfile;run.configDir=join(f.ports.env.HOME,'.codex');run.runId??=randomUUID();run.baseBranch='main';run.automaticOrigin={coordinatorId:'factory',machine:'test'};
@@ -52,7 +58,7 @@ async function world(t) {
     const code=await runPdd(['autopilot','audit','17',String(pr)],{cwd:f.source,env:f.ports.env,stdout,stderr,autopilotLauncherPorts:{...f.ports,...(w.fs?{fs:w.fs}:{}),run:execute,
       agentDefinitions:()=>[{kind:w.agent,name:w.agent,command:'configured-codex',env:{}}],codexLimits:async()=>({state:w.limit}),...(w.nativeUsage?{}:{dailyUsage:async()=>w.usage}),...(w.refreshCosts?{refreshCosts:w.refreshCosts}:{}),
       runAuditor:async(command,args,options)=>{w.launches.push({command,args,options});await w.delay?.();if(w.agent==='claude') return {code:0,stdout:JSON.stringify({session_id:w.session,result:JSON.stringify(w.answer)})};return {code:w.providerExit??0,stdout:JSON.stringify({type:'thread.started',thread_id:w.session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:w.raw??JSON.stringify(w.answer)}})+'\n'};},
-      sendAlert:async input=>{w.alerts.push(input);return {exitCode:w.uncertain==='alert'?1:0};},
+      sendAlert:async input=>{w.alerts.push(input);return alertReply(w,input);},
     }});
     return {code,text:stdout.text+stderr.text};
   };
@@ -66,9 +72,9 @@ const comments = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.
 const reopens = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('PATCH')&&c.args.includes('state=open'));
 const newPrs = w=>w.calls.filter(c=>c.file==='gh'&&c.args[0]==='pr'&&c.args[1]==='create');
 
-const checkHeldAudit=w=>auditMerge({run:w.run,pr:23},{...w.ports,fs:w.fs??nativeFs,
+const checkHeldAudit=(w,pr=23,ports={})=>auditMerge({run:w.run,pr},{...w.ports,fs:w.fs??nativeFs,
   execFile:async(file,args)=>{w.calls.push({file,args});throw Error('held audit must not execute a program');},
-  sendAlert:async input=>{w.alerts.push(input);return {exitCode:w.uncertain==='alert'?1:0};},
+  sendAlert:async input=>{w.alerts.push(input);return alertReply(w,input);},...ports,
 });
 
 // The recommendation is the only damaged field. No saved effect may run.
@@ -105,16 +111,100 @@ for(const failure of ['failed','uncertain'])test(`3138 repair 1: recommendation 
   delete record.result.revert;mkdirSync(join(w.run.runDir,'audits'),{recursive:true});writeFileSync(w.file(),JSON.stringify(record));
   const bytes=readFileSync(w.file(),'utf8');
   // The first response either confirms failure or leaves delivery uncertain.
-  w.uncertain='alert';
+  w.alertFailure=true;
   if(failure==='uncertain')w.fs={...nativeFs,renameSync(from,to) {
     if(String(to).includes('/decisions/') && JSON.parse(readFileSync(from,'utf8')).state==='failed')throw Error('crash before final journal');
     return nativeFs.renameSync(from,to);
   }};
   assert.equal((await checkHeldAudit(w)).exitCode,1);assert.equal(w.alerts.length,1);
-  delete w.fs;delete w.uncertain;
+  delete w.fs;delete w.alertFailure;
   assert.equal((await checkHeldAudit(w)).exitCode,1);assert.equal((await checkHeldAudit(w)).exitCode,1);
   assert.equal(w.alerts.length,failure==='failed'?2:1);
   assert.equal(readFileSync(w.file(),'utf8'),bytes);assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+});
+
+function seedRecommendationHold(w,pr=23,custody='local',change=()=>{}) {
+  const record={schema:'pdd.audit.v1',repository:w.run.repo.toLowerCase(),runId:w.run.runId,pr,merge,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:result('BAD'),
+    comment:{state:'unknown',at:2},revert:{state:'unknown',at:2}};
+  delete record.result.revert;change(record);
+  const folder=custody==='local'?join(w.run.runDir,'audits'):join(w.concernFolder(),'..','records');
+  mkdirSync(folder,{recursive:true});
+  const identity=createHash('sha256').update(JSON.stringify([record.runId,record.pr,record.merge])).digest('hex');
+  const file=custody==='local'?w.file(pr):join(folder,`${identity}.json`),bytes=JSON.stringify(record);
+  writeFileSync(file,bytes);writeFileSync(`${file}.revert`,'');
+  return {file,bytes,record};
+}
+const decisionStates=w=>readdirSync(join(w.concernFolder(),'..','decisions')).map(name=>
+  JSON.parse(readFileSync(join(w.concernFolder(),'..','decisions',name),'utf8'))).sort((a,b)=>a.pr-b.pr);
+function assertHeldEvidence(w,entries) {
+  for(const {file,bytes} of entries) {
+    assert.equal(readFileSync(file,'utf8'),bytes);assert.equal(readFileSync(`${file}.revert`,'utf8'),'');
+  }
+  assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+}
+function realAlertPorts(w,http) {
+  const config=join(w.ports.env.XDG_CONFIG_HOME,'pdd');mkdirSync(config,{recursive:true});
+  const file=join(config,'autopilot-alerts.json');
+  const configure=()=>writeFileSync(file,JSON.stringify({v:1,service:'slack',url:'https://hooks.slack.com/services/synthetic/test/fixture'}));
+  return {configure,ports:{sendAlert:undefined,alertPorts:{stateRoot:join(w.base,'alert-state'),hostname:()=> 'test-machine',http}}};
+}
+for(const failure of ['http','not-configured'])test(`3138 repair 2: real alert ${failure} failure retries before journaling sent`,async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let requests=0;
+  const alert=realAlertPorts(w,async()=>({status:++requests===1&&failure==='http'?503:200,text:'ok'}));
+  if(failure==='http')alert.configure();
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'failed','UNDELIVERED_ALERT_MUST_REMAIN_RETRYABLE');
+  alert.configure();
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'sent');
+  assert.equal(requests,failure==='http'?2:1);
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(requests,failure==='http'?2:1);
+  assertHeldEvidence(w,[entry]);
+});
+test('3138 repair 2: real unconfirmed delivery stays unknown without another HTTP request',async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let requests=0;
+  const alert=realAlertPorts(w,async()=>{requests++;return {status:200,text:''};});alert.configure();
+  for(let n=0;n<2;n++)assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'unknown');assert.equal(requests,1);assertHeldEvidence(w,[entry]);
+});
+test('3138 repair 2: exitCode alone cannot confirm alert delivery',async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let sends=0;
+  for(let n=0;n<2;n++)assert.equal((await checkHeldAudit(w,23,{sendAlert:async()=>{sends++;return {exitCode:0};}})).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'unknown');assert.equal(sends,1);assertHeldEvidence(w,[entry]);
+});
+for(const custody of ['local','shared','mixed'])test(`3138 repair 2: ${custody} damaged PR records each alert once through the real alert module`,async t=>{
+  const w=await world(t);w.run.pr.push({number:24,state:'merged',mergeSha:'c'.repeat(40)});
+  w.run.pr[0].mergeSha=merge;
+  const entries=[seedRecommendationHold(w,23,custody==='shared'?'shared':'local'),
+    seedRecommendationHold(w,24,custody==='local'?'local':'shared',a=>{a.merge='c'.repeat(40);})];
+  const messages=[],alert=realAlertPorts(w,async input=>{messages.push(input.body.text);return {status:200,text:'ok'};});alert.configure();
+  for(let n=0;n<2;n++) {
+    const holds=[];assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[]);
+    assert.deepEqual(holds,[{pr:23,cause:'audit-evidence-invalid'},{pr:24,cause:'audit-evidence-invalid'}]);
+    for(const pr of [24,23])assert.equal((await checkHeldAudit(w,pr,alert.ports)).exitCode,1);
+  }
+  assert.equal(messages.length,2,'EACH_HELD_PR_NEEDS_ITS_OWN_ALERT');
+  for(const entry of entries)assert.equal(messages.filter(text=>text.includes(`PR #${entry.record.pr} (${entry.record.merge})`)).length,1);
+  assert.deepEqual(decisionStates(w).map(a=>[a.pr,a.state]),[[23,'sent'],[24,'sent']]);assertHeldEvidence(w,entries);
+});
+for(const damage of ['repository','run','merge','filename'])test(`3138 repair 2: another damaged record cannot bypass selected ${damage} identity`,async t=>{
+  const w=await world(t);w.run.pr.push({number:24,state:'merged',mergeSha:merge},{number:25,state:'merged',mergeSha:merge});
+  const entries=[seedRecommendationHold(w),seedRecommendationHold(w,24,'shared',a=>{
+    if(damage==='repository')a.repository='other/repo';
+    if(damage==='run')a.runId='other-run';
+    if(damage==='merge')a.merge='c'.repeat(40);
+  })];
+  if(damage==='filename') {
+    const entry=entries[1],file=join(w.concernFolder(),'..','records','invalid.json');
+    nativeFs.renameSync(entry.file,file);nativeFs.renameSync(`${entry.file}.revert`,`${file}.revert`);entry.file=file;
+  }
+  entries.push(seedRecommendationHold(w,25));
+  assert.equal((await checkHeldAudit(w,24)).exitCode,1);assert.equal(w.alerts.length,0);
+  assert.equal((await checkHeldAudit(w,23)).exitCode,1);assert.equal(w.alerts.length,1);
+  assert.equal((await checkHeldAudit(w,25)).exitCode,1);assert.equal(w.alerts.length,2,'VALID_PR_ALERT_MUST_SURVIVE_OTHER_RECORD_DAMAGE');
+  assertHeldEvidence(w,entries);
 });
 
 for(const recommendation of [false,true])test(`3138 BAD revert=${recommendation} saves the recommendation and alerts once`,async t=>{

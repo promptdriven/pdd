@@ -123,7 +123,18 @@ sending before delivery; sent and recovered sending/unknown suppress repeats.
 Only a confirmed failed send may retry. A damaged/unreadable decision journal
 holds without sending. Its identity is the audit identity below, independent of
 the damaged recommendation and source bytes, so repeats and independent clones
-cannot duplicate a successful or uncertain alert. Supply shared auditor chats to cost refresh by runId;
+cannot duplicate a successful or uncertain alert. The alert port returns
+`{exitCode,message}`: zero means the incident was saved, not that it was delivered.
+Mark sent only when its message confirms an Alert or Update was sent. A message
+reporting delivery failed or no destination leaves the decision failed and eligible
+for the alert module's retry rule. Unconfirmed delivery or any other missing
+confirmation remains unknown. Request material updates so two PR decisions on the
+same issue can each reach the destination. Inspect all local and shared records
+despite individual validation failures. Select the diagnostic record for the
+requested PR independently of record order, with its own filename, repository,
+run attempt and pinned merge checks. Keep each PR's hold and alert independent;
+another damaged record cannot hide it. The complete inventory still fails closed
+for launches and ordinary follow-ups. Supply shared auditor chats to cost refresh by runId;
 a shared attempt absent from discovery leaves cost admission unknown. Use the native dead-owner recovery lock through an
 injected acquireAuditLock port; it is not the workflow mutation lock. A second
 caller waits for a later tick, never sends an early BAD alert. The concern file
@@ -201,6 +212,6 @@ hold, never absence. Legacy local reservation files also prevent resend.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"b044a771e22d62165145f6c451506951f8d1d5b80998444be4d14f2bdcbd2956","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"c497a1f54d6c82ca06282af95b0fa9f9d3d089a7fc10c43ebf1c9a41f3548da5","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","properties":{"runId":{"type":"string"},"runDir":{"type":"string"},"repo":{"type":"string"},"automaticOrigin":{"type":"object","properties":{},"required":[],"additionalProperties":false},"pr":{"type":"array","items":{"type":"object","properties":{"number":{"type":"integer"},"state":{"type":"string"}},"required":["number","state"],"additionalProperties":false}}},"required":["runId","runDir","repo","automaticOrigin","pr"],"additionalProperties":false}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

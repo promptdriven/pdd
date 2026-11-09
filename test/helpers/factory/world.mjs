@@ -164,7 +164,10 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
             else value=await w.execute(file,args,opts);
           }
           else if(m.method==='runtimeHealth')value={state:w.interpreter.mode==='refused'?'unavailable':'healthy',detail:'factory interpreter program'};
-          else if(m.method==='alert'){w.alerts.push(m.args[0]);value={exitCode:0};}
+          else if(m.method==='alert'){
+            const input=m.args[0];w.alerts.push(input);
+            value={exitCode:0,message:`Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`};
+          }
           else if(m.method==='sleep'){w.time+=Math.min(m.args[0],1000);await new Promise(r=>setTimeout(r,1));}
           else if(m.method==='fetch') {
             const [url,o]=m.args;let body;

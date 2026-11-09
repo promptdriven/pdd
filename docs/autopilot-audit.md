@@ -68,6 +68,11 @@ inspect the evidence and choose: keep the merge and finish the rest, or use
 base. A separate durable alert record preserves the damaged evidence and all
 publication reservations. Repeats send nothing after success or uncertain
 delivery. A confirmed failed send can retry. No revert PR or new auditor runs.
+An alert is marked sent only after the alert port confirms delivery. Saving the
+incident alone does not confirm delivery. Each eligible held PR has its own
+decision alert, even when other records are damaged or belong to another run.
+The inventory still blocks auditor launches and ordinary follow-up effects until
+its evidence is valid.
 
 Completed automatic runs remain eligible after coordinator replacement. Discovery
 matches the repository, source checkout and machine. It includes absent audits
