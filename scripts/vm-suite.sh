@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Run on pdd-vm: scripts/vm-suite.sh <full commit SHA>. Logs stay outside the repo.
 # The suite waits for its turn in vm-suite-lock.sh next to this script. See its header.
+# Caller validation logs use a nonempty PDD_STATE_DIR, else PDD_SUITE_QUEUE.state
+# or LOCK.queue.state beside the selected/default lock. These logs remain after
+# the private child HOME/state folders are removed.
 set -euo pipefail
 if [[ $# != 1 || ! $1 =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo 'Usage: scripts/vm-suite.sh <full commit SHA>' >&2
@@ -12,6 +15,7 @@ if [[ ! -x $lock_runner ]]; then
   echo "vm-suite: lock runner not found or not executable: $lock_runner" >&2
   exit 1
 fi
+export PDD_STATE_DIR="${PDD_STATE_DIR:-${PDD_SUITE_QUEUE:-${PDD_VM_SUITE_LOCK:-$HOME/.local/state/pdd/vm-suite/fullsuite.lock}.queue}.state}"
 "$lock_runner" --check
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/pdd-vm-suite.XXXXXX")
 echo "VM suite logs: $run_dir"

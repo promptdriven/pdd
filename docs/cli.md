@@ -934,7 +934,16 @@ receipts are in the same queue. The receipt stores a redacted command, its SHA-2
 worktree fingerprint, matching workflow run, owned recorder and child, terminal
 exit and signal, and complete TAP summary counts when available. Missing counts
 stay unknown. Logs and receipts use mode 0600. Logs are under PDD_STATE_DIR, or
-HOME/.local/state/pdd, in a validation folder for the selected queue. Log names
+HOME/.local/state/pdd, in a validation folder for the selected queue.
+`scripts/vm-suite-lock.sh` and `scripts/vm-suite.sh` select caller log state
+explicitly: a nonempty PDD_STATE_DIR wins; otherwise they use
+`PDD_SUITE_QUEUE.state`, or `LOCK.queue.state` beside the resolved compatibility
+lock when no queue selector is supplied. Logs survive temporary child cleanup.
+Without a state override, an external lock and queue keep both scripts' writes
+outside the caller HOME.
+The legacy history stays beside the lock. Factory callers select their own
+private PDD_STATE_DIR; HOME fallback tests use disposable homes.
+Log names
 combine the queue-path hash, ticket and a random attempt ID. An existing file
 causes a fresh ID to be selected. Resetting the queue or rebooting preserves
 earlier logs and permits a new attempt. Commands are saved as

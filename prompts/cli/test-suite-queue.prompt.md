@@ -2,7 +2,8 @@
 
 Own `src/test-suite-queue.mjs` and the compatibility entrypoint
 `scripts/vm-suite-lock.sh`, `src/test-suite-entry.mjs` and the detached native
-recorder `src/test-suite-recorder.mjs` and evidence adapter
+recorder `src/test-suite-recorder.mjs`, validation state selection in
+`scripts/vm-suite.sh`, and evidence adapter
 `src/validation-evidence.mjs`. This queue bounds full-suite resource use for all
 repositories and parallel workflow runs on one machine. It runs only an explicit
 operator or worker command; it does not schedule tests or approve publication.
@@ -54,6 +55,16 @@ returns the child's status. Preserve the compatibility queued/started/finished
 log lines and history file at `PDD_VM_SUITE_LOCK.history`, else
 `HOME/.local/state/pdd/vm-suite/fullsuite.lock.history`. An explicit legacy lock
 path still needs an existing writable parent; the default log parent is created. No GitHub writes, private paths or live agent calls.
+
+Both VM scripts preserve a nonempty caller `PDD_STATE_DIR`. Otherwise they set
+it to `PDD_SUITE_QUEUE.state` when a nonempty queue selector is supplied, or
+`LOCK.queue.state` beside the resolved compatibility lock (including its default).
+This is the caller state for durable validation logs, separate from the temporary
+child state below. Retain these logs after suite cleanup, including nonzero exits.
+Without a caller state override, an external lock and queue keep both scripts
+from writing into the caller HOME; legacy history remains beside the selected lock. `--check` creates no validation
+logs. Factory and test callers must keep their state inside their disposable
+fixture; tests of the HOME state fallback may use their private HOME explicitly.
 
 ## Clean suite environment
 

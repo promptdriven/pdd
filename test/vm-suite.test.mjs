@@ -3,7 +3,7 @@ import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
 import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,7 +88,7 @@ if (name === 'git') {
 function run(t, options = {}) {
   const fake = fakes(t, options);
   const result = spawnSync('bash', [options.script ?? script, options.argument ?? sha], {
-    cwd: fake.dir, encoding: 'utf8', timeout: 15000, env: fake.env,
+    cwd: fake.dir, encoding: 'utf8', timeout: 15000, env: { ...fake.env, ...options.lockEnv?.(fake.dir) },
   });
   assert.ifError(result.error);
   const events = fake.events();
@@ -284,3 +284,35 @@ test('the lock runner runs the plain suite with Chrome when SUITE is empty', t =
   const clone = literal(result.clone);
   assert.match(history, new RegExp(`^started ${clock} in ${clone}\\nfinished ${clock} exit 3 in ${clone}\\n$`));
 });
+
+for (const runner of ['compatibility', 'vm-suite']) {
+  for (const selector of ['queue', 'legacy-lock']) {
+    test(`${runner} retains validation logs beside ${selector} without writing into HOME`, t => {
+      for (const explicitState of [false, true]) {
+        const lockEnv = dir => {
+          const lock = join(dir, 'shared/fullsuite.lock');
+          mkdirSync(join(dir, 'shared'));
+          if (selector === 'legacy-lock') {
+            mkdirSync(`${lock}.queue`);
+            copyFileSync(join(dir, 'suite-queue/capacity.json'), join(`${lock}.queue`, 'capacity.json'));
+          }
+          return { PDD_VM_SUITE_LOCK: lock, PDD_SUITE_QUEUE: selector === 'queue' ? join(dir, 'suite-queue') : undefined,
+            PDD_STATE_DIR: explicitState ? join(dir, 'selected-state') : undefined,
+            SUITE: 'printf "validation-marker\\n"; npm run suite' };
+        };
+        const result = runner === 'compatibility' ? runLock(t, { lockEnv }) : run(t, { lockEnv });
+        assert.equal(result.status, 0, result.stderr);
+        const queue = selector === 'queue' ? join(result.dir, 'suite-queue') : join(result.dir, 'shared/fullsuite.lock.queue');
+        const rows = readdirSync(queue).filter(name => /^ticket-.*\.json$/.test(name))
+          .map(name => JSON.parse(readFileSync(join(queue, name), 'utf8')));
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].state, 'finished');
+        const state = explicitState ? join(result.dir, 'selected-state') : `${queue}.state`;
+        assert.ok(rows[0].logPath.startsWith(join(state, 'validation') + '/'));
+        assert.ok(statSync(rows[0].logPath).size > 0);
+        assert.equal(statSync(rows[0].logPath).mode & 0o777, 0o600);
+        assert.deepEqual(readdirSync(result.home), ['auth-sentinel']);
+      }
+    });
+  }
+}
