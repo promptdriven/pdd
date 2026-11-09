@@ -45,7 +45,7 @@ async function tickWorld(t, { github } = {}) {
       w.gh.push(args);
       if (args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: repo, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repo}` }), stderr: '' };
       if (args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
-      const endpoint = endpointOf(args), sent = args.find(word => /^If-None-Match: /.test(word))?.slice(15), method = args[args.indexOf('--method') + 1];
+      const endpoint = endpointOf(args), sent = args.find(word => /^If-None-Match: /.test(word))?.slice(15), method = args.includes('--method') ? args[args.indexOf('--method') + 1] : 'GET';
       const answer = (status, body, extra) => ({ code: status === 304 ? 1 : 0, stdout: reply(status, body, { remaining: status === 304 ? w.remaining : --w.remaining, ...extra }), stderr: status === 304 ? 'gh: HTTP 304\n' : '' });
       const listed = (rows, tag) => sent === tag ? answer(304) : answer(200, rows, { etag: tag });
       // The open list has two pages: the first issue, then the rest.
@@ -55,9 +55,13 @@ async function tickWorld(t, { github } = {}) {
         return sent === tag ? answer(304) : answer(200, rows, { etag: tag, ...(second ? {} : { link: `<https://api.github.com/repos/${repo}/issues?state=open&sort=updated&direction=desc&per_page=100&page=2>; rel="next"` }) });
       }
       if (endpoint.startsWith(`repos/${repo}/issues?state=all`)) { w.sinceReads = [...(w.sinceReads ?? []), endpoint]; return listed(w.since, `"since-${endpoint}-${JSON.stringify(w.since).length}"`); }
+      const subject = endpoint.match(new RegExp(`^repos/${repo}/issues/(\\d+)$`));
+      if (subject) { const row = w.issues.find(row => row.number === Number(subject[1])); return answer(row ? 200 : 404, row ?? {}); }
       if (endpoint === `repos/${repo}/issues/comments/901`) {
         if (method === 'PATCH') { const { body } = JSON.parse(options.input); w.patches.push(body); w.claim = { ...w.claim, body, updated_at: at(w.time) }; }
-        return answer(200, w.claim);
+        const response = answer(200, {...w.claim, issue_url:`https://api.github.com/repos/${repo}/issues/7`});
+        if (!args.includes('--include')) response.stdout = JSON.stringify({...w.claim, issue_url:`https://api.github.com/repos/${repo}/issues/7`});
+        return response;
       }
       if (endpoint.includes('/reviews?')) return answer(200, []);
       if (endpoint === 'graphql') return answer(200, { data: {} }, { resource: 'graphql' });

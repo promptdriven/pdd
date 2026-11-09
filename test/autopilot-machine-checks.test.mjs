@@ -103,6 +103,7 @@ test('native run admission enforces calculated capacity while coordinator identi
   const claim={issue,active:true,owner:'c',coordinatorId:'c',machine:'m',commentId:'1',labelEventId:'2'};
   for(const [cap,explicit,expected] of [[1,undefined,false],[2,undefined,false],[3,undefined,true],[3,1,false],[1,3,true]]) {
     const ports={
+      github:{issue:async args=>({json:JSON.stringify(args.repository===repository&&args.issue===99?{number:99,labels:[]}: {error:'not-found'})})},
       settings:{read:async()=>({mode:'auto',activation:'a',capacityRuns:cap,...(explicit?{runs:explicit}:{})})},
       owners:{read:async()=>({json:JSON.stringify({localOwner:'c',runsKnown:true,claims:[claim],runs:[{issue:'https://github.com/example/repo/issues/1',runId:'one',state:'working'},{issue:'https://github.com/example/repo/issues/2',runId:'two',state:'working'}]})})},
       snapshots:{read:async()=>({snapshot:{repository,complete:true,issues:[{key:issue,nodeId:'99',title:'Ready',revision:'a'.repeat(64),state:'open',authority:'trusted',assignees:[],conditions:[],execution:'idle',holds:[]}],edges:[],reviews:[{id:'review',issue,authority:'trusted',intact:true,outcome:'complete',analysis:'Independent work',base:[],continuation:'',inputs:[{key:issue,revision:'a'.repeat(64)}],candidates:[{key:issue,revision:'a'.repeat(64)}],dependencies:[],questions:[],effects:'none'}],impacts:[],inputs:[]}})},

@@ -38,3 +38,5 @@ Native test commands for automatic approval are `node --test TEST...`, `npm test
 - [Prompt approval](prompt-approve.prompt.md): required for safe status editing and path validation.
 - [Approval policy](approval-policy.prompt.md): required for strict mode and evidence recording.
 - [Runtime workspace](runtime-workspace.prompt.md): required for selecting project source and excluding fixtures.
+
+Use “Runtime interface” when naming the declaration in user messages, including its global approval status.

@@ -3,7 +3,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 096733b7d91eee9ee2668ab96def9ffef52ebcb8dde7b0e67914acae8622e345).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 27fa596328382eed4b16280f0f352a6b249042295fe6f1e0e262bdddba661d6a).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -20,6 +20,7 @@ import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLast
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners'), LIVE_GITHUB = Symbol('live github');
 const DEFAULT_CACHE = Symbol('default etag cache');
+const VERIFIED_CLAIM_TARGET = Symbol('verified claim comment target');
 const NATIVE_FLOORS = Symbol('native dependency floor guards');
 const NATIVE_READ_SCOPE = Symbol('native dependency read scope'), NATIVE_AUTHORITY = Symbol('native authority');
 const NATIVE_CONTEXT = Symbol('native context'), NATIVE_EVIDENCE = Symbol('native evidence'), NATIVE_SETTINGS = Symbol('native settings');
@@ -75,7 +76,7 @@ function spawnRead(file, args, options = {}) {
 const notModified = text => /^HTTP\/\S+\s+304\b/.test(String(text ?? ''));
 
 function service(cwd, ports) {
-  const exec = guardAutomaticGithubWrites(ports.execFile ?? execute, ports, {cwd, repository:ports.issueTarget?.repository, issue:ports.issueTarget?.issue, manualCustody:ports.manualCustody});
+  const exec = guardAutomaticGithubWrites(ports.execFile ?? execute, ports, {cwd, repository:ports.issueTarget?.repository, issue:ports.issueTarget?.issue, manualCustody:ports.manualCustody, [VERIFIED_CLAIM_TARGET]:ports[VERIFIED_CLAIM_TARGET]});
   async function run(file, args, input, purpose, conditional = false, repository, guard = ports.githubFloor) {
     let r;
     try { r = await exec(file, args, { ...(cwd ? { cwd } : {}), ...(input === undefined ? {} : { input }), ...(purpose ? { purpose } : {}), ...(repository ? { repository } : {}) }); }
@@ -1102,7 +1103,11 @@ async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorI
     || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return null;
   const value = iso(time(at)), body = editClaimRecord(comment.body, record, { ...record.value, [name]: value }, name);
   if (body === null) throw Error(`Claim record cannot take ${name === 'lastSeen' ? 'a heartbeat' : name} without other changes`);
-  const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository)).value;
+  const owner = /^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)$/i.exec(comment.issue_url ?? '');
+  const proof = owner && sameRepo(owner[1], repository) && Number(owner[2]) === i.issue
+    ? Object.freeze({endpoint, repository, issue:i.issue, heartbeat:name === 'lastSeen'}) : null;
+  const writer = proof ? service(cwd, {...ports, issueTarget:{repository,issue:i.issue}, [VERIFIED_CLAIM_TARGET]:proof}) : s;
+  const saved = (await writer.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository)).value;
   if (String(saved?.id) !== String(claim.commentId) || claimRecord(saved.body)?.value[name] !== value) throw Error(name === 'lastSeen' ? 'Claim heartbeat readback is unresolved' : 'Claim record readback is unresolved');
   return value;
 }
@@ -1618,6 +1623,52 @@ function validReview(review) {
     && (review.outcome !== 'complete' || !review.questions.length) && (review.outcome !== 'question' || review.questions.length > 0);
 }
 
+// Fresh label connections reduce delivery cost without reusing snapshot authority.
+export async function readManualHolds({repository, issues, cwd = ''}, supplied = {}) {
+  const numbers = [...new Set(issues)], result = new Map();
+  const ports = createDependencyReadPorts({cwd}, supplied);
+  const one = async issue => {
+    let hold;
+    try { hold = await (supplied.manualSafetyRead ?? supplied.readManualHold ?? readManualHold)({repository,issue,cwd},ports); }
+    catch { hold = {known:false,held:false}; }
+    result.set(issue,hold);
+  };
+  if (!repositoryName(repository) || numbers.some(n=>!Number.isSafeInteger(n)||n<=0)) return result;
+  if (supplied.manualSafetyRead || supplied.readManualHold || !ports.github[NATIVE_GITHUB]) {
+    for (const number of numbers) await one(number);
+    return result;
+  }
+  const api = service(cwd,{...ports,githubCache:null,dependencyReads:undefined}).api;
+  for (let offset=0;offset<numbers.length;offset+=25) {
+    const batch=numbers.slice(offset,offset+25), [owner,name]=repository.split('/');
+    const query=`query($owner:String!,$name:String!${batch.map((_,i)=>`,$n${i}:Int!`).join('')}) { repository(owner:$owner,name:$name) { ${batch.map((_,i)=>`i${i}:issue(number:$n${i}) { url number labels(first:100) { nodes { name } pageInfo { hasNextPage } } }`).join(' ')} } }`;
+    let data;
+    try {
+      const response=(await api('graphql','POST',JSON.stringify({query,variables:{owner,name,...Object.fromEntries(batch.map((number,i)=>[`n${i}`,number]))}}),'issues',repository,true)).value;
+      if (!response.errors?.length && object(response.data?.repository)) data=response.data.repository;
+    } catch { /* The fresh single-issue reader is the fallback. */ }
+    for (const [i,number] of batch.entries()) {
+      const row=data?.[`i${i}`], labels=row?.labels;
+      if (row?.number===number && info(row.url)?.key===`https://github.com/${repository.toLowerCase()}/issues/${number}`
+        && Array.isArray(labels?.nodes) && labels.pageInfo?.hasNextPage===false
+        && labels.nodes.every(label=>object(label)&&typeof label.name==='string') && !labels.nodes.some(label=>label.name==='pdd:manual'))
+        result.set(number,{known:true,held:false});
+      else await one(number);
+    }
+  }
+  return result;
+}
+
+export async function issueEffectsAllowed({repository,issues,cwd=''},ports={}) {
+  let observations;
+  const read = target => {
+    observations ??= Promise.resolve().then(()=> (ports.manualSafetyReadMany ?? readManualHolds)({repository,issues:[...new Set(issues)],cwd},ports));
+    return observations.then(rows=>rows.get(target.issue) ?? {known:false,held:false});
+  };
+  for (const issue of new Set(issues)) if (!await issueEffectAllowed({repository,issue,cwd},{...ports,manualSafetyRead:read})) return false;
+  return true;
+}
+
 // One admission rule for tick effects and public automatic commands. The tick's
 // observation is sticky; a fresh safety read catches labels added while waiting.
 export async function issueEffectAllowed({repository, issue, cwd = '', localOnly = false}, ports = {}) {
@@ -1665,18 +1716,21 @@ export function guardAutomaticGithubWrites(execute, ports, context = {}) {
       repository = url?.[1] ?? (repoAt >= 0 ? args[repoAt+1] : repository);
       issue = url ? Number(url[2]) : /^[1-9]\d*$/.test(target ?? '') ? Number(target) : context.issue ?? options.issueTarget?.issue;
     }
+    const proof = context[VERIFIED_CLAIM_TARGET] ?? options[VERIFIED_CLAIM_TARGET];
+    const verifiedComment = comment && proof?.endpoint === comment;
     if (write && issueWrite) {
-      if (comment) {
+      if (verifiedComment) { repository = proof.repository; issue = proof.issue; }
+      else if (comment) {
         const reply = await execute('gh',['api',comment],{...options,input:undefined});
         let value; try { value = JSON.parse(String(reply.stdout).replace(/^HTTP\/[\s\S]*?\r?\n\r?\n/,'')); } catch { throw Object.assign(Error('Unresolved issue write target'),{code:'manual-hold'}); }
         const target = /repos\/([^/]+\/[^/]+)\/(?:issues|pulls)\/(\d+)$/.exec(value.issue_url ?? value.pull_request_url ?? '');
         repository = target?.[1] ?? (context.issue ? context.repository : options.issueTarget?.repository); issue = target ? Number(target[2]) : context.issue ?? options.issueTarget?.issue;
       }
       const targets = [{repository,issue}, ...(context.issue ? [{repository:context.repository,issue:context.issue}] : [])];
-      for (const target of targets) if (!await issueEffectAllowed({...target,cwd:options.cwd ?? context.cwd},ports))
+      for (const target of targets) if (!await issueEffectAllowed({...target,cwd:options.cwd ?? context.cwd,localOnly:verifiedComment && proof.heartbeat === true && ports.manualReadsDeferred?.() === true},ports))
         throw Object.assign(Error('Manual issue authority holds GitHub write'),{code:'manual-hold'});
     }
-    return execute(file,args,context.issue ? {...options,issueTarget:{repository:context.repository,issue:context.issue}} : options);
+    return execute(file,args,{...options, ...(context.issue ? {issueTarget:{repository:context.repository,issue:context.issue}} : {}), ...(verifiedComment ? {[VERIFIED_CLAIM_TARGET]:proof} : {})});
   };
 }
 

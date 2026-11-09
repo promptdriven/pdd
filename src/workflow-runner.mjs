@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, issueEffectAllowed, guardAutomaticGithubWrites, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8836d59881310ee29fa95b488209d07181768a6a764dc3c92677d65f56c77d02).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0495cddf81fa50e3314354463f0b38a2c39b380863ceee75fa5d6de38e26710e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4432,9 +4432,9 @@ function savedRuntimeEvidence(run, results = []) {
     : Object.values(run.done ?? {}).filter(record => record.smallChange).sort((a,b) => b.at - a.at)[0]?.smallChange;
   return {...(latest ? {runtimeCoverage:latest.coverage.runtime,nativeOnly:latest.nativeOnly ?? []} : {}), ...(smallChange ? {smallChange} : {})};
 }
-function runtimeStatusLines(evidence) {
+function runtimeStatusLines(evidence, {smallChange = true} = {}) {
   const value = evidence.runtimeCoverage;
-  const scope = evidence.smallChange;
+  const scope = smallChange ? evidence.smallChange : null;
   const small = scope ? [`Issue checklist: ${scope.checklist?.status ?? 'missing'}`, formatFormalEvidence(scope.formal, true)] : [];
   return [...small, ...(value ? [`Runtime coverage: ${value.checkable} of ${value.total} prompts checkable, ${value.native_only} native-only`,
     ...(evidence.nativeOnly ?? []).flatMap(row => (row.prompts ?? []).map(prompt => `${row.test} ${row.state}: ${prompt.path}: ${oneLine(prompt.reason)}`))] : [])];
@@ -4539,7 +4539,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
     ...(herdr.warning ? [herdr.warning] : []), ...(herdr.unownedWorkspaces ?? []).map(w => `Unowned workspace ${JSON.stringify(w.workspaceId)}: ${w.closeCommand}`)] : [];
   if (!shown.length) return done([...paneLines, `No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
   const cards = shown.filter(item => item.waitingForStory).map(item => item.ref);
-  return done([...paneLines, ...shown.map(item => [item.line,...runtimeStatusLines(item)].join('\n')),
+  return done([...paneLines, ...shown.map(item => [item.line,...runtimeStatusLines(item, {smallChange:false})].join('\n')),
     ...(cards.length ? [`Waiting for Story approval: ${cards.join(', ')}. Show each card: pdd workflow card N.`] : []),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
     `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));

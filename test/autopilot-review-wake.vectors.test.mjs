@@ -56,6 +56,8 @@ async function fixture(t, initialReviews = [[]]) {
       assert.ok(command === 'gh' && args[0] === 'api' && args.includes('GET'), `Unexpected process: ${command} ${args.join(' ')}`);
       const endpoint = args[args.indexOf('GET') + 1], request = { endpoint, args: [...args] };
       f.requests.push(request);
+      const subject = /^repos\/owner\/repo\/issues\/(\d+)$/.exec(endpoint);
+      if (subject) { const row = f.rows.find(row => row.number === Number(subject[1])); return reply(row ?? {}, row ? 200 : 404); }
       if (endpoint.startsWith('repos/owner/repo/issues?')) {
         const etag = `"issues-${f.issueVersion}"`;
         request.status = args.includes(`If-None-Match: ${etag}`) ? 304 : 200;

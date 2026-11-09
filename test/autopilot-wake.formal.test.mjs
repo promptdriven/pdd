@@ -32,7 +32,7 @@ async function fixture(t, initialReviews = [[]]) {
   mkdirSync(cwd); mkdirSync(home);
   const f = {
     time: Date.parse('2026-11-04T00:00:00Z'), issueVersion: 1, pageVersions: initialReviews.map(() => 1),
-    rows: [issue(70), issue(90, { body: 'Fixes #70', pull_request: {} })],
+    externalIssues: new Map(), rows: [issue(70), issue(90, { body: 'Fixes #70', pull_request: {} })],
     detail: { state: 'open', draft: false, merged: false, head: { sha: 'synthetic-head' } },
     reviewPages: structuredClone(initialReviews), comments: [], permissions: {}, requests: [], warnings: [],
     prompts: [], attempts: 0, failures: 0, agentStatus: 'idle', modelCalls: 0,
@@ -56,6 +56,8 @@ async function fixture(t, initialReviews = [[]]) {
       assert.ok(command === 'gh' && args[0] === 'api' && args.includes('GET'), `Unexpected process: ${command} ${args.join(' ')}`);
       const endpoint = args[args.indexOf('GET') + 1], request = { endpoint, args: [...args] };
       f.requests.push(request);
+      const subject = /^repos\/owner\/repo\/issues\/(\d+)$/.exec(endpoint);
+      if (subject) { const row = f.rows.find(row => row.number === Number(subject[1])) ?? f.externalIssues.get(Number(subject[1])); return reply(row ?? {}, row ? 200 : 404); }
       if (endpoint.startsWith('repos/owner/repo/issues?')) {
         const etag = `"issues-${f.issueVersion}"`;
         request.status = args.includes(`If-None-Match: ${etag}`) ? 304 : 200;
@@ -126,7 +128,7 @@ for (const trusted of [false, true]) for (const status of ['idle', 'working', 'b
 for (const rule of ['run', 'claim']) for (const age of [3599999, 3600000, 3600001]) for (const status of ['idle', 'working', 'blocked', 'unknown']) {
   test(`bounded ${rule} age=${age} status=${status}`, async t => {
     const f = await fixture(t); const changedAt = f.time;
-    if (rule === 'run') f.ports.readRunProgress = async () => [{ number: 101, changedAt }];
+    if (rule === 'run') { f.externalIssues.set(101,issue(101)); f.ports.readRunProgress = async () => [{ number: 101, changedAt }]; }
     else {
       f.rows[0].labels = [{ name: 'pdd:working' }];
       f.rows[0].updated_at = new Date(changedAt).toISOString(); f.issueVersion++;

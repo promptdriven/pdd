@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: ecbcb6e63811219e850b41ab4927f843a2fb3325996f50f43c80ba8701dee107).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 475b5bd1578767a6f3c9a708b8735da21b74b68ac6a943f0bc4bb3c9e2518056).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -166,7 +166,7 @@ function interfaceView(root,path,text) {
   const declarations=value=>Object.fromEntries(Object.entries(value).filter(([key])=>!['status','prose_sha256'].includes(key)));
   if(isDeepStrictEqual(declarations(previous),declarations(next))) return [];
   const unchanged=['entries','calls','resources','instance_types'].flatMap(key=>(previous[key] ?? []).flatMap((entry,i)=>isDeepStrictEqual(entry,next[key]?.[i]) ? [`/${key}/${i}`] : []));
-  return ['The Runtime has one global status. The whole interface needs re-approval.',
+  return ['The Runtime interface has one global status. The whole interface needs re-approval.',
     `Unchanged declarations: ${unchanged.join(', ') || 'none'}`,
     before ? `Interface diff since approved ${before.commit.slice(0,12)}:` : 'Interface diff from before extension (display context):',
     ...lineDiff(old,current).map(([mark,value])=>`  ${mark} ${plain(value)}`)];

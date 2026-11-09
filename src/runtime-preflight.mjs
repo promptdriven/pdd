@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 928009c02955048b50a8b1985b205be8be710b4b83c345d73e3d0d0f80d09f21).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 593795d5383de3ba190e67df257d1f7f1973f0e36c599efdc6a3f2459525eeb9).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -1585,7 +1585,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     for (const plan of scoped) {
       for (const path of plan.boundary) inspect(path,plan.story);
       const crossing=plan.problems[0];
-      if (crossing) throw Object.assign(new PreflightError(4,`${plan.story}: ${crossing.step_id}: ${crossing.prompt_path}: ${crossing.code}. Correct the Runtime boundary or call target.`),{code:'binding-boundary-invalid'});
+      if (crossing) throw Object.assign(new PreflightError(4,`${plan.story}: ${crossing.step_id}: ${crossing.prompt_path}: ${crossing.code}. Correct the Runtime interface boundary or call target.`),{code:'binding-boundary-invalid'});
     }
     const required = new Set(scoped.flatMap(plan=>plan.boundary));
     if (scoped.length === bindingPlans.length && scoped.length) for (const [path,file] of payload) {

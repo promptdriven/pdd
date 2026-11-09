@@ -1,5 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: ca94c81c1c56670e4a40592bb1d2a0e6c9c21bf12a7d4cb746af730a6557d5c4).
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: b9e4d9e2101fd0d9ff1cf8777eb9c757e363df842853ca2d40048098cbaafb22).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { gitContext } from './workflow-runs.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange, issueKey } from './issue-dependencies.mjs';
-import { issueEffectAllowed, createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges, commandGithubFloor } from './issue-dependencies-github.mjs';
+import { issueEffectAllowed, issueEffectsAllowed, createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges, commandGithubFloor } from './issue-dependencies-github.mjs';
 
 const snapshotRead = async (ports, args) => {
   const result = await (ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports));
@@ -443,8 +443,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   // One delivery through the existing route. `redelivery` marks a repeated request
   // while it is sent, so the launcher can name it and refuse it under uncertain custody.
   const send = async again => {
-    for (const key of prepared.queued)
-      if (!await issueEffectAllowed({repository, issue:Number(key.split('/').pop()), cwd}, ports)) return false;
+    if (!await issueEffectsAllowed({repository,issues:prepared.queued.map(key=>Number(key.split('/').pop())),cwd},ports)) return false;
     // Snapshot ownership can predate a restart or takeover. Check before AI work.
     try {
       const live = json((await ports.owners.read({ repository, issues: prepared.queued })).json);

@@ -1,7 +1,7 @@
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: f89215bd1b6a89fa105936b7d7ef063a298f8d7b71252a99ebbaadbe5b774b75).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: a95b4d64a8cf9fa95b04aa04c7bd60b82c75e653f04d4b4332c54f703b49e538).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -1181,8 +1181,8 @@ function interfaceDiagnostic(view, raw, root, secrets = []) {
   if (view.code === 'invalid-interface' && !pointer && !view.section?.startsWith('/')) {
     let findings = [];
     try { if (view.path) findings = interfaceFindings({root,paths:[view.path]}).filter(item => item.section?.startsWith('/')); } catch { /* No local diagnosis is available. */ }
-    view.hint = [rule, 'The Runtime did not identify the field.', findings.length
-      ? `Local schema findings (not confirmed as the Runtime cause): ${findings.map(item => item.message).join('; ')}`
+    view.hint = [rule, 'The PDD interpreter did not identify the field.', findings.length
+      ? `Local schema findings (not confirmed as the interpreter cause): ${findings.map(item => item.message).join('; ')}`
       : 'Inspect the interface or request a detailed Runtime diagnostic.'].filter(Boolean).join(' ');
   }
   return view;
@@ -2108,6 +2108,8 @@ function lintProblems(context, answer, refusal = null) {
   const problems = refusal ? [{ ...refusal, path: null }] : [];
   const program = answer?.result?.report?.program;
   const canonical = Array.isArray(answer?.result?.problems) ? answer.result.problems : answer?.result?.report?.problems;
+  const originalIdentity = item => JSON.stringify([cleanText(item.code, context.secrets) || 'lint-refused', cleanText(item.file ?? item.path, context.secrets) || null, cleanText(item.at ?? item.section, context.secrets) || null]);
+  const canonicalLocations = new Set((Array.isArray(canonical) ? canonical.filter(isObject) : []).map(originalIdentity));
   for (const item of Array.isArray(canonical) ? canonical.filter(isObject) : []) {
     const reason = cleanText(item.reason, context.secrets), fix = cleanText(item.fix, context.secrets);
     problems.push(interfaceDiagnostic({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.file ?? item.path, context.secrets) || null,
@@ -2117,6 +2119,7 @@ function lintProblems(context, answer, refusal = null) {
       source: cleanText(item.source, context.secrets) || null }, item, context.root, context.secrets));
   }
   for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
+    if (canonicalLocations.has(originalIdentity(item))) continue;
     const problem = interfaceDiagnostic({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
       section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null }, item, context.root, context.secrets);
     if (!problems.some(p => p.code === problem.code && p.path === problem.path && p.section === problem.section)) problems.push(problem);

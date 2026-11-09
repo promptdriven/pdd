@@ -43,3 +43,5 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before you change
 ## Caller navigation
 
 The [CLI](pdd-cli.prompt.md) routes `pdd approve PROMPT` here. The [runtime client](runtime-client.prompt.md) uses the same view and edit for Try-page approvals.
+
+Use “Runtime interface” when naming the declaration and its global approval status in user messages.

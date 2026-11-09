@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 654eb2fac8a6e489c31790a13cb93a1910fca85ce24fd2aec05765eb0f7a903b).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ed9955df120882339a9ba6b15d32502025ceb4f2d4551c1eac16d98b08f20436).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -29,7 +29,7 @@ import { tidyRuns } from './workflow-runner.mjs';
 import { paneUsage, ensurePaneBudget } from './workflow-chat.mjs';
 import { reconcileDependencyIntake } from './issue-dependencies-intake.mjs';
 import { issueKey } from './issue-dependencies.mjs';
-import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, issueEffectAllowed, guardAutomaticGithubWrites, readManualHold, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, dependencySnapshotStore, issueRowVersion, recordLongRunningAlert, issueEffectAllowed, issueEffectsAllowed, guardAutomaticGithubWrites, readManualHold, readManualHolds, releaseParkedClaim, refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat } from './issue-dependencies-github.mjs';
 import { sendToChat, START_GRACE_MS } from './workflow-chat.mjs';
 import { acquireRunLock, runtimeWakeTag, isRetryRequest, automaticAttention, advanceAutomaticPr1, resumeStoppedRun, nudgeIdleRun } from './workflow-runner.mjs';
 import { checkCause, readRunResults, checkVerdictSince, latestCheckVerdict, savedLostCheck, savedCheckCause } from './workflow-results.mjs';
@@ -1275,7 +1275,7 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
         if (submitting) {
           await observe('attempted');
           try { reply = await p.scanTransport(async () => {
-            for (const number of effectSubjects) if (!await issueAllowed(state,p,number)) throw Object.assign(Error('Manual issue authority holds coordinator delivery.'),{code:'agent_blocked'});
+            if (!await issueEffectsAllowed({repository:state.repo,issues:effectSubjects,cwd:state.cwd},p)) throw Object.assign(Error('Manual issue authority holds coordinator delivery.'),{code:'agent_blocked'});
             try { return await herdr(args, p); } catch (error) { transportError = error; throw error; }
           }); }
           catch (error) { await observe(['agent_not_found','pane_not_found','agent_blocked'].includes(error?.code) ? 'failed' : 'uncertain'); throw error; }
@@ -1299,7 +1299,7 @@ async function wake(state, makeText, p, prepare = async () => {}, explicitStartR
         const current = (await herdr(['agent', 'get', pane], p)).result?.agent;
         if (!withinLaunch()) { expired = true; return false; }
         if (!current || !['idle', 'done'].includes(current.agent_status) || !observeIdentity(current)) return false;
-        for (const number of effectSubjects) if (!await issueAllowed(state,p,number)) return false;
+        if (!await issueEffectsAllowed({repository:state.repo,issues:effectSubjects,cwd:state.cwd},p)) return false;
         try { await prepare(); if (artifact) await artifact.prepare(); } catch { return false; }
         const finalState = read(state.stateFile);
         const finalCustodyMatches = recovering
@@ -1623,7 +1623,7 @@ async function runTick(stateFile, ports, completion) {
     const suppressions = new Map((state.manualSuppressions ?? []).map(row => [row.number,row.reason]));
     const remoteAllowed = () => { const b = readBudget().budget; return !(state.retryAt > p.now()) && !(b.state === 'reserve' && b.resetAt > p.now()); };
     const observeManualNow = issue => (p.readManualHold ?? readManualHold)({repository:state.repo, issue, cwd:state.cwd},
-      createDependencyReadPorts({cwd:state.cwd}, {...p, execFile:async (file,args,options) => p.execute(file,args,{...options,purpose:'dependencies'})}));
+      createDependencyReadPorts({cwd:state.cwd}, {...p, execFile:async (file,args,options) => p.execute(file,args,{...options,purpose:'issues'})}));
     const observeManual = async ({repository = state.repo, issue, observation}) => {
       if (repository.toLowerCase() !== state.repo.toLowerCase()) {
         if (!remoteAllowed()) return {known:false,held:false};
@@ -1656,6 +1656,7 @@ async function runTick(stateFile, ports, completion) {
     p.manualRepository = state.repo;
     p.manualSafetyRead = ({repository,issue,cwd}) => repository.toLowerCase() === state.repo.toLowerCase() ? observeManualNow(issue)
       : (p.readManualHold ?? readManualHold)({repository,issue,cwd},{...p,execFile:(file,args,options) => p.execute(file,args,options)});
+    p.manualSafetyReadMany = ports.manualSafetyReadMany ?? (input => readManualHolds(input,{...ports,execFile:(file,args,options)=>p.execute(file,args,{...options,purpose:'issues'})}));
     p.manualReadsDeferred = () => !remoteAllowed();
     p.manualObservationDeferred = ({repository,issue}) => repository.toLowerCase() === state.repo.toLowerCase() && deferredManualObservations.has(issue) && !p.manualHolds.has(issue);
     p.onManualHold = ({repository, issue:number, hold}) => {
@@ -1675,7 +1676,7 @@ async function runTick(stateFile, ports, completion) {
       && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.automaticOrigin?.repository?.toLowerCase() === state.repo.toLowerCase()
       && run.automaticOrigin?.machine === state.machine && samePath(run.sourceRoot,state.cwd));
     // Observe both current and recoverable owners before any gate, resume or wake.
-    for (const number of new Set([...allRuns.filter(run => run.repo?.toLowerCase() === state.repo.toLowerCase()).map(run => run.number), ...(state.cachedIssues ?? []).filter(row => !row.pull_request).map(row => row.number), ...Object.values(state.health.incidents ?? {}), ...(state.githubIntake?.claims ?? []).map(claim => Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1])), ...p.manualHolds].filter(number => Number.isSafeInteger(number) && number > 0)))
+    for (const number of new Set([...allRuns.filter(run => run.repo?.toLowerCase() === state.repo.toLowerCase()).map(run => run.number), ...Object.values(state.health.incidents ?? {}), ...p.manualHolds].filter(number => Number.isSafeInteger(number) && number > 0)))
       await observeManual({issue:number});
     await healthAlerts(state, p, dirname(stateFile));
     if (config.mode === 'auto') {
@@ -1751,7 +1752,7 @@ async function runTick(stateFile, ports, completion) {
         if (saved && !(Date.parse(claim.lastSeen) + STUCK_CLAIM_AFTER > p.now())) continue;
         try {
           const beat = await (p.refreshClaimHeartbeat ?? refreshClaimHeartbeat)({ cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(p.now()).toISOString() },
-            { execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), admitMutation: action => issueAction(state,p,Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1]),action) });
+            {manualHold:p.manualHold, manualSafetyRead:p.manualSafetyRead, manualRepository:p.manualRepository, manualHolds:p.manualHolds, manualReadsDeferred:p.manualReadsDeferred, manualObservationDeferred:p.manualObservationDeferred, onManualHold:p.onManualHold, execFile:async(file,args,options)=>p.execute(file,args,{purpose:'claims',...options}), admitMutation:action=>p.scanAction(async()=>await issueAllowed(state,p,Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1]),saved) ? action() : {state:'held'})});
           if (beat?.state === 'refreshed' && typeof beat.lastSeen === 'string') claim.lastSeen = beat.lastSeen;
         } catch (error) { p.warn(`Claim heartbeat deferred for ${claim.issue}: ${line(error.message)}`); }
       }
@@ -1826,7 +1827,7 @@ async function runTick(stateFile, ports, completion) {
       try {
         intake = await (ports.reconcileDependencyIntake ?? reconcileDependencyIntake)(
           { cwd: state.cwd, repository: state.repo, trigger: completion ? 'completion' : 'tick', mode: config.mode },
-          { ...ports, manualHold:p.manualHold, manualSafetyRead:p.manualSafetyRead, onManualHold:p.onManualHold, manualHolds:p.manualHolds, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, sortBudget: async () => githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(config.github) }).state === 'normal', admitMutation: action => p.scanAction(action) });
+          { ...ports, manualHold:p.manualHold, manualSafetyRead:p.manualSafetyRead, manualSafetyReadMany:p.manualSafetyReadMany, onManualHold:p.onManualHold, manualHolds:p.manualHolds, env: p.env, now: p.now, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'dependencies', ...options }), githubCache: etags, snapshotStore, ...(githubFloor ? { githubFloor } : {}), clock: ports.clock ?? { now: async () => ({ iso: new Date(p.now()).toISOString() }) }, pending: dependencyPending, admitEffect: scanGuard, sortBudget: async () => githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(config.github) }).state === 'normal', admitMutation: action => p.scanAction(action) });
       } finally { etags.save(); }
       try { p.dependencySnapshot = snapshotStore.load(); } catch { p.dependencySnapshot = null; }
       if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {
@@ -1974,7 +1975,9 @@ async function runTick(stateFile, ports, completion) {
     }
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];
-      if (issue.pull_request || issue.state !== 'open' || !await issueAllowed(state,p,issue.number)) continue;
+      if (issue.pull_request || issue.state !== 'open') continue;
+      const authority = await observeManual({issue:issue.number});
+      if (!authority.known || authority.held || p.manualHolds.has(issue.number)) continue;
       const selection = {number:issue.number, inScope:true, state:'unknown', reasons:['readiness-unknown']};
       selections.push(selection);
       try {
@@ -2166,7 +2169,6 @@ async function runTick(stateFile, ports, completion) {
           if(events.length) await (p.metricsAppendEvents ?? (input=>appendEvents(input,{commonDir:async()=>context.commonDir})))({root:state.cwd,events});
         } catch { try { const context=await metricsContext(state.cwd); for(const item of work) metricsGap({commonDir:context.commonDir,repo:state.repo,issue:item.number,at:p.now()}); } catch {} if (work.length) metricsWarn('Metrics launch capture incomplete.'); }
       };
-      for (const number of new Set([...work.map(item => item.number),...timeRules.map(rule => rule.number)])) await issueAllowed(state,p,number);
       delivered = await wake(state, () => message(state, work.filter(item => !p.manualHolds.has(item.number)), timeRules.filter(rule => !p.manualHolds.has(rule.number))), p, async () => {}, ports.explicitStartReconcile === true, { kind: 'work', events: Object.fromEntries(Object.entries(pending).map(([key, value]) => [key, value.event])), times: pendingTimes, recipe: !state.recipeDelivered }, capture, [...new Set([...work.map(item => item.number),...timeRules.map(rule => rule.number)])].filter(number => !p.manualHolds.has(number)));
       if (delivered) { state.recipeDelivered = true; state.health.recoveryPending = null; Object.assign(state.seen, pending); Object.assign(state.timeSeen, pendingTimes); }
       // Record the delivered 24-hour alert in the own claim comment, so that no machine sends it again.

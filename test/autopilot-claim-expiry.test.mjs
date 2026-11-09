@@ -236,17 +236,25 @@ test('heartbeat: a writer clock 1 day ahead does not keep a stopped machine\'s c
 });
 
 // GitHub sets a comment's updated_at to its own (server) time on each edit.
-function commentService(initial, { serverTime = () => NOW, lostReply = false } = {}) {
+function commentService(initial, { serverTime = () => NOW, lostReply = false, issue = {number: 7, labels: []} } = {}) {
   const comments = new Map(initial.map(row => [String(row.id), structuredClone(row)])), patches = [];
   const execFile = async (file, args, options = {}) => {
     assert.equal(file, 'gh'); assert.equal(args[0], 'api');
-    const method = args[3], endpoint = args[4], id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(endpoint)?.[1];
+    const methodAt = args.findIndex(arg => ['--method', '-X'].includes(arg));
+    const method = methodAt < 0 ? 'GET' : args[methodAt + 1];
+    const endpoint = args.find(arg => /^repos\//.test(arg));
+    const output = value => ({stdout: (args.includes('--include') ? 'HTTP/2.0 200 OK\r\n\r\n' : '') + JSON.stringify(value)});
+    if (endpoint === `repos/owner/repo/issues/${issue.number}`) {
+      assert.equal(method, 'GET');
+      return output(issue);
+    }
+    const id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(endpoint)?.[1];
     assert.ok(id, `unexpected endpoint ${endpoint}`);
     if (method === 'PATCH') {
       const { body } = JSON.parse(options.input); patches.push({ id, body }); Object.assign(comments.get(id), { body, updated_at: at(serverTime()) });
       if (lostReply) return { stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}' };
     } else assert.equal(method, 'GET');
-    return { stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(comments.get(id))}` };
+    return output({...comments.get(id), issue_url: `https://api.github.com/repos/owner/repo/issues/${issue.number}`});
   };
   return { comments, patches, execFile };
 }
@@ -350,14 +358,24 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') {
-        const id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(args[4] ?? '')?.[1];
+        const methodAt = args.findIndex(arg => ['--method', '-X'].includes(arg));
+        const method = methodAt < 0 ? 'GET' : args[methodAt + 1];
+        const endpoint = args.find(arg => /^repos\//.test(arg));
+        const issueNumber = /^repos\/owner\/repo\/issues\/([0-9]+)$/.exec(endpoint ?? '')?.[1];
+        if (issueNumber && method === 'GET') {
+          const issue = f.issues.find(row => row.number === Number(issueNumber));
+          return {code: issue ? 0 : 1, stdout: `HTTP/2.0 ${issue ? '200 OK' : '404 Not Found'}\r\n\r\n${JSON.stringify(issue ?? {})}`, stderr: ''};
+        }
+        const id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(endpoint ?? '')?.[1];
         if (id && f.claimComments.has(id)) {
           // Real GitHub: an edit sets the comment's updated_at and the issue's updated_at to the edit time.
-          if (args[3] === 'PATCH') {
+          if (method === 'PATCH') {
             const { body } = JSON.parse(options.input); f.patches.push({ id, body }); Object.assign(f.claimComments.get(id), { body, updated_at: at(f.time) });
             for (const row of f.issues) if ((f.issueComments[row.number] ?? []).some(comment => String(comment.id) === id)) row.updated_at = at(f.time);
           }
-          return { code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(f.claimComments.get(id))}`, stderr: '' };
+          const number = Object.entries(f.issueComments).find(([,rows]) => rows.some(row => String(row.id) === id))?.[0];
+          const comment = {...f.claimComments.get(id), ...(number ? {issue_url: `https://api.github.com/repos/owner/repo/issues/${number}`} : {})};
+          return { code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(comment)}`, stderr: '' };
         }
         if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
         if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' };
@@ -835,5 +853,36 @@ test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most 
       ? 'To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel 7 in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.'
       : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'), rules[0].reason);
     assert.doesNotMatch(rules[0].reason, /changed approach/);
+  }
+});
+
+for (const boundary of ['matching','other-issue','other-repository','new-hold']) test(`heartbeat target proof: ${boundary}`, async () => {
+  const service = commentService([{id:901,user:{login:'owner'},body:claimBody()}]);
+  const {guardAutomaticGithubWrites} = await import('../src/issue-dependencies-github.mjs');
+  const current = {repository:repo,issue:7,held:false};
+  let commentReads = 0;
+  const readManualHold = async ({repository,issue}) => ({known:repository===current.repository && issue===current.issue,held:current.held});
+  const transport = async (file,args,options) => {
+    const response = await service.execFile(file,args,options);
+    const methodAt = args.indexOf('--method'), method = methodAt < 0 ? 'GET' : args[methodAt+1];
+    if (method==='GET' && args.includes(`repos/${repo}/issues/comments/901`)) {
+      commentReads++;
+      const raw = JSON.parse(response.stdout.replace(/^HTTP\/[\s\S]*?\r?\n\r?\n/,''));
+      if (boundary==='other-issue') raw.issue_url=`https://api.github.com/repos/${repo}/issues/8`;
+      if (boundary==='other-repository') raw.issue_url='https://api.github.com/repos/other/project/issues/7';
+      if (boundary==='new-hold') current.held=true;
+      response.stdout=(args.includes('--include')?'HTTP/2.0 200 OK\r\n\r\n':'')+JSON.stringify(raw);
+    }
+    return response;
+  };
+  const execFile = guardAutomaticGithubWrites(transport,{readManualHold});
+  const action = () => refreshClaimHeartbeat({repository:repo,claim:ownClaim(),coordinatorId:'coordinator-a',machine:'machine-a',at:at(NOW)},{execFile,readManualHold});
+  if (boundary==='matching') {
+    assert.equal((await action()).state,'refreshed');
+    assert.equal(commentReads,1);
+    assert.equal(service.patches.length,1);
+  } else {
+    await assert.rejects(action(),{code:'manual-hold'});
+    assert.equal(service.patches.length,0);
   }
 });

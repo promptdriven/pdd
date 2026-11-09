@@ -50,3 +50,63 @@ test('snapshot and sort exclude effective manual holds and restore intake after 
   assert.ok(!released.issues[0].holds.includes('pdd:manual'));
   assert.deepEqual(sortPlan({snapshot:released}).queued, [key]);
 });
+
+function batchAuthorityWorld({shape='complete',count=2}={}) {
+  const state={held:false,calls:[]};
+  const ports={manualAuthority:{read:async()=>({known:true,allowed:true})},execFile:async(file,args,options={})=>{
+    assert.equal(file,'gh');
+    const endpoint=args.find(word=>word==='graphql'||/^repos\//.test(word));state.calls.push(endpoint);
+    let value;
+    if(endpoint==='graphql') {
+      const {variables}=JSON.parse(options.input),rows={};
+      for(const [name,number] of Object.entries(variables)) if(/^n\d+$/.test(name)) {
+        const row={url:`https://github.com/${repository}/issues/${number}`,number,labels:{nodes:state.held&&number===2&&shape==='complete'?[{name:'pdd:manual'}]:[],pageInfo:{hasNextPage:false}}};
+        if(number===2&&shape==='wrong-issue')row.url=`https://github.com/${repository}/issues/3`;
+        if(number===2&&shape==='partial-labels')row.labels.pageInfo.hasNextPage=true;
+        rows[`i${name.slice(1)}`]=number===2&&shape==='missing'?null:row;
+      }
+      value={data:{repository:rows},...(shape==='errors'?{errors:[{message:'unavailable'}]}:{})};
+    } else {
+      const subject=new RegExp(`^repos/${repository}/issues/(\\d+)(/timeline\\?per_page=100)?$`).exec(endpoint??'');
+      assert.ok(subject);
+      value=subject[2]?[event('labeled','owner')]:{number:Number(subject[1]),labels:state.held&&Number(subject[1])===2?[{name:'pdd:manual'}]:[]};
+    }
+    return {code:0,stdout:JSON.stringify(value)};
+  }};
+  const issues=Array.from({length:count},(_,i)=>i+1);
+  const gate=async()=>dependencyGithub.issueEffectsAllowed
+    ? dependencyGithub.issueEffectsAllowed({repository,issues},ports)
+    : (await Promise.all(issues.map(issue=>dependencyGithub.issueEffectAllowed({repository,issue},ports)))).every(Boolean);
+  return {state,gate};
+}
+
+test('fresh delivery authority batches 26 clear subjects into two queries',async()=>{
+  const {state,gate}=batchAuthorityWorld({count:26});
+  assert.equal(await gate(),true);
+  assert.deepEqual(state.calls,['graphql','graphql']);
+});
+for(const shape of ['complete','wrong-issue','partial-labels','missing','errors']) test(`fresh delivery authority retains late hold through ${shape} batch`,async()=>{
+  const {state,gate}=batchAuthorityWorld({shape});
+  assert.equal(await gate(),true);
+  state.held=true;state.calls=[];
+  assert.equal(await gate(),false);
+  assert.ok(state.calls.includes(`repos/${repository}/issues/2`));
+  assert.ok(state.calls.includes(`repos/${repository}/issues/2/timeline?per_page=100`));
+});
+
+
+test('batch authority preserves an injected single-issue reader',async()=>{
+  const calls=[];
+  const ports={readManualHold:async({issue})=>{calls.push(issue);return {known:issue===1,held:false};},execFile:async()=>assert.fail('unexpected transport')};
+  const allowed=dependencyGithub.issueEffectsAllowed
+    ? await dependencyGithub.issueEffectsAllowed({repository,issues:[1,2]},ports)
+    : (await Promise.all([1,2].map(issue=>dependencyGithub.issueEffectAllowed({repository,issue},ports)))).every(Boolean);
+  assert.equal(allowed,false);assert.deepEqual(calls,[1,2]);
+});
+for(const bad of ['rejection','malformed'])test(`batch authority blocks custom reader ${bad}`,async()=>{
+  const reader=async()=>{if(bad==='rejection')throw Error('unavailable');return {};};
+  const allowed=dependencyGithub.issueEffectsAllowed
+    ? await dependencyGithub.issueEffectsAllowed({repository,issues:[1,2]},{manualSafetyReadMany:reader})
+    : false;
+  assert.equal(allowed,false);
+});

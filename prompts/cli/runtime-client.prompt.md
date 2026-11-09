@@ -928,6 +928,11 @@ print missing-edge details. A service binding refusal must retain the local
 plan beside its authoritative compatibility evidence; a locally matched fixture
 is evidence of disagreement, never permission to turn a refusal into a pass.
 
+Canonical lint problems and legacy refused-prompt aliases for the same code,
+file and original section are one problem. Preserve the canonical JSON pointer,
+rule and other richer fields. Diagnostic display may replace section with a
+pointer, but deduplication must retain the original location identity.
+
 ## Dependencies
 
 - [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.
@@ -1218,3 +1223,5 @@ Request `includeRuntime: true` from bindingCoverage for command reports; direct 
 For named Runtime Story `lint --local`, keep the SVG-only advisory: captured dependency prompts are layout context, not a request to admit every dependency as a Runtime program. Default `lint --local` checks workspace interface declarations as well. Named nonlocal lint and checks retain executable interface admission. Native-validation Story selection keeps its separate saved-evidence route.
 
 Local lint findings use a local heading; server findings retain interpreter attribution. Intentional native-only omissions count separately from malformed unsent tests in lint summaries. Native omissions never supply a pass.
+
+User diagnostics name the PDD interpreter as the service; Runtime interface names the declaration. Preserve machine identifiers and server gate text.

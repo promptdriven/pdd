@@ -54,7 +54,7 @@ function world(t, existing) {
     if (command === 'herdr' || command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '' };
     if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: repo, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repo}` }) };
     assert.equal(command, 'gh'); assert.equal(args[0], 'api');
-    const endpoint = args[4], method = args[3]; let value;
+    const endpoint = args.find(word => /^repos\//.test(word)), methodIndex = args.findIndex(word => ['--method','-X'].includes(word)), method = methodIndex < 0 ? 'GET' : args[methodIndex + 1]; let value;
     if (endpoint === `repos/${repo}`) value = { owner: { login: 'example' } };
     else if (endpoint === `repos/${repo}/collaborators?per_page=100`) value = [];
     else if (endpoint === `repos/${repo}/issues/17`) value = { labels: f.issueLabels ?? [{ name: 'pdd:working' }] };
@@ -67,13 +67,13 @@ function world(t, existing) {
         Object.assign(f.claim, { body, updated_at: at(f.time) });
         if (f.losePatch) { f.losePatch = false; throw Error('Lost accepted PATCH reply'); }
       }
-      value = f.claim;
+      value = {...f.claim, issue_url:`https://api.github.com/repos/${repo}/issues/17`};
     } else if (endpoint === `repos/${repo}/issues/17/comments` && method === 'POST') {
       value = { id: 1000 + f.comments.length, user: { login: 'example' }, created_at: at(f.time), ...JSON.parse(options.input) };
       f.comments.push(value); f.writes.push({ method, body: value.body });
       if (f.losePost) { f.losePost = false; throw Error('Lost accepted POST reply'); }
     } else throw Error(`Unexpected fake endpoint ${method} ${endpoint}`);
-    return { code: 0, stdout: `HTTP/1.1 200 OK\n\n${JSON.stringify(value)}` };
+    return { code: 0, stdout: args.includes('--include') ? `HTTP/1.1 200 OK\n\n${JSON.stringify(value)}` : JSON.stringify(value) };
   };
   f.ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), env, stateRoot, stateDir: join(dir, 'index'), now: () => f.time, run: f.execFile, execFile: f.execFile,
     allocationCheck: async () => ({ state: 'ready' }), pathDiagnostic: () => [], selectAgent: async () => agent, timer: async () => true,

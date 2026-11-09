@@ -58,6 +58,8 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') {
+        const endpoint = args.find(word => /^repos\//.test(word)), subject = /^repos\/owner\/repo\/issues\/(\d+)$/.exec(endpoint ?? '');
+        if (subject) { const row = f.issues.find(row => row.number === Number(subject[1])); return {code:row ? 0 : 1, stdout:`HTTP/2.0 ${row ? 200 : 404}\r\n\r\n${JSON.stringify(row ?? {})}`}; }
         if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
         if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' };
         return { code: 0, stdout: '{}', stderr: '' };

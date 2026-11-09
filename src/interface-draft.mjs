@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: db93b16e0fcfd6daa9c60fb122395f9e68753dbd9f634cfcec07cf0066fd13d7).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 3b4853e52f47f43f3e1df33fc7112d49afd395baaebedcd272ec87e59491a6f1).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -536,7 +536,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         const next=render();
         records[path]={head:git(root,['rev-parse','HEAD']).trim(),original_sha256:sha256(text),prose_sha256:iface.prose_sha256,interface_sha256:sha256(JSON.stringify(iface)),...(block ? {mode:extend?'extend':'refresh',...(extend ? {extension_before:block[1]} : {})} : inferredBudget ? {mode:'prose'} : {})};
         writeFileSync(join(root,path),next);
-        rows.push({path,state:'drafted',prose_coverage:coverage,...(extend ? {approval_scope:'whole-interface',approval_note:'The Runtime has one global status; mixed approval status is unavailable. The whole interface needs re-approval.',interface_diff:{before:block[1],after:interfaceBlocks(next)[0][1],unchanged:preservedPointers(previous,iface)}} : {}),...(inferredBudget ? {draft_budget:{source:'command-default',limits:iface.limits}} : {}),...(questions.length ? {questions,next_step:recovery(path)} : {})});
+        rows.push({path,state:'drafted',prose_coverage:coverage,...(extend ? {approval_scope:'whole-interface',approval_note:'The Runtime interface has one global status; mixed approval status is unavailable. The whole interface needs re-approval.',interface_diff:{before:block[1],after:interfaceBlocks(next)[0][1],unchanged:preservedPointers(previous,iface)}} : {}),...(inferredBudget ? {draft_budget:{source:'command-default',limits:iface.limits}} : {}),...(questions.length ? {questions,next_step:recovery(path)} : {})});
       } catch(error) {rows.push({path,state:'refused',problems:[{code:error.code ?? 'interface-draft-failed',message:error.message,...(error.pointer!==undefined ? {section:error.pointer,rule:error.rule} : {})}]});}
     }
     if(rows.some(row=>row.state==='drafted')) saveDrafts(root,records);

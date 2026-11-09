@@ -40,3 +40,5 @@ must derive requests from the full issue and trusted follow-ups, never the plan.
 - [Replay evidence](workflow-replay.prompt.md): required fingerprint contract
   `sourceFingerprint` for current Git-visible content. File I/O uses Node fs;
   callers supply the run folder and repository root. Tests use disposable files.
+
+Small-change checklist and Formal check facts remain in detailed text status and JSON run rows. Preserve compact list/all text rows; these views keep existing Runtime coverage lines but do not add the detailed small-change evidence block. The saved evidence remains available through the run detail and JSON.
