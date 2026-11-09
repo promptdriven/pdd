@@ -85,8 +85,11 @@ const isAgentSession = env => Boolean(env.PDD_AGENT_SESSION || env.CLAUDECODE ||
 // showed "report https://ru").
 function clip(text, max) {
   if (text.length <= max) return text;
-  const url = [...text.matchAll(/https?:\/\/\S+/g)].find(match => match.index < max && match.index + match[0].length > max);
-  const end = url ? url.index + url[0].length : /\s/.test(text[max]) ? max : text.slice(0, max).replace(/\s+\S*$/, '').length;
+  // Do not leave half of a surrogate pair at the cut when UTF-8 encodes the result.
+  const boundary = text.charCodeAt(max - 1) >= 0xD800 && text.charCodeAt(max - 1) <= 0xDBFF &&
+    text.charCodeAt(max) >= 0xDC00 && text.charCodeAt(max) <= 0xDFFF ? max - 1 : max;
+  const url = [...text.matchAll(/https?:\/\/\S+/g)].find(match => match.index < boundary && match.index + match[0].length > boundary);
+  const end = url ? url.index + url[0].length : /\s/.test(text[boundary]) ? boundary : text.slice(0, boundary).replace(/\s+\S*$/, '').length;
   // A space keeps the "…" out of a link that ends the cut text.
   return end >= text.length ? text : `${text.slice(0, end).trimEnd()}${url ? ' ' : ''}…`;
 }
