@@ -845,8 +845,13 @@ only after a valid workspace list confirms that workspace exists. Malformed
 or out-of-scope inventory retains the chat with `invalid_cleanup_inventory`
 and supplies no close mark. Confirmed absence sends no close request and keeps
 the saved session. A `closing` run holds a working slot in status and admission until all
-chat and shell absence checks pass. Each tick retries guarded cleanup. Status
-names the retained reasons; after 60 seconds it also shows `closing-retry`.
+chat and shell absence checks pass. Without a current blocker, fresh running
+progress holds cleanup with `new progress since park`. An unelapsed recovery
+grace holds it with `recovery grace until T`, where T is its UTC deadline.
+Both holds keep saved custody and count as working. When neither progress
+timestamp is newer than the park time and no grace remains, a stale or missing
+blocker permits guarded cleanup to retry. Status names the retained reasons;
+after 60 seconds it also shows `closing-retry`.
 Busy agents and uncertain identity keep their protection during every retry.
 
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.

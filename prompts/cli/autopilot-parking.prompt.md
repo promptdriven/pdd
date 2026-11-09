@@ -2,7 +2,7 @@
 
 Own src/autopilot-parking.mjs. Behavioral refinement authorized by #3091: keep one existing run, claim, worktree and native session, and reuse the existing check queue, issue groups and workflow resume path.
 
-Export idleParkingBlocker(run,now,graceMs=60000), idleSince(run), interpreterWaitFor(run), blockerFor(run), parkingSummary(runs,limit), parkingWords(summary,interpreter), and async reconcileParking(state,ports,{wakeRules=[],wake=false,policy={}}={}). Every external effect is injected: list, park, wake, release, blockerCleared, checkProgress, observeBlocker, alertUnknown, now. alertUnknown returns true only on confirmed delivery. state.parkingAlerts stores confirmed run/cause alert identities. observeBlocker reuses native account health/session observations when no saved blocker exists; a known limit parks until its actual reset timestamp, and an unknown reset remains blocked. The launcher binds them to native guarded workflow/GitHub/clock/process observers. No AI calls, polling loop, second queue, independent resume or direct process signaling.
+Export idleParkingBlocker(run,now,graceMs=60000), idleSince(run), interpreterWaitFor(run), blockerFor(run), parkingSummary(runs,limit,now), parkingWords(summary,interpreter), and async reconcileParking(state,ports,{wakeRules=[],wake=false,policy={}}={}). The optional summary now is injected epoch milliseconds for timed hold reasons; omitting it preserves capacity counts without a timed grace observation. Every external effect is injected: list, park, wake, release, blockerCleared, checkProgress, observeBlocker, alertUnknown, now. alertUnknown returns true only on confirmed delivery. state.parkingAlerts stores confirmed run/cause alert identities. observeBlocker reuses native account health/session observations when no saved blocker exists; a known limit parks until its actual reset timestamp, and an unknown reset remains blocked. The launcher binds them to native guarded workflow/GitHub/clock/process observers. No AI calls, polling loop, second queue, independent resume or direct process signaling.
 
 A named blocker is {kind,until}, with kind interpreter, person, pdd, dependency, account, github, ci, review, environment or unknown; until is null or its explicit clearing value. Use saved blockedOn first, then runtimeWait (interpreter), open question or person gate (person), eligible #3064 environmentRetry (environment), or waiting PR (ci). On every tick also classify stuck/waiting/paused records saved before parking existed. Saved interpreter no-verdict, unknown saved-read and runner-stopped causes take precedence over a generic approval gate. interpreterWaitFor returns the current saved runtimeWait, or derives {at,reason,batch,cause} from that stopped record: at is updatedAt then startedAt then 0, batch is the saved batch identifier when present, cause is unknown for unknown reads/runner-stopped and service otherwise. Reuse parking.interpreterWait only while the current park is for the interpreter and its reason, batch and cause still match the current inferred evidence; keep its original at across unchanged ticks. A wait inferred from a finished check without a saved cause must be re-observed through observeBlocker on every tick, even at the same approval gate. Bind it to interpreterGate and interpreterCheck: the completed check step plus the current saved result identity (batch, completion/start timestamp and states). A changed gate, check step, batch or result replaces that inferred wait; unchanged evidence preserves its identity. A saved verdict retires the inferred interpreter blocker in favor of the current gate. A superseded wait cannot supply a later wait's batch or identity. Save each current wait with the park, including replacements, so cleanup cannot move its timestamp. Explicit independent questions retain person precedence. An automatic approve-pr gate whose check step finished without a saved verdict waits for the interpreter, not approval. Never infer an interpreter wait from an old no-verdict result while an agent or check still works.
 
@@ -31,12 +31,22 @@ checkProgress observation includes current live agent activity as well as check
 custody. Such activity reserves working capacity even for a stopped workflow.
 Every closing run reserves one working slot in admission and status, including
 a done current turn and absent panes, until cleanup confirms the full park.
-Do not drop a closing run because its saved blocker disappeared; retry guarded
-cleanup on every tick. New activity keeps its reservation and defers closure.
+When no current saved or observed blocker exists, a worker returned to running
+with either progressAt or updatedAt newer than parking.at keeps closing custody
+without cleanup. A recovery-ceiling or bare-pause grace also defers cleanup until
+idleSince + 60000, even if the progress timestamps are not newer than parking.at.
+A stale or missing blocker alone must not strand a closing reservation: with
+neither fresh progress nor unelapsed grace, retry guarded cleanup on every tick.
+New activity keeps its reservation and defers closure.
 
 parkingSummary additionally returns closing, an array of {number,reasons}, in
 run order, for closing reservations. reasons is a nonempty reason-to-count map
-from parking.closeReasons, defaulting to cleanup-pending. parkingWords names
+from parking.closeReasons, defaulting to cleanup-pending. For the holds above,
+instead show "new progress since park" or "recovery grace until T", where T is
+the grace deadline in ISO 8601 UTC. Keep working occupancy and all saved custody;
+these local status observations do not update the worker's progress timestamps.
+With now supplied, include closing-retry after 60000 ms even during a hold.
+parkingWords names
 each closing run and these reasons, including closing-retry once cleanup has
 remained incomplete for 60000 ms. The runner owns durable attempt observations.
 This bound triggers a visible retry reason, never permission to close unsafe work.

@@ -85,8 +85,9 @@ test('3132 bounded closing names the cause and retries without releasing its slo
   assert.equal(summary.closing[0].reasons['screen-unavailable'], 1); assert.ok(attempts > previousReads);
   const {parkingWords} = await import('../src/autopilot-parking.mjs');
   assert.match(parkingWords(summary), /17.*screen-unavailable/);
-  // Losing the saved blocker must not strand the existing reservation.
-  const changed = f.record(); delete changed.blockedOn; changed.state = 'running'; save(f,changed);
+  // Losing a stale blocker without new progress must not strand the reservation.
+  const changed = f.record(); delete changed.blockedOn; changed.state = 'running';
+  changed.progressAt = changed.updatedAt = changed.parking.at; save(f,changed);
   ports.herdr = h; await tick();
   assert.equal(f.record().parking.phase, 'parked');
   assert.equal(f.record().parking.closeReasons, undefined);
