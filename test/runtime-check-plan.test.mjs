@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {appendFileSync,readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+import {appendFileSync,readFileSync,writeFileSync,mkdirSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {runCheck} from '../src/runtime-client.mjs';
@@ -72,6 +72,55 @@ test('3114: shared transitive dependency selects every consuming Story',async t=
     assert.equal(story.role,'target');assert.deepEqual(story.affected_paths,['docs/rates.md']);
     assert.ok(story.dependency_closure.includes('docs/shared.md'));
   }
+});
+
+// Adapted from the integration review's public runCheck reproducer.
+for(const owner of ['generated-header','unprovable'])test(`3114: deleted implementation with ${owner} keeps a failed Story in target work`,async t=>{
+  const setup=harbor(t),independent='prompts/independent.prompt.md',deleted='src/order.mjs';
+  writeFileSync(join(setup.repo,independent),readFileSync(join(setup.repo,PLACE),'utf8'));
+  const path=join(setup.repo,'tests/unknown-item.json'),doc=JSON.parse(readFileSync(path,'utf8'));
+  doc.steps[0].entry_path=independent;writeFileSync(path,JSON.stringify(doc));
+  mkdirSync(join(setup.repo,'src'));
+  writeFileSync(join(setup.repo,deleted),`${owner==='generated-header'?`// Generated from ${PLACE}.\n`:''}export const value=1;\n`);
+  commit(setup.repo);
+  unlinkSync(join(setup.repo,deleted));
+  appendFileSync(join(setup.repo,'user_stories/unknown-item.md'),'\n');
+  const fake=await fakeRuntime(t,(entry,f)=>{
+    if(entry.command==='lint')return {status:200,json:f.lint(entry.request.requestId,[PLACE,independent].map(path=>({path,state:'approved',admission_state:'approved',interface:{calls:[]}})))};
+    if(entry.command==='check'){
+      const failed=entry.request.scenario==='tests/place-order.json';
+      return {status:200,json:f.check(entry.request.requestId,failed?'failed':'passed',[
+        {criterion_id:'AC1',target:'result',path:'/value',op:'equals',expected:2,actual:failed?1:2,passed:!failed}])};
+    }
+    return f.normal(entry);
+  });
+  const {ports}=portsFor(environment(setup,fake));
+  assert.equal(await runCheck({cwd:setup.repo,options:{'--json':true}},ports),1,'the full batch must still fail');
+  const result=JSON.parse(ports.stdout.text);
+  assert.equal(result.check_scope.target.state,'failed','deleted implementation failure belongs to target repair');
+  assert.deepEqual(result.check_scope.target.failures,['tests/place-order.json']);
+  assert.deepEqual(result.check_scope.baseline.failures,[]);
+  const story=result.check_plan.stories.find(row=>row.story_path==='user_stories/place-order.md');
+  assert.equal(story.role,'target');
+  if(owner==='generated-header')assert.deepEqual(story.affected_paths,[deleted]);
+  else assert.match(story.reason,/conservative/);
+  assert.equal(result.check_plan.stories.find(row=>row.story_path==='user_stories/unknown-item.md').role,'target');
+  const saved=JSON.parse(readFileSync(join(setup.state,'batches',result.batch,'batch.json'),'utf8'));
+  assert.deepEqual(saved.check_plan,result.check_plan);
+  const read=portsFor(ports.env).ports;
+  assert.equal(await runCheck({cwd:setup.repo,words:[result.batch],options:{'--read':true,'--json':true}},read),1);
+  assert.deepEqual(JSON.parse(read.stdout.text).check_scope,result.check_scope);
+  assert.equal(fake.posts.filter(row=>row.command==='check').length,2);
+
+  // An excluded deletion must neither read historical bytes nor widen scope.
+  writeFileSync(join(setup.repo,'pdd-workspace.json'),JSON.stringify({allowed_paths:['prompts/','tests/','user_stories/']}));
+  const found=findTests({root:setup.repo}),reads=[];
+  const plan=buildCheckPlan({root:setup.repo,found,selected:found.tests,rows:[],full:true},{
+    git:(root,args)=>{reads.push(args);return git(root,...args);},
+    capture:()=>({stories:found.stories.map(story=>({story_path:story.path,files:[{path:story.path},{path:story.path.endsWith('/place-order.md')?PLACE:independent}]}))})
+  });
+  assert.equal(reads.some(args=>args[0]==='show'),false);
+  assert.equal(plan.stories.find(row=>row.story_path==='user_stories/place-order.md').role,'baseline');
 });
 
 for(const mode of ['missing-interface','missing-bound','missing-call-bound','recursive-call'])test(`3114: ${mode} names one prerequisite and blocks the whole paid batch`,async t=>{

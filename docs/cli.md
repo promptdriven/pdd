@@ -592,6 +592,10 @@ rerun unchanged target checks to repair it. The classification does not prove
 the failure's age or owner. Required repository full-pass gates still apply.
 Saved reads use the original plan. Without reliable change scope, PDD marks the
 selection as conservative and retains the selected Stories as targets.
+Deleted generated implementations keep their owner through the comparison
+revision's Generated-from header. If permitted metadata cannot prove a deleted
+path's owner, the selected Stories remain conservative targets. Workspace
+exclusions also apply to these historical metadata reads.
 
 `pdd lint`, `pdd test` and `pdd test --files` report broken selected tests first,
 with the file, reason and fix step. Missing or unreadable dependencies and invalid

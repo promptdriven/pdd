@@ -1,7 +1,8 @@
-// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: da6cc5be3781f18acc84745914bba6b902d06bb3f0a8b157943679750bc75f14).
+// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 54b8fa31a87d406f1e42a8c3d0e7a2916a95369df65685ca0e5a406c71cf4d37).
 import { spawnSync } from 'node:child_process';
 import { captureSource, readPrompt, sourceFilePort } from './runtime-preflight.mjs';
 import { resultOutcome } from './runtime-outcome.mjs';
+import { allowsRuntimePath, loadRuntimeWorkspace } from './runtime-workspace.mjs';
 
 const sorted = values => [...new Set(values)].sort();
 const gitRead = (root, args) => {
@@ -17,20 +18,35 @@ export function buildCheckPlan({ root, found, selected, rows, full, base = 'HEAD
     changed = sorted([...git(['diff', '--name-only', '-z', '--no-renames', base, '--']).split('\0'),
       ...git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0')].filter(Boolean));
   } catch { /* Unknown changes require conservative target coverage. */ }
+  const workspace = found.workspace ?? loadRuntimeWorkspace({root});
   const source = sourceFilePort(root, found.visible, found.workspace);
-  const owners = new Map();
-  const own = (prompt, path) => owners.set(prompt, [...(owners.get(prompt) ?? []), path]);
+  const owners = new Map(), unknownOwners = new Set();
+  let deleted = new Set(), deletionsUnavailable = false;
+  if (changed?.some(path=>allowsRuntimePath(workspace,path))) {
+    try { deleted = new Set(git(['diff', '--name-only', '-z', '--no-renames', '--diff-filter=D', base, '--']).split('\0').filter(Boolean)); }
+    catch { deletionsUnavailable = true; }
+  }
+  const own = (prompt, path) => {
+    if (!found.visible.has(prompt)) return;
+    owners.set(prompt, [...(owners.get(prompt) ?? []), path]);
+    unknownOwners.delete(path);
+  };
   for (const path of changed ?? []) {
-    if (!found.visible.has(path)) continue;
+    if (!allowsRuntimePath(workspace,path)) continue;
+    if (deleted.has(path)) unknownOwners.add(path);
+    else if (!found.visible.has(path)) continue;
     try {
-      const header = source.read({path}).content.slice(0, 4096).match(/Generated from\s+([^\s()]+\.prompt\.md)/);
+      // Validate the permitted source path even when its working file is absent.
+      if (deleted.has(path)) source.stat({path});
+      const content = deleted.has(path) ? git(['show', `${base}:${path}`]) : source.read({path}).content;
+      const header = content.slice(0, 4096).match(/Generated from\s+([^\s()]+\.prompt\.md)/);
       if (header) own(header[1], path);
-    } catch { /* Missing or excluded source is never opened by another route. */ }
+    } catch { /* Unproved deleted ownership keeps target coverage conservative. */ }
   }
   if (changed?.length && found.visible.has('pdd-bindings.json')) {
     try {
       const inventory = JSON.parse(source.read({path:'pdd-bindings.json'}).content);
-      for (const item of inventory.modules ?? []) if (changed.includes(item.module) && typeof item.prompt === 'string') own(item.prompt, item.module);
+      for (const item of inventory.modules ?? []) if (changed.includes(item.module) && allowsRuntimePath(workspace,item.module) && typeof item.prompt === 'string') own(item.prompt, item.module);
     } catch { /* The binding owner retains inventory validation. */ }
   }
   const prerequisites = [], seenProblems = new Set(), prompts = new Map();
@@ -82,9 +98,10 @@ export function buildCheckPlan({ root, found, selected, rows, full, base = 'HEAD
     catch { unavailable = true; }
     const affected = sorted((changed ?? []).filter(path => closure.includes(path) || tests.some(test=>test.path === path || test.storyPath === path))
       .concat(closure.flatMap(path=>owners.get(path) ?? [])));
-    const target = !full || changed === null || !changed.length || unavailable || affected.length > 0 || changed.includes('pdd-bindings.json');
+    const uncertainOwner = deletionsUnavailable || unknownOwners.size > 0;
+    const target = !full || changed === null || !changed.length || unavailable || uncertainOwner || affected.length > 0 || changed.includes('pdd-bindings.json');
     return {story_path,tests:tests.map(test=>test.path),role:target?'target':'baseline',
-      reason:!full?'explicit selection':unavailable?'dependency closure unavailable; conservative selection':changed === null?'change scope unavailable; conservative selection':!changed.length?'no changed paths; conservative selection':affected.length?`changed paths: ${affected.join(', ')}`:target?'binding inventory changed':'unrelated to known changes; required by full batch; pre-change result unknown',
+      reason:!full?'explicit selection':unavailable?'dependency closure unavailable; conservative selection':changed === null?'change scope unavailable; conservative selection':!changed.length?'no changed paths; conservative selection':uncertainOwner?'deleted ownership unavailable; conservative selection':affected.length?`changed paths: ${affected.join(', ')}`:target?'binding inventory changed':'unrelated to known changes; required by full batch; pre-change result unknown',
       affected_paths:affected,dependency_closure:closure};
   });
   if (!stories.some(story=>story.role === 'target')) for (const story of stories) {

@@ -16,7 +16,13 @@ Story's captured upload closure with changed paths. Capture via `ports.capture`
 (default the canonical capture owner), grouping every selected test variant.
 Changed tests, Stories and transitive dependencies affect that Story. Translate
 changed implementation paths to their owning prompts through Generated-from
-headers and the binding inventory when declared. If no target can be established,
+headers and the binding inventory when declared. For a deleted implementation,
+read the same owner header from the comparison base revision. Apply workspace
+exclusions before reading base metadata; excluded paths cannot affect ownership.
+If permitted metadata cannot prove a deleted path's owner, retain the selected
+Stories as conservative targets, even when another change already establishes a
+target. Never classify uncertain deleted ownership as unrelated baseline work.
+If no target can be established,
 retain all Stories as targets, stating that scope is conservative. Never infer
 unrelated status from an unavailable closure.
 
@@ -69,12 +75,14 @@ native-test obligations. The partial surface supplies no proof of those effects.
 
 - [Preflight and capture](runtime-preflight.prompt.md): required for source
   selection, dependency closure and interface reads.
+- [Workspace authority](runtime-workspace.prompt.md): required for permitted
+  ownership metadata reads, including deleted paths in the comparison base.
 - [Result outcome](runtime-outcome.prompt.md): required for public row states.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"4c231c8f54c241ebcd02c99086a1a9b374e0e13da2f3108dcc12a4de18f0b740","kind":"partial","entries":[{"operation":"checkPlanResults","input_schema":{"type":"object","properties":{"plan":{"type":"object","properties":{"schema_version":{"type":"string","enum":["pdd.check-plan.v1"]},"stories":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["target","baseline"]},"tests":{"type":"array","items":{"type":"string"}}},"required":["role","tests"],"additionalProperties":false}}},"required":["schema_version","stories"],"additionalProperties":false},"rows":{"type":"array","items":{"type":"object","properties":{"test":{"type":"string"},"state":{"type":"string","enum":["passed","failed","refused","not_run","unknown","running"]}},"required":["test","state"],"additionalProperties":false}}},"required":["plan","rows"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"target":{"type":"object","properties":{"tests":{"type":"array","items":{"type":"string"}},"passed":{"type":"array","items":{"type":"string"}},"failures":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}},"state":{"type":"string","enum":["passed","failed","not_run","none"]}},"required":["tests","passed","failures","unresolved","state"],"additionalProperties":false},"baseline":{"type":"object","properties":{"tests":{"type":"array","items":{"type":"string"}},"passed":{"type":"array","items":{"type":"string"}},"failures":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}},"state":{"type":"string","enum":["passed","failed","not_run","none"]}},"required":["tests","passed","failures","unresolved","state"],"additionalProperties":false},"guidance":{"type":"string"}},"required":["target","baseline","guidance"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"d5843fab5c3dd02662f71bca2d6d1dff6a97fbf46bd040ab3d20e8062ed7d7a4","kind":"partial","entries":[{"operation":"checkPlanResults","input_schema":{"type":"object","properties":{"plan":{"type":"object","properties":{"schema_version":{"type":"string","enum":["pdd.check-plan.v1"]},"stories":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["target","baseline"]},"tests":{"type":"array","items":{"type":"string"}}},"required":["role","tests"],"additionalProperties":false}}},"required":["schema_version","stories"],"additionalProperties":false},"rows":{"type":"array","items":{"type":"object","properties":{"test":{"type":"string"},"state":{"type":"string","enum":["passed","failed","refused","not_run","unknown","running"]}},"required":["test","state"],"additionalProperties":false}}},"required":["plan","rows"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"target":{"type":"object","properties":{"tests":{"type":"array","items":{"type":"string"}},"passed":{"type":"array","items":{"type":"string"}},"failures":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}},"state":{"type":"string","enum":["passed","failed","not_run","none"]}},"required":["tests","passed","failures","unresolved","state"],"additionalProperties":false},"baseline":{"type":"object","properties":{"tests":{"type":"array","items":{"type":"string"}},"passed":{"type":"array","items":{"type":"string"}},"failures":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}},"state":{"type":"string","enum":["passed","failed","not_run","none"]}},"required":["tests","passed","failures","unresolved","state"],"additionalProperties":false},"guidance":{"type":"string"}},"required":["target","baseline","guidance"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 
 </details>
