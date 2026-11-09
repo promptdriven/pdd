@@ -478,7 +478,6 @@ for (const confirmed of [false, true]) test(`3068 repair 2: ${confirmed ? 'confi
     await tickAutopilot(input.stateFile, {stateDir: input.stateDir, env: input.env,
       layoutDirectory: input.layoutDirectory, now: () => input.now, herdr: h.herdr, owners: {read: async () => ({json: JSON.stringify(input.ownership)})},
       findNativeSessions: async () => [], run: execute, execFile: execute,
-      owners: {read: async () => ({json: JSON.stringify(input.ownership)})},
       warn: value => warnings.push(value), sendAlert: async value => {alerts.push(value); return {exitCode: 0};}});
     process.stdout.write(JSON.stringify({launches: h.calls.filter(a => a[0] === 'pane' && a[1] === 'run'), alerts, warnings}));
   `;
