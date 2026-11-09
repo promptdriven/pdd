@@ -16,7 +16,7 @@ export function scriptedAgent(w) {
   const a={steps:[],briefs:[],suites:[],checks:[]};
   a.prepare=async()=>{
     const {root}=w.record();
-    put(root,'value.prompt.md',valuePrompt(2));
+    if(!w.codeOnly)put(root,'value.prompt.md',valuePrompt(2));
     put(root,'user_stories/value.md','As a user, I want the value to be two, so that the result follows my request.\n\n## Acceptance criteria\n\n1. The value is 2.\n');
     put(root,'tests/value.json',scenario);
     put(root,'test/value.test.mjs',nativeTest);
@@ -64,7 +64,9 @@ export function scriptedAgent(w) {
     }
     // Recompute after formal/review in case a step committed source.
     if(['formal','review'].includes(step) && area.replay_evidence)a.evidence();
-    const argv=['workflow','done',step,'--summary',`Factory ${step}; ${step==='check'?'Prompt tests: 1 of 1 pass':'native evidence retained'}`];
+    const verdict=w.codeOnly?'Verdict: the prompt is right; the bug is only in the CODE.':'Verdict: the bug is in the PROMPT (its check fails on the issue case).';
+    const details=w.codeOnly?'Prompt unchanged; passing on old and new snapshots. Native old code fails the value assertion; corrected code passes.':'Prompt correction: old fails; new passes.';
+    const argv=['workflow','done',step,'--summary',`${step==='reproduce'?verdict+'\n':''}${w.codeOnly?'This PR: '+details+'\nFix: Keep the prompt unchanged; correct the native value.\n':''}Factory ${step}; ${step==='check'?'Prompt tests: 1 of 1 pass':'native evidence retained'}\nResult: ${details}`];
     if(area.optional.includes(step))argv.push('--skipped','Autopilot optional default');
     const done=await w.command(argv,{cwd:run.root,actor:'worker',allowFailure});a.steps.push(step);
     if(done.code!==0)return {step,refused:done};
@@ -97,20 +99,49 @@ export function scriptedAgent(w) {
       // A separate native checkout checks the published head, independent of worker memory.
       w.git(w.mergeCheckout,'fetch','-q','origin');w.git(w.mergeCheckout,'switch','-q','-C','factory-check',`origin/${pr.headRefName}`);
       const r=spawnSync(process.execPath,['--test','test/value.test.mjs'],{cwd:w.mergeCheckout,env:w.env,encoding:'utf8'});
-      let promptResult=null,oldPromptResult=null;
+      let promptResult=null,oldPromptResult=null,oldNative=null,oldPrompt=null,newPrompt=null;
+      // Read native Story-step records, independently of worker options and editable PR prose.
+      const storyVerdicts=w.record().areas[0].steps.flatMap(step=>[...String(w.record().done[step]?.summary??'').matchAll(/^Verdict: (.+)$/gm)].map(m=>m[1]));
+      assert.ok(new Set(storyVerdicts).size<=1,'conflicting recorded Story verdicts');
+      const codeOnly=w.workflow==='bug' && storyVerdicts[0]==='the prompt is right; the bug is only in the CODE.';
+      if(saved.stage==='prompt-pr' && w.workflow==='bug') {
+        const bodyCodeOnly=/the prompt is right; the bug is only in the CODE/.test(pr.body);
+        assert.equal(bodyCodeOnly,codeOnly,'PR must match the recorded Story verdict');
+        if(codeOnly)assert.doesNotMatch(pr.body,/the bug is in the PROMPT/,'conflicting PR Story verdicts');
+      }
+      const snapshot=path=>{
+        const result=spawnSync('git',['show',`${w.record().baseSha}:${path}`],{cwd:w.mergeCheckout,env:w.env,encoding:'utf8'});
+        assert.equal(result.status,0,result.stderr);return result.stdout;
+      };
       if(saved.stage==='prompt-pr') {
+        oldPrompt=snapshot('value.prompt.md');newPrompt=readFileSync(join(w.mergeCheckout,'value.prompt.md'),'utf8');
+        if(codeOnly)assert.equal(newPrompt,oldPrompt,'code-only checker requires unchanged prompt bytes');
         promptResult=await w.command(['test','value','--cache-clear','--json'],{cwd:w.mergeCheckout,actor:'checker'});
         const fresh=JSON.parse(promptResult.stdout);assert.ok(fresh.rows.every(row=>row.state==='passed'));
-        // Run the same expected vector against the old prompt in this private checkout.
-        put(w.mergeCheckout,'value.prompt.md',w.git(w.record().root,'show',`${w.record().baseSha}:value.prompt.md`)+'\n');
+        // Keep the expected vector fixed; only the source snapshot changes.
+        put(w.mergeCheckout,'value.prompt.md',oldPrompt);
         await w.command(['test','--fill-hash'],{cwd:w.mergeCheckout,actor:'checker'});
         oldPromptResult=await w.command(['test','value','--cache-clear','--json'],{cwd:w.mergeCheckout,actor:'checker',allowFailure:true});
-        assert.notEqual(oldPromptResult.code,0);assert.equal(JSON.parse(oldPromptResult.stdout).rows[0].state,'failed','old prompt must fail the value criterion');
+        if(codeOnly) {
+          assert.equal(oldPromptResult.code,0,'unchanged old prompt must pass');
+          assert.ok(JSON.parse(oldPromptResult.stdout).rows.every(row=>row.state==='passed'));
+          put(w.mergeCheckout,'value.mjs',snapshot('value.mjs'));
+          oldNative=spawnSync(process.execPath,['--test','test/value.test.mjs'],{cwd:w.mergeCheckout,env:w.env,encoding:'utf8'});
+          assert.equal(oldNative.status,1,'code-only checker needs native old-code failure');
+          assert.match(oldNative.stdout+oldNative.stderr,/ERR_ASSERTION/,'old code must reach the assertion');
+          assert.match(oldNative.stdout+oldNative.stderr,/FACTORY_VALUE/,'old code must fail for the issue reason');
+          assert.equal(pairedNative?.status,0,'code-only checker needs a passing corrected code head');
+          w.git(w.mergeCheckout,'restore','value.mjs');
+        } else {
+          assert.notEqual(oldPromptResult.code,0);assert.equal(JSON.parse(oldPromptResult.stdout).rows[0].state,'failed','old prompt must fail the value criterion');
+        }
         w.git(w.mergeCheckout,'restore','value.prompt.md');
         assert.ok(r.status===0 || r.status===1&&pairedNative?.status===0,'red PR 1 native checks require its passing paired code PR');
       } else assert.equal(r.status,0,r.stdout+r.stderr);
       pr.statusCheckRollup=[{name:saved.stage==='prompt-pr'?'factory-prompt':'factory-native',status:'COMPLETED',conclusion:'SUCCESS',headSha:pr.headRefOid}];
-      await w.github.gh(['pr','comment',String(pr.number),'--body-file','-'],{input:JSON.stringify({verdict:'PASS',head:pr.headRefOid,risk:1,family:'script',session:'fresh-'+pr.number,checker_mode:'scripted',evidence:{nativeExit:r.status,promptVerdict:promptResult?.code??null,oldPromptExit:oldPromptResult?.code??null,pairedNativeExit:pairedNative?.status??null}})});
+      await w.github.gh(['pr','comment',String(pr.number),'--body-file','-'],{input:JSON.stringify({verdict:'PASS',head:pr.headRefOid,risk:1,family:'script',session:'fresh-'+pr.number,checker_mode:'scripted',evidence:{nativeExit:r.status,promptVerdict:promptResult?.code??null,oldPromptExit:oldPromptResult?.code??null,pairedNativeExit:pairedNative?.status??null,
+        codeOnly,oldNativeExit:oldNative?.status??null,oldNativeOutput:oldNative?oldNative.stdout+oldNative.stderr:null,nativeCommand,
+        base:w.record().baseSha,pairedHead:codePr?.headRefOid??null,oldPromptSha256:oldPrompt===null?null:sha(oldPrompt),newPromptSha256:newPrompt===null?null:sha(newPrompt)}})});
       await w.command(['workflow','status',String(w.record().number)]);
       await w.command(['autopilot','check-base','17',String(pr.number)]);
       const head=JSON.parse((await w.github.gh(['pr','view',String(pr.number),'--json','headRefOid'])).stdout).headRefOid;
