@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: 78d0f0464d5d00f16d129683709f6a3ac7c9ed98eb6cc261eccb4e0daa908f9a).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 728c545f8baf81e0e530e9cfa36b0cef0812c768a63bdd58581642d2bd340f26).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-environment.prompt.md (sha256: c655cfcc99fd5c06ef38a6c3e1fab7a350fdf31b740b5cd37373bf5a7336ccd7).
+// Generated from prompts/cli/autopilot-environment.prompt.md (sha256: d801ed81adbf2a0875c5a66c13096b64b76f03751d33c012fee6ee3551b74957).
 import { readFileSync, readdirSync, accessSync, constants } from 'node:fs';
 import { readCheckStatus } from './test-suite-queue.mjs';
 import { readMachineResources } from './machine-resources.mjs';

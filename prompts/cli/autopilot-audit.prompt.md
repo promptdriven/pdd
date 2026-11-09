@@ -149,6 +149,6 @@ hold, never absence. Legacy local reservation files also prevent resend.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","additionalProperties":true}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"df5bc560537b63d2896de1d0e8b403a4b375c1182b0e8d3f27be8f49222eb9aa","entries":[{"operation":"pendingAudits","input_schema":{"type":"object","properties":{"run":{"type":"object","additionalProperties":true}},"required":["run"],"additionalProperties":false},"result_schema":{"type":"array","items":{"type":"integer"}},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
