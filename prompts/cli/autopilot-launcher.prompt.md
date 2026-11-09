@@ -710,11 +710,12 @@ For it, offer one `stuck-claim` time rule, once per stuck time, that asks the
 skill to retry with a changed approach or ask in the configured alert channel,
 without another alert when the cause and required decision are unchanged.
 After a ceiling (the claim is `takeoverLimited`, or this checkout's run of the
-issue is `stuck` with a saved `repairLimit`), the rule instead says which limit
+issue is `stuck` with a saved `repairLimit` or `integrationLimit` from the
+[runner's budget policy](workflow-runner.prompt.md#autopilot-repair-ceiling)), the rule instead says which limit
 was reached and asks for no retry, no removal of `pdd:stuck` and no new comment:
 send the one `stuck` alert only if this stop has none yet. After the takeover
 limit, a person removes `pdd:stuck` and `pdd:working` to let Autopilot try again.
-After the repair limit, the rule gives the way out: to let Autopilot try again, a
+After the repair or base integration limit, the rule gives the way out: to let Autopilot try again, a
 person removes `pdd:stuck` and `pdd:working`, then runs `pdd workflow cancel N`
 in the checkout that holds the stuck run; the next tick starts a new run with a
 fresh repair count. When both limits hold, the rule names both and gives the

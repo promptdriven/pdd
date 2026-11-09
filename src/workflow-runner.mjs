@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1fdebeaf1286e33b43acafbb13b558159e666cf8634495089553ff49ced6e979).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f24b821ecee86b0861c434bb7919446cf4e2f3dfc08a36c5e46fff0082ec2aba).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -566,7 +566,7 @@ function clearChatFailure(run) {
 // said "waiting for you" about a minute before the chat had asked).
 const revising = run => { const last = run.changes?.at(-1); return Boolean(last && !last.answer && last.stage === run.gate.area && last.at >= run.gate.at); };
 // A run stopped at the repair limit keeps that one-line reason, also after a later park (#3041).
-const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.parkReason ?? 'automatic work stopped';
+const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.integrationLimit?.area ? integrationLimitReason(run.integrationLimit.area) : run.parkReason ?? 'automatic work stopped';
 // Read saved facts only. The digest must not probe or wake native workers.
 export function automaticAttention({ repo, machine }, ports = {}) {
   return (ports.readRuns ? ports.readRuns() : allRuns({}, ports)).flatMap(run => {
@@ -2304,7 +2304,7 @@ function automaticPr1Eligible(run, {cwd, coordinatorId, machine}, p, published =
   return validSavedAutomaticOrigin(run) && run.automaticOrigin.coordinatorId === coordinatorId
     && run.automaticOrigin.machine === machine && samePath(run.sourceRoot, cwd)
     && ['pdd-bug', 'pdd-feature'].includes(run.skill) && run.state === 'waiting'
-    && automaticPr1ParkingEligible(run, p) && !openQuestion(run) && !run.repairLimit
+    && automaticPr1ParkingEligible(run, p) && !openQuestion(run) && !run.repairLimit && !run.integrationLimit
     && (!run.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
     && run.gate?.kind === 'approve-pr' && run.gate.area === area?.name
     && area.gate === 'pr' && area.before === 'approve'
@@ -2654,15 +2654,50 @@ const PROOF_STEPS = ['check', 'try', 'verify'];
 // 5 rounds in one area, pdd refuses another, records the stop as `stuck`, and refuses every
 // later `done` of that run. Manual runs keep their skill's own repair rule and save no count.
 const REPAIR_ROUNDS = 5, REPAIR_REFUSED = Symbol('repair refused');
+const INTEGRATION_ROUNDS = 2;
+const integrationLimitReason = name => `Base integration limit reached in ${name}: take the stuck path`;
+const integrationRefusal = (name, step, number) => `pdd refused ${step}: the ${name} area has had ${INTEGRATION_ROUNDS} base integration rounds. ${integrationLimitReason(name)}. Keep the claim, progress and failed evidence. Do not retry. A person can remove pdd:stuck and pdd:working, then run pdd workflow cancel ${number}; a new run has fresh counters.`;
+
+async function integrationSource(run, p) {
+  try {
+    if (await rawGit(p, run.root, 'status', '--porcelain', '--untracked-files=all')) return null;
+    const head = (await rawGit(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}')).trim();
+    const base = (await rawGit(p, run.root, 'merge-base', head, `refs/remotes/origin/${run.baseBranch}`)).trim();
+    const tree = (await rawGit(p, run.root, 'rev-parse', `${head}^{tree}`)).trim();
+    return [head, base, tree].every(commitSha) ? { head, base, tree } : null;
+  } catch { return null; }
+}
+function accountingStep(run, area, step) {
+  // Integration may have removed this result from current evidence. Its last
+  // real snapshot still anchors budget decisions; it is never a fresh result.
+  return run.done[step] ?? (run.integrationSources?.[area.name]?.length
+    ? run.stepHistory?.findLast(row => row.step === step && row.record.area === area.name)?.record : null);
+}
+async function baseIntegration(run, area, step, source, p) {
+  const from = accountingStep(run, area, step)?.integrationSource;
+  if (!source || !from || ![from.head, from.base, from.tree].every(commitSha)
+    || from.base === source.base || !area.steps.includes(step)) return null;
+  try {
+    await rawGit(p, run.root, 'merge-base', '--is-ancestor', from.base, source.base);
+    await rawGit(p, run.root, 'merge-base', '--is-ancestor', from.head, source.head);
+    const merged = (await rawGit(p, run.root, 'merge-tree', '--write-tree', from.head, source.base)).trim();
+    if (merged !== source.tree) return null;
+    return { reason: `Saved base ${run.baseBranch} advanced from ${from.base} to ${source.base}; the issue tree is unchanged by the merge.`, from, to: source };
+  } catch { return null; }
+}
+function accountedIntegration(run, area, source) {
+  return Boolean(source && run.integrationSources?.[area.name]?.some(saved => saved.tree === source.tree));
+}
 const repairLimitReason = name => `Repair limit reached in ${name}: take the stuck path`;
 // The way out is a person's: a stuck run is still active, so a new automatic start waits until it is cancelled.
 const repairRefusal = (name, step, rounds, number) => `pdd refused ${rounds ? 'another repair round' : `${step}`}: the ${name} area of this Autopilot run has had ${REPAIR_ROUNDS} repair rounds. pdd did not record ${step}; the run is stuck ("${repairLimitReason(name)}"). Take the stuck path: add pdd:stuck, write one comment with the cause, send one stuck alert, keep the claim and progress, and let the coordinator continue with other issues. Do not retry it. To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.`;
 function repairRound(run, area, step, worktree) {
-  if (!Object.hasOwn(run, 'automaticOrigin') || !area.steps.includes(step) || !run.done[step]) return null;
+  const previous = accountingStep(run, area, step);
+  if (!Object.hasOwn(run, 'automaticOrigin') || !area.steps.includes(step) || !previous) return null;
   const index = area.steps.indexOf(step);
   if (!area.steps.slice(index + 1).some(item => run.done[item])) return null;
   // A later step on unchanged content is a retry, not a round. An unknown fingerprint (now or when last recorded) counts as no change.
-  const recorded = run.done[step].worktreeSha256;
+  const recorded = previous.worktreeSha256;
   if (index > 0 && (typeof worktree !== 'string' || typeof recorded !== 'string' || recorded === worktree)) return null;
   const used = Number.isSafeInteger(run.repairRounds?.[area.name]) ? run.repairRounds[area.name] : 0;
   return used >= REPAIR_ROUNDS ? REPAIR_REFUSED : used + 1;
@@ -2709,8 +2744,20 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const area = run.areas[run.area], lines = [], normal = normalRun(run, p), automaticReturn = automaticPromptReturn(run,p);
   // After the repair limit, the run is stuck: no step of it is recorded, so it cannot go on to open a PR.
   if (Object.hasOwn(run, 'automaticOrigin') && run.repairLimit) return fail(repairRefusal(run.repairLimit.area, step, false, run.number));
+  if (Object.hasOwn(run, 'automaticOrigin') && run.integrationLimit) return fail(integrationRefusal(run.integrationLimit.area, step, run.number));
   const worktree = Object.hasOwn(run, 'automaticOrigin') ? gitFingerprint(run.root) : null;
-  if (repairRound(run, area, step, worktree) === REPAIR_REFUSED) {
+  const source = Object.hasOwn(run, 'automaticOrigin') ? await integrationSource(run, p) : null;
+  const integration = source ? await baseIntegration(run, area, step, source, p) : null;
+  const accounted = accountedIntegration(run, area, source);
+  const chargeIntegration = integration && integration.from.tree !== source.tree && !accounted;
+  if (chargeIntegration && (run.integrationRounds?.[area.name] ?? 0) >= INTEGRATION_ROUNDS) {
+    commitRun(run, p, latest => {
+      if (ended(latest) || latest.area !== run.area || gitFingerprint(run.root) !== worktree || !equalFact(accountingStep(latest, area, step)?.integrationSource, integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+      latest.state = 'stuck'; latest.parkReason = integrationLimitReason(area.name); latest.integrationLimit = { area: area.name, step, at: p.now() };
+    });
+    return fail(integrationRefusal(area.name, step, run.number));
+  }
+  if (!integration && !accounted && repairRound(run, area, step, worktree) === REPAIR_REFUSED) {
     commitRun(run, p, latest => {
       if (ended(latest) || latest.area !== run.area || repairRound(latest, area, step, worktree) !== REPAIR_REFUSED) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
       latest.state = 'stuck'; latest.parkReason = repairLimitReason(area.name); latest.repairLimit = { area: area.name, step, at: p.now() };
@@ -2729,7 +2776,8 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const reason = skipped === undefined ? null : keepLines(skipped) || 'no reason given';
   const record = { at: p.now(), summary: keepLines(reason === null ? summary : [`skipped: ${reason}`, summary].filter(Boolean).join('\n')), area: area.name,
     ...(reason === null ? {} : { skipped: { reason } }), ...(PROOF_STEPS.includes(step) ? { pddResults: ownResults(run, p) } : {}),
-    ...(typeof worktree === 'string' ? { worktreeSha256: worktree } : {}) };
+    ...(typeof worktree === 'string' ? { worktreeSha256: worktree } : {}),
+    ...(source ? { integrationSource: source } : {}), ...(integration ? { integration } : {}) };
   if (PROOF_STEPS.includes(step) && reason === null) {
     const usable = record.pddResults.some(usableResult), shown = usable || !record.pddResults.length ? resultLines(record.pddResults) : [...resultLines(record.pddResults), noResultLine()];
     lines.push(...(usable ? ['pdd recorded its own results with this step:'] : ['warning: pdd has no result of its own for this run yet. pdd recorded the step with the label "no pdd result".']), ...shown,
@@ -2741,16 +2789,39 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
   if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary)}));}
   const applyDone=latest=>{
-    const round=repairRound(latest,area,step,worktree);
+    if (integration || accounted) {
+      if (gitFingerprint(run.root) !== worktree || accountedIntegration(latest, area, source) !== accounted
+        || integration && !equalFact(accountingStep(latest, area, step)?.integrationSource, integration.from)) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+    }
+    if (chargeIntegration) {
+      const used = latest.integrationRounds?.[area.name] ?? 0;
+      if (used >= INTEGRATION_ROUNDS) throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+      latest.integrationRounds = { ...latest.integrationRounds, [area.name]: used + 1 };
+      latest.integrationSources = { ...latest.integrationSources, [area.name]: [...(latest.integrationSources?.[area.name] ?? []), source] };
+      lines.push(`Base integration round ${used + 1} of ${INTEGRATION_ROUNDS} in the ${area.name} area. ${integration.reason}`);
+    }
+    const round=integration || accounted ? null : repairRound(latest,area,step,worktree);
     if(round===REPAIR_REFUSED)throw Object.assign(Error('The run changed; look again.'),{code:'workflow_progress_refused'});
     if(round){latest.repairRounds={...latest.repairRounds,[area.name]:round};lines.push(`Repair round ${round} of ${REPAIR_ROUNDS} in the ${area.name} area of this Autopilot run.`);}
     endRuntimeWait(latest);
     if (reason === null && latest.environmentRetry?.area === latest.area && latest.environmentRetry.step === step) { delete latest.environmentRetry; delete latest.stuckCause; }
     if(equalFact(latest.question,observedQuestion))latest.question=null;
-    const later=area.steps.includes(step) && latest.done[step]?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];
+    const later=area.steps.includes(step) && (latest.done[step] || round)?area.steps.slice(area.steps.indexOf(step)+1).filter(item=>latest.done[item]):[];
+    // Integration can first return through a later step, such as a failed PR-open
+    // retry. Earlier records on the old tree are stale too; keep their identities
+    // in history and let the ordinary next-step selection request fresh records.
+    const stale = integration && integration.from.tree !== source.tree
+      ? Object.keys(latest.done).filter(item => latest.done[item].integrationSource?.tree
+        && latest.done[item].integrationSource.tree !== source.tree) : [];
+    if (Object.hasOwn(latest, 'automaticOrigin')) {
+      const replaced = new Set([...(latest.done[step] ? [step] : []), ...later, ...stale]);
+      for (const item of replaced) (latest.stepHistory ??= []).push({ step: item, record: latest.done[item], supersededAt: record.at });
+    }
     // A step that pdd skipped itself is cleared without a warning; pdd skips it again below.
     const told=later.filter(item=>latest.done[item]?.skipped?.by!=='pdd');
-    for(const item of later)delete latest.done[item];
+    for(const item of new Set([...later, ...stale]))delete latest.done[item];
+    const earlierStale = stale.filter(item => item !== step && !later.includes(item));
+    if (earlierStale.length) lines.push(`Source changed: pdd cleared ${earlierStale.join(', ')}; record those steps again on the integrated tree.`);
     if(told.length)lines.push(`warning: ${step} ran again after ${told.join(', ')}. pdd cleared ${told.length>1?'those steps':'that step'}; run ${told.length>1?'them':'it'} again.`);
     if(hasRuntime)(latest.runtimeHistory??=[]).push({...record,step});
     // pdd's own pdd test results, once per batch, so a later partial check keeps the Stories of an earlier one.
@@ -3562,7 +3633,7 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
   } else if (until !== undefined && route === undefined) return fail('--until requires --blocker or --route.');
   const stuckCause = classifyStuckCause(text, runtime);
   let retry = null;
-  if (!blockedOn && stuckCause === 'environment' && !run.repairLimit) {
+  if (!blockedOn && stuckCause === 'environment' && !run.repairLimit && !run.integrationLimit) {
     const target = step;
     if (!target) return fail('Name the failed validation with --step STEP. Nothing was parked.');
     const previous = run.environmentRetry;
@@ -3778,7 +3849,7 @@ export function isRetryRequest(text) {
 const isPersonRetry = (run, text) => run.state === 'stuck' && isRetryRequest(text);
 async function personRetryRefusal(run, text, p, savedRetry = false) {
   if (!savedRetry && !isPersonRetry(run, text)) return null;
-  if (run.repairLimit) return 'The repair limit requires the existing cancel and new-run route.';
+  if (run.repairLimit || run.integrationLimit) return 'The repair or integration limit requires the existing cancel and new-run route.';
   if (explicitlyStopped(run, p)) return 'Automatic continuation refused: Autopilot is stopped.';
   return await continuationOwnership(run, run.root, p);
 }
@@ -3939,7 +4010,7 @@ Nothing was sent to the chat.` };
               current.state = current.gate || openQuestion(current) ? 'waiting' : 'running';
               delete current.parkReason;
             }
-            if (personRetry && current.state === 'stuck' && !current.repairLimit) {
+            if (personRetry && current.state === 'stuck' && !current.repairLimit && !current.integrationLimit) {
               current.state = current.gate || openQuestion(current) ? 'waiting' : 'running';
               delete current.parkReason;
             }

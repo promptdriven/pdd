@@ -36,6 +36,10 @@ question and no lead repair commands:
    Model unavailable coverage by omitting the recorded Story contract and path
    inventory as well as derived coverage. Removing only the cache leaves the
    approved reconstruction evidence available to the workflow runner.
+9. A base-only merge retains the issue patch, uses a separate bounded integration
+   count, retains failed validation in history and clears later evidence. Fresh
+   validation reaches merge without consuming a defect repair. A real issue
+   edit uses the defect budget; neither budget resets the other.
 
 9. An automatic merge starts a fresh scripted auditor through the native audit
    command, saves OK with parent/merge evidence and posts the verdict once. A

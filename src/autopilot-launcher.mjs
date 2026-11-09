@@ -617,7 +617,8 @@ async function readRepairLimited(state, number, p) {
   try {
     const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
     const run = read(join(commonDir, 'pdd', 'runs', String(number), 'status.json'));
-    return run?.v === 1 && run.number === number && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'stuck' && Boolean(run.repairLimit);
+    return run?.v === 1 && run.number === number && run.repo?.toLowerCase() === state.repo.toLowerCase() && run.state === 'stuck'
+      && (run.repairLimit ? true : run.integrationLimit ? 'integration' : false);
   } catch { return false; }
 }
 // Runs that wait for the interpreter (pdd workflow park --interpreter), from the same local run records.
@@ -1805,7 +1806,8 @@ async function runTick(stateFile, ports, completion) {
         // retry is refused or not allowed: the rule asks for no retry and no further comment.
         // Both ceilings can hold at once: name each one, and the cancel step whenever this checkout's run has the repair limit.
         const takeover = limitedFor(claim), repair = await (p.readRepairLimited ?? readRepairLimited)(state, number, p);
-        const ceiling = takeover && repair ? 'takeover limit and the repair limit' : takeover ? 'takeover limit' : repair ? 'repair limit' : null;
+        const runLimit = repair === 'integration' ? 'base integration limit' : 'repair limit';
+        const ceiling = takeover && repair ? `takeover limit and the ${runLimit}` : takeover ? 'takeover limit' : repair ? runLimit : null;
         timeRules.push({ kind: 'stuck-claim', number, reason: ceiling
           ? `Issue #${number} has been stuck for 4 hours after the ${ceiling}. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet. ${repair ? `To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel ${number} in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.` : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'} Its claim is no longer refreshed and expires in 4 hours.`
           : `Issue #${number} has been stuck for 4 hours; retry it with a changed approach or ask in the configured alert channel. Send no new alert if the cause and required decision are unchanged; another review alone is not a material change. Its claim is no longer refreshed and expires in 4 hours unless the issue leaves pdd:stuck.` });
