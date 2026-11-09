@@ -166,7 +166,8 @@ test('factory 8: a pre-card persisted run continues after upgrade without lead a
   // Serialize the additive-field omissions of the repository's legacy fixture.
   // Retain actual decisions; this does not create or grant any approval.
   const old=w.record();delete old.storyApproval;
-  for(const decision of old.decisions)delete decision.storyCoverage;
+  // No approved contract or path inventory is available to reconstruct coverage.
+  for(const decision of old.decisions){delete decision.storyCoverage;delete decision.storyContract;delete decision.storyPaths;}
   old.metricsOrigin.cliVersion='0.1.20';old.metricsOrigin.skillVersion='0.1.20';
   put(old.runDir,'status.json',old);
   const prior=old.decisions.map(d=>({gateId:d.gateId,evidence:d.evidence}));

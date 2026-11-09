@@ -33,6 +33,9 @@ question and no lead repair commands:
    returns through the supported prompt route and integrates the current source.
 8. A persisted pre-card run resumes on the candidate after an upgrade. Its
    historical decisions are retained; missing coverage cannot authorize a merge.
+   Model unavailable coverage by omitting the recorded Story contract and path
+   inventory as well as derived coverage. Removing only the cache leaves the
+   approved reconstruction evidence available to the workflow runner.
 
 Every scenario records its actual commands and useful structural observations.
 Assertions use states, identities, hashes, counts and effects, not exact English

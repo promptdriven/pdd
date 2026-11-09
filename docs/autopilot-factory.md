@@ -49,7 +49,7 @@ the same merge.
 | Capacity and queues | Pane and check-slot waits recover; dead holders release reservations without resending an uncertain request. |
 | Claim transfer | The old coordinator cannot continue the current chat or publish after another machine takes the claim. |
 | PR 1 re-entry | The corrected prompt survives code entry and merge; expected values stay fixed. |
-| Run serialization compatibility | Missing Story coverage cannot publish automatically; supported gates retain prior decisions and reach merge. |
+| Run serialization compatibility | Without Story coverage or its recorded contract and path inventory, publication waits for a supported gate; prior decisions survive and the run reaches merge. |
 
 Synthetic operator and person actions apply only to disposable fixtures. The test
 never approves a prompt in the source checkout. The command transcript records
