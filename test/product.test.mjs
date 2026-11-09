@@ -4,6 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { readProduct, productStatus, productNext, productStart, runProduct } from '../src/product.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
@@ -12,7 +13,7 @@ import { storyEvidence } from '../src/workflow-runner.mjs';
 import { sourceFingerprint } from '../src/workflow-replay.mjs';
 import { resolveWorkflowRepository } from '../src/workflow-github.mjs';
 
-const root = new URL('../', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../', import.meta.url));
 const stream = () => ({ text: '', write(value) { this.text += value; } });
 const pr = (number, state = 'OPEN', extra = {}) => ({ number, url: `https://github.com/example/coffee/pull/${number}`, isCrossRepository: false, headRepository: {name:'coffee'}, headRepositoryOwner:{login:'example'}, headRefName: `branch-${number}`, state, body: `PR 2 of this run: the code.\n<!-- pdd-workflow:run-${number}:code -->`, isDraft: true, updatedAt: `2026-10-${number}`, ...extra });
 function fixture(t) {

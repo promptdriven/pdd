@@ -54,7 +54,7 @@ const exec=child.execFile; child.execFile=(file,args,...rest)=>{if(file!=='git'|
 child.execFile[promisify.custom]=(file,args,options)=>new Promise((resolve,reject)=>child.execFile(file,args,options,(error,stdout,stderr)=>error?reject(error):resolve({stdout,stderr})));
 for(const key of ['exec','spawn','spawnSync','execSync','execFileSync','fork'])child[key]=stop;globalThis.fetch=stop;syncBuiltinESMExports();`);
   const status = readFileSync(join(f.runDir, 'status.json')), index = readFileSync(join(f.repo, '.git/index')), story = readFileSync(join(f.repo, 'user_stories/greet.md'));
-  const r = spawnSync(process.execPath, ['--import', guard, bin, 'workflow', 'view', '2442'], { cwd: f.repo, env: f.env, encoding: 'utf8', timeout: 10000 });
+  const r = spawnSync(process.execPath, ['--import', pathToFileURL(guard).href, bin, 'workflow', 'view', '2442'], { cwd: f.repo, env: f.env, encoding: 'utf8', timeout: 10000 });
   assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /State: waiting/);
   assert.deepEqual(readFileSync(join(f.runDir, 'status.json')), status); assert.deepEqual(readFileSync(join(f.repo, '.git/index')), index);
   assert.deepEqual(readFileSync(join(f.repo, 'user_stories/greet.md')), story); assert.deepEqual(readdirSync(f.home), []);

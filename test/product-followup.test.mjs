@@ -4,6 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, readdirSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { productStart, productStatus, runProduct } from '../src/product.mjs';
 
 const marker = run => `<!-- pdd-product: run=${run} -->`;
@@ -183,7 +184,7 @@ else if (a[1].startsWith('search/issues?')) {
 else if (a[1].includes('/timeline?')) process.stdout.write('[]');
 else { process.stderr.write('Unexpected gh call: ' + JSON.stringify(a)); process.exit(2); }
 `, { mode: 0o755 });
-  const cli = new URL('../bin/pdd.mjs', import.meta.url).pathname;
+  const cli = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
   const invoke = args => {
     const reply = spawnSync(process.execPath, [cli, 'product', ...args], { cwd: f.cwd, encoding: 'utf8', env: { ...process.env, HOME: f.cwd, PATH: `${bin}:${process.env.PATH}` } });
     assert.equal(reply.status, 0, `${args}: ${reply.stderr} ${reply.stdout}`); return reply.stdout;

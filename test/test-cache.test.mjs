@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runCheck } from '../src/runtime-client.mjs';
 import { renderHelp } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
@@ -101,7 +102,7 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     const editLoopEnv = { ...process.env, HOME: ctx.home, PATH: `${bin}:${process.env.PATH}`, PDD_RUNTIME_URL: ctx.fake.origin, PDD_STATE_DIR: ctx.state };
     delete editLoopEnv.CI; // This case exercises local edit-loop reuse; CI guards have dedicated cases.
     const cli = command => new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [new URL('../bin/pdd.mjs', import.meta.url).pathname, command, '--json'], {
+      const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url)), command, '--json'], {
         cwd: ctx.repo, env: editLoopEnv, stdio: ['ignore', 'pipe', 'pipe']
       });
       let out = '', err = ''; child.stdout.on('data', x => { out += x; }); child.stderr.on('data', x => { err += x; });

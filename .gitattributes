@@ -1,0 +1,2 @@
+# Prompt hashes, approvals and fixtures compare exact bytes; keep LF on every platform.
+* text=auto eol=lf

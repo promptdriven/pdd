@@ -4,6 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { productStatus, productNext, productStart, runProduct } from '../src/product.mjs';
 import { storyEvidence } from '../src/workflow-runner.mjs';
 import { sourceFingerprint } from '../src/workflow-replay.mjs';
@@ -248,7 +249,7 @@ else if(a[1].endsWith('/issues/81')) process.stdout.write(JSON.stringify({number
 else if(a[1].includes('/timeline?')) process.stdout.write('[]');
 else process.stdout.write(JSON.stringify(Array.from({length:150},()=>({body:'x'.repeat(65536)}))));
 `,{mode:0o755});
-  const cli=new URL('../bin/pdd.mjs',import.meta.url).pathname;
+  const cli=fileURLToPath(new URL('../bin/pdd.mjs',import.meta.url));
   for(const args of [['status'],['next'],['start','phone-1','--no-run']]) {
     const result=spawnSync(process.execPath,[cli,'product',...args],{cwd:f.cwd,encoding:'utf8',env:{...process.env,HOME:f.cwd,PATH:`${bin}:${process.env.PATH}`}});
     assert.equal(result.status,0,`${args}: ${result.stderr} ${result.stdout}`);
