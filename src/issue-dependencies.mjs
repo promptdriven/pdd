@@ -1,5 +1,5 @@
 import { projectSortGraph } from './issue-sort.mjs';
-// Generated from prompts/cli/issue-dependencies.prompt.md (sha256: 9dd1aafacf95cd2361eb7a0afc1127cfc320e5cdb1051c8f3f075398788cc196).
+// Generated from prompts/cli/issue-dependencies.prompt.md (sha256: 4500001e51a4eb4a00d83f938937c746deb2413dea599df4bcd37c8e8ff62baa).
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const unique = xs => [...new Set(xs)];
 // The one canonical GitHub issue identity: OWNER/REPO ignores letter case.

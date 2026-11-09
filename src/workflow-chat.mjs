@@ -1,6 +1,6 @@
 import {issueEffectAllowed} from './issue-dependencies-github.mjs';
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 6a9398f9c590010f6e2290f1ec2dec593ba9ea4166ab03c858f25f6cdd527541).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 01d5a94f2edbc53888a510a82a026da4c2d9a97e9620ad6cf8e3535351f46518).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';

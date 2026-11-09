@@ -90,6 +90,6 @@ path arithmetic; all filesystem, Git and service access belongs to callers.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"bb9a8d823855b1132b96aabea1925d4a7919f44f9e8672242ce4b88e6f727a7a","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

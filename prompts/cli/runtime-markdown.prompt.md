@@ -42,6 +42,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"523fd4233bf4dd963e1304a420a2b00d2dbab7c5ec7e961717d6b08d43a0edc9","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

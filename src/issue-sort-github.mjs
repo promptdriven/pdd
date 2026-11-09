@@ -1,5 +1,5 @@
 import { issueEffectAllowed } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 35ba9a7b91661b69d19bc2ea0ab426c69c9578a38bd4387c2d25d847555f45e9).
+// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 27ebebac17b84507cbe965cf7b0786571e4787c3cc6280902637142d5d05bcae).
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';

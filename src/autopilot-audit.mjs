@@ -1,5 +1,5 @@
 import {issueEffectAllowed, guardAutomaticGithubWrites} from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: c4ecbfb35ac72a834477d0d9afb6c25f01a5f95a890dcace1ffbb5b77010338f).
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: bf91369098b4146aabb6af61b73772d75e150ecac73c97c4be1127a0f3c6d078).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';

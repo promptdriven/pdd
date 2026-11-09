@@ -73,6 +73,6 @@ Count held and uncertain runs in capacity summaries while excluding them from au
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"664192b882d984e57661da72ef5a6265b7a23d63d4c77f00f42b251854131979","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"46e20140e971dbbede0e6f29caf259d0455a635c9e5313b1954545a18e831e22","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
