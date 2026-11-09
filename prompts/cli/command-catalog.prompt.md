@@ -288,6 +288,9 @@ Add workflow.resend, prefix workflow resend, local workflow-resend, required rep
 
 Catalog `interface draft` with local `interface-draft`, repeat optional prompt operands, flags --all and --json. Form: `pdd interface draft [PROMPT...] [--all] [--json]`. Draft missing blocks and lint locally without AI/network calls. Catalog approve flags --automatic and text --tests, with additional form `pdd approve PROMPT --automatic --tests COMMAND`. The automatic route requires existing tests and a complete current prompt check; strict mode still requires a person. Help must explain native-only not-run and the separate automatic route, without claiming that an agent can approve new behavior.
 
+Catalog text --route on workflow park and show `pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` for recording a missing supported PDD route without asking a person. The runner owns route validation and installed-fix clearing.
+
+
 ## Dependencies
 
 [Workflow scope](workflow-scope.prompt.md) is required authoring, generation, runtime, verification and testing context for the scope route meanings.

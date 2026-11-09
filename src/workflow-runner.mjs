@@ -1,4 +1,4 @@
-import {interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
+import {routeQuestionFor, interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
 import { selectAutopilotBase } from './autopilot-base.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
 
@@ -3525,7 +3525,7 @@ export const runtimeWakeTag = at => `Interpreter wake for the park at ${new Date
 const RUNTIME_WAKE_TAG = /^Interpreter wake for the park at [^ ]+\./;
 
 // Record an automatic stop without releasing or waking its worker.
-async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker, until, cwd }, ports) {
+async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker, until, route, cwd }, ports) {
   const p = deps(ports), run = await runForWorktree(cwd, p);
   if (!run) return fail('Park requires the existing run worktree.');
   const text = String(reason ?? '').trim();
@@ -3536,8 +3536,19 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
   const ownership = await continuationOwnership(run, cwd, p);
   if (ownership) return fail(ownership);
   const area = run.areas[run.area];
-  if (step !== undefined && (!['check', 'verify', 'formal'].includes(step) || !area.steps.includes(step))) return fail('Name a check, verify or formal validation step in the current area. Nothing was parked.');
+  if (route !== undefined && (!/^[a-z][a-z0-9-]*$/.test(route) || runtime || blocker !== undefined)) return fail('Use a route kind without --interpreter or --blocker.');
+  if (step !== undefined && ((route === undefined && !['check', 'verify', 'formal'].includes(step)) || !area.steps.includes(step))) return fail('Name a check, verify or formal validation step in the current area. Nothing was parked.');
+  let routeWait = null;
   let blockedOn = null;
+  if (route !== undefined) {
+    const fix = until ?? (route === 'prompt-reentry' ? '#2897' : `capability:route-${route}`);
+    if (!/^(?:#[1-9][0-9]*|capability:[a-z][a-z0-9-]*|commit:[a-f0-9]{7,40})$/.test(fix)) return fail('Name an installed capability, issue fix or commit for the route.');
+    const target = step ?? area.steps.find(name => !run.done?.[name]) ?? area.name;
+    const previous = run.routeWait;
+    routeWait = {kind: route, step: target, question: text, at: p.now(), until: fix};
+    if (previous && ['kind', 'step', 'question', 'until'].every(key => previous[key] === routeWait[key])) routeWait.at = previous.at;
+    blockedOn = {kind: 'pdd-route', until: fix};
+  }
   if (blocker !== undefined) {
     const kinds = ['person', 'pdd', 'dependency', 'account', 'github', 'ci', 'review'];
     const valid = kinds.includes(blocker) && !runtime
@@ -3548,7 +3559,7 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
     if (blocker === 'person' && !run.gate && !openQuestion(run)) return fail('A person blocker requires a pending question or gate. Nothing was parked.');
     if (!valid) return fail('Name a blocker and its clearing value: dependency issue, pdd release, or account/github reset time.');
     blockedOn = {kind: blocker, until: until ?? null};
-  } else if (until !== undefined) return fail('--until requires --blocker.');
+  } else if (until !== undefined && route === undefined) return fail('--until requires --blocker or --route.');
   const stuckCause = classifyStuckCause(text, runtime);
   let retry = null;
   if (!blockedOn && stuckCause === 'environment' && !run.repairLimit) {
@@ -3576,6 +3587,11 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
     if (latest.area !== selectedArea || !sameGate(latest.gate,selectedGate) || latest.state !== selectedState || !equalFact(latest.automaticOrigin,selectedOrigin) || explicitlyStopped(latest,p))
       throw Object.assign(Error('The run or Autopilot changed; look again.'),{code:'workflow_progress_refused'});
     latest.stuckCause = stuckCause;
+    if (routeWait) {
+      latest.routeWait = routeWait;
+      const reports = latest.routeReports ??= [];
+      if (!reports.some(row => sameFact(row, routeWait))) reports.push(routeWait);
+    } else delete latest.routeWait;
     if (retry) latest.environmentRetry = retry;
     if (!blockedOn) delete latest.blockedOn;
     if (blockedOn) { latest.state='paused'; latest.blockedOn=blockedOn; latest.parkReason=text; delete latest.runtimeWait; }
@@ -5041,6 +5057,11 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
   commitRun(run, p, fresh => {
     if (fresh.parking?.at !== input.at) throw Object.assign(Error('Park changed'), {code: 'workflow_progress_refused'});
     if (fresh.parking.phase === 'parked') {
+      if (fresh.parking.blocker.kind === 'pdd-route') {
+        const route = routeQuestionFor(fresh);
+        if (route && fresh.question?.text === route.question && !fresh.question.answeredAt) delete fresh.question;
+        delete fresh.routeWait;
+      }
       endRuntimeWait(fresh); delete fresh.blockedOn;
       // Consume the accepted stop before resume/delivery can save a new one.
       // Environment retry delivery still needs its cause for validation.
@@ -5050,7 +5071,8 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
     }
     fresh.parking.phase = 'waking';
     if (text) fresh.parking.text = text;
-    if (fresh.parking.blocker.kind !== 'environment' && (inferredGate || !fresh.gate && !openQuestion(fresh) || fresh.parking.blocker.kind === 'pdd')) fresh.state = 'running';
+    if (fresh.parking.blocker.kind === 'pdd-route' && (fresh.gate || openQuestion(fresh))) fresh.state = 'waiting';
+    else if (fresh.parking.blocker.kind !== 'environment' && (inferredGate || !fresh.gate && !openQuestion(fresh) || ['pdd', 'pdd-route'].includes(fresh.parking.blocker.kind))) fresh.state = 'running';
   });
   const result = await openRunLocked({...input, automaticResume: {...input, parked: true}}, p);
   if (result.exitCode !== 0) return {...result, recovery: 'skipped'};

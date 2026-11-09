@@ -1,4 +1,4 @@
-import {blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
+import {collectRouteQuestions, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession} from './workflow-chat.mjs';
 import {WORKFLOW_CAPABILITIES, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
@@ -381,7 +381,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     coordinatorId: state.coordinatorId, machine: state.machine});
   const parking = {
     now: p.now,
-    list: () => listRuns({cwd: state.cwd}, worker),
+    list: () => listRuns({cwd: state.cwd, cancelled: true}, worker),
     checkProgress: async run => {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
       return busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
@@ -419,7 +419,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run, interpreterBatch, interpreterCheck}, worker));
     },
     wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
-      text: rule?.text ?? (run.parking.blocker.kind === 'pdd'
+      text: rule?.text ?? (['pdd', 'pdd-route'].includes(run.parking.blocker.kind)
         ? `The installed PDD contains ${run.parking.blocker.until}. ${run.parking.blocker.until === '#2897' ? 'The PR 1 re-entry and current-main integration route now exists.' : 'The required fix is available.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
       {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
     blockerCleared: async (run, rule) => {
@@ -427,7 +427,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
       if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
-      if (blocker.kind === 'pdd') {
+      if (['pdd', 'pdd-route'].includes(blocker.kind)) {
         const required = blocker.until === '#2897' ? 'capability:prompt-reentry' : /^#[1-9][0-9]*$/.test(blocker.until) ? `capability:issue-${blocker.until.slice(1)}` : blocker.until;
         if (typeof required !== 'string') return false;
         if (required.startsWith('capability:')) return (p.installedPddCapabilities ?? WORKFLOW_CAPABILITIES).includes(required.slice(11));
@@ -488,9 +488,43 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
   };
   return parking;
 }
+// Save the attempt before dispatch. An uncertain external write must not be repeated.
+async function routeQuestionsTick(state, p, config, runs, localOnly) {
+  state.routeQuestions = collectRouteQuestions(state.routeQuestions, runs);
+  if (!await p.scanGuard(latest => {latest.routeQuestions = state.routeQuestions;})) return;
+  if (localOnly || config.mode !== 'auto') return;
+  for (const group of state.routeQuestions.groups) {
+    if (group.count < 2 || group.issue) continue;
+    group.issue = {state: 'creating', at: p.now(), url: null};
+    if (!await p.scanGuard(latest => {latest.routeQuestions = state.routeQuestions;})) return;
+    const records = state.routeQuestions.records.filter(row => group.recordIds.includes(row.id));
+    const input = {kind: group.kind, title: `Missing PDD route: ${group.kind}`,
+      body: `A supported PDD route is missing. Kind: ${group.kind}. Recorded questions: ${group.count}.\n\n`
+        + records.map(row => `Run ${row.issue ?? row.run}, step ${row.step}:\n\n${row.question}`).join('\n\n')
+        + `\n\n<!-- pdd:missing-route:${state.coordinatorId}:${group.kind} -->`};
+    try {
+      const result = await p.scanAction(async () => {
+        if (p.createRouteIssue) return p.createRouteIssue(input);
+        const reply = await p.execute('gh', ['api', '--method', 'POST', 'repos/promptdriven/pdd/issues',
+          '-f', `title=${input.title}`, '-f', `body=${input.body}`], {purpose: 'dependencies'});
+        if (reply.code !== 0) throw Error('Route issue creation did not confirm success.');
+        return {url: JSON.parse(reply.stdout).html_url};
+      });
+      if (!/^https:\/\/github\.com\/promptdriven\/pdd\/issues\/[1-9][0-9]*$/.test(result?.url ?? '')) throw Error('Route issue URL is unconfirmed.');
+      group.issue = {...group.issue, state: 'opened', url: result.url};
+    } catch {
+      group.issue.state = 'unknown';
+      p.warn(`Route issue outcome is unknown for ${group.kind}; retain its attempt before any repair.`);
+    }
+    if (!await p.scanGuard(latest => {latest.routeQuestions = state.routeQuestions;})) return;
+  }
+}
 async function parkingTick(state, p, config, options = {}) {
   try {
     const ports = parkingPorts(state, p, options);
+    const routes = (await ports.list()).filter(run => run.repo?.toLowerCase() === state.repo.toLowerCase() && run.sourceRoot === state.cwd
+      && run.automaticOrigin?.coordinatorId === state.coordinatorId && run.automaticOrigin?.machine === state.machine);
+    await routeQuestionsTick(state, p, config, routes, options.localOnly);
     state.parking = await reconcileParking(state, ports, {...options, policy: config.parking, release: !options.localOnly});
     state.parkedNumbers = (await ports.list()).filter(run => run.parking && !['completed', 'cancelled'].includes(run.state)).map(run => run.number);
     await p.scanGuard(latest => {latest.parking = state.parking; latest.parkedNumbers = state.parkedNumbers; latest.parkingAlerts = state.parkingAlerts;});
@@ -2220,7 +2254,16 @@ export async function runAutopilotLauncher(input, ports = {}) {
       state.repo = found.run.repo;
       return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
     }
-    if (command === 'status' && input.json) return ok(JSON.stringify(await localCosts(input, ports), null, 2));
+    if (command === 'status' && input.json) {
+      const folder = stateFolder(ports, p.env), routeQuestions = [];
+      for (const name of existsSync(folder) ? readdirSync(folder) : []) {
+        if (!name.endsWith('.json')) continue;
+        const saved = read(join(folder, name));
+        if (saved?.routeQuestions && (input.all || samePath(saved.cwd, input.cwd)))
+          routeQuestions.push({repository: saved.repo, cwd: saved.cwd, ...saved.routeQuestions});
+      }
+      return ok(JSON.stringify({...await localCosts(input, ports), routeQuestions}, null, 2));
+    }
     if (command === 'status' && input.all) {
       const status = await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);
       try { status.message += '\n' + costStatusLines(await localCosts(input, ports)); } catch {}
