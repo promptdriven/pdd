@@ -1,5 +1,10 @@
 # Autopilot launcher
 
+Bind the parking owner's checkProgress port to both fresh check-queue custody
+and current live agent activity. A current working/blocked/unknown agent holds
+working capacity and defers parking even when the workflow is stopped. Use the
+parking owner's closing reasons in status and retry its held reservations.
+
 Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(input, ports)` and
 `tickAutopilot(stateFile, ports)` and `requestAutopilotCompletion({cwd,env}, ports)`, and the pure
 `autopilotLaunchFingerprint(state)` that returns the launch fingerprint below for a saved state. This launcher connects a repository to the

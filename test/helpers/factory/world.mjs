@@ -159,7 +159,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
       try {const value=JSON.parse(text.trim().split('\n').at(-1));if(value.repository&&value.issues)w.packets.push(value);}catch{}
     }
   };
-  w.start=async()=>{await w.command(['autopilot','start','--runs','2','--checks','1'],{actor:'operator'});w.messages();};
+  w.start=async()=>{await w.command(['autopilot','start','--runs',String(w.runLimit??2),'--checks','1'],{actor:'operator'});w.messages();};
   w.reviewDependencies=async()=>{
     w.messages();
     for(let n=0;n<8;n++) {

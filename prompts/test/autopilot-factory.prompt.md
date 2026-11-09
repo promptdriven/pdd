@@ -58,6 +58,12 @@ repairs the named declaration, a fresh check must reach a verdict.
    records one alert.
 
 Every scenario records its actual commands and useful structural observations.
+Include #3132: absent panes (including a starting chat), a done current chat,
+and a working current agent. Prove absent custody is confirmed without another
+close, done closure saves its screen and session first, working activity defers
+parking, and a closing reservation blocks a new start at the run limit. Retry
+retained cleanup with a named status reason and prove working never exceeds the
+configured cap across these observations.
 Assertions use states, identities, hashes, counts and effects, not exact English
 sentences. A bounded failure must name the stage and saved state. The shell
 entry runs the complete factory in less than 15 minutes, returns nonzero on any

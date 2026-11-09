@@ -921,7 +921,7 @@ export async function closeFinishedChats(run, ports = {}) {
         if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
         await ports.checkpoint(null, run.layout);
       }
-    } else if (ports.reason === 'park') {
+    } else if (ports.reason === 'park' && workspace) {
       const kept = (run.chats ?? []).filter(chat => !Number.isFinite(chat.closed?.confirmedAt)).map(chat => ({area: chat.area, reason: 'not-pdd-created'}));
       if (!kept.length) kept.push({area: 'run shell', reason: 'not-pdd-created'});
       return {closed: 0, kept, warnings, reasonCounts: countReasons(kept)};
@@ -929,6 +929,14 @@ export async function closeFinishedChats(run, ports = {}) {
   }
   const finished = ports.force ? run.chats ?? [] : finishedChats(run);
   const candidates = ports.onlyChat ? finished.filter(chat => chat.paneId === ports.onlyChat.paneId && chat.terminalId === ports.onlyChat.terminalId) : finished;
+  const confirmAbsent = async chat => {
+    if (ports.dryRun || Number.isFinite(chat.closed?.confirmedAt)) return;
+    chat.closed ??= {at: now(), reason: 'absent', screen: null};
+    chat.closed.confirmedAt = now();
+    chat.state = 'ended';
+    await checkpoint(chat);
+    closed++;
+  };
   for (const chat of [...candidates].sort((a,b) => finishedAt(run,a) - finishedAt(run,b))) {
     const keep = reason => kept.push({area: chat.area, reason});
     try {
@@ -937,17 +945,16 @@ export async function closeFinishedChats(run, ports = {}) {
       if (!ports.force && !chat.closed && (!Number.isFinite(end) || now() < Math.max(end, chat.openedAt ?? 0) + grace)) { keep('grace'); continue; }
       const workspaces = await inventory('workspace'), workspace = workspaces.find(w => w.workspace_id === chat.workspaceId);
       if (!workspace) {
-        // A missing workspace is not a license to close IDs on another server.
-        if (!chat.closed) keep('workspace-absent');
-        else if (!ports.dryRun && !Number.isFinite(chat.closed.confirmedAt)) { chat.closed.confirmedAt = now(); await checkpoint(chat); }
+        // Absence confirms custody without sending a close to any saved ID.
+        await confirmAbsent(chat);
         continue;
       }
       if (!samePath(workspace.worktree?.checkout_path, run.root) || !samePath(workspace.worktree?.repo_key, run.commonDir) || workspace.worktree?.is_linked_worktree !== true)
         { keep('workspace-identity'); continue; }
       const tabs = await inventory('tab', chat.workspaceId), panes = await inventory('pane', chat.workspaceId);
       const tab = tabs.find(t => t.tab_id === chat.tabId), rows = panes.filter(p => p.tab_id === chat.tabId);
-      if (!tab && !rows.length && chat.closed) {
-        if (!ports.dryRun && !Number.isFinite(chat.closed.confirmedAt)) { chat.closed.confirmedAt = now(); await checkpoint(chat); }
+      if (!panes.some(p => p.pane_id === chat.paneId)) {
+        await confirmAbsent(chat);
         continue;
       }
       if (!tab || tab.workspace_id !== chat.workspaceId || rows.length !== 1 || rows[0].workspace_id !== chat.workspaceId ||

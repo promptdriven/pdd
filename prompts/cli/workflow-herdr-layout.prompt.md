@@ -121,6 +121,12 @@ presence permits retry only with the same verified workspace identity, original
 root and safety guards above. Changed or unknown ownership remains pending and
 untouched. No intent alone authorizes a repeated close.
 
+Complete valid workspace inventory also confirms an already absent run workspace
+as closed before any close intent exists. Require valid saved workspace and
+original root fields; checkpoint closed and send no close request. Absence does
+not grant creation authority. Every request to close a present workspace still
+requires the saved creation authority above.
+
 `closeHerdrRepoLayoutIfIdle` returns true if a safely owned idle parent was closed or is already gone, false when retained. Adoption is not creation ownership: never close a parent merely because it is a non-linked workspace of the clone. A parent may be closed only with durable run-record evidence that PDD created this exact parent/root, no remaining open run uses it, unchanged verified parent identity and exactly its one original tab/pane. Existing run records with workspace IDs alone do not prove parent creation or its initial roots; preserve those parents and return false. Without that evidence preserve it, including legacy or person-opened parents. Never create another durable layout registry to establish cleanup ownership.
 
 ## Pane budget

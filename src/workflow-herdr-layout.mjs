@@ -477,19 +477,18 @@ async function assertShellForeground(command, paneId) {
 export async function closeHerdrRunLayout({runId, cwd, layout, commonDir}, ports) {
   if (!id(runId) || !layout || ![layout.workspaceId, layout.tabId, layout.paneId, layout.terminalId, commonDir].every(id)) throw problem('layout_cleanup_uncertain');
   if (layout.phase === 'closed') return;
-  if (layout.createdWorkspaceId !== layout.workspaceId) throw problem('layout_cleanup_uncertain');
   const {command, checkpoint} = ports, root = layout.root ?? layout;
   if (![root.tabId, root.paneId, root.terminalId].every(id)) throw problem('layout_cleanup_uncertain');
   const run = {runId, cwd, commonDir, workspaceId: layout.workspaceId, rootTabId: root.tabId, rootPaneId: root.paneId, rootTerminalId: root.terminalId};
   run.restartTerminal = layout.restartTerminal === true;
   const inspect = async (refresh = false) => {
-    if (layout.createdWorkspaceId !== run.workspaceId) throw problem('layout_cleanup_uncertain');
     const rows = await inventory(command);
-    if (layout.phase === 'close_intent' && !rows.some(w => w.workspace_id === run.workspaceId)) {
+    if (!rows.some(w => w.workspace_id === run.workspaceId)) {
       layout.phase = 'closed';
       await checkpoint();
       return false;
     }
+    if (layout.createdWorkspaceId !== run.workspaceId) throw problem('layout_cleanup_uncertain');
     ownedWorkspace(rows, run, cwd);
     if (refresh) {
       const panes = await paneRows(command, run.workspaceId), tabs = await tabsFor(command, run.workspaceId);

@@ -389,8 +389,10 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     list: () => listRuns({cwd: state.cwd, cancelled: true}, worker),
     checkProgress: async run => {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
-      return busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
-        || busy((p.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: p.env}, {now: p.now, ...p.interpreterQueuePorts}));
+      if (busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
+        || busy((p.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: p.env}, {now: p.now, ...p.interpreterQueuePorts}))) return true;
+      const chat = currentChat(run), live = chat ? await chatSession(chat, {...worker, run}) : null;
+      return Boolean(live?.alive && !['idle', 'done'].includes(live.status));
     },
     observeBlocker: async run => {
       if (run.blockedOn) return null;

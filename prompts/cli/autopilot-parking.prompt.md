@@ -23,6 +23,24 @@ The central coordinator ledger is {records,groups}. Each record has id (JSON ide
 
 A missing saved UUID or old layout field does not reject the whole park. The workflow/chat owners prove each close and retain only unsafe chats with reasons. A closing reservation remains occupied until all required absence checks pass. Old-coordinator runs enter this policy only after the caller proves current same-machine claim ownership and adopts them; transferred claims use the normal handover path. Busy agents remain open.
 
+## Closing progress (#3132)
+
+Before starting parking, require the current live agent to be idle or done;
+working, blocked and unknown live statuses defer parking. The injected
+checkProgress observation includes current live agent activity as well as check
+custody. Such activity reserves working capacity even for a stopped workflow.
+Every closing run reserves one working slot in admission and status, including
+a done current turn and absent panes, until cleanup confirms the full park.
+Do not drop a closing run because its saved blocker disappeared; retry guarded
+cleanup on every tick. New activity keeps its reservation and defers closure.
+
+parkingSummary additionally returns closing, an array of {number,reasons}, in
+run order, for closing reservations. reasons is a nonempty reason-to-count map
+from parking.closeReasons, defaulting to cleanup-pending. parkingWords names
+each closing run and these reasons, including closing-retry once cleanup has
+remained incomplete for 60000 ms. The runner owns durable attempt observations.
+This bound triggers a visible retry reason, never permission to close unsafe work.
+
 ## Dependencies
 
 - [Environment causes](autopilot-environment.prompt.md): required generation/runtime/testing context for eligible environmentRetry and its bounded backoff. No other dependency policy is copied here.
@@ -30,6 +48,6 @@ A missing saved UUID or old layout field does not reject the whole park. The wor
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"284de410e0162548bf2f3df439b32d5b02a4237609693fdca276eb6c13072372","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"284de410e0162548bf2f3df439b32d5b02a4237609693fdca276eb6c13072372","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
