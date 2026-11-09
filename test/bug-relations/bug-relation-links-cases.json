@@ -1,0 +1,45 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/bug-relation-links.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Only a necessary-before needs choice may create a dependency in the supplied direction; other classifications do not automatically become dependencies."
+    },
+    {
+      "id": "AC2",
+      "text": "An explicitly selected existing Class parent may receive the selected sub-issue; an unsupported duplicate effect is reported without claiming success."
+    },
+    {
+      "id": "AC3",
+      "text": "Existing links, human removals, graph cycles, ownership, incomplete observations and uncertain mutation outcomes are respected."
+    }
+  ],
+  "cases": [
+    {
+      "id": "dependency",
+      "given": "A validated needs proposal explicitly selects a dependent and necessary blocker",
+      "required_observation": "The native dependency is created in the selected direction only after existing graph and ownership checks."
+    },
+    {
+      "id": "class",
+      "given": "A validated explicit sub-issue choice names an existing Class parent",
+      "required_observation": "The selected child is linked through the existing native pathway with readback."
+    },
+    {
+      "id": "duplicate",
+      "given": "A validated duplicate choice names endpoints and direction",
+      "required_observation": "It is reported unsupported until a documented native mutation and safe readback exist; no substitute link is made."
+    },
+    {
+      "id": "holds",
+      "given": "Self link, cycle, unknown graph, live foreign owner or confirmed human removal",
+      "required_observation": "No forbidden mutation occurs."
+    },
+    {
+      "id": "uncertain",
+      "given": "A mutation has an unknown result",
+      "required_observation": "The batch stops and does not blindly resend; confirmed earlier results remain visible."
+    }
+  ]
+}

@@ -1,3 +1,9 @@
+# Reproduced bug findings (#2841)
+
+- [Keep reproduced bug findings](bug-findings-record.md) — [native cases](../test/bug-relations/bug-findings-record-cases.json). Prompt tests: NOT RUN; native effects unbound.
+- [Check relation evidence](bug-relation-evidence.md) — [native cases](../test/bug-relations/bug-relation-evidence-cases.json). Prompt tests: NOT RUN; native effects unbound.
+- [Apply chosen native relations](bug-relation-links.md) — [native cases](../test/bug-relations/bug-relation-links-cases.json). Prompt tests: NOT RUN; native effects unbound.
+
 # SVG layout spec
 
 1. [Keep the built screen aligned with its drawing](svg-layout-spec.md): local prompt/drawing warnings and a failing browser comparison for missing layout parts.

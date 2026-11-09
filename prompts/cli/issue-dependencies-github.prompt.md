@@ -37,6 +37,15 @@ for trust checks. Retain current comment revisions from this observation instead
 Native createSortPart and ensureSortLink implement issue-mixed transport guards,
 including readback. The splitCandidates page kind reads the issue index in all states for interrupted split recovery. A createSortPart error has sortUnsent:true only before its creation transport is invoked; readback failures never claim that the POST was unsent. Preserve all existing dependency observations.
 
+<a id="reproduced-bug-relation-boundary"></a>
+## Reproduced bug relation boundary
+
+Expose a new native production boundary `applyReproducedBugRelations({cwd,repository,issue,relations}, ports)` for an explicitly supplied batch; it is not an existing API. Each relation has `issue` (other open issue identity), `classification` (one of `needs`, `same cause`, `same class`, `duplicate`, `related`), `quote` (nonempty exact short text), `source` (issue/comment or code locator and observed revision), and `effect` (explicit `none`, `blocked-by`, `sub-issue`, or `duplicate`, with explicit target and direction when applicable). Return a result for each proposal identifying applied, already present, held, unsupported, or unknown and the reason; do not claim success without native readback. These findings and choices come from the agent, never from semantic inference by pdd. `none` is a recorded choice, not a link. Only an explicitly necessary-before `needs` choice may request `blocked-by`. A `sub-issue` choice names an existing `Class:` parent and child; do not discover or create a parent. A duplicate choice names both endpoints and direction. Other classifications do not automatically make dependencies. Do not close, reassign or alter unrelated issues.
+
+Before any mutation validate every proposal: current trusted issue/comment evidence or current identified code revision must contain the supplied quote exactly; a missing, empty, edited, unavailable, inaccessible or untrusted source holds the batch. A match verifies existence only, not relation meaning. Use the existing trust owner before reading issue/comment bodies and the existing evidence locators and revisions. Recheck evidence and all current authority, ownership and target observations at effect time, including after waits; unknown or changed facts hold effects. An open issue observed as closed or unavailable cannot authorize a new effect.
+
+Reuse the dependency model for self, duplicate, unknown and cycle checks and its native blocked-by effect; reuse the sort link native sub-issue transport and its existing guards. Respect complete observations, claims, human-owned links and confirmed human removals; do not recreate a removed link. Existing links are reported as already present without a write. Preserve admission, pacing, idempotence and read-before-write/readback. Stop the batch on a failed or unknown-result mutation; do not blindly resend an unknown effect. Results already confirmed remain visible. The current adapter has no supported duplicate mutation and readback contract: report `unsupported` for that effect until a documented native operation and safe readback are implemented and verified; do not substitute a dependency or claim completion.
+
 ## Read complete native observations
 
 Resolve an omitted repository through the existing repository resolver. Explicit
@@ -581,6 +590,132 @@ Select sort-context loading from the original supplied ports before native
 adapter construction. A snapshot wrapper retains every native sort operation;
 its existing issue-cache invalidation also covers sort issue and relationship
 updates. Keep ordinary supplied GitHub ports free of extra native reads.
+
+<a id="native-validation-profile-bug-relation-evidence"></a>
+<details><summary>Native validation profile: bug-relation-evidence</summary>
+
+```json
+{
+  "schema": "pdd.native-profile.v1",
+  "profileId": "bug-relation-evidence",
+  "reportFormat": "tap13",
+  "requiredIds": [
+    "test/bug-relations/evidence.test.mjs::matching",
+    "test/bug-relations/evidence.test.mjs::missing",
+    "test/bug-relations/evidence.test.mjs::changed"
+  ],
+  "requiredGates": [],
+  "fixtures": [],
+  "mappings": [
+    {
+      "storyPath": "user_stories/bug-relation-evidence.md",
+      "criterionId": "AC1",
+      "criterionText": "Every proposed quote must exist exactly in its current trusted issue or code source before any batch mutation.",
+      "nativeIds": [
+        "test/bug-relations/evidence.test.mjs::matching",
+        "test/bug-relations/evidence.test.mjs::missing",
+        "test/bug-relations/evidence.test.mjs::changed"
+      ]
+    },
+    {
+      "storyPath": "user_stories/bug-relation-evidence.md",
+      "criterionId": "AC2",
+      "criterionText": "Missing, changed, inaccessible, unavailable or untrusted evidence holds the batch; a matching quote does not determine a relation.",
+      "nativeIds": [
+        "test/bug-relations/evidence.test.mjs::matching",
+        "test/bug-relations/evidence.test.mjs::missing",
+        "test/bug-relations/evidence.test.mjs::changed"
+      ]
+    },
+    {
+      "storyPath": "user_stories/bug-relation-evidence.md",
+      "criterionId": "AC3",
+      "criterionText": "Evidence and authority are checked again before an effect if observations can have changed.",
+      "nativeIds": [
+        "test/bug-relations/evidence.test.mjs::matching",
+        "test/bug-relations/evidence.test.mjs::missing",
+        "test/bug-relations/evidence.test.mjs::changed"
+      ]
+    }
+  ],
+  "sourcePaths": [
+    "src/issue-dependencies-github.mjs"
+  ],
+  "testPaths": [
+    "test/bug-relations/evidence.test.mjs"
+  ]
+}
+```
+
+</details>
+
+<a id="native-validation-profile-bug-relation-links"></a>
+<details><summary>Native validation profile: bug-relation-links</summary>
+
+```json
+{
+  "schema": "pdd.native-profile.v1",
+  "profileId": "bug-relation-links",
+  "reportFormat": "tap13",
+  "requiredIds": [
+    "test/bug-relations/links.test.mjs::dependency",
+    "test/bug-relations/links.test.mjs::class",
+    "test/bug-relations/links.test.mjs::duplicate",
+    "test/bug-relations/links.test.mjs::holds",
+    "test/bug-relations/links.test.mjs::uncertain"
+  ],
+  "requiredGates": [],
+  "fixtures": [],
+  "mappings": [
+    {
+      "storyPath": "user_stories/bug-relation-links.md",
+      "criterionId": "AC1",
+      "criterionText": "Only a necessary-before needs choice may create a dependency in the supplied direction; other classifications do not automatically become dependencies.",
+      "nativeIds": [
+        "test/bug-relations/links.test.mjs::dependency",
+        "test/bug-relations/links.test.mjs::class",
+        "test/bug-relations/links.test.mjs::duplicate",
+        "test/bug-relations/links.test.mjs::holds",
+        "test/bug-relations/links.test.mjs::uncertain"
+      ]
+    },
+    {
+      "storyPath": "user_stories/bug-relation-links.md",
+      "criterionId": "AC2",
+      "criterionText": "An explicitly selected existing Class parent may receive the selected sub-issue; an unsupported duplicate effect is reported without claiming success.",
+      "nativeIds": [
+        "test/bug-relations/links.test.mjs::dependency",
+        "test/bug-relations/links.test.mjs::class",
+        "test/bug-relations/links.test.mjs::duplicate",
+        "test/bug-relations/links.test.mjs::holds",
+        "test/bug-relations/links.test.mjs::uncertain"
+      ]
+    },
+    {
+      "storyPath": "user_stories/bug-relation-links.md",
+      "criterionId": "AC3",
+      "criterionText": "Existing links, human removals, graph cycles, ownership, incomplete observations and uncertain mutation outcomes are respected.",
+      "nativeIds": [
+        "test/bug-relations/links.test.mjs::dependency",
+        "test/bug-relations/links.test.mjs::class",
+        "test/bug-relations/links.test.mjs::duplicate",
+        "test/bug-relations/links.test.mjs::holds",
+        "test/bug-relations/links.test.mjs::uncertain"
+      ]
+    }
+  ],
+  "sourcePaths": [
+    "src/issue-dependencies-github.mjs",
+    "src/issue-dependencies.mjs",
+    "src/issue-sort-github.mjs"
+  ],
+  "testPaths": [
+    "test/bug-relations/links.test.mjs"
+  ]
+}
+```
+
+</details>
 
 ## Dependencies
 

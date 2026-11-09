@@ -2,6 +2,10 @@
 
 Own `src/workflow-runner.mjs`. It runs a workflow for one GitHub issue as a few area chats. pdd has four jobs: start, gates, PR and status. The agent does the work. For an automatic fresh area chat, arm the one-shot [worker completion bridge](workflow-worker-completion.prompt.md) after its identity is saved and launch confirmed. The bridge waits for native worker completion and coordinator availability; it does not impose a workflow timeout. After saving a supported current automatic resume, arm the same bridge with its new resume anchor and require fresh activity evidence before completion. Arm a confirmed current automatic `--new` replacement with its saved fresh pane identity, and treat a resumed replacement as a resume. Reused-pane recovery needs fresh activity evidence and is not armed as a fresh turn. pdd does not run tests automatically or merge. The explicit local [old-code proof](workflow-prove.prompt.md) command and shared full-suite queue are the bounded supplied-command execution exceptions; this runner never executes a command from notes or evidence.
 
+## Reproduced bug findings
+
+For a bug run, retain the reproduce step's actual `Cause: <file>#<function> · Flaw: <one sentence> · Class: <short name>` and `Relations:` findings in the saved run record and gather them for PR 1, including on refresh. A failed reproduction supplies no invented cause; an explicitly empty search is distinct from an unavailable search. Each relation retains the other open issue identity, agent-selected classification, exact short quote and source locator, and explicit proposed effect, target and direction. These are agent findings, not test or check receipts. Preserve existing gate, ownership and publication rules. Delegate evidence and effects to [GitHub dependency effects](issue-dependencies-github.prompt.md#reproduced-bug-relation-boundary); never interpret a classification as permission to mutate.
+
 ## Native admission lock
 
 Native module function `acquireRunLock(runDir, filename = 'chat-replacement.lock')`
@@ -1217,6 +1221,69 @@ A saved non-null `ackedAt`, including zero, denotes an acknowledgement. On the f
 Every successful `stepDone` result, including an ordinary next step, an existing gate/PR ending and the existing successful unknown/out-of-order step result, appends a warning, prefixing every warning line with `warning:`, identifying delivered changes whose `ackedAt` is absent or null and their delivery times. Read the latest journal snapshot when producing the result; generic done summaries, gates and Herdr receipts never imply uptake. Advice in a done warning asks the agent to tell the person about the outstanding request; it must not tell the agent to type into its own chat. Include the same catalog-derived, full-running-package, shell-safe uptake command hint for each outstanding request, instructing the agent to use it only after actually addressing that request. Never acknowledge automatically or make acknowledgement a gate; every hint/advice line also starts with `warning:`. Acknowledged requests produce no uptake warning. A journal read failure appends the visibility-unavailable warning. Failed step validation retains its existing result and causes no additional journal read or effects. Status visibility and successful-done warning collection are pure snapshot reads: acquire no journal claim, perform no recovery or normalization, and write nothing. In-flight records, stale owner metadata and journal bytes remain unchanged. Invalid saved delivery or acknowledgement times cannot turn a successful saved completion into failure. These warnings add no gate, block no normal step/approval/PR/area progress and do not alter existing outcomes. Status and ordinary run/step/question writes cannot erase saved uptake; a later new request gets a fresh id and stays open independently.
 
 The Interpreter entries below name the actual public module functions, including `runStatus`. For selected-run display, `runs.resolveRun` transports the existing [run-record resolver](workflow-runs.prompt.md) reply `{run}` or `{error}` as JSON text; `results.readRunResults` transports the existing injected reader reply as JSON text. `files` binds the named read-only Node filesystem operations (UTF-8 reads; null means a failed read/stat/list/realpath), and `program.execFile` binds the existing process port. Preserve native exceptions as unavailable facts, not empty successful reads. These are dependency bindings, not new public renderer/snapshot operations. Native run selection, journal/claim durability, process recovery, active chat/PR refresh and the done chain still require native tests; these declarations do not prove those effects. The display scenarios use an ended run and do not cover active refresh.
+
+<a id="native-validation-profile-bug-findings-record"></a>
+<details><summary>Native validation profile: bug-findings-record</summary>
+
+```json
+{
+  "schema": "pdd.native-profile.v1",
+  "profileId": "bug-findings-record",
+  "reportFormat": "tap13",
+  "requiredIds": [
+    "test/bug-relations/findings.test.mjs::record",
+    "test/bug-relations/findings.test.mjs::empty",
+    "test/bug-relations/findings.test.mjs::failure",
+    "test/bug-relations/findings.test.mjs::inert"
+  ],
+  "requiredGates": [],
+  "fixtures": [],
+  "mappings": [
+    {
+      "storyPath": "user_stories/bug-findings-record.md",
+      "criterionId": "AC1",
+      "criterionText": "A successful reproduction retains the exact cause, flaw and class and each discovered relation with its actual quote and source in the run and PR 1, including after refresh.",
+      "nativeIds": [
+        "test/bug-relations/findings.test.mjs::record",
+        "test/bug-relations/findings.test.mjs::empty",
+        "test/bug-relations/findings.test.mjs::failure",
+        "test/bug-relations/findings.test.mjs::inert"
+      ]
+    },
+    {
+      "storyPath": "user_stories/bug-findings-record.md",
+      "criterionId": "AC2",
+      "criterionText": "An empty relation search is recorded honestly; a failed reproduction never invents a cause.",
+      "nativeIds": [
+        "test/bug-relations/findings.test.mjs::record",
+        "test/bug-relations/findings.test.mjs::empty",
+        "test/bug-relations/findings.test.mjs::failure",
+        "test/bug-relations/findings.test.mjs::inert"
+      ]
+    },
+    {
+      "storyPath": "user_stories/bug-findings-record.md",
+      "criterionId": "AC3",
+      "criterionText": "Agent findings remain inert in PR text and never become check results.",
+      "nativeIds": [
+        "test/bug-relations/findings.test.mjs::record",
+        "test/bug-relations/findings.test.mjs::empty",
+        "test/bug-relations/findings.test.mjs::failure",
+        "test/bug-relations/findings.test.mjs::inert"
+      ]
+    }
+  ],
+  "sourcePaths": [
+    "src/workflow-runner.mjs",
+    "src/workflow-pr-body.mjs"
+  ],
+  "testPaths": [
+    "test/bug-relations/findings.test.mjs"
+  ]
+}
+```
+
+</details>
 
 ## Dependencies
 
