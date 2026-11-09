@@ -869,7 +869,10 @@ Each log is limited to 1 MiB. Overflow keeps its beginning and end with an exact
 `N bytes omitted` marker. A pending output line is limited to 256 KiB; a larger
 line is omitted in full with its byte count. Bounded scanning still tracks
 quoted secrets and private keys in omitted lines. Their continuation stays
-redacted through its closing delimiter or end of output. Each receipt is limited
+redacted through its closing delimiter or end of output. A recognized credential
+field stays pending across assignment whitespace, including line breaks and
+omitted lines, until its quoted or unquoted value is redacted. Stdout and stderr
+keep separate recognition state. Each receipt is limited
 to 64 KiB, with free-text fields limited to 4 KiB. Required source and ownership metadata
 that cannot fit prevents execution. The `evidence` fields report raw output
 bytes, saved log bytes, omitted bytes and whether truncation occurred. Counts

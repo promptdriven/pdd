@@ -35,7 +35,7 @@ export function serializeValidationReceipt(record) {
 // its opener when a window or the retained line ends.
 function multilineSecrets() {
   let tail='', field=null, quote=null, escaped=false, privateKey=false;
-  let header=null, label='', dashes=0, suppressed=false;
+  let header=null, label='', dashes=0, suppressed=false, continuedField=false;
   return {
     write(text) {
       for(const char of text) {
@@ -58,8 +58,13 @@ function multilineSecrets() {
           else if(char===quote) quote=null;
         } else if(!privateKey) {
           if(field==='separator') {
+            // A value on a later line has no local field name for the shared
+            // string redactor. Suppress it before this line can be emitted.
+            if(continuedField && !/\s/.test(char)) suppressed=true;
             if(char==='"'||char==="'") {quote=char;field=null;}
-            else if(!/\s/.test(char)) field=null;
+            else if(!/\s/.test(char)) field='value';
+          } else if(field==='value') {
+            if(/[\s,;]/.test(char)) field=null;
           } else if(field) {
             if(char===':'||char==='=') field='separator';
             else if(field==='name'&&(char==='"'||char==="'")) field='space';
@@ -75,8 +80,10 @@ function multilineSecrets() {
     finishLine() {
       const redact=suppressed||Boolean(header);
       suppressed=Boolean(quote||privateKey||header);
-      // A field name or separator alone is not a multiline secret opener.
-      field=null;tail='';
+      // Whitespace, including LF and discarded oversized lines, can separate
+      // a recognized field from its separator and its value. Keep only this
+      // bounded recognition state, never the raw assignment or secret body.
+      continuedField=Boolean(field);tail='';
       return redact;
     },
   };

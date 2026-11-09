@@ -10,6 +10,8 @@ import {spawn,execFileSync} from 'node:child_process';
 import {runTestSuite,readSuiteProgress,executeSuite} from '../src/test-suite-queue.mjs';
 import {checkMachine,withCheckLifetime} from './helpers/check-machine.mjs';
 import {calculateCheckCapacity} from '../src/test-suite-queue.mjs';
+import {redactSecrets} from '../src/secret-redaction.mjs';
+import {redactingLines,MAX_EVIDENCE_LINE_BYTES,MAX_VALIDATION_LOG_BYTES,MAX_VALIDATION_RECEIPT_BYTES} from '../src/validation-evidence.mjs';
 
 const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
 const until = async (predicate, message) => {
@@ -27,6 +29,90 @@ function fixture(t) {
 }
 const read = path => JSON.parse(fs.readFileSync(path,'utf8'));
 const summary = 'TAP version 13\n1..2\n# tests 2\n# suites 0\n# pass 1\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n';
+
+test('integration fix-up: pending sensitive fields cover the assignment grammar on both streams',async t=>{
+  const f=fixture(t),rows=[];
+  const fields=['key','token','password','secret','api_key','api-key','apikey','authorization','cookie','credential'];
+  // Every ECMAScript whitespace character allowed by the shared \s grammar.
+  const whitespace=['',' ', '\t','\r','\n','\v','\f','\u00a0','\u1680',
+    ...Array.from({length:11},(_,i)=>String.fromCodePoint(0x2000+i)),
+    '\u2028','\u2029','\u202f','\u205f','\u3000','\ufeff',' \t\r\n', '\n\n'];
+  const gaps=whitespace.map(space=>[space,space]).concat([['\n',''],['','\n'],['\r\n\t',' \n\r']]);
+  for(const field of fields) for(const [before,after] of gaps)
+    for(const [left,right,separator] of [['','','='],['"','"',':'],["'","'",'=']])
+      for(const valueQuote of ['', '"', "'"]) {
+        const secret=`synthetic-pending-${rows.length}-credential`;
+        const assignment=`${left}${field.toUpperCase()}${right}${before}${separator}${after}${valueQuote}${secret}${valueQuote}\n`;
+        rows.push({assignment,secret,omitted:0});
+      }
+  const regularRows=rows.length;
+  // Overflow before the separator or value, on the same or an earlier line.
+  for(const beforeSeparator of [false,true]) for(const multiline of [false,true]) for(const valueQuote of ['', '"', "'"]) {
+    const secret=`synthetic-pending-${rows.length}-credential`;
+    const space=' '.repeat(MAX_EVIDENCE_LINE_BYTES)+(multiline?'\n\t\r\n':'');
+    const assignment=`"password"${beforeSeparator?space:''}:${beforeSeparator?'':space}${valueQuote}${secret}${valueQuote}\n`;
+    const omitted=assignment.split(/(?<=\n)/).reduce((sum,line)=>sum+(Buffer.byteLength(line)>MAX_EVIDENCE_LINE_BYTES?Buffer.byteLength(line):0),0);
+    rows.push({assignment,secret,omitted});
+  }
+  const safe='safe-after-field\n';
+  let splits=0,overflowWrites=0;
+  for(const [index,row] of rows.entries()) {
+    assert.equal(redactSecrets(row.assignment).includes(row.secret),false,`shared grammar row ${index}`);
+    const input=Buffer.from(row.assignment+safe);
+    const check=parts=>{
+      let saved='',omitted=0;
+      const stream=redactingLines((text,count)=>{
+        assert.equal(text.includes(row.secret),false,`stream credential exposure at row ${index}`);
+        saved+=text;omitted+=count;
+      });
+      for(const part of parts)stream.write(part);
+      stream.end();
+      assert.equal(saved.includes(row.secret),false,`stream credential exposure at row ${index}`);
+      assert.ok(saved.endsWith(safe));assert.equal(omitted,row.omitted);
+    };
+    if(index<regularRows) {
+      // Include splits inside UTF-8 whitespace and either end of the transport.
+      for(let split=0;split<=input.length;split++) {
+        check([input.subarray(0,split),input.subarray(split)]);splits++;
+      }
+    } else for(const width of [1,4093,65536]) {
+      const parts=[];for(let offset=0;offset<input.length;offset+=width)parts.push(input.subarray(offset,offset+width));
+      check(parts);overflowWrites++;
+    }
+  }
+  assert.equal(regularRows,2790);assert.equal(rows.length,2802);
+  assert.equal(splits,186969);assert.equal(overflowWrites,36);
+  // Real recorder boundary: the same grammar corpus reaches disk and caller.
+  // A field pending on one stream must not suppress the other stream's sentinel.
+  for(const channel of ['stdout','stderr']) {
+    const program=join(f.root,`pending-${channel}.cjs`),inputPath=join(f.root,`pending-${channel}.input`);
+    const data=rows.map(row=>row.assignment+safe).join('');fs.writeFileSync(inputPath,data);
+    const other=channel==='stdout'?'stderr':'stdout',sentinel=`independent-${other}\n`;
+    fs.writeFileSync(program,`const fs=require('node:fs');const data=fs.readFileSync(${JSON.stringify(inputPath)});const write=(stream,bytes)=>new Promise(done=>process[stream].write(bytes,done));(async()=>{await write(${JSON.stringify(channel)},'password=\\n');await write(${JSON.stringify(other)},${JSON.stringify(sentinel)});await write(${JSON.stringify(channel)},'"synthetic-isolated-credential"\\n');for(let i=0;i<data.length;i+=4093)await write(${JSON.stringify(channel)},data.subarray(i,i+4093));await write('stdout',${JSON.stringify(summary)});process.exitCode=7;})();`);
+    let forwarded='';const capture={write(bytes){
+      const row=read(f.receipt);assert.ok(fs.readFileSync(row.logPath).includes(bytes));
+      assert.doesNotMatch(String(bytes),/synthetic-(?:pending-\d+|isolated)-credential/);
+      forwarded+=bytes;
+    }};
+    const result=await runTestSuite({cwd:f.root,command:`${quote(process.execPath)} ${quote(program)}`,env:f.env},
+      {...f.ports,stdout:capture,stderr:capture});
+    const row=read(f.receipt),log=fs.readFileSync(row.logPath,'utf8');
+    assert.equal(result.exitCode,7);assert.equal(row.exitCode,7);assert.equal(row.outcome,'completed');
+    assert.equal(row.state,'finished');assert.equal(row.signal,null);
+    assert.deepEqual(row.counts,{tests:2,suites:0,pass:1,fail:1,cancelled:0,skipped:0,todo:0});
+    for(const text of [log,forwarded,fs.readFileSync(f.receipt,'utf8')])
+      assert.doesNotMatch(text,/synthetic-(?:pending-\d+|isolated)-credential/);
+    assert.equal(forwarded,log);assert.ok(log.includes(sentinel));
+    assert.equal(log.split(safe).length-1,rows.length);
+    assert.ok(Buffer.byteLength(log)<=MAX_VALIDATION_LOG_BYTES);
+    assert.ok(fs.statSync(f.receipt).size<=MAX_VALIDATION_RECEIPT_BYTES);
+    assert.deepEqual(row.evidence,{outputBytes:Buffer.byteLength('password=\n"synthetic-isolated-credential"\n'+sentinel+data+summary),
+      logBytes:Buffer.byteLength(log),omittedBytes:rows.reduce((sum,row)=>sum+row.omitted,0),truncated:true});
+    // Select the next native attempt's receipt for its forwarding assertions.
+    f.receipt=join(f.env.PDD_SUITE_QUEUE,'ticket-2.json');
+  }
+  t.diagnostic(JSON.stringify({regularRows,overflowRows:rows.length-regularRows,splits,overflowWrites,nativeRuns:2}));
+});
 
 for (const kind of ['quoted secret','private key']) for (const split of [false,true])
 test(`repair 2: overflow retains ${kind} state (transport splits=${split})`,async t=>{

@@ -119,6 +119,12 @@ its exact raw byte count at its newline or EOF. Discarding raw bytes must not
 discard recognition state: scan in bounded windows, retaining only bounded
 delimiter context and state for every supported multiline form. Recognize
 openers before or after overflow, even across window or transport boundaries.
+Once a sensitive field name is recognized, keep bounded pending state across
+all whitespace accepted by shared redaction, including spaces, tabs, CR and LF,
+before its separator and before its value. Omitted oversized parts must not
+clear that state. Consume and redact the later quoted or unquoted value before
+its first save or forwarding. Stdout and stderr have independent state; a
+pending field in one stream must not consume ordinary output from the other.
 While a quoted secret or private key remains open, suppress continuation lines
 through the closing delimiter (or EOF) and mark them `[redacted]`; an oversized
 continuation still uses its exact omission marker. Escaped quotes do not close
