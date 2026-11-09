@@ -1,9 +1,11 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
-import {mkdtempSync,rmSync,existsSync} from 'node:fs';
+import {mkdtempSync,rmSync,existsSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {runAutopilotDoctor} from '../src/autopilot-doctor.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {runAutopilotLauncher} from '../src/autopilot-launcher.mjs';
 import {doctorFixture} from './helpers/doctor-fixture.mjs';
@@ -67,6 +69,7 @@ test('doctor: stopped Herdr needs no pane allocation; missing CLI and unreadable
   const run=f.ports.run;f.ports.run=(file,args,o)=>file==='gh'&&args[0]==='api'?f.answer('',1):run(file,args,o);
   const r=await invoke(f);assert.equal(r.code,0,r.text);check(r,'herdr-room','PASS');check(r,'merge-rules','WARN');
   assert.ok(!f.calls.some(c=>c.file==='herdr'&&c.args.includes('pane')));
+  const report=await runAutopilotDoctor(f.input,f.ports);assert.match(report.checks.find(c=>c.id==='merge-rules').fix,/gh auth login/);
 });
 
 test('doctor: network failure never prints secrets and CLI rejects doctor operands',async()=>{
@@ -88,4 +91,69 @@ test('start: missing sign-in refuses before creating the local state folder',asy
   assert.equal(existsSync(stateRoot),false,'failed preflight must not create local state');
   assert.equal(r.exitCode,1);
   assert.match(r.message,/(?:^|\n)FAIL agent:/);
+});
+
+for (const overrides of [{CLAUDE_CONFIG_DIR:'/profiles/claude custom'}, {HOME:'/profiles/custom home'}, {HOME:'/profiles/custom home',CLAUDE_CONFIG_DIR:'/profiles/claude custom'}]) test(`doctor: custom Claude profile ${Object.keys(overrides).join('+')} owns all checks`,async()=>{
+  const f=doctorFixture({kind:'claude'});
+  for (const path of [...f.paths.keys()]) if(path.includes('/skills/')) {
+    const content=f.paths.get(path);f.paths.delete(path);
+    const root=overrides.CLAUDE_CONFIG_DIR??join(overrides.HOME,'.claude');
+    f.paths.set(path.replace('/home/fake/.claude',root),content);
+  }
+  f.ports.agentDefinitions=()=>[{id:'custom',kind:'claude',command:'claude',env:overrides}];
+  const result=await invoke(f);
+  assert.equal(result.code,0,result.text);check(result,'setup-skills','PASS');check(result,'agent','PASS');
+  for(const call of f.calls.slice(1).filter(c=>c.options?.env)) for(const [name,value] of Object.entries(overrides)) assert.equal(call.options.env[name],value,`${call.file}: ${name}`);
+});
+
+test('doctor: repair commands run with selected HOME, PATH and provider directories without exposing secret overrides',async t=>{
+  const folder=mkdtempSync(join(tmpdir(),'pdd-doctor-command-'));t.after(()=>rmSync(folder,{recursive:true,force:true}));
+  const home=join(folder,"profile ' one"),config=join(folder,'Claude config');
+  writeFileSync(join(folder,'claude'),'#!/bin/sh\nprintf "%s\\n" "$HOME" "$CLAUDE_CONFIG_DIR" "${CODEX_HOME-unset}" "$PATH" "$CUSTOM_SETTING"\n',{mode:0o700});
+  const f=doctorFixture({kind:'claude'});
+  f.input.env.CODEX_HOME='/caller/codex';
+  f.ports.agentDefinitions=()=>[{id:'custom',kind:'claude',command:'claude',env:{HOME:home,CLAUDE_CONFIG_DIR:config,CODEX_HOME:'/selected/codex',PATH:folder,CUSTOM_SETTING:'custom value',API_TOKEN:'SECRET_VALUE'}}];
+  const r=await runAutopilotDoctor(f.input,f.ports),fix=r.checks.find(c=>c.id==='agent').fix;
+  assert.ok(!r.message.includes('SECRET_VALUE'));
+  const output=execFileSync('/bin/sh',['-c',fix],{env:{HOME:'/caller',CODEX_HOME:'/caller/codex',CLAUDE_CONFIG_DIR:'/caller/claude',PATH:folder+':/usr/bin:/bin',API_TOKEN:'selected-secret'},encoding:'utf8'});
+  assert.deepEqual(output.trim().split('\n'),[home,config,'/selected/codex',folder,'custom value']);
+});
+
+test('doctor: malformed agents.json identifies its file and a repair without configuration content',async t=>{
+  const folder=mkdtempSync(join(tmpdir(),'pdd-doctor-config-'));t.after(()=>rmSync(folder,{recursive:true,force:true}));
+  const f=doctorFixture({home:folder}),path=join(folder,'.config','pdd','agents.json');
+  mkdirSync(join(folder,'.config','pdd'),{recursive:true});writeFileSync(path,'{"SECRET_VALUE":');
+  delete f.ports.agentDefinitions;
+  const result=await runAutopilotDoctor(f.input,f.ports),line=result.checks.find(c=>c.id==='agent-config');
+  assert.equal(result.exitCode,1);assert.equal(line?.status,'fail');assert.ok(line.detail.includes(path));assert.match(line.fix,/vi /);assert.ok(!result.message.includes('SECRET_VALUE'));
+});
+
+test('doctor: invalid runtime address and unavailable user session give repair commands',async()=>{
+  const f=doctorFixture();f.input.env.PDD_RUNTIME_URL='http://invalid/path?SECRET_VALUE';
+  f.ports.agentDefinitions=()=>[{id:'codex',kind:'codex',command:'codex',env:{PDD_RUNTIME_URL:'https://user:SECRET_VALUE@example.invalid/?token=SECRET_VALUE'}}];
+  f.ports.runtimeHealth=()=>assert.fail('invalid origin must not reach health port');
+  const run=f.ports.run;f.ports.run=(file,args,o)=>file==='systemctl'?f.answer('',1):run(file,args,o);
+  const result=await runAutopilotDoctor(f.input,f.ports),runtime=result.checks.find(c=>c.id==='interpreter'),timers=result.checks.find(c=>c.id==='user-timers');
+  assert.equal(result.exitCode,1);assert.equal(runtime.status,'fail');assert.match(runtime.detail,/PDD_RUNTIME_URL/);assert.match(runtime.fix,/unset PDD_RUNTIME_URL/);assert.match(timers.fix,/systemctl start/);assert.ok(!result.message.includes('SECRET_VALUE'));
+});
+
+
+test('doctor: saved profile overrides changed definition directories for sign-in, usage and all checks',async()=>{
+  const f=doctorFixture();
+  f.input.profile={agent:{id:'codex',kind:'codex'},home:'/home/fake',definitionHome:'/definitions',configHome:'/saved/codex'};
+  f.input.env.CODEX_HOME='/signed-out-caller';
+  f.ports.agentDefinitions=({env})=>{assert.equal(env.HOME,'/definitions');return [{id:'codex',kind:'codex',command:'codex',env:{HOME:'/changed-home',CODEX_HOME:'/changed-profile',CLAUDE_CONFIG_DIR:'/unrelated/claude'}}];};
+  f.ports.codexLimits=async({env})=>{assert.equal(env.HOME,'/home/fake');assert.equal(env.CODEX_HOME,'/saved/codex');assert.ok(!Object.hasOwn(env,'CLAUDE_CONFIG_DIR'));return {state:'healthy'};};
+  const result=await runAutopilotDoctor(f.input,f.ports);
+  assert.equal(result.exitCode,0,result.message);
+  for(const call of f.calls.filter(c=>c.options?.env)) {assert.equal(call.options.env.HOME,'/home/fake');assert.equal(call.options.env.CODEX_HOME,'/saved/codex');}
+});
+
+for (const reuse of [true,false]) test(`doctor: full pane budget ${reuse?'reuses the coordinator':'defers potential reclamation to guarded admission'}`,async()=>{
+  const f=doctorFixture();f.input.env.PDD_HERDR_PANE_BUDGET='1';f.panes=[{pane_id:'saved',workspace_id:'workspace'}];
+  if(reuse)f.input.coordinatorPaneId='saved';
+  else f.ports.reclaimablePanes=async({env,panes})=>{assert.equal(env.HOME,f.input.env.HOME);assert.deepEqual(panes,f.panes);return 1;};
+  const result=await runAutopilotDoctor(f.input,f.ports),capacity=result.checks.find(c=>c.id==='herdr-room');
+  assert.equal(result.exitCode,0,result.message);assert.equal(capacity.status,reuse?'pass':'warn');
+  assert.ok(f.calls.every(c=>!c.args || !c.args.includes('close')));
 });

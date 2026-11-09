@@ -84,6 +84,15 @@ Draft and unreadable prompt paths are warnings. Doctor never approves them.
 A successful interpreter access read sends no source and proves no prompt behavior.
 See [the first-start path](../README.md#autopilot-on-your-own-repository).
 
+Doctor uses the saved coordinator profile on restart.
+A selected agent's HOME, CODEX_HOME, CLAUDE_CONFIG_DIR and other environment
+settings apply to its checks. Repair commands carry that profile environment.
+A malformed agents.json report names the file to edit. An invalid
+PDD_RUNTIME_URL report gives the HTTPS-origin or unset repair.
+A full pane budget can warn when local workflow records show potential room from
+reclamation. Start must still prove room through its guarded cleanup and admission.
+Doctor closes no panes. A reused coordinator needs no extra pane.
+
 Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine.
 
 | Command | What it does |

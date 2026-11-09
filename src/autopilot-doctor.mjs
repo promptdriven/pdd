@@ -14,8 +14,66 @@ const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
 const skills = ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph','pdd-autopilot','pdd-check','pdd-merge'];
 const ready = value => value?.code === 0;
 
+// Shared with start: definition HOME selects agents.json; invocation HOME selects the account.
+export async function resolveAutopilotAgent(input, ports = {}) {
+  const caller = input.env ?? ports.env ?? process.env, profile = input.profile;
+  const definitionEnv = profile ? {...caller, HOME:profile.definitionHome} : caller;
+  if (profile) {
+    const variable={codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME'}[profile.agent.kind];
+    for (const name of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) {
+      if (name===variable && profile.configHome) definitionEnv[name]=profile.configHome; else delete definitionEnv[name];
+    }
+  }
+  const invocation = def => {
+    const env = {...caller, ...def?.env};
+    if (profile) {
+      env.HOME = profile.home;
+      const variable = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME'}[profile.agent.kind];
+      for (const name of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) {
+        if (name === variable && profile.configHome) env[name] = profile.configHome; else delete env[name];
+      }
+    }
+    return env;
+  };
+  let definitions = [], configurationError = null, agent = null;
+  const installed = [], cwd = input.cwd, files = ports.files ?? nativeFiles;
+  try { definitions = await (ports.agentDefinitions ?? loadAgentDefinitions)({cwd,env:definitionEnv}); }
+  catch (error) { configurationError = error; }
+  definitions = [...(Array.isArray(definitions)?definitions:[]),{id:'agy',kind:'agy',command:'agy',env:{}}];
+  if (profile) definitions = definitions.filter(def=>def.id===profile.agent.id && def.kind===profile.agent.kind);
+  const current = caller.CODEX_THREAD_ID?'codex':caller.CLAUDECODE?'claude':null;
+  const rank = def => def.kind===current?-1:['codex','claude','agy','gemini'].indexOf(def.kind);
+  definitions = definitions.map((def,index)=>({def,index})).sort((a,b)=>rank(a.def)-rank(b.def)||a.index-b.index).map(x=>x.def);
+  if (ports.selectAgent) {
+    try { agent = await ports.selectAgent({cwd}, {...ports,env:definitionEnv}); } catch {}
+    if (profile && (agent?.id!==profile.agent.id || agent?.kind!==profile.agent.kind)) agent = null;
+  } else for (const def of definitions) {
+    const env = invocation(def), run = (args,options={})=>(ports.run??runAgentProcess)(def.command,args,{cwd,env,timeoutMs:10000,maxBytes:16384,...options});
+    try {
+      if (def.kind==='agy') {
+        const result = await checkWorkflowAgents({cwd,env,requested:'agy'},{run:(_file,args,opts)=>run(args,opts)});
+        if (result.ok) { agent=def; break; }
+      } else if (def.kind==='gemini') {
+        const info=await run(['--version']);
+        let credentials;
+        try { credentials=JSON.parse(files.readFileSync(join(env.GEMINI_CLI_HOME||env.HOME||'','.gemini','oauth_creds.json'),'utf8')); } catch {}
+        if (ready(info)&&typeof credentials?.refresh_token==='string'&&credentials.refresh_token) { agent=def; break; }
+      } else if (['codex','claude'].includes(def.kind)) {
+        const status=await run(def.kind==='codex'?['login','status']:['auth','status','--json']);
+        installed.push(def);
+        if (parseAgentAuthStatus({agent:def.kind,result:status})==='ready') { agent=def; break; }
+      }
+    } catch { /* Another provider may be ready. Never echo provider output. */ }
+  }
+  const preferred=installed[0] ?? definitions[0];
+  return {agent,preferred,installed,env:invocation(agent??preferred),configurationError};
+}
+
 export async function runAutopilotDoctor(input, ports = {}) {
-  const env = input.env ?? ports.env ?? process.env, files = ports.files ?? nativeFiles;
+  const callerEnv = input.env ?? ports.env ?? process.env, files = ports.files ?? nativeFiles;
+  const selection = await resolveAutopilotAgent({...input,env:callerEnv},ports);
+  ports.onSelection?.(selection);
+  const env = selection.env;
   const platform = ports.platform ?? process.platform, node = ports.nodeVersion ?? process.versions.node;
   const uid = ports.uid ?? process.getuid?.();
   let cwd = input.cwd;
@@ -56,61 +114,47 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const write = ['ADMIN','MAINTAIN','WRITE'].includes(metadata?.viewerPermission);
   add('github-permission',named && originRepo?.toLowerCase()===repo.toLowerCase() && write ? 'pass':'fail',`${named?repo:'repository unavailable'}; permission ${['ADMIN','MAINTAIN','WRITE','TRIAGE','READ'].includes(metadata?.viewerPermission)?metadata.viewerPermission:'unknown'}; push and PR need write access`,named?`gh repo fork ${quote(repo)} --clone`:'gh auth setup-git');
   const merge = [metadata?.mergeCommitAllowed,metadata?.squashMergeAllowed,metadata?.rebaseMergeAllowed].includes(true);
-  add('merge-method',merge?'pass':'fail','Repository must enable a merge method; permission alone does not bypass reviews',named?`gh repo view ${quote(repo)} --web`:'gh auth login');
+  add('merge-method',merge?'pass':'fail','Repository must enable a merge method; permission alone does not bypass reviews',named?`gh repo edit ${quote(repo)} --enable-squash-merge`:'gh auth login');
   const ruleReply = named && branch ? await run('gh',['api',`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`]) : null;
   const rules = ready(ruleReply)?json(ruleReply.stdout):null;
-  add('merge-rules',Array.isArray(rules)?'pass':'warn',Array.isArray(rules)?`Branch rules: ${rules.map(r=>r.type).filter(x=>typeof x==='string').join(', ') || 'none'}; required reviews and checks still apply`:'Branch rules unavailable; merge eligibility is unproved',named&&branch?`gh api ${quote(`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`)}`:'gh repo view --web');
+  add('merge-rules',Array.isArray(rules)?'pass':'warn',Array.isArray(rules)?`Branch rules: ${rules.map(r=>r.type).filter(x=>typeof x==='string').join(', ') || 'none'}; required reviews and checks still apply`:'Branch rules unavailable; merge eligibility is unproved',named&&branch?`${Array.isArray(rules)?'':'gh auth login && '}gh api ${quote(`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`)}`:'gh auth login');
 
-  let definitions = [], agent = null, installed = [];
-  try { definitions = await (ports.agentDefinitions ?? loadAgentDefinitions)({cwd,env}); } catch { /* report account failure */ }
-  const current = env.CODEX_THREAD_ID?'codex':env.CLAUDECODE?'claude':null;
-  definitions = [...(Array.isArray(definitions)?definitions:[]),{id:'agy',kind:'agy',command:'agy',env:{}}];
-  const rank = def => def.kind===current?-1:['codex','claude','agy','gemini'].indexOf(def.kind);
-  definitions = definitions.map((def,index)=>({def,index})).sort((a,b)=>rank(a.def)-rank(b.def)||a.index-b.index).map(x=>x.def);
-  if (ports.selectAgent) { try { agent = await ports.selectAgent({cwd}, {...ports,env}); } catch {} }
-  else for (const def of definitions) {
-    if (def.kind==='agy') {
-      try {
-        const result = await checkWorkflowAgents({cwd,env,requested:'agy'},{run:(_file,args,opts)=>(ports.run??runAgentProcess)(def.command,args,opts)});
-        if (result.ok) { agent=def; break; }
-      } catch {}
-      continue;
-    }
-    if (def.kind==='gemini') {
-      const childEnv={...env,...def.env};
-      const info=await run(def.command,['--version']);
-      const credentials=json(read(join(childEnv.GEMINI_CLI_HOME||childEnv.HOME||'','.gemini','oauth_creds.json')));
-      if (ready(info)&&typeof credentials?.refresh_token==='string'&&credentials.refresh_token) { agent=def; break; }
-      continue;
-    }
-    if (!['codex','claude'].includes(def.kind)) continue;
-    let status;
-    try { status = await (ports.run ?? runAgentProcess)(def.command,def.kind==='codex'?['login','status']:['auth','status','--json'],{cwd,env:{...env,...def.env},timeoutMs:10000,maxBytes:16384}); } catch { continue; }
-    installed.push(def);
-    if (parseAgentAuthStatus({agent:def.kind,result:status})==='ready') { agent = def; break; }
+  let configurationFix;
+  if (selection.configurationError) {
+    const path=join(input.profile?.definitionHome??callerEnv.HOME??'', '.config','pdd','agents.json');
+    configurationFix=`vi ${quote(path)}`;
+    add('agent-config','fail',`Cannot load agent configuration: ${path}`,configurationFix);
   }
-  const preferred = installed[0] ?? definitions[0];
-  const login = preferred?.kind==='claude'?`${quote(preferred.command)} auth login`:`${quote(preferred?.command ?? 'codex')} login`;
-  add('agent',agent?'pass':'fail',agent?`${agent.kind} signed in`:'Agent sign-in missing or unavailable',agent?`${quote(agent.command ?? agent.kind)} ${agent.kind==='claude'?'auth status --json':'login status'}`:installed.length?login:'npm install -g @openai/codex');
-  if (!agent && !installed.length) add('agent-signin','fail','Sign in after installing Codex, or install Claude Code and sign in',login);
+  const {agent,preferred,installed}=selection;
+  const login = `${quote(preferred?.command ?? 'codex')}${preferred?.kind==='claude'?' auth login':['agy','gemini'].includes(preferred?.kind)?'':' login'}`;
+  const statusArgs={codex:'login status',claude:'auth status --json',agy:'models',gemini:'--version'};
+  add('agent',agent?'pass':'fail',agent?`${agent.kind} signed in`:'Sign in to a configured agent; account missing or unavailable',configurationFix??(agent?`${quote(agent.command ?? agent.kind)} ${statusArgs[agent.kind]}`:installed.length?login:'npm install -g @openai/codex'));
+  if (!configurationFix && !agent && !installed.length) add('agent-signin','fail','Sign in after installing Codex, or install Claude Code and sign in',login);
   let usage = {state:'unknown'};
-  if (agent?.kind==='codex') { try { usage = await (ports.codexLimits ?? readCodexLimits)({command:agent.command??'codex',cwd,env:{...env,...agent.env}}, {spawn:ports.spawn}); } catch {} }
-  add('agent-usage',usage.state==='limited'?'fail':usage.state==='healthy'?'pass':'warn',usage.state==='limited'?'Agent usage limit reached; retry after allowance is available':usage.state==='healthy'?'Read-only usage check healthy':`${agent?.kind ?? 'Agent'} usage is unproved${agent?.kind==='claude'?'; run /usage in Claude Code':''}`,agent?.kind==='claude'?'claude':retry);
+  if (agent?.kind==='codex') { try { usage = await (ports.codexLimits ?? readCodexLimits)({command:agent.command??'codex',cwd,env}, {spawn:ports.spawn}); } catch {} }
+  add('agent-usage',usage.state==='limited'?'fail':usage.state==='healthy'?'pass':'warn',usage.state==='limited'?'Agent usage limit reached; retry after allowance is available':usage.state==='healthy'?'Read-only usage check healthy':`${agent?.kind ?? 'Agent'} usage is unproved${agent?.kind==='claude'?'; run /usage in Claude Code':''}`,agent?.kind==='claude'?quote(agent.command??'claude'):retry);
 
   const herdr = await run('herdr',['--version']);
   add('herdr',ready(herdr)?'pass':'fail','Herdr installation','curl -fsSL https://herdr.dev/install.sh | sh');
   const herdrRead = args => run('herdr',['--session','pdd',...args]);
   const serverReply = await herdrRead(['status','server','--json']);
   const server = ready(serverReply)?json(serverReply.stdout):null;
-  let count = server?.running===false?0:null;
+  let count = server?.running===false?0:null, inventory=[];
   if (server?.running===true) {
     const reply = await herdrRead(['pane','list','--json']);
     const panes = ready(reply)?json(reply.stdout)?.result?.panes:null;
-    if (Array.isArray(panes)) count = panes.length;
+    if (Array.isArray(panes)) {count = panes.length;inventory=panes;}
   }
   const budget = env.PDD_HERDR_PANE_BUDGET===undefined?56:/^\d+$/.test(env.PDD_HERDR_PANE_BUDGET)?Number(env.PDD_HERDR_PANE_BUDGET):NaN;
-  const room = count!==null && Number.isSafeInteger(budget) && budget>=0 && (budget===0 || count+1<=budget);
-  add('herdr-room',room?'pass':'fail',`${count??'unknown'} panes; budget ${Number.isSafeInteger(budget)?budget:'invalid'}; needs 1`,Number.isSafeInteger(budget)?'pdd workflow tidy --dry-run && pdd workflow tidy':'unset PDD_HERDR_PANE_BUDGET');
+  const need=input.coordinatorPaneId && inventory.some(p=>p.pane_id===input.coordinatorPaneId)?0:1;
+  const validBudget=Number.isSafeInteger(budget) && budget>=0;
+  const room=count!==null && validBudget && (budget===0 || count+need<=budget);
+  let potential=0;
+  if (!room && count!==null && validBudget && ports.reclaimablePanes) {
+    try {potential=await ports.reclaimablePanes({env,panes:inventory});} catch {}
+  }
+  const pending=!room && Number.isSafeInteger(potential) && potential>0 && count-potential+need<=budget;
+  add('herdr-room',room?'pass':pending?'warn':'fail',`${count??'unknown'} panes; budget ${Number.isSafeInteger(budget)?budget:'invalid'}; needs ${need}${pending?'; potential workflow reclamation; guarded start admission must prove room':''}`,validBudget?'pdd workflow tidy --dry-run && pdd workflow tidy':'unset PDD_HERDR_PANE_BUDGET');
 
   const block = ['CLAUDE.md','AGENTS.md'].some(name=>/<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/.test(read(join(cwd,name))??''));
   add('setup-block',block?'pass':'fail','PDD instructions in AGENTS.md or CLAUDE.md','pdd setup');
@@ -133,8 +177,10 @@ export async function runAutopilotDoctor(input, ports = {}) {
   add('draft-prompts',!ready(tracked)||drafts.length||unreadable.length?'warn':'pass',`First check may need prompt approval: ${drafts.join(', ')||'none'}${unreadable.length?`; unreadable: ${unreadable.join(', ')}`:''}`,'pdd files --json');
 
   let health;
+  try { runtimeOrigin(env); } catch { health={state:'address'}; }
   try {
-    if (ports.runtimeHealth) health = await ports.runtimeHealth({env});
+    if (health?.state==='address') { /* Keep address guidance; do not call a health port. */ }
+    else if (ports.runtimeHealth) health = await ports.runtimeHealth({env});
     else {
       const token = await run('gh',['auth','token']);
       if (!ready(token)||!token.stdout.trim()) health = {state:'auth'};
@@ -145,16 +191,27 @@ export async function runAutopilotDoctor(input, ports = {}) {
       }
     }
   } catch { health = {state:'unavailable'}; }
-  add('interpreter',health?.state==='healthy'?'pass':'fail',health?.state==='healthy'?'Read-only interpreter access accepted':'Interpreter access is unproved; no check was submitted',health?.state==='auth'?'gh auth login':health?.state==='access'?`${platform==='darwin'?'open':'xdg-open'} https://promptdriven.ai/login`:retry);
+  add('interpreter',health?.state==='healthy'?'pass':'fail',health?.state==='healthy'?'Read-only interpreter access accepted':health?.state==='address'?'PDD_RUNTIME_URL must be an HTTPS origin; unset it to use the default':'Interpreter access is unproved; no check was submitted',health?.state==='address'?`unset PDD_RUNTIME_URL; ${retry}`:health?.state==='auth'?'gh auth login':health?.state==='access'?`${platform==='darwin'?'open':'xdg-open'} https://promptdriven.ai/login`:retry);
   if (platform==='linux') {
-    add('user-timers',ready(await run('systemctl',['--user','show-environment']))?'pass':'fail','systemd user session','systemctl --user status');
+    add('user-timers',ready(await run('systemctl',['--user','show-environment']))?'pass':'fail','systemd user session','systemctl --user status; sudo systemctl start user@$(id -u).service');
     const linger = await run('loginctl',['show-user',String(uid),'--property=Linger','--value']);
     add('linger',ready(linger)&&linger.stdout.trim()==='yes'?'pass':'warn','Lingering keeps timers running after logout','loginctl enable-linger');
   } else if (platform==='darwin') {
-    add('user-timers',ready(await run('launchctl',['print',`gui/${uid}`]))?'pass':'fail','launchctl user session',`launchctl print gui/${uid}`);
+    add('user-timers',ready(await run('launchctl',['print',`gui/${uid}`]))?'pass':'fail','launchctl user session',`launchctl print gui/${uid}; launchctl bootstrap gui/${uid} "$HOME/Library/LaunchAgents"`);
     const sleep = await run('pmset',['-g','custom']);
     const values = [...(sleep.stdout??'').matchAll(/^\s*sleep\s+(\d+)/gm)].map(x=>Number(x[1]));
     add('sleep',ready(sleep)&&values.length&&values.every(x=>x===0)?'pass':'warn','Sleep can pause work; keep this command running while Autopilot works','caffeinate -i');
   } else add('platform','fail','Autopilot needs Linux or macOS',retry);
+  // Only profile paths are literal. Other definition values may be secrets.
+  const names=new Set(['HOME','PATH','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME',...Object.keys((agent??preferred)?.env??{})]);
+  const secret=name=>{
+    if (/token|secret|password|passwd|credential|api_?key|private_?key|auth/i.test(name)) return true;
+    if (/url$/i.test(name)) {
+      try {const url=new URL(env[name]);return Boolean(url.username||url.password||url.search||url.hash);} catch {return true;}
+    }
+    return false;
+  };
+  const bindings=[...names].map(name=>env[name]===undefined?`-u ${name}`:!secret(name)?`${name}=${quote(env[name])}`:`${name}="${'${'}${name}:?Set ${name} for the selected profile}"`);
+  for (const check of checks) check.fix=`env ${bindings.filter(x=>x.startsWith('-u ')).join(' ')} ${bindings.filter(x=>!x.startsWith('-u ')).join(' ')} /bin/sh -c ${quote(check.fix)}`;
   return {exitCode:checks.some(c=>c.status==='fail')?1:0,message:checks.map(c=>`${c.status.toUpperCase()} ${c.id}: ${c.detail}; fix: ${c.fix}`).join('\n'),checks};
 }

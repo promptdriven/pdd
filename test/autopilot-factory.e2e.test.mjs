@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {proseSha256} from '../src/runtime-preflight.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
-import {existsSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {existsSync,readdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {factoryWorld,put,readJson,valuePrompt} from './helpers/factory/world.mjs';
@@ -355,6 +355,7 @@ test('factory 12: stopped legacy runs free a full shared budget for a second rep
 
 test('factory 3125: fresh repo with stale PATH and no agent sign-in refuses start without effects',async t=>{
   const w=await factoryWorld(t);
+  rmSync(join(w.base,'bin/pdd'));
   put(w.base,'bin/pdd','#!/bin/sh\nif [ "$1" = --version ]; then echo 0.1.15; else echo "pdd setup"; fi\n');
   const {chmodSync}=await import('node:fs');chmodSync(join(w.base,'bin/pdd'),0o700);
   const commands=w.github.commands.length,issues=JSON.stringify([...w.github.issues]),panes=w.herdr.panes.length;
@@ -372,4 +373,18 @@ test('factory 3125: fresh repo with stale PATH and no agent sign-in refuses star
   const reads=w.github.commands.slice(commands);
   assert.ok(reads.every(({args})=>args[0]==='repo'||args[0]==='auth'||args[0]==='api'&&!args.includes('POST')));
   assert.ok(!existsSync(join(w.home,'.config/systemd')));
+});
+
+
+test('factory 3125: restart and doctor use the healthy saved profile with a signed-out caller',async t=>{
+  const w=await factoryWorld(t);
+  w.agentProfile=join(w.home,'original-profile');
+  const env={CODEX_HOME:w.agentProfile};
+  await w.command(['autopilot','start'],{env});
+  const prior=w.state(),caller={CODEX_HOME:join(w.home,'signed-out-caller')};
+  await w.command(['autopilot','doctor'],{env:caller});
+  await w.command(['autopilot','start'],{env:caller});
+  assert.equal(w.state().coordinatorId,prior.coordinatorId);
+  assert.equal(w.state().environment.CODEX_HOME,w.agentProfile);
+  assert.ok(w.doctorAccounts.length>=3);assert.ok(w.doctorAccounts.every(profile=>profile===w.agentProfile));
 });

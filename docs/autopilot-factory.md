@@ -73,3 +73,11 @@ The first-start scenario uses a fresh repository with a stale executable pdd on
 PATH and no agent sign-in. Doctor reports both failures and start returns the
 same report. No coordinator state, pane, timer, claim, PR or interpreter job is
 created. Programs and account reads use controlled ports.
+
+Every factory start runs the real doctor. Setup files and skill entrypoints live
+in the private fixture home. Program, account and health observations use the
+factory ports. The restart case signs out the caller profile and keeps the saved
+coordinator profile healthy. Doctor and start must use that saved profile and
+retain the coordinator identity.
+The full-budget recovery case also runs doctor. Potential workflow reclamation
+must reach the existing guarded sweeps. A busy personal pane stays open.

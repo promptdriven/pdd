@@ -1303,11 +1303,26 @@ generation and verification context. Start first retains the existing Git-folder
 location returns the existing repository error without other probes. For valid
 repository invocations, before any start state write, admission lock,
 timer change, workspace allocation, claim or GitHub mutation, run that same doctor
-with the input environment and injected ports. On a required failure return its
-complete multi-line report unchanged. Doctor bypasses all launcher state reads and
-writes and the GitHub ledger. Successful start retains existing readiness, saved
+with the selected invocation environment and injected ports. Read only the saved
+state first to resolve the same verified profile binding used by restart; a
+signed-out unrelated caller must not block a healthy saved coordinator. For
+--resume-custody, validate the projection shape and repository identity read-only
+and use its original profile for preflight. Doctor uses that saved profile too
+when invoked in the same checkout. No directory or lock is created by resolution.
+Share agent selection with the doctor owner; definition overrides apply to all
+checks and repair commands. After a pass, use that invocation environment for
+startup checks too. Keep state-file lookup and definitionHome tied to the caller
+home that selected the configuration. Revalidate saved profile/custody under existing start
+guards before effects. On a required failure return the complete multi-line report
+unchanged. Doctor bypasses launcher writes and the GitHub ledger. Successful start retains existing readiness, saved
 profile/custody, base, admission and delegation checks. A doctor pass alone grants
-no approval or merge authority.
+no approval or merge authority. Supply the saved coordinator pane identity and a
+read-only potential-reclamation observation to doctor. Read the local workflow
+index and intersect saved finished chats, or idle blocked automatic-run chats,
+with live pane/workspace identities. Exclude known working panes. This is only
+potential room: doctor warns and the existing custody checks, bounded sweeps and
+final admission decide. Never run tidy, parking, claim recovery or a lock
+acquisition during doctor.
 
 ## Dependencies
 

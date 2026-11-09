@@ -1,8 +1,8 @@
-import {runAutopilotDoctor} from './autopilot-doctor.mjs';
+import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {auditMerge, pendingAudits} from './autopilot-audit.mjs';
-import {collectRouteQuestions, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
+import {collectRouteQuestions, idleParkingBlocker, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
-import {chatHealth, chatSession} from './workflow-chat.mjs';
+import {chatHealth, chatSession, finishedChats} from './workflow-chat.mjs';
 import {WORKFLOW_CAPABILITIES, sweepIdleRuns, recoverAutomaticRunOwner, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
 import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
@@ -17,11 +17,10 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runAgentProcess, parseAgentAuthStatus } from './agent-adapters.mjs';
+import { runAgentProcess } from './agent-adapters.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
-import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { gitContext, metricsSource, allRuns, updateRunCosts, listRuns, readRun, updateRun, resolveRun } from './workflow-runs.mjs';
 import { appendEvents } from './metrics-store.mjs';
 import { recordCaptureGap } from './metrics-gap.mjs';
@@ -145,38 +144,11 @@ async function workflowReadiness(state, p) {
   return refused('pdd cannot verify the Git layout of this checkout, so it cannot make issue worktrees here.');
 }
 async function selectAgent(state, p, saved = null) {
-  let definitions = loadAgentDefinitions({ cwd: state.cwd, env: p.env });
-  definitions.push({ id: 'agy', kind: 'agy', command: 'agy', env: {} });
-  if (saved) definitions = definitions.filter(def => def.id === saved.agent.id && def.kind === saved.agent.kind);
-  const current = p.env.CODEX_THREAD_ID ? 'codex' : p.env.CLAUDECODE ? 'claude' : null;
-  const rank = def => def.kind === current ? -1 : ['codex', 'claude', 'agy', 'gemini'].indexOf(def.kind);
-  definitions = definitions.map((def, index) => ({ def, index })).sort((a, b) => rank(a.def) - rank(b.def) || a.index - b.index).map(x => x.def);
-  for (const def of definitions) {
-    const agentEnv = { ...p.env, ...def.env };
-    if (saved) {
-      agentEnv.HOME = saved.home;
-      for (const variable of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) {
-        if (saved.configVariable === variable && saved.configHome) agentEnv[variable] = saved.configHome;
-        else delete agentEnv[variable];
-      }
-    }
-    try {
-      if (def.kind === 'gemini') {
-        const help = await p.execute(def.command, ['--version'], { env: agentEnv });
-        const credentials = read(join(agentEnv.GEMINI_CLI_HOME || agentEnv.HOME || homedir(), '.gemini', 'oauth_creds.json'), {});
-        if (help.code === 0 && typeof credentials.refresh_token === 'string' && credentials.refresh_token) return def;
-      } else if (def.kind === 'agy') {
-        const result = await checkWorkflowAgents({ cwd: state.cwd, env: agentEnv, requested: 'agy' }, {
-          run: (_command, args, options) => p.execute(def.command, args, options),
-        });
-        if (result.ok) return def;
-      } else {
-        const result = await p.execute(def.command, def.kind === 'codex' ? ['login', 'status'] : ['auth', 'status', '--json'], { env: agentEnv });
-        if (parseAgentAuthStatus({ agent: def.kind, result }) === 'ready') return def;
-      }
-    } catch { /* Try another installed sign-in; never make a model call to test it. */ }
-  }
-  return null;
+  const selected = await resolveAutopilotAgent({cwd:state.cwd,env:p.env,profile:saved}, {
+    ...p, run:(command,args,options)=>p.execute(command,args,options), selectAgent:undefined,
+  });
+  if (selected.configurationError) throw selected.configurationError;
+  return selected.agent;
 }
 function xml(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;'); }
 // Timers execute this file directly. Neither platform needs a shell or a daemon owned by pdd.
@@ -2086,7 +2058,7 @@ async function runTick(stateFile, ports, completion) {
   }
 }
 
-async function verifiedCustody(state, path, p, runs) {
+function custodyProjection(state, path) {
   const projection = read(path);
   const keys = ['repository','sourceRoot','coordinatorId','machine','activation','paneId','workspaceId','agent','home','definitionHome','configHome','launchStartedAt'];
   if (!projection || typeof projection !== 'object' || Array.isArray(projection) || Object.keys(projection).length !== keys.length || !keys.every(key => Object.hasOwn(projection,key))) throw Error('Invalid original coordinator custody projection.');
@@ -2094,6 +2066,19 @@ async function verifiedCustody(state, path, p, runs) {
       || !['repository','sourceRoot','coordinatorId','machine','activation','paneId','workspaceId','home','definitionHome'].every(key => typeof projection[key] === 'string' && projection[key])
       || !(projection.configHome === null || typeof projection.configHome === 'string' && projection.configHome) || !Number.isFinite(projection.launchStartedAt)
       || !samePath(projection.sourceRoot,state.cwd) || projection.repository.toLowerCase() !== state.repo.toLowerCase()) throw Error('Original coordinator custody does not match this repository.');
+  return projection;
+}
+function savedProfile(state, env) {
+  if (!state?.agent) return null;
+  const profile=profileBinding(state,{env});
+  const launched=state.ownerLaunch?.profile ?? state.launchProfile;
+  if (!launched || JSON.stringify(launched)!==JSON.stringify(profile) || !profile.home || !profile.definitionHome)
+    throw Error('The saved coordinator profile cannot be verified. Inspect the existing coordinator before retrying.');
+  return profile;
+}
+
+async function verifiedCustody(state, path, p, runs) {
+  const projection = custodyProjection(state, path);
   const variable = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME'}[projection.agent.kind];
   const environment = { ...state.environment, HOME:projection.home };
   for (const name of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) { if (name === variable && projection.configHome) environment[name] = projection.configHome; else delete environment[name]; }
@@ -2262,16 +2247,40 @@ async function localCosts(input, ports, state = {}) {
 }
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, checks, resumeCustody, issues = [] } = input;
+  let startSelection;
   if (command === 'doctor' || command === 'start') {
-    const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input) : ports.doctorPorts ?? ports;
-    if (command === 'start') {
-      // Preserve invalid-location admission before probing accounts or services.
-      const env = input.env ?? process.env;
-      try { await gitRoot({env, execute:(file,args,options)=>
-        (doctorPorts.run ?? runAgentProcess)(file,args,{cwd:input.cwd,env,timeoutMs:10000,...options})}); }
-      catch (error) { return bad(error.message); }
+    const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
+    const env = input.env ?? ports.env ?? process.env;
+    let doctorInput=input;
+    try {
+      // Resolve identity without creating state, admission locks or GitHub ledgers.
+      const cwd=await gitRoot({env,execute:(file,args,options)=>
+        (doctorPorts.run??runAgentProcess)(file,args,{cwd:input.cwd,env,timeoutMs:10000,...options})});
+      const id=createHash('sha256').update(cwd).digest('hex').slice(0,20);
+      const previous=read(join(stateFolder(ports,env),`${id}.json`));
+      const state={...previous,cwd};
+      let profile;
+      if (resumeCustody) {
+        if (!previous) throw Error('Original coordinator recovery needs saved local state.');
+        profile=custodyProjection(state,resolve(input.cwd,resumeCustody));
+      } else profile=savedProfile(previous,env);
+      doctorInput={...input,cwd,env,profile,coordinatorPaneId:resumeCustody?profile.paneId:previous?.paneId};
+    } catch (error) {
+      if (command==='start') return bad(error.message);
+      // Doctor still reports repository failures in its complete report.
+      if (!error.exact) return bad(error.message);
     }
-    const diagnostics = await runAutopilotDoctor(input, doctorPorts);
+    const diagnostics = await runAutopilotDoctor(doctorInput, {...doctorPorts,
+      reclaimablePanes:doctorPorts.reclaimablePanes??(({env,panes})=>{
+        // A read-only candidate count. Only the existing guarded sweeps may close them.
+        const runs=(ports.allRuns??allRuns)({cancelled:true},{...ports,env});
+        const candidates=runs.flatMap(run=>[
+          ...finishedChats(run),
+          ...(run.automaticOrigin && idleParkingBlocker(run,(ports.now??Date.now)(),0)?run.chats??[]:[]),
+        ]);
+        return panes.filter(pane=>pane.agent_status!=='working' && pane.agent?.agent_status!=='working'
+          && candidates.some(chat=>chat.paneId===pane.pane_id && chat.workspaceId===pane.workspace_id)).length;
+      }),onSelection:selection=>{startSelection=selection;}});
     if (command === 'doctor' || diagnostics.exitCode !== 0) return diagnostics;
   }
   let state = { cwd: input.cwd, environment: keepEnv(input.env ?? process.env) };
@@ -2321,7 +2330,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
     let initialRevision = previous?.controlRevision ?? null;
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
-    p = portsFor(state, { ...ports, env: input.env });
+    // Explicit undefined values mask unrelated ambient provider directories in portsFor.
+    const invocationEnv=startSelection ? {...startSelection.env,
+      CODEX_HOME:startSelection.env.CODEX_HOME,CLAUDE_CONFIG_DIR:startSelection.env.CLAUDE_CONFIG_DIR,GEMINI_CLI_HOME:startSelection.env.GEMINI_CLI_HOME} : input.env;
+    p = portsFor(state, { ...ports, env: invocationEnv });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
     if (command === 'status') {
       const timerActive = Boolean(await timer('status', state, p));
@@ -2404,11 +2416,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
     try { if ((await p.execute('herdr', ['--version'])).code !== 0) throw Error(); }
     catch { return bad('Herdr is missing or unavailable; install Herdr, then run herdr --help.'); }
     if (resumeCustody && !previous) return bad('Original coordinator recovery needs saved local state.');
-    const previousProfile = previous?.agent && !resumeCustody ? profileBinding(previous, p) : null;
+    const previousProfile = !resumeCustody ? savedProfile(previous,p.env) : null;
     let probe = p, saved = null;
     if (previousProfile) {
-      const launchedProfile = previous.ownerLaunch?.profile ?? previous.launchProfile;
-      if (!launchedProfile || JSON.stringify(launchedProfile) !== JSON.stringify(previousProfile) || !previousProfile.home || !previousProfile.definitionHome) return bad('The saved coordinator profile cannot be verified. Inspect the existing coordinator before retrying.');
       const configVariable = { codex:'CODEX_HOME', claude:'CLAUDE_CONFIG_DIR', gemini:'GEMINI_CLI_HOME' }[previous.agent.kind];
       const env = { ...p.env, HOME:previousProfile.definitionHome };
       for (const variable of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) {
@@ -2416,14 +2426,14 @@ export async function runAutopilotLauncher(input, ports = {}) {
       }
       saved = { ...previousProfile, configVariable }; probe = { ...p, env };
     }
-    const agent = resumeCustody ? {id:previous?.agent?.id,kind:previous?.agent?.kind} : ports.selectAgent ? await ports.selectAgent(state, probe) : await selectAgent(state, probe, saved);
+    const agent = resumeCustody ? {id:previous?.agent?.id,kind:previous?.agent?.kind} : ports.selectAgent ? await ports.selectAgent(state, probe) : saved ? await selectAgent(state, probe, saved) : startSelection.agent;
     if (!agent || saved && (agent.id !== saved.agent.id || agent.kind !== saved.agent.kind)) return bad(saved ? 'The saved coordinator profile is unavailable. Restore its sign-in and retry.' : 'Sign in to Codex, Claude Code, agy or Gemini at your terminal, then run pdd autopilot start.');
     const version = read(join(packageRoot, 'package.json')).version;
     const warnings = (ports.pathDiagnostic ?? pathDiagnostic)({ cwd: state.cwd, packageRoot, env: p.env, mode: 'workflow' });
     const pendingCustody = Boolean(previous?.deliveryIntent || previous?.reconciliationIntent);
     if (!pendingCustody && !previousProfile && !resumeCustody) {
       state.agent = { id: agent.id, kind: agent.kind, command: agent.command };
-      state.definitionHome = p.env.HOME;
+      state.definitionHome = (input.env ?? ports.env ?? process.env).HOME;
       state.environment = keepEnv({ ...p.env, ...agent.env });
     }
     state.activatedAt ??= new Date(p.now()).toISOString();

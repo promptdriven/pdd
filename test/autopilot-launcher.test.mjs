@@ -1,5 +1,6 @@
 import './helpers/test-home.mjs';
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import {healthyDoctorPorts} from './helpers/doctor-fixture.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import * as nativeFs from 'node:fs';
@@ -64,6 +65,27 @@ async function fixture(t, options = {}) {
       }
       return {};
     },
+  };
+  // Use the same selected definition and fake account as launcher admission.
+  f.ports.doctorPorts=input=>{
+    const ports=healthyDoctorPorts(input),run=ports.run;
+    let definitions=[];
+    ports.agentDefinitions=async ({env})=>definitions=f.ports.selectAgent
+      ? [await f.ports.selectAgent({cwd}, {...f.ports,env}) ?? {id:'codex',kind:'codex',command:'codex',env:{}}]
+      : loadAgentDefinitions({cwd,env});
+    const read=ports.files.readFileSync;
+    ports.files.readFileSync=path=>path.includes('/skills/')?'skill':path.endsWith('/.gemini/oauth_creds.json')?(f.ports.selectAgent?'{"refresh_token":"fixture"}':nativeFs.readFileSync(path,'utf8')):read(path);
+    ports.run=async(file,args,options)=>{
+      if (!f.ports.selectAgent && ['codex','claude','agy','gemini'].includes(file)) return f.ports.run(file,args,options);
+      if (args[0]==='models' || args[0]==='--version' && file!=='git' && file!=='gh' && file!=='herdr' && !file.endsWith('/pdd')) return {code:definitions.some(def=>def.command===file)?0:1,stdout:'fixture',stderr:''};
+      if (args.join(' ')==='login status' || args.join(' ')==='auth status --json') {
+        (f.doctorAccounts??=[]).push({...options.env});
+        const ready=!f.accountReady || f.accountReady(options.env);
+        return {code:ready?0:1,stdout:args[0]==='auth'?JSON.stringify({loggedIn:ready}):ready?'Logged in using ChatGPT':'Not logged in',stderr:''};
+      }
+      return run(file,args,options);
+    };
+    return ports;
   };
   f.module = await import('../src/autopilot-launcher.mjs');
   f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
@@ -227,6 +249,9 @@ test('autopilot routes parse and dispatch without setup or a runtime call', asyn
 
 test('start installs a timer and runs the recipe immediately; unchanged empty ticks wake no AI', async t => {
   const f = await fixture(t);
+  const profile=join(f.home,'original-profile');
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{CODEX_HOME:profile}});
+  f.accountReady=env=>env.CODEX_HOME===profile;
   assert.equal((await f.invoke('start')).exitCode, 0);
   assert.equal(f.polls.length, 1); assert.equal(f.prompts.length, 1);
   assert.match(f.prompts[0], /"recipeFirst":true/);
@@ -258,7 +283,8 @@ test('start installs a timer and runs the recipe immediately; unchanged empty ti
     if(args[0]==='agent'&&args[1]==='get')return {result:{type:'agent_info',agent:live}};
     return oldHerdr(args);
   };
-  const recovered=await f.invoke('start',{resumeCustody:artifact}); assert.equal(recovered.exitCode,0,recovered.message);
+  const recovered=await f.invoke('start',{resumeCustody:artifact,env:{HOME:f.home,PATH:process.env.PATH,CODEX_HOME:join(f.dir,'signed-out-caller')}}); assert.equal(recovered.exitCode,0,recovered.message);
+  assert.ok(f.doctorAccounts.length>=3);assert.ok(f.doctorAccounts.every(env=>env.CODEX_HOME===profile));
   const restored=f.state(); assert.equal(restored.coordinatorId,original.coordinatorId); assert.equal(restored.agent.kind,'codex'); assert.deepEqual(restored.uncertainDeliveryHistory,history); assert.equal(restored.runs,undefined);
   f.ports.listRuns=async()=>[]; const semanticOnly=await f.invoke('start',{resumeCustody:artifact}); assert.equal(semanticOnly.exitCode,0,semanticOnly.message); assert.equal(f.state().coordinatorId,original.coordinatorId); assert.deepEqual(f.state().uncertainDeliveryHistory,history); assert.equal(f.state().runs,undefined);
 });
@@ -2219,4 +2245,49 @@ test('audit tick discovers completed runs through the injected Git executor', as
   assert.ok(rules.some(row => row.kind === 'post-merge-audit' && row.number === 17 && row.pr === 23));
   assert.ok(f.runs.slice(before).some(([file, args]) => file === 'git' && args.includes('--git-common-dir')));
   assert.equal(f.runs.slice(before).filter(([file]) => file === 'gh').length, 0, 'local audit discovery needs no GitHub read');
+});
+
+
+test('start: custody preflight uses the original healthy profile with a signed-out caller',async t=>{
+  const f=await fixture(t),profile=join(f.home,'original-profile');
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{CODEX_HOME:profile}});
+  f.accountReady=env=>env.CODEX_HOME===profile;
+  assert.equal((await f.invoke('start')).exitCode,0);
+  const original=f.state(),launch=original.ownerLaunch,artifact=join(f.dir,'custody.json');
+  writeFileSync(artifact,JSON.stringify({repository:original.repo,sourceRoot:f.cwd,coordinatorId:original.coordinatorId,machine:original.machine,activation:original.activatedAt,paneId:original.paneId,workspaceId:original.workspaceId,agent:launch.profile.agent,home:launch.profile.home,definitionHome:launch.profile.definitionHome,configHome:launch.profile.configHome,launchStartedAt:launch.startedAt}));
+  f.ports.listRuns=async()=>[];
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{}});
+  const r=await f.invoke('start',{resumeCustody:artifact,env:{HOME:f.home,PATH:process.env.PATH,CODEX_HOME:join(f.dir,'signed-out-caller')}});
+  assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().coordinatorId,original.coordinatorId);assert.equal(f.state().environment.CODEX_HOME,profile);
+  assert.ok(f.doctorAccounts.every(env=>env.CODEX_HOME===profile));
+});
+
+test('start: a custom Claude definition supplies HOME and config environment to doctor and startup checks',async t=>{
+  const f=await fixture(t),home=join(f.dir,'invocation home'),config=join(f.dir,'Claude config');
+  mkdirSync(join(f.home,'.config','pdd'),{recursive:true});
+  writeFileSync(join(f.home,'.config','pdd','agents.json'),JSON.stringify({include_defaults:false,agents:[{name:'Claude profile',kind:'claude',command:'claude',env:{HOME:home,CLAUDE_CONFIG_DIR:config,CODEX_HOME:join(home,'codex')}}]}));
+  delete f.ports.selectAgent;
+  const run=f.ports.run;
+  f.ports.run=async(file,args,options)=>{
+    if(file==='claude')return {code:0,stdout:'{"loggedIn":true}',stderr:''};
+    if(file==='gh' && args[0]==='auth') {assert.equal(options.env.HOME,home);assert.equal(options.env.CLAUDE_CONFIG_DIR,config);}
+    return run(file,args,options);
+  };
+  const r=await f.invoke('start');assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().agent.kind,'claude');assert.equal(f.state().environment.HOME,home);assert.equal(f.state().environment.CLAUDE_CONFIG_DIR,config);assert.equal(f.state().definitionHome,f.home);
+});
+
+
+test('start: an absent selected provider directory masks an unrelated ambient profile',async t=>{
+  const f=await fixture(t),ambient=process.env.CODEX_HOME;
+  process.env.CODEX_HOME=join(f.dir,'ambient-profile');
+  t.after(()=>{if(ambient===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=ambient;});
+  const run=f.ports.run;
+  f.ports.run=async(file,args,options)=>{
+    if(file==='gh' && args[0]==='auth')assert.equal(options.env.CODEX_HOME,undefined);
+    return run(file,args,options);
+  };
+  const r=await f.invoke('start');assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().environment.CODEX_HOME,undefined);
 });

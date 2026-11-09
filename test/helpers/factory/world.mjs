@@ -1,7 +1,7 @@
 // Generated from prompts/test/autopilot-factory.prompt.md.
 import '../test-home.mjs';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync,existsSync,readdirSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync,existsSync,readdirSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve,dirname} from 'node:path';
 import {fork,execFileSync,execFile} from 'node:child_process';
@@ -28,10 +28,13 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   for(const dir of [w.cwd,w.home,join(base,'bin')])mkdirSync(dir,{recursive:true});
   for(const name of ['gh','herdr','codex','claude','gemini','agy','curl','wget'])writeFileSync(join(base,'bin',name),'#!/bin/sh\necho factory-external-program-denied >&2\nexit 97\n',{mode:0o700});
   writeFileSync(join(base,'bin/gh'),'#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = token ]; then echo factory-token; elif [ \"$1\" = api ] && [ \"$2\" = user ]; then echo \"example 1\"; else echo factory-native-gh-denied >&2; exit 97; fi\n',{mode:0o700});
+  symlinkSync(join(packageRoot,'bin/pdd.mjs'),join(base,'bin/pdd'));
   w.env={CI:'1',HOME:w.home,USERPROFILE:w.home,PATH:join(base,'bin')+':'+dirname(process.execPath)+':/usr/bin:/bin',XDG_CONFIG_HOME:join(base,'config'),PDD_STATE_DIR:join(base,'runtime'),PDD_INTERPRETER_QUEUE:join(base,'interpreter-queue'),PDD_SUITE_QUEUE:join(base,'suite-queue'),PDD_INTERPRETER_CONCURRENCY:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_ALLOW_PROTOCOL:'file',LANG:'C.UTF-8'};
   w.git=(cwd,...a)=>execFileSync('git',a,{cwd,env:w.env,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   w.git(w.cwd,'init','-q','-b','main');w.git(w.cwd,'config','user.email','factory@example.invalid');w.git(w.cwd,'config','user.name','Factory');
   put(w.cwd,'pdd.json',{autopilot:{mode:'auto',trust:['example'],base:'main',parking:{hours:24,maxParked:20}}});
+  put(w.cwd,'AGENTS.md','<!-- pdd:start -->\nUse the installed PDD skills.\n<!-- pdd:end -->\n');
+  for (const skill of ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph','pdd-autopilot','pdd-check','pdd-merge']) put(w.home,`.agents/skills/${skill}/SKILL.md`,'Factory skill entrypoint.');
   put(w.cwd,'value.mjs','export const value = 1;\n');put(w.cwd,'value.prompt.md',valuePrompt(1));
   put(w.cwd,'CONTRIBUTING.md','Run node --test test/value.test.mjs. Open PRs against main.\n');
   put(w.cwd,'package.json',{type:'module',scripts:{test:'node --test test/value.test.mjs'}});
@@ -130,10 +133,14 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
           else if(m.method==='warning')w.warnings.push(m.args[0]);
           else if(m.method==='doctorExec') {
             const [file,args,opts]=m.args;
-            if(file.startsWith(join(base,'bin')+'/')) {
-              value=await new Promise(resolve=>execFile(file,args,{cwd:opts.cwd,env:w.env,encoding:'utf8'},(e,stdout,stderr)=>resolve({code:e?.code??0,stdout,stderr})));
+            if(file===join(base,'bin/pdd')) {
+              value=await new Promise(resolve=>execFile(file,args,{cwd:opts.cwd,env:{...w.env,...opts.env},encoding:'utf8'},(e,stdout,stderr)=>resolve({code:e?.code??0,stdout,stderr})));
             } else if(file==='gh' && args[0]==='--version')value={code:0,stdout:'gh version 2.60',stderr:''};
-            else if(file==='codex')value={code:1,stdout:'Not logged in',stderr:''};
+            else if(file==='codex') {
+              const signedIn=opts.env.PDD_FACTORY_DOCTOR!=='1' && (!w.agentProfile || opts.env.CODEX_HOME===w.agentProfile);
+              value={code:signedIn?0:1,stdout:signedIn?'Logged in using ChatGPT':'Not logged in',stderr:''};
+              (w.doctorAccounts??=[]).push(opts.env.CODEX_HOME);
+            }
             else if(file==='claude')value={code:1,stdout:JSON.stringify({loggedIn:false}),stderr:''};
             else if(file==='systemctl'||file==='loginctl')value={code:0,stdout:file==='loginctl'?'yes':'',stderr:''};
             else value=await w.execute(file,args,opts);

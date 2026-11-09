@@ -1,7 +1,8 @@
 # Autopilot first-start doctor
 
 Own `src/autopilot-doctor.mjs`. Export asynchronous `runAutopilotDoctor(input,
-ports = {})`. Input carries cwd, packageRoot and env. Preserve existing launcher
+ports = {})`. Input carries cwd, packageRoot and env, and an optional saved profile binding
+(agent id/kind, home, definitionHome, configHome), plus optional coordinatorPaneId. Preserve existing launcher
 behavior except the authorized required preflight before startup effects.
 The doctor is read-only: no GitHub writes, agent generation, interpreter jobs,
 state files, timer changes, workspace allocation, cleanup or approvals.
@@ -13,6 +14,32 @@ Collapse control characters and newlines in details. Never echo auth payloads,
 tokens or provider diagnostics. Each fix is a concrete shell command, safely
 quoted for paths, with a diagnostic command for successful checks or conditions
 that need inspection. Report unavailable evidence, never invent a successful read.
+
+Resolve the selected definition before prerequisite probes. Load definitions from
+saved definitionHome when a profile is supplied, restrict selection to its agent
+id/kind, and preserve saved HOME and provider config home after definition overrides.
+Otherwise merge the selected definition's env over the caller environment. Use
+this invocation environment for every prerequisite, including PATH, GitHub,
+provider sign-in, usage, skills, interpreter and scheduling. Claude user skills
+live under CLAUDE_CONFIG_DIR/skills when set; HOME overrides select user roots.
+Keep the caller environment unchanged. An agents.json read or parse failure gets
+its own required agent-config line with the actual file path and an editor repair
+command; never echo raw errors or configuration values.
+
+Export resolveAutopilotAgent(input, ports = {}) for the launcher's same selection
+policy. Return agent (definition or null), preferred (definition or undefined),
+installed (probed definitions), env (effective invocation environment), and
+configurationError (caught load error or null). Program/file/config selection ports
+match the doctor. A saved binding wins over conflicting definition profile values.
+
+Printed commands must target that invocation environment. Preserve safe PATH,
+HOME, CODEX_HOME, CLAUDE_CONFIG_DIR and GEMINI_CLI_HOME bindings and explicit unsets
+for absent provider directories. Include other non-secret definition overrides as literal bindings;
+credential-named bindings and URLs with credentials, query or fragment use shell
+variable references, never literal secret values.
+Report no raw provider/configuration error or auth payload. A failed inspection
+must also name the repair action (enable a merge method, edit config, restore the
+user service/session, or sign in); a status command alone is insufficient.
 
 Check these boundaries in order and continue after failures:
 - PATH: first executable pdd resolves to packageRoot/bin/pdd.mjs and its help
@@ -33,8 +60,12 @@ Check these boundaries in order and continue after failures:
   no generation call to discover allowance, and no credit/reset advice.
 - Herdr installed. Read the workflow session `pdd` server status and pane list without starting a server, matching the shared workflow pane budget.
   A stopped server has zero panes. Apply PDD_HERDR_PANE_BUDGET (default 56,
-  0 unlimited); insufficient room for one coordinator fails, invalid budget or
-  unreadable inventory fails. Recommend the native tidy command for capacity.
+  0 unlimited). Reusing the saved coordinator pane requires no new pane. If room
+  is short, a read-only reclaimablePanes({env,panes}) port may identify a count of
+  potential workflow panes. Enough potential room warns that capacity is unproved
+  until start's existing guarded sweeps and admission run; doctor closes nothing
+  and grants no cleanup authority. Otherwise insufficient room fails. Invalid
+  budget or unreadable inventory fails. Recommend the native tidy command for capacity.
 - Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all ten skill
   entrypoints in one selected provider's supported project/user skill root,
   and valid pdd.json autopilot mode/trust. Off fails. Describe observe versus auto
@@ -47,7 +78,10 @@ Check these boundaries in order and continue after failures:
   at the shared runtime origin. No upload or job. Require HTTP 200 JSON to prove
   access; missing auth, denial, maintenance, unsupported endpoint or unreachable
   access fail with gh auth login, the platform browser sign-up command or a doctor
-  retry as appropriate. No auth body or token appears in the report.
+  retry as appropriate. Validate the origin even with an injected health port. An
+  invalid PDD_RUNTIME_URL names that setting and advises an HTTPS origin or unsetting
+  it to use the default, with an executable unset-and-retry command. No auth body
+  or token appears in the report.
 - Linux requires a readable systemd user session; lingering is advisory for logout
   persistence and names loginctl enable-linger. macOS requires a readable launchctl
   user domain; read pmset and warn when sleep can pause work, with caffeinate -i.
@@ -67,7 +101,8 @@ have injected ports. Native defaults are adapter bindings only. Files provides
 readFileSync, realpathSync, accessSync and statSync; run accepts executable,
 argv and cwd/env options and returns code/stdout/stderr. agentDefinitions,
 selectAgent, codexLimits, runtimeHealth, fetch and spawn are independently
-replaceable ports. Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays returned by definition ports.
+replaceable ports. onSelection observes the resolved selection before checks;
+the launcher uses its env and agent for startup after a passing report. Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays returned by definition ports.
 
 <details><summary>Runtime interface</summary>
 
