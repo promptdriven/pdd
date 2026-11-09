@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 141e78427ab1cf986d5de035413294c0df4fb258b74f38d3a2bc6251cff17282).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 654eb2fac8a6e489c31790a13cb93a1910fca85ce24fd2aec05765eb0f7a903b).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -496,7 +496,7 @@ async function routeQuestionsTick(state, p, config, runs, localOnly) {
     if (group.count < 2 || group.issue) continue;
     const subjects = state.routeQuestions.records.filter(row => group.recordIds.includes(row.id));
     let allowed = true;
-    for (const row of subjects) if (!await issueAllowed(state,p,row.issue ?? row.run)) allowed = false;
+    for (const row of subjects) if (!await issueAllowed(state,p,row.run)) allowed = false;
     if (!allowed) continue;
     group.issue = {state: 'creating', at: p.now(), url: null};
     if (!await p.scanGuard(latest => {latest.routeQuestions = state.routeQuestions;})) return;
@@ -507,7 +507,7 @@ async function routeQuestionsTick(state, p, config, runs, localOnly) {
         + `\n\n<!-- pdd:missing-route:${state.coordinatorId}:${group.kind} -->`};
     try {
       const result = await p.scanAction(async () => {
-        for (const row of records) if (!await issueAllowed(state,p,row.issue ?? row.run)) {delete group.issue;return null;}
+        for (const row of records) if (!await issueAllowed(state,p,row.run)) {delete group.issue;return null;}
         if (p.createRouteIssue) return p.createRouteIssue(input);
         const reply = await p.execute('gh', ['api', '--method', 'POST', 'repos/promptdriven/pdd/issues',
           '-f', `title=${input.title}`, '-f', `body=${input.body}`], {purpose: 'dependencies'});

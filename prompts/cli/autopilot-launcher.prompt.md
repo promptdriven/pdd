@@ -1363,6 +1363,11 @@ in `manualSuppressions` entries `{number,reason}`. Reasons are `manual` or
 `authority-unknown`; deferred reads alone add no suppression without a signal.
 The public audit command enforces the gate through the audit owner. Public `add` checks every target before repository label creation and again before each issue label write; held targets stay unmarked.
 
+For grouped missing-route issues, check each retained route record using its
+numeric run issue number before reservation and again before publication. The
+record's issue URL is display evidence, not a numeric gate input. Keep held or
+unknown subjects pending; a confirmed-clear subject can use the existing route.
+
 ## Shared automatic effect ports
 
 Install the dependency reader's shared automatic GitHub write port around every

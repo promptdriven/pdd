@@ -229,3 +229,28 @@ test('3131 installed code-only checker wakes a saved route once and keeps indepe
   assert.equal(launches(), 1); await tick(); assert.equal(launches(), 1);
   assert.deepEqual(warnings, []);
 });
+
+
+test('integration 013: grouped route subjects use numeric authority and retain held work', async t => {
+  const rows = [];
+  for (const authority of ['clear', 'held', 'unknown']) {
+    const {f, ports, tick, creates} = await setup(t, {full: true});
+    ask(f, drafting); await tick();
+    const observations = [];
+    ports.readManualHold = async input => {
+      observations.push(input.issue);
+      return {known: authority !== 'unknown', held: authority === 'held'};
+    };
+    // An active check retains custody while the person hold suppresses new work.
+    ports.readSuiteProgress = () => ({state: 'running'});
+    f.tick(); ask(f, `${drafting} No drafting tool is available.`);
+    await tick(); await tick();
+    rows.push({authority, creates: creates.length,
+      numeric: observations.length > 0 && observations.every(number => number === 17)});
+  }
+  assert.deepEqual(rows, [
+    {authority: 'clear', creates: 1, numeric: true},
+    {authority: 'held', creates: 0, numeric: true},
+    {authority: 'unknown', creates: 0, numeric: true},
+  ]);
+});
