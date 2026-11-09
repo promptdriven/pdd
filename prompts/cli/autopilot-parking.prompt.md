@@ -25,6 +25,6 @@ The central coordinator ledger is {records,groups}. Each record has id (JSON ide
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"6019e38b49d046ddac0e3709b26bf3dbca8efd12dc6a37fdd77aef201a790ab2","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"fa7bf6eb41fced4f4f1a02054f391392dd7b67683f4513d76074295757f565ba","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

@@ -121,7 +121,7 @@ test('factory 5d: a dead dispatched holder records uncertainty without resending
   await a.merge();assert.deepEqual(w.leadActions,[]);
 });
 
-test('factory 6: another machine takes the claim; the old worker cannot publish [known gap: claim-transfer-open]',async t=>{
+test('factory 6: another machine takes the claim; the old worker cannot publish',async t=>{
   const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
   const before=w.record();w.github.unlabel(17,'pdd:working');w.github.claim(17,{coordinatorId:'another-coordinator',machine:'another-machine'});
   const out=await w.command(['workflow','open','17'],{actor:'old-coordinator',allowFailure:true});
@@ -134,7 +134,7 @@ test('factory 6: another machine takes the claim; the old worker cannot publish 
   await w.tick();assert.equal(w.github.prs.length,0);assert.equal(w.record().runId,before.runId);
   assert.equal(w.github.issues.get(17).comments.filter(c=>c.body.includes('another-coordinator')).length,1);assert.deepEqual(w.leadActions,[]);
   // Keep this candidate finding red even though publication has its own guard.
-  assert.notEqual(out.code,0,'GAP claim-transfer-open: the old coordinator can still open its current chat after another machine takes the claim');
+  assert.notEqual(out.code,0,'claim-transfer-open: the old coordinator can still open its current chat after another machine takes the claim');
 });
 
 async function eventually(check,message) {

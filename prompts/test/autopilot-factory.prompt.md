@@ -41,9 +41,9 @@ Every scenario records its actual commands and useful structural observations.
 Assertions use states, identities, hashes, counts and effects, not exact English
 sentences. A bounded failure must name the stage and saved state. The shell
 entry runs the complete factory in less than 15 minutes, returns nonzero on any
-failure and removes its own temporary data. The runner names `claim-transfer-open`
-as a known failing scenario. Keep its assertion enabled and its failure nonzero;
-never count it as a pass. Select private HOME,
+failure and removes its own temporary data. The `claim-transfer-open` scenario
+must pass: after claim transfer, the old coordinator cannot open its current chat.
+Keep this assertion enabled and return nonzero on failure. Select private HOME,
 XDG_CONFIG_HOME, PDD_STATE_DIR, suite and interpreter queues. No external network,
 real gh, agent, system timer or live Herdr process may run. Never touch another
 process or its state. Use the repository fakes as the starting point. Keep

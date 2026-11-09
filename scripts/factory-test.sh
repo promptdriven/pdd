@@ -10,6 +10,5 @@ export PDD_INTERPRETER_QUEUE="$factory_tmp/interpreter-queue"
 export PDD_SUITE_QUEUE="$factory_tmp/suite-queue"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$PDD_STATE_DIR"
 unset NODE_OPTIONS PDD_AUTOPILOT_CONTEXT PDD_AGENT_SESSION CODEX_HOME CLAUDE_CONFIG_DIR
-printf '%s\n' 'Known gap: claim-transfer-open (factory 6). Its assertion stays enabled; a failure keeps this run nonzero.'
 # timeout owns only the test process it starts. It cannot select another job.
 timeout --signal=TERM --kill-after=5s 890s node --test --test-concurrency=1 test/autopilot-factory.e2e.test.mjs
