@@ -386,7 +386,8 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     coordinatorId: state.coordinatorId, machine: state.machine});
   const parking = {
     now: p.now,
-    list: async () => (await listRuns({cwd: state.cwd, cancelled: true}, worker)).filter(run => !p.manualHolds?.has(run.number)),
+    list: async () => await listRuns({cwd: state.cwd, cancelled: true}, worker),
+    held: run => p.manualHolds?.has(run.number),
     checkProgress: async run => {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
       return busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
@@ -430,6 +431,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
+      if (blocker.kind === 'manual') return run.parking.manualCleared === true;
       if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
       if (blocker.kind === 'unknown') return hasParkedReply(run, worker);
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
@@ -1619,35 +1621,43 @@ async function runTick(stateFile, ports, completion) {
       return {budget, restLeft};
     };
     let {budget, restLeft} = readBudget();
+    const confirmed = new Set(state.manualIssues ?? []);
     if (config.mode === 'auto') {
       const worker = {...workflowCleanupPorts(p, ports), autopilotStateFile:stateFile};
       const allRuns = await listRuns({cwd: state.cwd}, worker);
-      p.manualHolds = new Set();
+      p.manualHolds = new Set(state.manualIssues ?? []);
+      const remoteAllowed = () => { const b = readBudget().budget; return !(state.retryAt > p.now()) && !(b.state === 'reserve' && b.resetAt > p.now()); };
       const observe = run => (p.readManualHold ?? readManualHold)({repository: state.repo, issue: run.number, cwd: state.cwd},
         createDependencyReadPorts({cwd: state.cwd}, {...p, execFile: async (file, args, options) => p.execute(file, args, {...options, purpose: 'dependencies'})}));
       for (const run of allRuns) {
         if (['completed', 'cancelled'].includes(run.state) || run.automaticOrigin?.coordinatorId !== state.coordinatorId
           || run.automaticOrigin?.machine !== state.machine || !samePath(run.sourceRoot, state.cwd)) continue;
+        if (!remoteAllowed()) continue;
         let hold; try { hold = await observe(run); } catch { hold = {known:false}; }
-        if (!hold.known || hold.held) p.manualHolds.add(run.number);
-        if (!hold.known || !hold.held) continue;
+        if (!hold.known || hold.held) p.manualHolds.add(run.number); else p.manualHolds.delete(run.number);
+        if (hold.known && hold.held) confirmed.add(run.number); else confirmed.delete(run.number);
         const args = {ref:String(run.number), cwd:state.cwd, packageRoot:state.packageRoot, coordinatorId:state.coordinatorId, machine:state.machine};
         const parking = parkingPorts(state, p);
-        if (await parking.checkProgress(run)) continue;
+        if (!hold.known || await parking.checkProgress(run)) continue;
+        if (!hold.held && !run.parking?.releaseAttempted) {
+          await p.scanAction(() => parkBlockedRun({...args, manualClear:true}, worker));
+          continue;
+        }
+        if (!remoteAllowed()) continue;
         try {
-          await p.scanAction(() => parkBlockedRun({...args, blocker:{kind:'manual', until:null}, expected:run, manualHold:true}, worker));
+          if (hold.held) await p.scanAction(() => parkBlockedRun({...args, blocker:{kind:'manual', until:null}, expected:run, manualHold:true}, worker));
           const fresh = (await listRuns({cwd:state.cwd}, worker)).find(item => item.runId === run.runId);
           if (!['parked', 'releasing'].includes(fresh?.parking?.phase) || await parking.checkProgress(fresh)) continue;
           await p.scanAction(() => releaseParkedRun({...args, runId:fresh.runId, at:fresh.parking.at, manualHold:true}, {
-            ...worker, manualHoldConfirmed: async current => { const result = await observe(current); return result.known && result.held; },
-            releaseParkedClaim: current => (p.releaseParkedClaim ?? releaseParkedClaim)({cwd:state.cwd, repository:state.repo,
+            ...worker, manualReleaseReady: remoteAllowed, manualHoldConfirmed: async current => { if (!remoteAllowed()) return false; const result = await observe(current); return result.known && result.held && remoteAllowed(); },
+            releaseParkedClaim: current => !remoteAllowed() ? {state:'deferred'} : (p.releaseParkedClaim ?? releaseParkedClaim)({cwd:state.cwd, repository:state.repo,
               claim:{...current.automaticOrigin.claim, issue:current.issue.url, coordinatorId:state.coordinatorId, machine:state.machine},
               coordinatorId:state.coordinatorId, machine:state.machine, runId:current.runId, branch:current.branch},
               {...worker, execFile:async (file, args, options) => p.execute(file, args, {...options, purpose:'claims'})})
           }));
         } catch (error) { p.warn(`Manual custody held for #${run.number}: ${line(error.message)}`); }
       }
-      state.manualIssues = [...p.manualHolds].sort((a, b) => a - b);
+      state.manualIssues = [...confirmed].sort((a, b) => a - b);
       await scanGuard(latest => { latest.manualIssues = state.manualIssues; });
       let reconsider;
       if (!(state.retryAt > p.now()) && !(budget.state === 'reserve' && budget.resetAt > p.now()))
@@ -1823,12 +1833,19 @@ async function runTick(stateFile, ports, completion) {
     if (Number.isFinite(result.fullAt)) state.issuesFullAt = result.fullAt;
     state.acknowledged ??= {}; state.commentCache ??= {}; state.seen ??= {}; state.timeSeen ??= {};
     p.manualHolds ??= new Set();
+    if (result.status === 200) for (const number of confirmed) {
+      const issue = (state.cachedIssues ?? []).find(row => row.number === number);
+      if (!issue || !issue.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:manual')) { confirmed.delete(number); p.manualHolds.delete(number); }
+    }
     for (const issue of state.cachedIssues ?? []) {
       if (!issue.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:manual')) continue;
+      const currentBudget = readBudget().budget;
+      if (state.retryAt > p.now() || currentBudget.state === 'reserve' && currentBudget.resetAt > p.now()) { p.manualHolds.add(issue.number); continue; }
       let hold; try { hold = await (p.readManualHold ?? readManualHold)({repository:state.repo, issue:issue.number, cwd:state.cwd}, createDependencyReadPorts({cwd:state.cwd}, {...p, execFile:async (file,args,options) => p.execute(file,args,{...options,purpose:'dependencies'})})); } catch {hold = {known:false};}
       if (!hold.known || hold.held) p.manualHolds.add(issue.number);
+      if (hold.known && hold.held) confirmed.add(issue.number);
     }
-    state.manualIssues = [...p.manualHolds].sort((a,b) => a-b);
+    state.manualIssues = [...confirmed].sort((a,b) => a-b);
     await scanGuard(latest => {latest.manualIssues = state.manualIssues;});
     cachePullRequests(state);
     const work = [], pending = {}, warnings = [], selections = [], held = new Set();

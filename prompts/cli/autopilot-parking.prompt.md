@@ -25,6 +25,8 @@ A missing saved UUID or old layout field does not reject the whole park. The wor
 
 A confirmed manual issue hold takes precedence over other blockers. Park it only after check custody is idle; release it after parking through the guarded release path, with a fresh confirmed hold. Unknown or removed evidence never releases the claim. Keep busy chats and all retained work.
 
+Count held and uncertain runs in capacity summaries while excluding them from automatic parking, waking and release mutations.
+
 ## Dependencies
 
 - [Environment causes](autopilot-environment.prompt.md): required generation/runtime/testing context for eligible environmentRetry and its bounded backoff. No other dependency policy is copied here.
@@ -32,6 +34,6 @@ A confirmed manual issue hold takes precedence over other blockers. Park it only
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"284de410e0162548bf2f3df439b32d5b02a4237609693fdca276eb6c13072372","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"664192b882d984e57661da72ef5a6265b7a23d63d4c77f00f42b251854131979","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

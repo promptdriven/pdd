@@ -5143,6 +5143,18 @@ function replaceParkingBlocker(run, blocker, interpreterBatch, interpreterCheck,
 export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
   const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
   const skipped = reason => ({...done(''), recovery: 'skipped', ...(reason ? {reasonCounts:{[reason]:1}} : {})});
+  if (input.manualClear && run?.parking?.blocker?.kind === 'manual' && !run.parking.releaseAttempted
+    && ['parked', 'releasing'].includes(run.parking.phase) && currentParkingOwner(run, p)) {
+    commitRun(run, p, fresh => {
+      const previous = fresh.parking.manualPrevious;
+      fresh.parking.phase = 'parked';
+      delete fresh.parking.manualHold;
+      delete fresh.parking.manualPrevious;
+      if (previous) Object.assign(fresh.parking, previous);
+      else fresh.parking.manualCleared = true;
+    });
+    return {...done(''), recovery: 'parked'};
+  }
   if (!run || ended(run) || !validSavedAutomaticOrigin(run)
     || run.automaticOrigin.machine !== input.machine
     || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || ['waking', 'releasing'].includes(run.parking?.phase)) return skipped();
@@ -5159,6 +5171,10 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   }
   if (run.parking?.phase === 'parked') {
     commitRun(run, p, fresh => {
+      if (input.manualHold && fresh.parking.blocker?.kind !== 'manual') {
+        const {blocker, text, personWait, interpreterWait, interpreterGate, interpreterCheck} = fresh.parking;
+        fresh.parking.manualPrevious = structuredClone({blocker, text, personWait, interpreterWait, interpreterGate, interpreterCheck});
+      }
       replaceParkingBlocker(fresh, input.blocker, input.interpreterBatch, input.interpreterCheck, p.now());
       if (continuationCheckHeld(fresh, p)) fresh.parking.checkHeld = true;
       else delete fresh.parking.checkHeld;
@@ -5225,9 +5241,11 @@ export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, 
     && !continuationCheckHeld(fresh, p);
   if (!current(run) || typeof p.releaseParkedClaim !== 'function') return skipped();
   const manual = input.manualHold || run.parking.manualHold === true || run.parking.blocker?.kind === 'manual';
-  if (manual && !await p.manualHoldConfirmed?.(run)) return skipped();
+  if (manual && !run.parking.releaseAttempted && !await p.manualHoldConfirmed?.(run)) return skipped();
   if (!conditionalCommit(run, p, current, fresh => {fresh.parking.phase = 'releasing'; if (manual) fresh.parking.manualHold = true;})) return skipped();
-  if (!current(readRun(run.runDir)) || manual && !await p.manualHoldConfirmed?.(readRun(run.runDir))) return skipped();
+  if (!current(readRun(run.runDir)) || manual && !readRun(run.runDir).parking.releaseAttempted && !await p.manualHoldConfirmed?.(readRun(run.runDir))) return skipped();
+  if (manual && p.manualReleaseReady && !await p.manualReleaseReady()) return skipped();
+  if (manual && !conditionalCommit(run, p, current, fresh => {fresh.parking.releaseAttempted = true;})) return skipped();
   const remote = await p.releaseParkedClaim(readRun(run.runDir));
   if (remote?.state !== 'released' || !current(readRun(run.runDir))) return skipped();
   const local = await releaseIssueClaim({cwd: input.cwd, issueNumber: run.number, runId: run.runId}, p);

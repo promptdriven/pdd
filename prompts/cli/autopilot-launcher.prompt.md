@@ -1296,6 +1296,8 @@ Load [audit policy](autopilot-audit.prompt.md) as required context.
 
 Before allocating a missing coordinator workspace, request one pane through the same bounded finished/idle workflow sweeps used for worker admission. Reconcile same-repository, same-folder, same-machine older coordinator runs through live stable-claim recovery before final pane admission and worker filtering. Claim recovery failure is retried; proven transfer uses the workflow owner's normal handover path. Pane-budget reclamation can also reclaim blocked runs of another repository through that repository's enabled owner and guarded claim recovery. It never assigns those runs to the requesting repository. Retained pane reasons appear in the pane hold warning.
 
+Manual authority reads and releases obey retry and reserve waits, rechecking budget after remote calls; saved confirmed holds suppress automatic work while reads are deferred. Unknown authority suppresses work but is not reported as a confirmed person hold. A confirmed clearance resumes the saved park under its prior blocker or the ordinary wake route; uncertain release custody is reconciled first.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
@@ -1356,4 +1358,4 @@ Catalog command `check-base` receives issues `[RUN, PR]`. Resolve the saved run 
 
 ## Manual issue custody (#3129)
 
-Before automatic gate, recovery and delivery work, observe the current `pdd:manual` hold for each owned active run using the issue dependency reader. A confirmed hold suppresses automatic work for that issue. Unknown evidence also suppresses it until a fresh observation succeeds. Allow busy agents and checks to finish; never force-close a busy chat. Once idle, park and release the claim through the existing guarded custody path, retaining the run, branch, PRs and files for a person. Recheck the hold at release; a removed or unknown hold retains custody. Show each held issue once in status. Removing the label makes the issue eligible again through normal intake.
+Before automatic gate, recovery and delivery work, observe the current `pdd:manual` hold for each owned active run using the issue dependency reader. A confirmed hold suppresses automatic work for that issue. Unknown evidence also suppresses it until a fresh observation succeeds. Allow busy agents and checks to finish; never force-close a busy chat. Once idle, park and release the claim through the existing guarded custody path, retaining the run, branch, PRs and files for a person. Recheck the hold at release; unknown evidence retains custody. Show each confirmed held issue once in status. Removing the label restores the retained run under the clearance and custody rules below.
