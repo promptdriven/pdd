@@ -24,6 +24,10 @@ only formal exemption field. A documentation-only exemption uses
 A one-PR small-change needs a recorded formal result: missing waits until formal completes,
 then blocks; stale/malformed and not_run block. A completed step is not a result.
 Summary, Proof, Details and saved status consume that same validated block.
+Keep the public [formal-evidence contract](../../docs/replay-evidence.md#reading-the-pr-status)
+and both RUNBOOK copies aligned with this rule, including its exception to
+"not needed". Other workflows keep their Story and replay policy. Formal evidence
+requirements add no person gate.
 
 ## Agent fields
 

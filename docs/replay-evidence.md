@@ -146,8 +146,8 @@ With scenario vectors, the code replay needs a typed formal block of any result,
 A missing, malformed or stale block holds the PR. A recorded Not run does not hold it when no Story has
 `## Rules to check`.
 
-The line says "Formal check: not needed (no Rules to check in the Story)" only when pdd read the Stories of the
-run, none has `## Rules to check`, and the prompt area has no scenario vectors. Then the formal check does not
+Outside the one-PR small-change flow, the line says "Formal check: not needed (no Rules to check in the Story)"
+only when pdd read the Stories of the run, none has `## Rules to check`, and the prompt area has no scenario vectors. Then the formal check does not
 hold the PR, except a Failed result. pdd finds the Stories of the run in the changed files and in the step
 summaries (`user_stories/**/NAME.md`), and in the `story_path` of each anchored scenario. When pdd finds no
 Story file, it cannot tell, so the formal check counts as needed. The line then adds: "pdd found no Story file
@@ -156,7 +156,18 @@ of this run, so the formal check counts as needed. When the Story has no Rules t
 
 ## Reading the PR status
 
-A code area with a formal step reads this formal block even when it has no scenario replay policy, including small-change. The readable Result, Proof row and formal header use the same validated status. Agent summaries remain attributed in Details and do not supply a formal or gate result. This read does not require scenario vectors from small-change. A missing formal block alone keeps that area's step-completion policy unless a known Story has Rules to check; malformed or stale supplied evidence blocks readiness.
+A code area with a formal step reads this formal block even when it has no scenario replay policy, including small-change. The readable Result, Proof row and formal header use the same validated status. Agent summaries remain attributed in Details and do not supply a formal or gate result. This read does not require scenario vectors from small-change.
+
+A one-PR small-change requires a recorded formal result, even without a Story or Rules to check.
+Missing formal evidence waits before formal step completion and blocks readiness after completion.
+A completed step or a prose note cannot replace the record. Malformed, stale, failed or not_run evidence
+cannot say ready. For documentation-only work, record `result: "not_applicable"`, a specific `scope`
+and `reason`, and `control_outcome: "not_run"`. Include the normal `schema_version`, `run_id` and current
+source fingerprint; scenario vectors are not required for this standalone block. The exemption is not
+a proof. The checker verifies that the diff fits its scope and reason. This adds no person gate.
+
+Other workflows keep their step-completion policy for a missing formal block unless a known Story has
+`## Rules to check`; malformed or stale supplied evidence blocks readiness.
 
 The canonical section appears above free-form summaries and prompt Runtime-check results. It reports
 replay PASS/FAIL/BLOCKED/NOT REPLAYED, derived counts, executed operations, control result, formal scope/reason,
@@ -178,7 +189,7 @@ independently prove execution or prompt/code equivalence. The schema does not au
 execution claims. Review commands, results and committed replay tests before merging.
 
 New bundled feature/bug code areas opt in explicitly. Saved areas and custom workflows without the field,
-and small-change, keep their publication behavior. A custom opt-in with an approved prompt area uses
+and small-change, do not opt into scenario replay. A custom opt-in with an approved prompt area uses
 `then: "ask-code"` to establish the original-vector anchor. A workflow whose code area has no such earlier area
 gets the [approved scenarios on the base](#approved-scenarios-on-the-base) that link to its changes, or all of
 them when the repository asks for that.

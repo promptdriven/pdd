@@ -682,9 +682,12 @@ and `reason`, and `control_outcome: "not_run"`. Use the normal schema_version,
 run_id and current source fingerprint; scenario vectors are not required for this
 standalone block. Do not invent a proof or control. Body, Summary, Proof and saved
 status read the same validated field. A scope/formal note cannot override it.
-Small-change missing formal evidence waits before the formal step, then blocks;
+A one-PR small-change requires a recorded formal result, even without a Story or Rules to check.
+Missing formal evidence waits before formal step completion and blocks readiness after completion;
 malformed, stale, failed or not_run evidence cannot say ready. A valid exemption
 means not applicable, never proved. The checker verifies that the diff fits it.
+Other workflows keep their step-completion policy for a missing formal block unless a known Story has
+`## Rules to check`; malformed or stale supplied evidence blocks readiness. This adds no person gate.
 
 ### Agent PR fields
 
