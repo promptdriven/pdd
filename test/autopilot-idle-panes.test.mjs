@@ -169,3 +169,28 @@ for (const boundary of ['check-probe', 'close-checkpoint', 'final-native-read'])
   assert.notEqual(f.record().parking?.phase, 'parked');
   assert.equal(f.record().progressAt, f.clock);
 });
+
+
+for (const kind of ['idle', 'resume']) test(`3110 explicit retry resumes a parked ${kind} ceiling once`, async t => {
+  const {f, run, tick} = await setup(t);
+  run.state = 'stuck'; run.progressAt = f.clock - 120_000;
+  run[kind === 'idle' ? 'chatIdleLimit' : 'chatResumeLimit'] = {at: run.progressAt, area: run.chats.at(-1).area};
+  save(run); await tick();
+  assert.equal(f.record().parking?.phase, 'parked');
+  const result = await changeRun({ref: '17', cwd: f.source, packageRoot, text: 'Please retry the current step'}, f.ports);
+  assert.equal(result.exitCode, 0, result.message);
+  assert.equal(launches(f).length, 0);
+  await tick();
+  const resumed = f.record();
+  assert.equal(resumed.parking, undefined, '3110 an explicit retry must clear the idle park');
+  assert.equal(resumed.state, 'running');
+  assert.equal(resumed.chats.at(-1).session.id, run.chats.at(-1).session.id);
+  assert.notEqual(resumed.chats.at(-1).paneId, run.chats.at(-1).paneId);
+  assert.deepEqual(resumed.done, run.done);
+  assert.equal(launches(f).length, 1);
+  const deliveries = f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt');
+  assert.equal(deliveries.length, 1);
+  await tick();
+  assert.equal(launches(f).length, 1);
+  assert.equal(f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt').length, 1);
+});

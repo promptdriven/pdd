@@ -426,6 +426,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       const blocker = run.parking.blocker;
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
       if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
+      if (blocker.kind === 'unknown') return hasParkedReply(run, worker);
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (blocker.kind === 'pdd') {
         const required = blocker.until === '#2897' ? 'capability:prompt-reentry' : /^#[1-9][0-9]*$/.test(blocker.until) ? `capability:issue-${blocker.until.slice(1)}` : blocker.until;
