@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 78d578cd1c7b2368db3c3cc21d20b5477b063d919a027e5ada80ecb0dc71e84a).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: a7a0d5c9948acd080f6bea397b7282b3b5464ad8ec95a060cf0012e764a57b86).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -80,6 +80,9 @@ const routes = [
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
     operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'},{name:'--draft',kind:'flag'},{name:'--through',kind:'value',choices:['prompt-pr','code']}],
     forms: [form('pdd workflow approve [ISSUE] [--said WORDS] [--draft]', 'Approve the gate and all its selected draft prompts in one step; --draft requests draft PRs at the current unpublished gate; --through prompt-pr|code records the person\'s code-or-stop choice from the Story card of a normal run. ' + approvalHelp('pdd workflow approve N'))] },
+  { id: 'workflow.resend', prefix: ['workflow','resend'], local: 'workflow-resend',
+    operands: [{name:'issue',type:'issue',repeat:true}], options: [{name:'--said',kind:'text'}],
+    forms: [form('pdd workflow resend ISSUE... [--said WORDS]', 'Record one person decision and resend each lost check once; --said - reads exact words from stdin; strict mode requires a person terminal.')] },
   { id: 'workflow.card', prefix: ['workflow', 'card'], local: 'workflow-card',
     operands: [{name:'issue',type:'issue',optional:true}], options: [],
     forms: [form('pdd workflow card [ISSUE]', "Print the run's Story card from its real files: the request, the Story, the test cases, the prompts that change and the next step. Read-only; no GitHub, Herdr or interpreter call.")] },

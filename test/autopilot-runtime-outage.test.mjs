@@ -343,13 +343,14 @@ async function hours(f, count, { persistent = new Set(), after = () => {} } = {}
 test('an interpreter outage: one interpreter alert per repository and machine, other work keeps moving, a test wake, one recovery', async t => {
   const f = await launcher(t);
   await f.start(); f.prompts.length = 0;
+  const alerts = () => f.sent.filter(text=>!text.includes('Autopilot digest'));
   const first = f.time;
   f.waits = [wait(15, first + 5 * minute), wait(12, first, { cause: 'unknown' })];
   f.health = { state: 'unavailable', detail: 'HTTP 503' }; f.time += 6 * minute;
   f.issues = [issue(30)];
   await f.tick();
-  assert.equal(f.sent.length, 1, 'one alert for both waiting issues');
-  assert.match(f.sent[0], /PDD Autopilot alert: interpreter /); assert.match(f.sent[0], /issues\/12/); assert.match(f.sent[0], /health check failed \(HTTP 503\)/);
+  assert.equal(alerts().length, 1, 'one alert for both waiting issues');
+  assert.match(alerts()[0], /PDD Autopilot alert: interpreter /); assert.match(alerts()[0], /issues\/12/); assert.match(alerts()[0], /health check failed \(HTTP 503\)/);
   const packet = f.packet();
   assert.equal(packet.runtime.state, 'unavailable'); assert.match(packet.runtime.note, /Keep other work moving/);
   assert.deepEqual(packet.issues.map(item => item.number), [30], 'a new issue may still start');
@@ -357,11 +358,12 @@ test('an interpreter outage: one interpreter alert per repository and machine, o
   const record = JSON.parse(readFileSync(join(f.ports.stateRoot, 'alerts', readdirSync(join(f.ports.stateRoot, 'alerts'))[0]), 'utf8'));
   assert.deepEqual(Object.values(record.incidents).map(item => [item.kind, item.issues]), [['interpreter', [12, 15]]]);
   for (let i = 0; i < 2; i++) { f.time += 30 * minute; await f.tick(); }
-  assert.equal(f.sent.length, 1, 'the open outage sends nothing more');
+  assert.equal(alerts().length, 1, 'the open outage sends nothing more');
   // interpreter answers again: only one test wake, for the oldest run whose check can be resent (#12 has an unknown outcome).
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute;
   await f.tick();
-  assert.equal(f.sent.length, 1, 'no recovery before proof');
+  assert.equal(alerts().length, 2, 'one grouped person decision; no recovery before proof');
+  assert.match(alerts()[1], /workflow resend 12 --said/);
   assert.deepEqual(kinds(f), [['runtime-ready', 15]]); assert.match(f.rules()[0].reason, /is the test/);
   const probeText = f.rules()[0].reason;
   assert.ok(probeText.indexOf(`pdd test --read ${BATCH}`) < probeText.indexOf(`pdd test --retry ${BATCH}`), 'the read comes before any resend');
@@ -369,15 +371,13 @@ test('an interpreter outage: one interpreter alert per repository and machine, o
   // The wake is delivered and the check of #15 still runs at the next tick: no proof, so nothing else wakes.
   f.waits = f.waits.filter(w => w.number !== 15);
   const prompts = f.prompts.length; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 1); assert.deepEqual(f.prompts.length > prompts ? kinds(f) : [], [], 'no wake without a new verdict');
+  assert.equal(alerts().length, 2, JSON.stringify(alerts())); assert.deepEqual(f.prompts.length > prompts ? kinds(f) : [], [], 'no wake without a new verdict');
   // Its new pdd test result has a verdict: The interpreter is back for all.
   f.probe = 'verdict'; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /PDD Autopilot recovered: interpreter/); assert.match(f.sent[1], /reached a verdict again/);
-  assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
-  assert.match(f.rules()[0].reason, /unknown outcome: never send it again blind/); assert.doesNotMatch(f.rules()[0].reason, /--retry/, 'an unknown outcome is never resent');
-  assert.match(f.rules()[0].reason, /"Interpreter wake for the park at 2026-11-06T12:00:00.000Z\. The interpreter is back\./);
+  assert.equal(alerts().length, 3); assert.match(alerts()[2], /PDD Autopilot recovered: interpreter/);
+  assert.deepEqual(f.prompts.length > prompts ? kinds(f) : [], [], 'lost check stays parked for its person decision');
   f.waits = []; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2, 'one recovery only');
+  assert.equal(alerts().length, 3, 'one recovery and one lost-verdict decision only');
 });
 
 test('a test wake that is never delivered holds no other run: 60 minutes later the next run is the test, then one recovery', async t => {
@@ -620,4 +620,87 @@ test('release: saved legacy and public state spellings retain the same access ca
   const batch = JSON.parse(readFileSync(path, 'utf8')); batch.rows[0].state = 'not_run';
   writeFileSync(path, JSON.stringify(batch));
   assert.equal(savedCheckCause(BATCH, { env: f.ports.env }), 'access');
+});
+
+test('3097: health recovery asks once for all lost batches and their earlier costs; no automatic wake', async t => {
+  const f = await launcher(t); await f.start(); f.prompts.length = 0;
+  f.waits = [wait(12,f.time,{cause:'unknown',cost:{calls:3,knownCalls:3}}),
+    wait(15,f.time+minute,{cause:'unknown',batch:'20261027-170600-efgh',cost:{calls:null,knownCalls:2}})];
+  f.health={state:'unavailable',detail:'HTTP 503'}; f.time+=2*minute; await f.tick();
+  const before=f.sent.length;
+  f.health={state:'healthy',detail:'HTTP 200'}; f.time+=minute; await f.tick();
+  const decisions=()=>f.sent.filter(text=>text.includes('workflow resend'));
+  assert.equal(decisions().length,1,'one grouped person decision after service recovery');
+  assert.match(decisions()[0],/workflow resend 12 15 --said/);
+  assert.match(decisions()[0],/20261027-170500-abcd/); assert.match(decisions()[0],/20261027-170600-efgh/);
+  assert.match(decisions()[0],/AI calls: 3/); assert.match(decisions()[0],/unknown.*at least 2/);
+  assert.equal(f.rules().filter(rule=>rule.kind==='runtime-ready').length,0);
+  f.time+=minute; await f.tick(); f.time+=minute; await f.tick();
+  assert.equal(decisions().length,1,'durable group identity prevents repeated questions');
+  assert.ok(f.sent.length>=before+1);
+  const state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
+  assert.ok(state.runtime.lostDecision,'identity survives on disk');
+  f.waits[1].batch='20261027-170700-ijkl'; f.time+=minute; await f.tick();
+  assert.equal(decisions().length,2,'a replacement lost batch needs another decision');
+});
+
+test('3097: native saved replacement evidence wakes a verdict without another send; a second lost receipt stays held',async t=>{
+  const f=await launcher(t);delete f.ports.readRuntimeWaits;
+  f.ports.env={HOME:f.home,XDG_CONFIG_HOME:join(f.home,'.config')};
+  await f.start();f.prompts.length=0;
+  const root=join(f.dir,'worktree');mkdirSync(root);
+  const folder=join(f.cwd,'pdd','runs','12');mkdirSync(folder,{recursive:true});
+  const record={v:1,number:12,repo:'owner/repo',state:'paused',area:1,done:{check:{}},root,
+    runtimeWait:{at:f.time,batch:BATCH,cause:'unknown',reason:'runner-stopped'}};
+  const save=()=>writeFileSync(join(folder,'status.json'),JSON.stringify(record));
+  const receipt=(batch,state,calls)=>{
+    const path=join(f.home,'.pdd','runtime','batches',batch);mkdirSync(path,{recursive:true});
+    const rows=[{test:'tests/check.json',state,max_calls:18,calls}];
+    writeFileSync(join(path,'batch.json'),JSON.stringify({batch,root,intent:'check',source_sha256:'a'.repeat(64),created_at:new Date(f.time).toISOString(),rows}));
+    writeFileSync(join(path,'summary.json'),JSON.stringify({batch,rows}));
+  };
+  receipt(BATCH,'unknown',4);save();f.time+=minute;await f.tick();
+  const firstDecision=f.sent.find(text=>text.includes('workflow resend'));
+  assert.ok(firstDecision,'native lost receipt needs a person decision');
+  assert.match(firstDecision,/AI calls: 4/);
+  const replacement='20261027-180000-efgh';receipt(replacement,'passed',2);
+  record.checkResends=[{oldBatch:BATCH,newBatch:replacement,state:'verdict'}];save();
+  f.time+=minute;await f.tick();
+  assert.deepEqual(kinds(f),[['runtime-ready',12]]);
+  assert.match(f.rules()[0].text,new RegExp(`--read ${replacement}`));
+  assert.doesNotMatch(f.rules()[0].text,/--retry|--max-calls/);
+  const lost='20261027-190000-ijkl';receipt(lost,'unknown',3);
+  record.checkResends.push({oldBatch:replacement,newBatch:lost,state:'no-verdict'});save();
+  const promptsBeforeLost=f.prompts.length;
+  f.time+=minute;await f.tick();
+  assert.equal((f.prompts.length>promptsBeforeLost?f.rules():[]).filter(rule=>rule.kind==='runtime-ready').length,0);
+  const decisions=f.sent.filter(text=>text.includes('workflow resend'));
+  assert.equal(decisions.length,2);assert.match(decisions[1],new RegExp(lost));
+});
+
+
+for(const legacy of [false,true]) test(`3097 repair 1: all-lost waits attach an access incident${legacy?' saved without a first run':''}`,async t=>{
+  const f=await launcher(t);await f.start();f.prompts.length=0;
+  f.waits=[wait(12,f.time,{cause:'unknown'})];
+  f.health={state:'access',detail:'HTTP 401',fix:'gh auth status'};
+  if(legacy){
+    const state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
+    state.runtime={access:{since:f.time,issues:[]}};
+    writeFileSync(f.stateFile(),JSON.stringify(state));
+  }
+  f.time+=minute;await f.tick();
+  assert.equal(f.sent.length,1,'a lost-verdict-only wait still needs an interpreter-access alert');
+  assert.match(f.sent[0],/interpreter-access/);assert.match(f.sent[0],/HTTP 401/);
+  let state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
+  assert.equal(state.runtime.access.first,12);assert.deepEqual(state.runtime.access.issues,[12]);
+  f.waits.push(wait(15,f.time,{cause:'unknown'}));
+  f.time+=minute;await f.tick();f.time+=5*60*minute;await f.tick();
+  state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
+  assert.deepEqual(state.runtime.access.issues,[12,15]);assert.equal(f.sent.length,1);
+  assert.deepEqual(kinds(f),[],'lost verdicts stay parked without retry or stuck wakes');
+  assert.equal(state.runtime.lostDecision,undefined,'access failure must not ask for a resend decision');
+  f.health={state:'healthy',detail:'HTTP 200'};f.time+=minute;await f.tick();
+  assert.equal(f.sent.filter(text=>text.includes('workflow resend')).length,1);
+  assert.equal(f.sent.filter(text=>text.includes('recovered: interpreter-access')).length,1);
+  assert.deepEqual(kinds(f),[],'health recovery cannot wake a lost verdict automatically');
 });

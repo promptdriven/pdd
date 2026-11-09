@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 249b4577e77097450e54fe2c27a2bba445c33e41a84101bec3cd7128dfae16a7).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 88e83fb25cd7dbe412869e5629bc18561bbdb4b31052251abd5f1cc97ddcf913).
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';
@@ -193,6 +193,25 @@ export function savedCheckCause(batch, { env = process.env } = {}) {
   if (shown && savedRows && [...states(savedRows)].some(([key, list]) => shown.has(key) && shown.get(key).join() !== list.join())) return 'unknown';
   return checkCause(summaryRows ?? savedRows);
 }
+// A person may buy one replacement for a stopped check, while all original receipts stay intact.
+export function savedLostCheck(batch, { env = process.env, root } = {}) {
+  if (!BATCH.test(String(batch ?? '')) || typeof root !== 'string') return null;
+  const folder = join(stateFolder(env), 'batches', batch);
+  const saved = readJson(join(folder, 'batch.json')), summary = readJson(join(folder, 'summary.json'));
+  if (saved?.batch !== batch || saved.intent !== 'check' || typeof saved.root !== 'string' || real(saved.root) !== real(root)
+    || !Array.isArray(saved.rows) || !saved.rows.length || !/^[a-f0-9]{64}$/.test(saved.source_sha256 ?? '')) return null;
+  if (saved.rows.some(row => !row || (OPEN_ROWS.has(row.recovery_state ?? row.state) || row.state === 'sent'))) return null;
+  const lost = saved.rows.filter(row => ['partial', 'unknown'].includes(resultOutcome(row).state));
+  const safePath = path => typeof path === 'string' && path.length && !isAbsolute(path) && !path.startsWith('-')
+    && !path.split(/[\\/]/).includes('..');
+  if (!lost.length || !lost.every(row => safePath(row.test) && Number.isInteger(row.max_calls) && row.max_calls >= 1 && row.max_calls <= 1000)) return null;
+  const usage = saved.rows.map(row => summary?.rows?.find(item => item.test === row.test) ?? row);
+  const numeric = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const knownCalls = usage.reduce((sum, row) => sum + (numeric(row.calls) ? row.calls : numeric(row.known_calls) ? row.known_calls : 0), 0);
+  return { batch, sourceSha256: saved.source_sha256, tests: [...new Set(lost.map(row => row.test))],
+    maxCalls: Math.min(...lost.map(row => row.max_calls)), cost: { calls: usage.every(row => numeric(row.calls)) ? knownCalls : null, knownCalls } };
+}
+
 // Proof that the interpreter gave a verdict after a time: a passed or failed row of this worktree's pdd test that ended at or
 // after `since` (a sent check, not a cached pass or a read of an older answer). It reads files only.
 export function latestCheckVerdict({ root, since }, { env = process.env } = {}) {

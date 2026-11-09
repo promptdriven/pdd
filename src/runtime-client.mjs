@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: cddb84d11a00e822a0e0a93ffdf6b262f5b89e968cd480bcb29b471ce5317ab9).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1e835b5f96c50aa4a40dcc77ebf7414ed980b9dfa3874cfcab3e16fa2d662264).
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
@@ -1308,6 +1308,7 @@ function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
+    ...(context.singleAttempt ? {single_attempt:true} : {}),
     exclude_fixture_projects: context.excludeFixtureProjects === true,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint: lint ? { ...lint, recovery_state: lint.state, ...resultOutcome(lint.public_result ?? lint) } : lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
@@ -2209,7 +2210,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
+  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
@@ -2299,7 +2300,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
 }
 
 async function recoverRestarts(context) {
-  if (context.intent !== undefined && context.intent !== 'check') return [];
+  if (context.singleAttempt || context.intent !== undefined && context.intent !== 'check') return [];
   const eligible = context.rows.filter(row => {
     adoptClaims(context, row);
     const id = row.request_ids.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
@@ -2512,7 +2513,7 @@ async function withCheckRun(context, run) {
 // pdd test. Returns the exit code.
 export async function runCheck({ words = [], options = {}, cwd = process.cwd(), cache = false } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts);
-  const context = { ports, cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
+  const context = { ports, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
     if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
