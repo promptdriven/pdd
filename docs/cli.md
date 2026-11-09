@@ -620,7 +620,7 @@ Reuse includes reached call targets, exact authored bytes, interpreter origin, c
 - A GitHub login that is not invited gets one line: `Your GitHub login NAME is not on the PDD interpreter invite list yet. Ask the PDD team to add you.` A GitHub account without PDD Cloud access gets the server's sign-up line (sign up at https://promptdriven.ai/login). When PDD Cloud cannot check the account, pdd says at once `PDD Cloud could not confirm your access. Try again in a minute.` A pdd that is too old gets `Please update pdd: …`. All of these exit with code 5.
 - The interpreter address is set in one place in pdd. You do not need to set it.
 
-Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint reports unmatched controls, labels and unspecified layout regions; a generic data-field mention does not describe a score box or status bar. SVG warnings do not change the exit code. Runtime interface findings exit 4 and name the draft command. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
+Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint reports unmatched controls, labels and unspecified layout regions; a generic data-field mention does not describe a score box or status bar. SVG warnings do not change the exit code. Default local lint also checks workspace interfaces. Interface findings exit 4 and name the draft command. Named Runtime Story local lint retains its SVG-only advisory; dependency prompts supply layout context. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
 
 An explicitly selected Story with a `Native validation` owner link is assessed from its saved native evidence by `pdd lint STORY`, including `pdd lint --local STORY`. This reads no hosted service and creates no association. Missing native proof exits 1; complete current whole-Story proof exits 0. It is separate from the SVG-only advisory for Runtime Stories.
 
@@ -1082,7 +1082,7 @@ Native-only requires a reason that names an effect the bound ports cannot fake
 (RUNBOOK §21). A checker reviews the reason. Approval records it. Checks show
 `not run: <reason>`, with no passing result. Other selected tests can run.
 
-Test output, workflow status and saved PR evidence include `Runtime coverage: N of M prompts checkable, K native-only`. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
+Test output, workflow status and saved PR evidence include prompt coverage counts. Text uses `Runtime coverage: N of M prompts checkable, K native-only` for native declarations and `Interpreter coverage` otherwise. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
 
 Saved reads preserve native-only outcomes and reasons while other selected rows
 wait for lint or complete it. Local lint also saves coverage and omission evidence

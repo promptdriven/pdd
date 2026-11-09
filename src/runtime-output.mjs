@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: ac90b0713bef29826529511170fdad5f6e57103b2b897619ceabc14fcdd390b1).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: c9ce3391adce6318e14b67bca43cb54c702e7f875e1835a49027f397cbd5ca36).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -489,7 +489,7 @@ export function tryUsageHeaders(usage) {
 
 export function coverageText(coverage) {
   const runtime = coverage?.runtime;
-  const promptLine = runtime ? `Runtime coverage: ${runtime.checkable} of ${runtime.total} prompts checkable, ${runtime.native_only} native-only\n` : '';
+  const promptLine = runtime ? `${runtime.native_only ? 'Runtime' : 'Interpreter'} coverage: ${runtime.checkable} of ${runtime.total} prompts checkable, ${runtime.native_only} native-only\n` : '';
   if (!coverage?.available) return promptLine + 'Module binding coverage unavailable: no pdd-bindings.json.';
   return promptLine + [`${coverage.bound} of ${coverage.total} modules bound`, ...coverage.modules.filter(m => m.state === 'unbound').map(m => `  ${m.path}: ${m.reason} Port attempted: ${m.port_attempt}`)].join('\n');
 }

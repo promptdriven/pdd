@@ -1162,3 +1162,11 @@ Early local-limit refusals also use the shared projection and text formatter for
 every selected row, including unaffected not-run siblings with no-server-verdict.
 A partial lint cannot
 admit Check or Try, including saved continuation and retry.
+
+## Candidate compatibility boundaries
+
+Request `includeRuntime: true` from bindingCoverage for command reports; direct inventory consumers retain their original shape. A lint access/transport stop with no native omissions keeps its original stderr-only exit 5. With native omissions, retain their reasons and coverage in the immediate and saved report. Exit-5 check reports without native declarations keep the prior module-only coverage shape; a transport/access failure is not an interpreter coverage verdict.
+
+For named Runtime Story `lint --local`, keep the SVG-only advisory: captured dependency prompts are layout context, not a request to admit every dependency as a Runtime program. Default `lint --local` checks workspace interface declarations as well. Named nonlocal lint and checks retain executable interface admission. Native-validation Story selection keeps its separate saved-evidence route.
+
+Local lint findings use a local heading; server findings retain interpreter attribution. Intentional native-only omissions count separately from malformed unsent tests in lint summaries. Native omissions never supply a pass.

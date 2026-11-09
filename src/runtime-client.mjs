@@ -1,5 +1,5 @@
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8f7ef1aed089081906c01588a605bc654ff850647b7d7b880a2b97c565d9d78d).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: d2d1a5200bcdfaa937010139e919cf5b86ce9fe6ed26c5c63d55bd315805af9f).
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -1854,7 +1854,9 @@ function printResult(context, rows, extra = {}) {
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
   const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the interpreter engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
-  const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage: context.coverage, rows, exitCode, summaryLine: context.noFailed ? 'No failed Stories. 0 AI calls.' : summaryLine(rows),
+  const coverage = exitCode === 5 && context.coverage?.runtime?.native_only === 0
+    ? Object.fromEntries(Object.entries(context.coverage).filter(([key])=>key !== 'runtime')) : context.coverage;
+  const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage, rows, exitCode, summaryLine: context.noFailed ? 'No failed Stories. 0 AI calls.' : summaryLine(rows),
     warnings: [...new Set([...warnings, ...(context.unmatched ?? [])]), ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
   if (context.batch && rows.some(row => row.can_retry)) line(ports.stderr, `Retry only unstarted checks with: pdd test --retry ${context.batch}`);
@@ -1873,7 +1875,7 @@ function printResult(context, rows, extra = {}) {
 
 function runFiles(cwd, words, options, ports) {
   const { root, found, normalized } = localSetup(cwd, words);
-  const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected });
+  const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   const rows = selected.map(test => ({test:test.path,story:test.story,state:'ready',refusals:[],
     ...(discoveryRefusal(test) ? {state:'refused',unsent:true,refusals:[discoveryRefusal(test)]} : {})}));
   const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
@@ -1920,7 +1922,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     return 4;
   }
   const selected = select(found, normalized, root);
-  context.coverage = bindingCoverage({ root, found, selected });
+  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
@@ -2025,7 +2027,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   let lint;
   try { lint = await runLint(context); }
   catch (error) {
-    if (!(error instanceof Stop) || error.exitCode !== 5) throw error;
+    if (!(error instanceof Stop) || error.exitCode !== 5 || !rows.some(row=>row.native_only?.length)) throw error;
     lint = {kind:'stop',note:{code:'blocked',message:error.message}};
   }
   if (lint.kind === 'pending') { context.lintPending = true; Object.assign(context.lint, { state: lint.answer.state, pending: true });
@@ -2094,8 +2096,9 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   }
   const localRefusal = context.localOnly && (problems.length > 0 || rows.some(row => row.state === 'refused'));
   const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = localRefusal ? 4 : exitCodeFor(rows);
-  const broken = rows.filter(row=>row.unsent).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
-  const summary = `Lint: ${passing} of ${rows.length} tests pass.${broken ? ` ${broken} tests could not run.` : ''}${unchecked ? ` ${unchecked} criteria not checked. The Story is not a full pass.` : ''} 0 AI calls. No checks were sent.`;
+  const omitted = rows.filter(row=>row.native_only?.length && !row.refusals?.length).length;
+  const broken = rows.filter(row=>row.unsent && (!row.native_only?.length || row.refusals?.length)).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
+  const summary = `Lint: ${passing} of ${rows.length} tests pass.${broken ? ` ${broken} tests could not run.` : ''}${omitted ? ` ${omitted} native-only tests omitted.` : ''}${unchecked ? ` ${unchecked} criteria not checked. The Story is not a full pass.` : ''} 0 AI calls. No checks were sent.`;
   const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
   const result = { batch, repo: root, exit_code: exitCode, lint_state: resultOverall(rows).state, ...resultOverall(rows), summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
@@ -2110,7 +2113,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
     `${row.test}: ${problem.message}`, problem.hint ?? 'Fix the named test file, then run the selection again.');
   for (const row of rows) for (const item of row.not_checked ?? []) out.push(`${row.test} ${item.criterion_id}: not checked: ${item.reason}`);
   if (problems.length) {
-    out.push('Lint problems (from the PDD interpreter):');
+    out.push(context.localOnly ? 'Local lint problems:' : 'Lint problems (from the PDD interpreter):');
     for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
   }
   for (const row of rows) out.push(`  ${row.test}  ${outcomeText(row)}${row.note ? `: ${row.note.message}` : ''}`);
@@ -2659,7 +2662,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
           promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
-        const problems = interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
+        const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, state: problems.length ? 'refused' : 'partial', lint_state: 'partial', ...resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}), rows: [], problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
         return problems.length ? 4 : 0;
@@ -3204,7 +3207,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
     const count = new Set(selected.map(test => test.storyPath ?? test.path)).size;
     line(ports.stderr, `pdd: test cache ${cache && !cache.disabled ? 'cleared' : 'unavailable'}. Running ${count} selected ${count === 1 ? 'Story' : 'Stories'}; the interpreter may reuse saved answers.`);
   }
-  context.coverage = bindingCoverage({ root, found, selected });
+  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
   context.rows = rows;
