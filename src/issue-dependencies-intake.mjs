@@ -1,5 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: d098606e91907fb1c461bb31a880cb4f1ed316f6ecbca17460e9ee61781061ca).
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: 399c196da1ad3776ad6ab4e423c2f0e7150ae641316baab80962ce3210b00046).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -12,7 +12,27 @@ import { gitContext } from './workflow-runs.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange, issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, readDependencySnapshot, saveDependencyReview, saveDependencyImpact, applyDependencyChanges, commandGithubFloor } from './issue-dependencies-github.mjs';
 
-const snapshotRead = (ports, args) => ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports);
+const snapshotRead = async (ports, args) => {
+  const result = await (ports.snapshots?.read ? ports.snapshots.read(args) : readDependencySnapshot(args, ports));
+  if (!ports.manualHold) return result;
+  // Intake can discover nodes outside the selected review subjects. Observe all
+  // of them before completion recovery, sorting or pending dependency effects.
+  const snapshot = structuredClone(result.snapshot);
+  for (const issue of snapshot.issues) {
+    if (!root(issue.key, args.repository)) continue;
+    let hold;
+    const coverage = snapshot.coverage?.issues.find(row => row.key === issue.key);
+    const observation = {held:issue.holds.includes('pdd:manual'), known:coverage?.issue !== false && !(issue.labels?.includes('pdd:manual') && coverage?.timeline === false) && !(coverage?.missing ?? []).some(text => /manual hold/i.test(text))};
+    try { hold = await ports.manualHold.read({repository:args.repository, issue:Number(issue.key.split('/').pop()), observation}); }
+    catch { hold = {known:false}; }
+    if (hold.held && !issue.holds.includes('pdd:manual')) issue.holds.push('pdd:manual');
+    if (!hold.known) {
+      if (coverage) { coverage.timeline = false; coverage.missing.push('Manual hold evidence unavailable'); }
+      else snapshot.complete = false;
+    }
+  }
+  return {...result, snapshot};
+};
 const root = (key, repository) => key.toLowerCase().startsWith(`https://github.com/${repository.toLowerCase()}/issues/`);
 const json = value => typeof value === 'string' ? JSON.parse(value) : value;
 const rows = snapshot => new Map([...snapshot.issues.map(x => [x.key, x.revision]), ...snapshot.inputs.map(x => [x.key, x.revision])]);
@@ -398,7 +418,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   let recovered = false;
   for (const node of graph.nodes) {
     const review = snapshot.reviews.find(r => r.id === node.review);
-    if (!skipped.includes(node.key) && !node.reasons.includes('Incomplete relevant observations') && node.reviewState === 'pending' && review?.effects === 'pending') {
+    if (subjects.includes(node.key) && !skipped.includes(node.key) && !node.reasons.includes('Incomplete relevant observations') && node.reviewState === 'pending' && review?.effects === 'pending') {
       await (ports.reviews?.apply ?? applyDependencyChanges)({ cwd, repository, issue: node.key, reviewId: review.id }, ports); recovered = true;
     }
   }
@@ -422,6 +442,10 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
   // One delivery through the existing route. `redelivery` marks a repeated request
   // while it is sent, so the launcher can name it and refuse it under uncertain custody.
   const send = async again => {
+    if (ports.manualHold) for (const key of prepared.queued) {
+      const hold = await ports.manualHold.read({repository, issue:Number(key.split('/').pop())});
+      if (!hold.known || hold.held) return false;
+    }
     // Snapshot ownership can predate a restart or takeover. Check before AI work.
     try {
       const live = json((await ports.owners.read({ repository, issues: prepared.queued })).json);

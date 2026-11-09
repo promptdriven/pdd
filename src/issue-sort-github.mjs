@@ -1,5 +1,5 @@
 import { readManualHold } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 7b10f3e6725b8945b62f7c7d0a5d766a3717a902eda351238a71df998507bcca).
+// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 6bb712bf5b24b9733e3b9e3b2b147caa9997b995e243c4bbc83110c1ca5319c6).
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -139,6 +139,10 @@ export async function currentSortIssue({ cwd, repository, snapshot, route }, por
 async function sortOwnership({ repository, route, areas }, ports) {
   // Keep these observations after all potentially long evidence reads. The native
   // update calls this again inside its mutation guard, after any admission wait.
+  if (ports.manualHold) {
+    const held = await ports.manualHold.read({repository, issue:Number(route.issue.split('/').pop())});
+    if (!held.known || held.held) return false;
+  }
   const manual = await readManualHold({ repository, issue: Number(route.issue.split('/').pop()), cwd: ports.cwd }, ports);
   if (!manual.known || manual.held) return false;
   const owners = parse((await ports.owners.read({ repository, issues: [route.issue] })).json);

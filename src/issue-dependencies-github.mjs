@@ -3,7 +3,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 15c49286212f3518f1ba7eb1fe6bf5ad1056522167fae3ff1eabf4b79cfd0e4a).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: f8569417196ff7f2de3199926ee523baead550ba2ec849b5c94a7728e7c8cec1).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -330,10 +330,10 @@ function rawGithub(cwd, ports) {
         || !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*$/.test(closer.url ?? '')) return { url: '' };
       return { url: closer.url };
     },
-    addBlocker: async ({ repository, issue, blockerId }) => {
+    addBlocker: async ({ repository, issue, blockerId, checkOwnership }) => {
       if (!/^[1-9][0-9]*$/.test(blockerId)) throw Error('Invalid REST issue identity');
       // Decimal digits become one JSON number token. Never pass through a JS Number.
-      await s.api(`repos/${repository}/issues/${issue}/dependencies/blocked_by`, 'POST', `{"issue_id":${blockerId}}`);
+      await s.api(`repos/${repository}/issues/${issue}/dependencies/blocked_by`, 'POST', `{"issue_id":${blockerId}}`, undefined, undefined, checkOwnership);
       return { ok: true };
     },
   };
@@ -1606,6 +1606,18 @@ function validReview(review) {
     && (review.outcome !== 'complete' || !review.questions.length) && (review.outcome !== 'question' || review.questions.length > 0);
 }
 
+// A shared early observation is conservative for the tick. A fresh safety read
+// also catches a label added after preparation or during a mutation admission wait.
+async function manualEffectClear({repository, issue, cwd = ''}, ports) {
+  if (ports.manualHold) {
+    let hold;
+    try { hold = await ports.manualHold.read({repository, issue}); } catch { return false; }
+    if (!hold.known || hold.held) return false;
+  }
+  const hold = await readManualHold({repository, issue, cwd}, ports);
+  return hold.known && !hold.held;
+}
+
 async function saveRecord({ repository, issue, value, type }, supplied) {
   const i = info(issue);
   if (!repositoryName(repository) || !i || i.comment || !sameRepo(i.repository, repository)) fail('invalid-review');
@@ -1615,7 +1627,9 @@ async function saveRecord({ repository, issue, value, type }, supplied) {
   const marker = type === 'review' ? REVIEW : IMPACT;
   const body = `${readable}\n\n<!-- ${marker} -->\n<details><summary>${title}</summary>\n\n\`\`\`json\n${JSON.stringify({ schema_version: `pdd.dependency-${type}.v1`, [type]: value })}\n\`\`\`\n</details>`;
   try {
-    const raw = parse((await ports.github.appendComment({ repository, issue: i.issue, body })).json);
+    const checkOwnership = () => manualEffectClear({repository, issue:i.issue, cwd:ports.cwd}, ports);
+    if (!await checkOwnership()) return {id:'', state:'pending', warnings:[]};
+    const raw = parse((await ports.github.appendComment({ repository, issue: i.issue, body, checkOwnership })).json);
     if (!raw.id) throw Error('No native comment confirmation');
     return { id: String(raw.id), state: 'saved', warnings: [] };
   } catch { return { id: '', state: 'pending', warnings: ['The comment append is unresolved; reread this analysis before retry.'] }; }
@@ -1647,7 +1661,8 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
   const inputs = nonIssueRows(intent.inputs);
   const accepted = current => {
     const node = projectIssueGraph({ snapshot: current }).nodes.find(n => n.key === target.key);
-    return node?.review === reviewId && node.reviewState === 'pending' && !node.reasons.includes('Incomplete relevant observations');
+    return !current.issues.find(i => i.key === target.key)?.holds?.includes('pdd:manual')
+      && node?.review === reviewId && node.reviewState === 'pending' && !node.reasons.includes('Incomplete relevant observations');
   };
   if (!accepted(snapshot)) return pending('The intent is stale, conflicting or unverified');
   // A person's change wins. A named blocker is refused when a person removed that
@@ -1701,7 +1716,9 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
     const blocker = snapshot.issues.find(i => info(i.key)?.key === info(dependency.key)?.key);
     if (!/^[1-9][0-9]*$/.test(blocker?.nodeId ?? '')) return pending('REST blocker identity is unavailable');
     if (ports.admitEffect && !await ports.admitEffect()) return pending('Automatic control changed before dependency effect');
-    try { await ports.github.addBlocker({ repository, issue: target.issue, blockerId: blocker.nodeId }); }
+    const checkOwnership = () => manualEffectClear({repository, issue:target.issue, cwd}, ports);
+    if (!await checkOwnership()) return pending('Manual hold prevents dependency effect');
+    try { await ports.github.addBlocker({ repository, issue: target.issue, blockerId: blocker.nodeId, checkOwnership }); }
     catch { /* An unclear reply is resolved only by observing the native edge. */ }
     // The readback after a write is a safety read: the floor does not stop it.
     if (ports.dependencyReads) ports.dependencyReads.safety++;

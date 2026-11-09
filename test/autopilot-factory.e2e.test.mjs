@@ -150,6 +150,31 @@ test('factory 3129: manual labels exclude intake and removal restores eligibilit
   assert.deepEqual(w.leadActions,[]);
 });
 
+test('factory 3129 repair: replacement coordinator observes a manual hold before worker recovery', async t => {
+  const w = await factoryWorld(t, {workflow:'bug'});
+  await w.begin();
+  const agent = scriptedAgent(w);
+  await agent.until(run => Boolean(run.done.reproduce));
+  await w.command(['workflow','status','17']);
+  const before = w.record(), head = w.git(before.root,'rev-parse','HEAD');
+  assert.ok(before.chats.at(-1).session?.id);
+  const state = w.state();
+  state.coordinatorId = 'replacement-coordinator';
+  state.ownerLaunch.coordinator.coordinatorId = state.coordinatorId;
+  writeFileSync(w.stateFile, JSON.stringify(state));
+  w.herdr.workspaces = []; w.herdr.tabs = []; w.herdr.panes = []; w.time += 120000;
+  await w.github.gh(['issue','edit','17','--add-label','pdd:manual']);
+  await w.tick();
+  assert.equal(w.herdr.panes.filter(pane => pane.cwd === before.root && pane.agent).length, 0, 'manual worker resumed after coordinator replacement');
+  assert.deepEqual(w.state().manualIssues, [17]);
+  const after = w.record();
+  assert.equal(after.runId, before.runId); assert.equal(after.root, before.root);
+  assert.deepEqual(after.done, before.done); assert.deepEqual(after.pr, before.pr);
+  assert.equal(w.git(before.root,'rev-parse','HEAD'), head);
+  assert.ok(after.state === 'cancelled' || after.automaticOrigin.claim, 'safe custody must survive a held restart');
+  assert.deepEqual(w.leadActions, []);
+});
+
 test('factory 3129: manual label releases saved claimed work without losing it',async t=>{
   const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.finish();
   const before=w.record(), head=w.git(before.root,'rev-parse','HEAD'),prs=structuredClone(w.github.prs);
