@@ -230,13 +230,18 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     row = await underLock(p, () => {
       const all = records(p), ticket = (all.at(-1)?.ticket ?? 0) + 1;
       const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
+      const logFolder = join(env.PDD_STATE_DIR ?? join(env.HOME || process.env.HOME,'.local','state','pdd'), 'validation', createHash('sha256').update(p.root).digest('hex').slice(0,20));
       Object.assign(record, {command:'[redacted]', commandFingerprint:createHash('sha256').update(command).digest('hex'), source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),
-        logPath:join(env.PDD_STATE_DIR ?? join(env.HOME || process.env.HOME,'.local','state','pdd'), 'validation', createHash('sha256').update(p.root).digest('hex').slice(0,20), `validation-${ticket}.log`), receiptPath:join(p.root,`ticket-${ticket}.json`),
+        logPath:null, receiptPath:join(p.root,`ticket-${ticket}.json`),
         recorderPid:null, recorderIdentity:null, exitCode:null, signal:null, counts:null, outcome:'running'});
-      // Validate the receipt before creating even an empty log.
-      serializeValidationReceipt(record);
-      p.fs.mkdirSync(join(record.logPath,'..'), {recursive:true,mode:0o700});
-      p.fs.writeFileSync(record.logPath, '', {mode:0o600,flag:'wx'});
+      for (;;) {
+        record.logPath = join(logFolder, `validation-${ticket}-${p.uuid()}.log`);
+        // Validate each candidate before creating even an empty log.
+        serializeValidationReceipt(record);
+        p.fs.mkdirSync(logFolder, {recursive:true,mode:0o700});
+        try { p.fs.writeFileSync(record.logPath, '', {mode:0o600,flag:'wx'}); break; }
+        catch (error) { if (error.code !== 'EEXIST') throw error; }
+      }
       try { save(p, record); }
       catch (error) { try { p.fs.unlinkSync(record.logPath); } catch {} throw error; }
       return record;

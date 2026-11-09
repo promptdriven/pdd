@@ -14,6 +14,7 @@ import {checkRuntimeHealth} from '../src/runtime-client.mjs';
 import {runAutopilotDoctor} from '../src/autopilot-doctor.mjs';
 import {doctorFixture} from './helpers/doctor-fixture.mjs';
 import {redactSecrets} from '../src/secret-redaction.mjs';
+import {loadAgentDefinitions} from '../src/agent-config.mjs';
 import {redactingLines,MAX_EVIDENCE_LINE_BYTES,MAX_VALIDATION_LOG_BYTES,MAX_VALIDATION_RECEIPT_BYTES} from '../src/validation-evidence.mjs';
 
 const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
@@ -32,6 +33,73 @@ function fixture(t) {
 }
 const read = path => JSON.parse(fs.readFileSync(path,'utf8'));
 const summary = 'TAP version 13\n1..2\n# tests 2\n# suites 0\n# pass 1\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n';
+
+test('012 fix-ups 2: agents.json child environment credentials are safe without doctor',async t=>{
+  const f=fixture(t),prefix='opaque-agent-config-child-',tail='PRIVATE-SUFFIX',secret=prefix+tail,program=join(f.root,'agent-env.cjs'),writes=[];
+  const folder=join(f.env.HOME,'.config','pdd');fs.mkdirSync(folder,{recursive:true});
+  fs.writeFileSync(join(folder,'agents.json'),JSON.stringify({include_defaults:false,
+    agents:[{name:'Custom',kind:'codex',command:process.execPath,env:{CUSTOM_TOKEN:prefix,CUSTOM_API_KEY:secret}}]}));
+  const [agent]=loadAgentDefinitions({cwd:f.root,env:f.env});
+  assert.equal(agent.env.CUSTOM_API_KEY,secret);assert.equal(f.env.CUSTOM_API_KEY,undefined);
+  // The launcher passes the loaded override to the real validation child.
+  // The child reads the value only from its own environment.
+  fs.writeFileSync(program,`const value=process.env.CUSTOM_API_KEY;(async()=>{for(const stream of ['stdout','stderr']){for(let i=0;i<value.length;i+=7)await new Promise(done=>process[stream].write(value.slice(i,i+7),done));await new Promise(done=>process[stream].write('\\nchild-env-safe\\n',done));}})();`);
+  let forwarded='';const capture={write(bytes){forwarded+=bytes;}};
+  const disk={...fs,writeFileSync(path,data,options){if(String(path).includes('ticket-'))writes.push(String(data));return fs.writeFileSync(path,data,options);}};
+  const result=await runTestSuite({cwd:f.root,command:`CUSTOM_TOKEN=${quote(agent.env.CUSTOM_TOKEN)} CUSTOM_API_KEY=${quote(agent.env.CUSTOM_API_KEY)} ${quote(agent.command)} ${quote(program)}`,env:f.env},
+    {...f.ports,fs:disk,stdout:capture,stderr:capture,source:()=>({head:null,fingerprint:null,runId:null,issue:null,error:secret})});
+  assert.equal(result.exitCode,0);assert.ok(writes.length>=3);
+  const row=read(f.receipt),log=fs.readFileSync(row.logPath,'utf8');
+  assert.equal(row.outcome,'completed');
+  for(const saved of [log,forwarded,fs.readFileSync(f.receipt,'utf8'),...writes]) {
+    assert.equal(saved.includes(secret),false);assert.equal(saved.includes(tail),false);
+  }
+  for(const saved of [log,forwarded])assert.equal(saved.split('child-env-safe').length-1,2);
+});
+
+test('012 fix-ups 2: overlapping values stay safe in all receipt writes and returned errors',async t=>{
+  for(const reverse of [false,true]) {
+    const f=fixture(t),short=`opaque-error-${reverse}-prefix`,long=short+'CONFIDENTIAL-TAIL',writes=[];
+    Object.assign(f.env,reverse?{LONG_PASSWORD:long,SHORT_TOKEN:short}:{SHORT_TOKEN:short,LONG_PASSWORD:long});
+    const disk={...fs,writeFileSync(path,data,options){if(String(path).includes('ticket-'))writes.push(String(data));return fs.writeFileSync(path,data,options);}};
+    const result=await runTestSuite({cwd:f.root,command:'true',env:f.env},{...f.ports,fs:disk,
+      source:()=>({head:null,fingerprint:null,runId:null,issue:null,error:long}),alive:pid=>pid===process.pid,
+      execute:async(_command,options)=>{options.onChild(987654321);throw Error('provider reply '+long);}});
+    assert.equal(result.exitCode,1);assert.ok(writes.length>=3);
+    for(const saved of [result.message,fs.readFileSync(f.receipt,'utf8'),...writes])assert.equal(saved.includes('CONFIDENTIAL-TAIL'),false);
+    assert.equal(read(f.receipt).outcome,'completed');
+  }
+});
+
+test('012 fix-ups 2: queue reset preserves both logs and permits validation again',async t=>{
+  const f=fixture(t),capture={write(){}};
+  const run=()=>runTestSuite({cwd:f.root,command:'printf "retained-log\\n"',env:f.env},{...f.ports,stdout:capture,stderr:capture});
+  assert.equal((await run()).exitCode,0);
+  const before=read(f.receipt),original=fs.readFileSync(before.logPath);
+  fs.rmSync(f.env.PDD_SUITE_QUEUE,{recursive:true});
+  assert.equal((await run()).exitCode,0,'queue reset must permit a new attempt');
+  const after=read(f.receipt);
+  assert.equal(before.ticket,after.ticket);assert.notEqual(before.logPath,after.logPath);
+  assert.deepEqual(fs.readFileSync(before.logPath),original);assert.deepEqual(fs.readFileSync(after.logPath),original);
+  for(const row of [before,after])assert.equal(fs.statSync(row.logPath).mode&0o777,0o600);
+});
+
+test('012 fix-ups 2: an existing log file selects a fresh attempt name',async t=>{
+  const f=fixture(t),attempts=[],capture={write(){}};
+  const disk={...fs,writeFileSync(path,data,options){
+    if(options?.flag==='wx'&&String(path).endsWith('.log')) {
+      attempts.push(String(path));
+      if(attempts.length===1)fs.writeFileSync(path,'prior-attempt',{mode:0o600,flag:'wx'});
+    }
+    return fs.writeFileSync(path,data,options);
+  }};
+  const result=await runTestSuite({cwd:f.root,command:'printf "fresh-attempt\\n"',env:f.env},
+    {...f.ports,fs:disk,stdout:capture,stderr:capture});
+  assert.equal(result.exitCode,0,'existing evidence must not block validation');
+  assert.equal(attempts.length,2);assert.notEqual(attempts[0],attempts[1]);
+  assert.equal(fs.readFileSync(attempts[0],'utf8'),'prior-attempt');
+  assert.equal(fs.readFileSync(read(f.receipt).logPath,'utf8'),'fresh-attempt\n');
+});
 
 test('integration fix-up: pending sensitive fields cover the assignment grammar on both streams',async t=>{
   const f=fixture(t),rows=[];

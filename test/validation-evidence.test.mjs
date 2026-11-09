@@ -1,7 +1,30 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {redactingLines,validationLog,serializeValidationReceipt,MAX_VALIDATION_LOG_BYTES,MAX_EVIDENCE_LINE_BYTES} from '../src/validation-evidence.mjs';
+import {redactingLines,validationLog,serializeValidationReceipt,safeEvidenceText,MAX_VALIDATION_LOG_BYTES,MAX_EVIDENCE_LINE_BYTES} from '../src/validation-evidence.mjs';
+import {redactSecrets,rememberSecrets,redactingValues} from '../src/secret-redaction.mjs';
+
+test('012 fix-ups 2: scalar and stream exact matches use original input and longest match first',()=>{
+  const cases=[
+    {values:['opaque-prefix','opaque-prefixPRIVATE-TAIL'],input:'opaque-prefixPRIVATE-TAIL',expected:'[redacted]'},
+    {values:['inside','opaque-inside-private'],input:'opaque-inside-private',expected:'[redacted]'},
+    {values:['opaque-abc','abc-tail'],input:'opaque-abc-tail',expected:'[redacted]-tail'},
+  ];
+  for(const {values,input,expected} of cases) for(const secrets of [values,[...values].reverse()]) {
+    const text='safe-before '+input+' safe-after',want='safe-before '+expected+' safe-after';
+    assert.equal(redactSecrets(text,secrets),want);
+    for(let split=0;split<=text.length;split++) {
+      let saved='';const stream=redactingValues(value=>saved+=value,secrets);
+      stream.write(text.slice(0,split));stream.write(text.slice(split));stream.end();
+      assert.equal(saved,want);
+    }
+  }
+  // Receipt and bounded error consumers use the same scalar rule before clipping.
+  const short='opaque-receipt-prefix',long=short+'PRIVATE-TAIL';
+  rememberSecrets(short,long);
+  for(const saved of [safeEvidenceText(long),serializeValidationReceipt({reason:long,source:{error:long}})])
+    assert.equal(saved.includes('PRIVATE-TAIL'),false);
+});
 
 for(const kind of ['quoted secret','private key'])
 test(`repair 2: bounded scanning retains ${kind} across overflow and awkward windows`,()=>{

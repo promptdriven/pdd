@@ -105,6 +105,10 @@ merge or prove the checkout stayed unchanged. Keep each attempt separately.
 Store receipts with mode 0600 in the private queue directory. Store bounded logs
 with mode 0600 under the caller's user state folder (PDD_STATE_DIR, otherwise
 HOME/.local/state/pdd), in a validation subfolder unique to the queue.
+Each log name combines the queue-path hash, ticket and a random attempt ID.
+Keep exclusive creation and retry with a fresh attempt ID if a file exists.
+Queue resets and reboots must not reuse or overwrite retained logs or block a
+new attempt on an existing file.
 Commands can contain unrecognizable positional secrets. Save `command` as
 `[redacted]` and `commandFingerprint` as the SHA-256 hex digest of the original
 UTF-8 command; execute the original only in memory. The fingerprint identifies
@@ -112,8 +116,8 @@ an attempt without storing command values. Do not reconstruct the command.
 
 Before any durable write, redact every receipt string and stdout/stderr using
 [shared secret redaction](secret-redaction.prompt.md). Its exact-value guarantee
-covers the process and caller environment secret values and credentials pdd has
-read. Transfer that inventory to the detached recorder only in memory over IPC;
+covers the child-visible credentials defined by that shared threat model.
+Transfer the known inventory to the detached recorder only in memory over IPC;
 do not pass it into the clean suite environment. Apply exact-value stream
 redaction before line handling, pattern matching or clipping. Use separate
 bounded overlap windows for stdout and stderr, including values containing LF

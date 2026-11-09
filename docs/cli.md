@@ -934,11 +934,21 @@ receipts are in the same queue. The receipt stores a redacted command, its SHA-2
 worktree fingerprint, matching workflow run, owned recorder and child, terminal
 exit and signal, and complete TAP summary counts when available. Missing counts
 stay unknown. Logs and receipts use mode 0600. Logs are under PDD_STATE_DIR, or
-HOME/.local/state/pdd, in a validation folder for the selected queue. Commands are saved as
+HOME/.local/state/pdd, in a validation folder for the selected queue. Log names
+combine the queue-path hash, ticket and a random attempt ID. An existing file
+causes a fresh ID to be selected. Resetting the queue or rebooting preserves
+earlier logs and permits a new attempt. Commands are saved as
 `[redacted]` because positional arguments can hold secrets. Execution uses the
 original command. Known secret values in output and error text are redacted before any save or
-forwarding. These include secret-named environment values (TOKEN, SECRET,
-PASSWORD, *_KEY and similar names) and gh and agent credentials read by pdd.
+forwarding. The completeness guarantee covers what the validation child can
+print: secret-named values in its own environment (TOKEN, SECRET, PASSWORD,
+*_KEY and similar names), and credentials pdd passes in arguments, handed-over
+files or agent-definition environment overrides. A CUSTOM_API_KEY loaded from
+agents.json is included before a child receives it. Credentials held only by
+other processes, such as an alert bot token that the validation child cannot
+read, are outside this threat model. Exact matching scans original text from
+left to right and consumes the longest known match at each position, regardless
+of registration order. This rule also applies to receipt strings and errors.
 Each stream keeps a bounded overlap window based on the longest known value.
 Exact matches can span chunks and lines, including values containing LF.
 Transformed or encoded copies are outside this exact-value guarantee.
