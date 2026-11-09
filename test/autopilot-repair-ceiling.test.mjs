@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { startRun, stepDone, approveRun, runStatus, cancelRun } from '../src/workflow-runner.mjs';
+import { startRun, stepDone, approveRun, runStatus, cancelRun, parkAutomaticRun } from '../src/workflow-runner.mjs';
+import { environmentRecovery } from '../src/autopilot-environment.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
@@ -65,7 +66,7 @@ test('repair ceiling: the 5th failed round refuses a 6th in an Autopilot run; a 
 });
 
 // An Autopilot run that can publish: a live claim on fake GitHub, so that pdd opens the PR.
-async function publishingRun(t, { rounds } = {}) {
+async function publishingRun(t, { rounds, unavailableMerge = false } = {}) {
   const f = await fixture(t, { name: 'small-change', agent: 'codex' });
   f.ports.env = { HOME: f.ports.env.HOME, PDD_INTERPRETER_QUEUE: f.ports.env.PDD_INTERPRETER_QUEUE };
   assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
@@ -82,7 +83,8 @@ async function publishingRun(t, { rounds } = {}) {
   const original = f.ports.execFile;
   const execFile = (file, args, opts) => file === 'gh' && args[0] === 'api' && args[1] === '--include'
     ? exec(process.execPath, [join(packageRoot, 'test/helpers/continuation-fake-gh.mjs'), ...args], { ...opts, env: { ...process.env, READER_FIXTURE_FILE: fixturePath, READER_GH_LOG: logPath } })
-    : original(file, args, opts);
+    : file === 'git' && args[0] === 'merge-tree' && unavailableMerge
+      ? Promise.resolve({ code: 1, stdout: '', stderr: 'unavailable' }) : original(file, args, opts);
   let value = 2;
   const edit = () => { writeFileSync(join(run.root, 'value.mjs'), `export const value = ${value++};\n`); f.git(run.root, 'commit', '-qam', `value ${value}`); };
   // Fake GitHub: the claim eras of issue 17. The last era is the live claim, with its last heartbeat now.
@@ -258,4 +260,86 @@ test('repair ceiling: an unknown worktree fingerprint does not make verify again
   const unknownThen = await done('verify', 'verify again, fingerprint known now');
   assert.doesNotMatch(unknownThen.message, /Repair round/);
   assert.equal(f.record().repairRounds, undefined, 'unknown counts as no change');
+});
+
+function advanceBase(f, run, n) {
+  writeFileSync(join(f.source, `base-${n}.txt`), `base ${n}\n`);
+  f.git(f.source, 'add', '.'); f.git(f.source, 'commit', '-qm', `Base advance ${n}`);
+  f.git(f.source, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  f.git(run.root, 'merge', '--no-edit', 'refs/remotes/origin/main');
+}
+
+test('base integration: two clean base merges retain the issue patch and the two used defect repairs', async t => {
+  const { f, run, done, edit } = await publishingRun(t);
+  edit(); await done('change');
+  for (let n = 1; n <= 2; n++) {
+    await done('verify', `defect failure ${n}`); edit(); await done('change');
+  }
+  assert.deepEqual(f.record().repairRounds, { build: 2 });
+  for (let n = 1; n <= 2; n++) {
+    await done('verify', `base validation failure ${n}`);
+    await done('formal', `formal failure ${n}`);
+    const before = f.record(); advanceBase(f, run, n);
+    const result = await done('change', 'integrate saved base');
+    assert.equal(result.exitCode, 0, result.message);
+    const after = f.record();
+    assert.deepEqual(after.repairRounds, { build: 2 }, 'base refresh must not consume a defect repair');
+    assert.deepEqual(after.integrationRounds, { build: n });
+    assert.equal(after.done.verify, undefined); assert.equal(after.done.formal, undefined);
+    assert.ok(after.stepHistory.some(row => row.step === 'verify' && row.record.summary === before.done.verify.summary));
+    assert.ok(after.stepHistory.some(row => row.step === 'formal' && row.record.summary === before.done.formal.summary));
+    assert.equal(after.done.change.integration.from.head, before.done.change.integrationSource.head);
+    assert.notEqual(after.done.change.integration.from.base, after.done.change.integration.to.base);
+  }
+  await done('verify', 'retained failure at integration ceiling');
+  const before = f.record(), pushes = f.pushes.length; advanceBase(f, run, 3);
+  assert.equal((await done('change')).exitCode, 1);
+  const after = f.record();
+  assert.equal(after.state, 'stuck'); assert.equal(after.integrationLimit.area, 'build');
+  assert.deepEqual(after.integrationRounds, { build: 2 }); assert.deepEqual(after.repairRounds, { build: 2 });
+  assert.deepEqual(after.done, before.done); assert.deepEqual(after.stepHistory, before.stepHistory);
+  assert.equal((await done('review')).exitCode, 1); assert.equal(f.pushes.length, pushes);
+  const status = await runStatus({ ref: '17', cwd: f.source }, f.ports);
+  assert.match(status.message, /integration/i);
+  await parkAutomaticRun({ cwd: run.root, reason: 'Native validation timeout', step: 'verify' }, f.agentPorts());
+  assert.equal(environmentRecovery(f.record()), null);
+  assert.equal((await done('change')).exitCode, 1);
+});
+
+test('base integration: repeating verify after a pure base merge also uses the integration budget', async t => {
+  const { f, run, done, edit } = await publishingRun(t);
+  edit(); await done('change'); await done('verify'); await done('formal', 'failed formal');
+  advanceBase(f, run, 1);
+  assert.equal((await done('verify')).exitCode, 0);
+  assert.equal(f.record().repairRounds, undefined);
+  assert.deepEqual(f.record().integrationRounds, { build: 1 });
+  assert.equal(f.record().done.formal, undefined);
+  edit();
+  assert.equal((await done('change')).exitCode, 0);
+  assert.deepEqual(f.record().repairRounds, { build: 1 }, 'a later defect still consumes a repair');
+  assert.deepEqual(f.record().integrationRounds, { build: 1 }, 'a defect cannot reset integration history');
+});
+
+for (const kind of ['committed defect', 'dirty source', 'missing snapshot', 'unavailable merge']) {
+  test(`base integration: ${kind} cannot claim a base-only exemption`, async t => {
+    const { f, run, done, edit } = await publishingRun(t, { unavailableMerge: kind === 'unavailable merge' });
+    edit(); await done('change'); await done('verify', 'failed verification');
+    if (kind === 'missing snapshot') { const saved = f.record(); delete saved.done.change.integrationSource; writeRun(saved); }
+    advanceBase(f, run, 1);
+    if (kind === 'committed defect') edit();
+    if (kind === 'dirty source') writeFileSync(join(run.root, 'untracked-defect.mjs'), 'export const defect = true;\n');
+    assert.equal((await done('change', 'base-only refresh')).exitCode, 0);
+    assert.deepEqual(f.record().repairRounds, { build: 1 });
+    assert.equal(f.record().integrationRounds, undefined);
+  });
+}
+
+test('base integration: a saved defect repair refusal cannot be bypassed by merging the base', async t => {
+  const { f, run, done, edit } = await publishingRun(t, { rounds: { build: 5 } });
+  edit(); await done('change'); await done('verify', 'failed verification');
+  assert.equal((await done('change')).exitCode, 1);
+  const before = f.record(); advanceBase(f, run, 1);
+  assert.equal((await done('change')).exitCode, 1);
+  assert.deepEqual(f.record().repairLimit, before.repairLimit);
+  assert.equal(f.record().integrationRounds, undefined); assert.deepEqual(f.record().done, before.done);
 });

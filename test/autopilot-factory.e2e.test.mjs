@@ -6,6 +6,7 @@ import {proseSha256} from '../src/runtime-preflight.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
 import {existsSync,readdirSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {spawnSync} from 'node:child_process';
 import {factoryWorld,put,readJson,valuePrompt} from './helpers/factory/world.mjs';
 
 for(const workflow of ['small-change','bug','feature'])test(`factory 1: ${workflow} reaches merge without lead action`,async t=>{
@@ -181,6 +182,43 @@ test('factory 8: a pre-card persisted run continues after upgrade without lead a
 test('factory interpreter: slow verdict completes the feature to merge',async t=>{
   const w=await factoryWorld(t,{workflow:'feature'});w.interpreter.mode='slow';await w.begin();const a=scriptedAgent(w);
   await a.finish();assert.ok(w.interpreter.gets.length>=3);await a.merge();assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 9: base refresh retains failed evidence and reaches merge without a defect repair (#3116)',async t=>{
+  const w=await factoryWorld(t);
+  put(w.cwd,'base-ready.mjs','export const ready = false;\n');
+  put(w.cwd,'test/base.test.mjs',"import {ready} from '../base-ready.mjs';import assert from 'node:assert/strict';assert.equal(ready,true,'FACTORY_BASE_READY');\n");
+  w.git(w.cwd,'add','.');w.git(w.cwd,'commit','-qm','Synthetic base validation defect');w.git(w.cwd,'push','-q',w.remote,'main');
+  w.git(w.cwd,'fetch','-q',w.remote,'main:refs/remotes/origin/main');
+  await w.begin();const a=scriptedAgent(w);
+  await a.until(r=>r.area===1);
+  put(w.record().root,'value.mjs','export const value = 2;\n');
+  w.git(w.record().root,'add','.');w.git(w.record().root,'commit','-qm','Retain issue patch before validation');
+  await a.until(r=>Boolean(r.done.verify));
+  const baseCheck=['workflow','suite','--command','node --test test/base.test.mjs'];
+  const nativeFailure=spawnSync(process.execPath,['--test','test/base.test.mjs'],{cwd:w.record().root,env:w.env,encoding:'utf8'});
+  assert.equal(nativeFailure.status,1);assert.match(nativeFailure.stdout+nativeFailure.stderr,/FACTORY_BASE_READY/);
+  const failed=await w.command(baseCheck,{cwd:w.record().root,allowFailure:true});
+  assert.equal(failed.code,1);
+  await w.command(['workflow','done','verify','--summary','Failed base validation; retain this evidence'],{cwd:w.record().root});
+  await w.command(['workflow','done','formal','--summary','Formal validation needs the current base'],{cwd:w.record().root});
+  const before=w.record(),issue=w.git(before.root,'show','HEAD:value.mjs');
+  put(w.cwd,'base-only.txt','Unrelated base integration\n');w.git(w.cwd,'add','.');w.git(w.cwd,'commit','-qm','Advance synthetic base');
+  put(w.cwd,'base-ready.mjs','export const ready = true;\n');w.git(w.cwd,'add','.');w.git(w.cwd,'commit','-qm','Correct the synthetic base validation');
+  w.git(w.cwd,'push','-q',w.remote,'main');w.git(w.cwd,'fetch','-q',w.remote,'main:refs/remotes/origin/main');
+  w.git(before.root,'merge','--no-edit','refs/remotes/origin/main');
+  await w.command(['workflow','done','change','--summary','Integrate the saved base'],{cwd:before.root});
+  const refreshed=w.record();
+  assert.equal(w.git(before.root,'show','HEAD:value.mjs'),issue);
+  assert.equal(refreshed.repairRounds,undefined,'G24 base-only refresh consumed a defect repair');
+  assert.deepEqual(refreshed.integrationRounds,{build:1});
+  assert.equal(refreshed.done.verify,undefined);assert.equal(refreshed.done.formal,undefined);
+  assert.ok(refreshed.stepHistory.some(row=>row.step==='verify'&&row.record.summary===before.done.verify.summary));
+  assert.equal((await w.command(baseCheck,{cwd:before.root})).code,0);
+  assert.equal(failed.code,1,'the earlier failed result remains available');
+  await a.finish();assert.equal(w.record().repairRounds,undefined);
+  assert.notEqual(w.record().done.verify.worktreeSha256,before.done.verify.worktreeSha256);
+  await a.merge();assert.deepEqual(w.leadActions,[]);
 });
 
 test('factory interpreter: a refused check remains a refusal and sends nothing on timer ticks',async t=>{

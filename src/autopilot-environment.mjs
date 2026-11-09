@@ -17,7 +17,7 @@ export function classifyStuckCause(reason, runtime = false) {
   return /filesystem journal|(?:disk|memory|I\/O) (?:pressure|stall|contention|full)|(?:native|test|suite|validation)[^.;\n]*(?:stall|timed? out|timeout|killed|cancelled|incomplete|ETIMEDOUT)|(?:full|suite) queue|queue (?:is )?full|missing tool|tool[^.;\n]*not found/i.test(text) ? 'environment' : 'work';
 }
 export function environmentRecovery(run) {
-  if (!run?.automaticOrigin || run.state !== 'stuck' || run.repairLimit || classifyStuckCause(run.parkReason) !== 'environment') return null;
+  if (!run?.automaticOrigin || run.state !== 'stuck' || run.repairLimit || run.integrationLimit || classifyStuckCause(run.parkReason) !== 'environment') return null;
   const retry = run.environmentRetry;
   if (!retry || !Number.isFinite(retry.at) || !Number.isInteger(retry.attempts) || retry.attempts < 0 || retry.attempts > ENVIRONMENT_BACKOFF.length
     || retry.area !== run.area || !validations.has(retry.step) || !run.areas?.[run.area]?.steps?.includes(retry.step)

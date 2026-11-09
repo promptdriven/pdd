@@ -122,9 +122,10 @@ test('person retries preserve STOP, claim ownership and repair ceilings', async 
   const before = f.record(); const chat = f.herdr.paneOf(before.chats.at(-1)); chat.agent.agent_status = 'idle';
   const stateFile = join(p.autopilotStateRoot, (await import('node:fs')).readdirSync(p.autopilotStateRoot)[0]);
   const state = JSON.parse(readFileSync(stateFile, 'utf8'));
-  for (const block of ['stop', 'claim', 'limit']) {
+  for (const block of ['stop', 'claim', 'limit', 'integration-limit']) {
     writeFileSync(stateFile, JSON.stringify({ ...state, enabled: block !== 'stop' }));
     const run = structuredClone(before); if (block === 'limit') run.repairLimit = { area: 'build', step: 'verify', at: f.clock }; writeRun(run);
+    if (block === 'integration-limit') { run.integrationLimit = { area: 'build', step: 'verify', at: f.clock }; writeRun(run); }
     const calls = chat.agent.prompts.length;
     const blocked = block === 'claim' ? ports({ execFile: async (file, args, options) => {
       if (file === 'gh' && args[0] === 'api' && args[1] === '--include') throw Error('ownership unavailable');
