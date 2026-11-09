@@ -7,13 +7,6 @@ export const MAX_VALIDATION_RECEIPT_BYTES = 65536;
 export const MAX_RECEIPT_TEXT_BYTES = 4096;
 export const MAX_EVIDENCE_LINE_BYTES = 262144;
 const marker = n => `\n[${n} bytes omitted]\n`;
-const quoteEnd = (text, start, quote) => {
-  for(let index=start;index<text.length;index++) {
-    if(text[index]==='\\') index++;
-    else if(text[index]===quote) return index;
-  }
-  return -1;
-};
 const clip = (text, limit) => {
   const bytes = Buffer.from(text);
   if (bytes.length <= limit) return text;
@@ -37,30 +30,69 @@ export function serializeValidationReceipt(record) {
   return text;
 }
 
-// Hold whole lines across transport chunks. Oversized lines fail closed rather
-// than expose a credential whose terminator has not arrived yet.
+// Recognition has constant space, separate from the bounded retained line.
+// In particular, long whitespace in an assignment or PEM label cannot erase
+// its opener when a window or the retained line ends.
+function multilineSecrets() {
+  let tail='', field=null, quote=null, escaped=false, privateKey=false;
+  let header=null, label='', dashes=0, suppressed=false;
+  return {
+    write(text) {
+      for(const char of text) {
+        tail=(tail+char).slice(-32);
+        if(header) {
+          if(char==='-') {
+            if(!dashes && !label.endsWith('PRIVATE KEY')) header=null;
+            else if(++dashes===5) {
+              privateKey=header==='BEGIN';header=null;field=null;suppressed=true;
+            }
+          } else if(dashes) header=null;
+          else label=(label+char).slice(-11);
+        }
+        if(char===' ' && /-----BEGIN $|-----END $/.test(tail)) {
+          header=tail.endsWith('BEGIN ')?'BEGIN':'END';label='';dashes=0;
+        }
+        if(quote) {
+          if(escaped) escaped=false;
+          else if(char==='\\') escaped=true;
+          else if(char===quote) quote=null;
+        } else if(!privateKey) {
+          if(field==='separator') {
+            if(char==='"'||char==="'") {quote=char;field=null;}
+            else if(!/\s/.test(char)) field=null;
+          } else if(field) {
+            if(char===':'||char==='=') field='separator';
+            else if(field==='name'&&(char==='"'||char==="'")) field='space';
+            else if(!/\s/.test(char)) field=null;
+          }
+          if(!quote && /[\s:="']/.test(char) &&
+            /\b(?:key|token|password|secret|api[_-]?key|authorization|cookie|credential)$/i.test(tail.slice(0,-1))) {
+            field=char===':'||char==='='?'separator':char==='"'||char==="'"?'space':'name';
+          }
+        }
+      }
+    },
+    finishLine() {
+      const redact=suppressed||Boolean(header);
+      suppressed=Boolean(quote||privateKey||header);
+      // A field name or separator alone is not a multiline secret opener.
+      field=null;tail='';
+      return redact;
+    },
+  };
+}
+
+// Hold whole lines across transport chunks. Scan discarded bytes too, without
+// retaining their raw contents or losing multiline suppression state.
 export function redactingLines(emit) {
   const decoder = new StringDecoder('utf8');
-  let pending = [], length = 0, oversized = false, privateKey = false, quotedSecret = null;
+  const secrets=multilineSecrets();
+  let pending = [], length = 0, oversized = false;
   const line = ended => {
+    const suppressed=secrets.finishLine();
     if (oversized) emit(marker(length),length);
-    else {
-      const text = decoder.write(Buffer.concat(pending));
-      if (quotedSecret) {
-        if (quoteEnd(text,0,quotedSecret)>=0) quotedSecret = null;
-        emit(`[redacted]${ended?'\n':''}`,0);
-      } else if (privateKey || /-----BEGIN [^-]*PRIVATE KEY-----/.test(text)) {
-        privateKey = !/-----END [^-]*PRIVATE KEY-----/.test(text);
-        emit(`[redacted]${ended?'\n':''}`,0);
-      } else {
-        // A quoted secret may continue over a newline. Suppress subsequent
-        // lines until its closing quote, even if they have no secret prefix.
-        for (const match of text.matchAll(/\b(?:key|token|password|secret|api[_-]?key|authorization|cookie|credential)["']?\s*[:=]\s*(["'])/gi)) {
-          if (quoteEnd(text,match.index+match[0].length,match[1])<0) quotedSecret = match[1];
-        }
-        emit(redactSecrets(text),0);
-      }
-    }
+    else if(suppressed) emit(`[redacted]${ended?'\n':''}`,0);
+    else emit(redactSecrets(Buffer.concat(pending).toString('utf8')),0);
     pending = []; length = 0; oversized = false;
   };
   return {
@@ -68,14 +100,17 @@ export function redactingLines(emit) {
       let start = 0;
       while (start < bytes.length) {
         const newline = bytes.indexOf(10,start), end = newline < 0 ? bytes.length : newline+1;
-        const part = bytes.subarray(start,end); length += part.length;
-        if (length > MAX_EVIDENCE_LINE_BYTES) { oversized = true; pending = []; }
-        else if (!oversized) pending.push(Buffer.from(part));
+        for(let offset=start;offset<end;offset+=4096) {
+          const part=bytes.subarray(offset,Math.min(offset+4096,end));
+          secrets.write(decoder.write(part));length+=part.length;
+          if (length > MAX_EVIDENCE_LINE_BYTES) { oversized = true; pending = []; }
+          else if (!oversized) pending.push(Buffer.from(part));
+        }
         if (newline >= 0) line(true);
         start = end;
       }
     },
-    end() { if (length) line(false); const rest=decoder.end(); if(rest) emit(redactSecrets(rest),0); },
+    end() { secrets.write(decoder.end());if (length) line(false); },
   };
 }
 

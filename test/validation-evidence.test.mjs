@@ -3,6 +3,42 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {redactingLines,validationLog,serializeValidationReceipt,MAX_VALIDATION_LOG_BYTES,MAX_EVIDENCE_LINE_BYTES} from '../src/validation-evidence.mjs';
 
+for(const kind of ['quoted secret','private key'])
+test(`repair 2: bounded scanning retains ${kind} across overflow and awkward windows`,()=>{
+  const secret='synthetic-overflow-secret-body';
+  const opener=kind==='quoted secret'?'password="':'-----BEGIN PRIVATE KEY-----';
+  const end=kind==='quoted secret'?'"':'-----END PRIVATE KEY-----';
+  const n=MAX_EVIDENCE_LINE_BYTES;
+  const openings=[opener+'x'.repeat(n), 'x'.repeat(n)+' '+opener,
+    'x'.repeat(4091)+' '+opener+'x'.repeat(n),
+    kind==='quoted secret'?'password'+ ' '.repeat(n)+'= "':
+      '-----BEGIN '+ ' '.repeat(n)+'PRIVATE KEY-----'];
+  for(const opening of openings) for(const width of [1,4093,65536]) for(const eof of [false,true]) {
+    const continuation=kind==='quoted secret'?'\\"'+secret:secret;
+    const input=Buffer.from(opening+'\n'+continuation+'\n'+end+(eof?'':'\nsafe-after-secret\n'));
+    let saved='',omitted=0;
+    const stream=redactingLines((text,count)=>{
+      assert.equal(text.includes(secret),false);saved+=text;omitted+=count;
+    });
+    for(let offset=0;offset<input.length;offset+=width)stream.write(input.subarray(offset,offset+width));
+    stream.end();
+    assert.equal(saved.includes(secret),false);assert.ok(saved.includes('[redacted]'));
+    assert.equal(omitted,Buffer.byteLength(opening+'\n'));
+    if(!eof)assert.ok(saved.endsWith('safe-after-secret\n'));
+  }
+  // End and reopen on an omitted line, including an oversized continuation.
+  for(const prefix of [opener,opener+'\n']) {
+    const input=prefix+'x'.repeat(n)+end+' '+opener+'\n'+secret+'\n'+end+'\nsafe-after-secret\n';
+    let saved='';const stream=redactingLines(text=>{saved+=text;});
+    stream.write(Buffer.from(input));stream.end();
+    assert.equal(saved.includes(secret),false);assert.ok(saved.endsWith('safe-after-secret\n'));
+  }
+  // Closing inside an omitted line must allow safe output to resume.
+  let saved='';const stream=redactingLines(text=>{saved+=text;});
+  stream.write(Buffer.from(opener+'x'.repeat(n)+end+'\nsafe-after-secret\n'));stream.end();
+  assert.ok(saved.endsWith('safe-after-secret\n'));
+});
+
 test('stream redaction covers every two-chunk split of supported synthetic credentials',()=>{
   const cases=[
     ['Authorization: Bearer arbitrary-test-value\n','arbitrary-test-value'],

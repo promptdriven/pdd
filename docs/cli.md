@@ -867,8 +867,10 @@ save or forwarding, including credentials split across output chunks.
 
 Each log is limited to 1 MiB. Overflow keeps its beginning and end with an exact
 `N bytes omitted` marker. A pending output line is limited to 256 KiB; a larger
-line is omitted in full with its byte count. Each receipt is limited to 64 KiB,
-with free-text fields limited to 4 KiB. Required source and ownership metadata
+line is omitted in full with its byte count. Bounded scanning still tracks
+quoted secrets and private keys in omitted lines. Their continuation stays
+redacted through its closing delimiter or end of output. Each receipt is limited
+to 64 KiB, with free-text fields limited to 4 KiB. Required source and ownership metadata
 that cannot fit prevents execution. The `evidence` fields report raw output
 bytes, saved log bytes, omitted bytes and whether truncation occurred. Counts
 and exit status use the complete process stream, including when storage is

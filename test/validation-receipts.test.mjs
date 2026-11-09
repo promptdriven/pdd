@@ -28,6 +28,41 @@ function fixture(t) {
 const read = path => JSON.parse(fs.readFileSync(path,'utf8'));
 const summary = 'TAP version 13\n1..2\n# tests 2\n# suites 0\n# pass 1\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n';
 
+for (const kind of ['quoted secret','private key']) for (const split of [false,true])
+test(`repair 2: overflow retains ${kind} state (transport splits=${split})`,async t=>{
+  const f=fixture(t),program=join(f.root,'overflow-secret.cjs');
+  const secret='synthetic-overflow-continuation-value';
+  const opener=kind==='quoted secret'?'password="':'-----BEGIN PRIVATE KEY-----';
+  const closing=kind==='quoted secret'?'"\n':'\n-----END PRIVATE KEY-----\n';
+  const opening=opener+'x'.repeat(262144)+'\n';
+  const continuation=secret+closing;
+  const safe='safe-after-secret\n',data=opening+continuation+safe+summary;
+  const input=join(f.root,'input');fs.writeFileSync(input,data);
+  // Await each write and yield between awkward boundaries. The helper tests
+  // also force these exact boundaries without depending on OS pipe batching.
+  const boundaries=split?[0,3,opener.length-2,opener.length,262143,262144,
+    opening.length-1,opening.length,opening.length+secret.length+1,data.length-7,data.length]:[0,data.length];
+  fs.writeFileSync(program,`const fs=require('node:fs');const data=fs.readFileSync(${JSON.stringify(input)});const boundaries=${JSON.stringify(boundaries)};(async()=>{for(let i=1;i<boundaries.length;i++){await new Promise(done=>process.stdout.write(data.subarray(boundaries[i-1],boundaries[i]),done));await new Promise(done=>setTimeout(done,5));}process.exitCode=7;})();`);
+  let forwarded='';const output={write(bytes){
+    const row=read(f.receipt);
+    assert.ok(fs.readFileSync(row.logPath).includes(bytes));
+    assert.equal(String(bytes).includes(secret),false);
+    forwarded+=bytes;
+  }};
+  const result=await runTestSuite({cwd:f.root,command:`${quote(process.execPath)} ${quote(program)}`,env:f.env},
+    {...f.ports,stdout:output,stderr:output});
+  const row=read(f.receipt),log=fs.readFileSync(row.logPath,'utf8');
+  assert.equal(result.exitCode,7);assert.equal(row.exitCode,7);
+  assert.equal(row.outcome,'completed');assert.equal(row.state,'finished');assert.equal(row.signal,null);
+  assert.deepEqual(row.counts,{tests:2,suites:0,pass:1,fail:1,cancelled:0,skipped:0,todo:0});
+  for(const saved of [log,forwarded,fs.readFileSync(f.receipt,'utf8')])assert.equal(saved.includes(secret),false);
+  assert.ok(log.includes('[redacted]'));assert.ok(log.includes(safe));assert.ok(forwarded.includes(safe));
+  assert.match(log,new RegExp(`\\[${Buffer.byteLength(opening)} bytes omitted\\]`));
+  assert.equal(forwarded,log);
+  assert.deepEqual(row.evidence,{outputBytes:Buffer.byteLength(data),logBytes:Buffer.byteLength(log),
+    omittedBytes:Buffer.byteLength(opening),truncated:true});
+});
+
 test('validation saves full output, source and terminal counts before forwarding or returning',async t=>{
   const f=fixture(t),cwd=join(f.root,'repo');fs.mkdirSync(cwd);
   const git=(...args)=>execFileSync('git',args,{cwd,env:f.env,stdio:['ignore','pipe','pipe']}).toString().trim();

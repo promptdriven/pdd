@@ -115,8 +115,17 @@ clipping so a clipped prefix cannot expose a credential. Stream boundaries are
 not redaction boundaries: buffer each stream independently until a complete line
 or EOF. `MAX_EVIDENCE_LINE_BYTES = 262144` bounds each pending raw line. Suppress
 an oversized line in full, including its continuation, and emit a marker with
-its exact raw byte count at its newline or EOF. Suppress private-key bodies
-through the matching end line. Forward only sanitized output, after saving it.
+its exact raw byte count at its newline or EOF. Discarding raw bytes must not
+discard recognition state: scan in bounded windows, retaining only bounded
+delimiter context and state for every supported multiline form. Recognize
+openers before or after overflow, even across window or transport boundaries.
+While a quoted secret or private key remains open, suppress continuation lines
+through the closing delimiter (or EOF) and mark them `[redacted]`; an oversized
+continuation still uses its exact omission marker. Escaped quotes do not close
+a value. Continue recognizing later openers after a delimiter, including on a
+discarded line. Resume ordinary redaction on the next safe line. Neither an
+unbounded line nor a long secret may require unbounded retained raw text.
+Forward only sanitized output, after saving it.
 
 `MAX_VALIDATION_LOG_BYTES = 1048576` bounds each saved log, including markers.
 Keep full sanitized output within that limit. On overflow retain the first and
