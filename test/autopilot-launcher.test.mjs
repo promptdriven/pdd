@@ -2367,3 +2367,40 @@ for(const row of admissionStates)test(`start admission parity: ${row.name}`,asyn
   const result=await prepare();
   assert.equal(result.exitCode===0,baseAdmitted&&!row.signedOut,result.message);
 });
+
+
+test('start: guarded cleanup reclaims a finished workflow shell after its chat has closed',async t=>{
+  const {fixture:workflowFixture}=await import('./helpers/workflow-runner-fixture.mjs');
+  const {tidyRuns}=await import('../src/workflow-runner.mjs');
+  const {allRuns}=await import('../src/workflow-runs.mjs');
+  const w=await workflowFixture(t);
+  assert.equal((await w.run()).exitCode,0);
+  const run=w.record();run.state='completed';run.chats[0].endedAt=w.clock;
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  w.tick(16*60_000);w.herdr.idle();
+  const shell=w.herdr.paneOf(run.layout);shell.agent={agent:'codex',agent_status:'working'};
+  const cleaned=await tidyRuns({},w.ports);
+  assert.equal(cleaned.closed,1);assert.equal(cleaned.kept,1);
+  assert.ok(!w.herdr.paneOf(run.chats[0]));assert.ok(w.herdr.paneOf(run.layout));
+  shell.agent=null;
+  const paneCount=w.herdr.panes.length;
+  assert.ok(paneCount>0);
+  const f=await fixture(t);
+  f.ports.stateDir=w.state;
+  assert.equal(allRuns({cancelled:true},{stateDir:w.state}).length,1);
+  f.ports.tidyRuns=options=>tidyRuns(options,w.ports);
+  f.ports.workflowHerdr=w.herdr.herdr;
+  const original=f.ports.doctorPorts;
+  f.ports.doctorPorts=input=>{
+    const p=original(input),read=p.run;
+    p.run=async(file,args,options)=>{
+      if(file==='herdr'&&args[0]==='--session'&&args[1]==='pdd')return {code:0,stdout:JSON.stringify(await w.herdr.herdr(args.slice(2))),stderr:''};
+      return read(file,args,options);
+    };
+    return p;
+  };
+  const result=await f.invoke('start',{env:{HOME:f.home,PATH:process.env.PATH,PDD_HERDR_PANE_BUDGET:String(paneCount)}});
+  assert.equal(result.exitCode,0,result.message);
+  assert.equal(w.herdr.panes.length,paneCount-1);
+  assert.ok(!w.herdr.paneOf(run.layout));
+});

@@ -2276,16 +2276,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
         herdr:ports.herdr,
         execute:(file,args)=>(doctorPorts.run??runAgentProcess)(file,args,{cwd:doctorInput.cwd,env,timeoutMs:10000,maxBytes:1024*1024}),
       })),
-      reclaimablePanes:doctorPorts.reclaimablePanes??(({env,panes})=>{
-        // A read-only candidate count. Only the existing guarded sweeps may close them.
-        const runs=(ports.allRuns??allRuns)({cancelled:true},{...ports,env});
-        const candidates=runs.flatMap(run=>[
-          ...finishedChats(run),
-          ...(run.automaticOrigin && idleParkingBlocker(run,(ports.now??Date.now)(),0)?run.chats??[]:[]),
-        ]);
-        return panes.filter(pane=>pane.agent_status!=='working' && pane.agent?.agent_status!=='working'
-          && candidates.some(chat=>chat.paneId===pane.pane_id && chat.workspaceId===pane.workspace_id)).length;
-      }),onSelection:selection=>{startSelection=selection;}});
+      onSelection:selection=>{startSelection=selection;}});
     if (command === 'doctor' || diagnostics.exitCode !== 0) return diagnostics;
   }
   let state = { cwd: input.cwd, environment: keepEnv(input.env ?? process.env) };

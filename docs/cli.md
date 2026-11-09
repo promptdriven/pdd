@@ -89,8 +89,10 @@ A selected agent's HOME, CODEX_HOME, CLAUDE_CONFIG_DIR and other environment
 settings apply to its checks. Repair commands carry that profile environment.
 A malformed agents.json report names the file to edit. An invalid
 PDD_RUNTIME_URL report gives the HTTPS-origin or unset repair.
-A full pane budget can warn when local workflow records show potential room from
-reclamation. Start must still prove room through its guarded cleanup and admission.
+Pane pressure, unreadable capacity, interpreter health and agent usage limits
+are warnings with fix commands. They never refuse start at preflight. Start can
+sweep, park and wait. It must still prove room through guarded cleanup and admission,
+including cleanup of a finished run shell after its chats have closed.
 Doctor closes no panes. A reused coordinator needs no extra pane.
 Doctor verifies that coordinator in `pdd-autopilot`. A full `pdd` workflow
 session does not block reuse. Fresh allocation uses the native workflow pane

@@ -134,7 +134,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   if (!configurationFix && !agent && !installed.length) add('agent-signin','fail','Sign in after installing Codex, or install Claude Code and sign in',login);
   let usage = {state:'unknown'};
   if (agent?.kind==='codex') { try { usage = await (ports.codexLimits ?? readCodexLimits)({command:agent.command??'codex',cwd,env}, {spawn:ports.spawn}); } catch {} }
-  add('agent-usage',usage.state==='limited'?'fail':usage.state==='healthy'?'pass':'warn',usage.state==='limited'?'Agent usage limit reached; retry after allowance is available':usage.state==='healthy'?'Read-only usage check healthy':`${agent?.kind ?? 'Agent'} usage is unproved${agent?.kind==='claude'?'; run /usage in Claude Code':''}`,agent?.kind==='claude'?quote(agent.command??'claude'):retry);
+  add('agent-usage',usage.state==='healthy'?'pass':'warn',usage.state==='limited'?'Agent usage limit reached; retry after allowance is available':usage.state==='healthy'?'Read-only usage check healthy':`${agent?.kind ?? 'Agent'} usage is unproved${agent?.kind==='claude'?'; run /usage in Claude Code':''}`,agent?.kind==='claude'?quote(agent.command??'claude'):retry);
 
   const herdr = await run('herdr',['--version']);
   add('herdr',ready(herdr)?'pass':'fail','Herdr installation','curl -fsSL https://herdr.dev/install.sh | sh');
@@ -144,7 +144,6 @@ export async function runAutopilotDoctor(input, ports = {}) {
     const verified=['working','starting','idle','blocked','done'].includes(health?.state);
     add('herdr-room',verified?'pass':'warn',verified?'Saved coordinator verified in pdd-autopilot; needs 0 workflow panes':'Saved coordinator recovery is unproved; guarded start decides allocation','pdd autopilot status');
   } else {
-    let inventory=[];
     const herdrRead=async args=>{
       const reply=await run('herdr',['--session','pdd',...args]);
       const body=json(ready(reply)?reply.stdout:reply.stderr||reply.stdout);
@@ -154,19 +153,14 @@ export async function runAutopilotDoctor(input, ports = {}) {
     try {
       let server;
       try { server=await herdrRead(['status','server','--json']); } catch { /* The native inventory read decides admission. */ }
-      const usage=await ensurePaneBudget(1,{env,onPaneUsage:panes=>{inventory=panes;},herdr:async args=>{
+      const usage=await ensurePaneBudget(1,{env,herdr:async args=>{
         if (server?.running===false) throw Object.assign(Error('Herdr stopped'),{code:'server_not_running'});
         return herdrRead(args);
       }});
       add('herdr-room','pass',`${usage.panes} panes; budget ${usage.budget}; needs 1`,'pdd workflow tidy --dry-run');
     } catch (error) {
-      let potential=0;
-      if (error.code==='herdr_pane_budget' && ports.reclaimablePanes) {
-        try { potential=await ports.reclaimablePanes({env,panes:inventory}); } catch {}
-      }
-      // Potential cleanup is not permission to close a pane. Native start rechecks under its guards.
-      const pending=Number.isSafeInteger(potential) && potential>0;
-      add('herdr-room',pending?'warn':'fail',pending?'Potential workflow reclamation; guarded start admission must prove room':error.code==='herdr_pane_budget'?error.message.split('\n')[0]:`Workflow pane admission: ${error.code??'unavailable'}`,error.code==='invalid_pane_budget'?'unset PDD_HERDR_PANE_BUDGET':'pdd workflow tidy --dry-run && pdd workflow tidy');
+      // Native start owns guarded sweeps, parking and capacity admission.
+      add('herdr-room','warn',error.code==='herdr_pane_budget'?error.message.split('\n')[0]:`Workflow pane admission: ${error.code??'unavailable'}`,error.code==='invalid_pane_budget'?'unset PDD_HERDR_PANE_BUDGET':'pdd workflow tidy --dry-run && pdd workflow tidy');
     }
   }
 
@@ -201,7 +195,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
       if (!ready(token)||!token.stdout.trim()) health={...health,state:'auth'};
     }
   } catch { health = {state:'unavailable'}; }
-  add('interpreter',health?.state==='healthy'?'pass':'fail',health?.state==='healthy'?'Read-only interpreter access accepted':health?.state==='address'?'PDD_RUNTIME_URL must be an HTTPS origin; unset it to use the default':'Interpreter access is unproved; no check was submitted',health?.state==='address'?`unset PDD_RUNTIME_URL; ${retry}`:health?.state==='auth'?'gh auth login':health?.state==='access'?`${platform==='darwin'?'open':'xdg-open'} https://promptdriven.ai/login`:retry);
+  add('interpreter',health?.state==='healthy'?'pass':'warn',health?.state==='healthy'?'Read-only interpreter access accepted':health?.state==='address'?'PDD_RUNTIME_URL must be an HTTPS origin; unset it to use the default':'Interpreter access is unproved; no check was submitted',health?.state==='address'?`unset PDD_RUNTIME_URL; ${retry}`:health?.state==='auth'?'gh auth login':health?.state==='access'?`${platform==='darwin'?'open':'xdg-open'} https://promptdriven.ai/login`:retry);
   if (platform==='linux') {
     add('user-timers',ready(await run('systemctl',['--user','show-environment']))?'pass':'fail','systemd user session','systemctl --user status; sudo systemctl start user@$(id -u).service');
     const linger = await run('loginctl',['show-user',String(uid),'--property=Linger','--value']);

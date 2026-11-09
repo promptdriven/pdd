@@ -41,16 +41,13 @@ test('doctor: stale PATH and missing sign-in accumulate; start returns identical
 });
 
 test('doctor: required failures refuse start; warnings permit readiness',async()=>{
-  for(const fault of ['node','permission','merge','usage','setup','interpreter','timers','budget']) {
+  for(const fault of ['node','permission','merge','setup','timers']) {
     const f=doctorFixture();
     if(fault==='node')f.ports.nodeVersion='22.19.9';
     if(fault==='permission')f.permission='READ';
     if(fault==='merge')f.merge=false;
-    if(fault==='usage')f.limited=true;
     if(fault==='setup')f.paths.delete('/project/AGENTS.md');
-    if(fault==='interpreter')f.ports.fetch=async()=>new Response('{}',{status:403});
     if(fault==='timers'){const run=f.ports.run;f.ports.run=(file,args,o)=>file==='systemctl'?f.answer('',1):run(file,args,o);}
-    if(fault==='budget')f.input.env.PDD_HERDR_PANE_BUDGET='1',f.panes=[{}];
     const r=await invoke(f,'start');assert.equal(r.code,1,`${fault}: ${r.text}`);
   }
   const f=doctorFixture();f.tracked='one.prompt.md\0';f.paths.set('/project/one.prompt.md','# Draft');f.ports.codexLimits=async()=>({state:'unknown'});
@@ -75,11 +72,11 @@ test('doctor: stopped Herdr needs no pane allocation; missing CLI and unreadable
 
 test('doctor: network failure never prints secrets and CLI rejects doctor operands',async()=>{
   const f=doctorFixture();f.ports.fetch=async()=>{throw Error('FAKE_TOKEN');};
-  const r=await invoke(f);assert.equal(r.code,1);check(r,'interpreter','FAIL');assert.ok(!r.text.includes('FAKE_TOKEN'));
+  const r=await invoke(f);assert.equal(r.code,0);check(r,'interpreter','WARN');assert.ok(!r.text.includes('FAKE_TOKEN'));
   const result=await runAutopilotLauncher({...f.input,command:'doctor'},{doctorPorts:f.ports,run:async()=>f.answer('',1)});
   const invalid=await runPdd(['autopilot','doctor','extra'],{...f.input,stdout:{write:()=>{}},stderr:{write:()=>{}},autopilotLauncherPorts:{run:()=>assert.fail('invalid input must not probe')}});
   assert.equal(invalid,2);
-  assert.equal(result.exitCode,1);assert.ok(Array.isArray(result.checks),'doctor must expose diagnostic checks');assert.equal(result.checks.find(c=>c.id==='interpreter').status,'fail');
+  assert.equal(result.exitCode,0);assert.ok(Array.isArray(result.checks),'doctor must expose diagnostic checks');assert.equal(result.checks.find(c=>c.id==='interpreter').status,'warn');
 });
 
 
@@ -135,7 +132,7 @@ test('doctor: invalid runtime address and unavailable user session give repair c
   f.ports.runtimeHealth=()=>assert.fail('invalid origin must not reach health port');
   const run=f.ports.run;f.ports.run=(file,args,o)=>file==='systemctl'?f.answer('',1):run(file,args,o);
   const result=await runAutopilotDoctor(f.input,f.ports),runtime=result.checks.find(c=>c.id==='interpreter'),timers=result.checks.find(c=>c.id==='user-timers');
-  assert.equal(result.exitCode,1);assert.equal(runtime.status,'fail');assert.match(runtime.detail,/PDD_RUNTIME_URL/);assert.match(runtime.fix,/unset PDD_RUNTIME_URL/);assert.match(timers.fix,/systemctl start/);assert.ok(!result.message.includes('SECRET_VALUE'));
+  assert.equal(result.exitCode,1);assert.equal(runtime.status,'warn');assert.equal(timers.status,'fail');assert.match(runtime.detail,/PDD_RUNTIME_URL/);assert.match(runtime.fix,/unset PDD_RUNTIME_URL/);assert.match(timers.fix,/systemctl start/);assert.ok(!result.message.includes('SECRET_VALUE'));
 });
 
 
@@ -150,10 +147,9 @@ test('doctor: saved profile overrides changed definition directories for sign-in
   for(const call of f.calls.filter(c=>c.options?.env)) {assert.equal(call.options.env.HOME,'/home/fake');assert.equal(call.options.env.CODEX_HOME,'/saved/codex');}
 });
 
-for (const reuse of [true,false]) test(`doctor: full pane budget ${reuse?'reuses the coordinator':'defers potential reclamation to guarded admission'}`,async()=>{
+for (const reuse of [true,false]) test(`doctor: full pane budget ${reuse?'reuses the coordinator':'defers capacity to guarded admission'}`,async()=>{
   const f=doctorFixture();f.input.env.PDD_HERDR_PANE_BUDGET='1';f.panes=[{pane_id:'personal',workspace_id:'workspace',tab_id:'tab',terminal_id:'terminal'}];
   if(reuse){f.input.coordinatorPaneId='saved';f.coordinatorPanes=[{pane_id:'saved'}];f.ports.coordinatorHealth=async()=>({state:'idle'});}
-  else f.ports.reclaimablePanes=async({env,panes})=>{assert.equal(env.HOME,f.input.env.HOME);assert.deepEqual(panes,f.panes);return 1;};
   const result=await runAutopilotDoctor(f.input,f.ports),capacity=result.checks.find(c=>c.id==='herdr-room');
   assert.equal(result.exitCode,0,result.message);assert.equal(capacity.status,reuse?'pass':'warn');
   assert.ok(f.calls.every(c=>!c.args || !c.args.includes('close')));
@@ -179,8 +175,8 @@ for(const row of healthCases)test(`doctor: runtime admission uses native health 
   const native=await checkRuntimeHealth({env:f.input.env},{gh:()=>({status:0,stdout:'synthetic-token'}),fetch:f.ports.fetch});
   assert.equal(native.state,row.state);
   const result=await runAutopilotDoctor(f.input,f.ports);
-  assert.equal(result.checks.find(c=>c.id==='interpreter').status,row.state==='healthy'?'pass':'fail');
-  assert.equal(result.exitCode,row.state==='healthy'?0:1,result.message);
+  assert.equal(result.checks.find(c=>c.id==='interpreter').status,row.state==='healthy'?'pass':'warn');
+  assert.equal(result.exitCode,0,result.message);
 });
 
 test('doctor: successful repository checks print read-only inspection commands',async()=>{
@@ -190,4 +186,20 @@ test('doctor: successful repository checks print read-only inspection commands',
     assert.equal(line.status,'pass');assert.match(line.fix,/gh repo view /);
     assert.doesNotMatch(line.fix,/gh repo (?:fork|edit) /);
   }
+});
+
+for (const fault of ['full panes','invalid budget','unreadable inventory','agent limit','interpreter outage']) test(`doctor: recoverable capacity warns without refusal for ${fault}`,async()=>{
+  const f=doctorFixture();
+  const id=fault==='agent limit'?'agent-usage':fault==='interpreter outage'?'interpreter':'herdr-room';
+  if(fault==='full panes') {f.input.env.PDD_HERDR_PANE_BUDGET='1';f.panes=[{pane_id:'personal',workspace_id:'workspace',tab_id:'tab',terminal_id:'terminal'}];}
+  if(fault==='invalid budget')f.input.env.PDD_HERDR_PANE_BUDGET='invalid';
+  if(fault==='unreadable inventory') {const run=f.ports.run;f.ports.run=(file,args,options)=>file==='herdr'&&args.includes('list')?f.answer('',1):run(file,args,options);}
+  if(fault==='agent limit')f.limited=true;
+  if(fault==='interpreter outage')f.ports.fetch=async()=>new Response('{}',{status:503});
+  const result=await invoke(f);
+  assert.equal(result.code,0,result.text);check(result,id,'WARN');
+  const line=(await runAutopilotDoctor(f.input,f.ports)).checks.find(c=>c.id===id);
+  assert.ok(line.fix.length>0);
+  assert.match(line.fix,fault==='invalid budget'?/unset PDD_HERDR_PANE_BUDGET/:id==='herdr-room'?/pdd workflow tidy/:/autopilot doctor/);
+  assert.ok(f.calls.every(c=>!c.args||!c.args.some(arg=>['close','start','exec'].includes(arg))));
 });

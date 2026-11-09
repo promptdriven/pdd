@@ -79,8 +79,8 @@ in the private fixture home. Program, account and health observations use the
 factory ports. The restart case signs out the caller profile and keeps the saved
 coordinator profile healthy. Doctor and start must use that saved profile and
 retain the coordinator identity.
-The full-budget recovery case also runs doctor. Potential workflow reclamation
-must reach the existing guarded sweeps. A busy personal pane stays open.
+The full-budget recovery case also runs doctor. Capacity warnings must reach
+the existing guarded sweeps. A busy personal pane stays open.
 The Herdr fake keeps `--session` and separate `pdd` and `pdd-autopilot`
 inventories. A full workflow session admits reuse of the healthy coordinator
 without allocating or closing panes. The launcher admission table also compares

@@ -9,7 +9,15 @@ state files, timer changes, workspace allocation, cleanup or approvals.
 
 Return {exitCode, message, checks}. Checks are ordered records with exactly id,
 status (pass, warn, fail), detail and fix. Exit 1 if any required check fails,
-else 0. Message has one line per record: STATUS id: detail; fix: command.
+else 0. Only prerequisites that start cannot recover itself may fail: the selected
+pdd installation, Node, Git/gh installation and sign-in, repository access and
+configuration, agent CLI installation and sign-in, required local tools and user
+scheduler, and PDD setup. Pane room, interpreter health, check slots, agent usage
+limits and other capacity observations are advisory: report WARN with a fix
+command, never refuse start for them. Start already sweeps, parks and waits;
+its native guards decide admission and recovery. Missing gh sign-in remains a
+prerequisite failure even when interpreter access is also unproved.
+Message has one line per record: STATUS id: detail; fix: command.
 Collapse control characters and newlines in details. Never echo auth payloads,
 tokens or provider diagnostics. Each fix is a concrete shell command, safely
 quoted for paths, with a diagnostic command for successful checks or conditions
@@ -55,7 +63,7 @@ Check these boundaries in order and continue after failures:
   and invocation environment. Probe only Codex login status or Claude auth status
   --json (preserve supported agy/Gemini launcher selection through its read-only readiness/credential ports). Without a selected account fail with the installed agent's sign-in
   command. Missing CLIs name their install command. Read Codex limits using its
-  read-only account port. Limited is failure, unknown is warning. For Claude,
+  read-only account port. Limited and unknown are warnings. For Claude,
   unsupported read-only usage evidence is warning with `claude` and /usage advice;
   no generation call to discover allowance, and no credit/reset advice.
 - Herdr installed. Read the workflow session `pdd` server status and pane list without starting a server, matching the shared workflow pane budget.
@@ -68,11 +76,10 @@ Check these boundaries in order and continue after failures:
   read. An unavailable or mismatched saved target warns and defers to the existing
   guarded start recovery; preflight must not refuse a start that native start
   admits. Saved custody and pending delivery also defer allocation to their guards.
-  If room is short, a read-only reclaimablePanes({env,panes}) port may identify a count of
-  potential workflow panes. Potential room warns that capacity is unproved
-  until start's existing guarded sweeps and admission run; doctor closes nothing
-  and grants no cleanup authority. Otherwise insufficient room fails. Invalid
-  budget or unreadable inventory fails. Recommend the native tidy command for capacity.
+  Insufficient room, invalid budget and unreadable inventory warn and defer to
+  native start. This includes a finished workflow shell after its chat has closed:
+  preflight does not need to predict which panes native cleanup can reclaim.
+  Recommend the native tidy command for capacity, or unset an invalid budget.
 - Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all ten skill
   entrypoints in one selected provider's supported project/user skill root,
   and valid pdd.json autopilot mode/trust. Off fails. Describe observe versus auto
@@ -85,7 +92,7 @@ Check these boundaries in order and continue after failures:
   with the selected environment and injected gh/fetch/clock ports. No upload or job.
   Preserve its health rules, including a JSON 404 from an interpreter without the
   optional capacity endpoint. Missing auth, denial, maintenance or unreachable
-  access fail with gh auth login, the platform browser sign-up command or a doctor
+  access warn with gh auth login, the platform browser sign-up command or a doctor
   retry as appropriate. Validate the origin even with an injected health port. An
   invalid PDD_RUNTIME_URL names that setting and advises an HTTPS origin or unsetting
   it to use the default, with an executable unset-and-retry command. No auth body
