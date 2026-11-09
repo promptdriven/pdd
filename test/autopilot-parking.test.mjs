@@ -1258,3 +1258,21 @@ for (const cause of ['pdd', 'interpreter reason', 'stuckCause', 'interpreter rea
       assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
     }
   });
+
+for (const hold of ['paused', 'idle', 'resume']) test(`3091 integration: preserve existing ${hold} custody without a new blocker`, async t => {
+  const {f, tick, ports} = await setup(t), run = f.record(), alerts = [];
+  if (hold === 'paused') run.state = 'paused';
+  else {
+    run.state = 'stuck'; run.parkReason = 'Controlled native recovery ceiling.';
+    run[hold === 'idle' ? 'chatIdleLimit' : 'chatResumeLimit'] = {area: run.chats.at(-1).area, at: f.clock};
+  }
+  save(f, run);
+  ports.sendAlert = async input => {alerts.push(input); return {exitCode: 0};};
+  await tick(); await tick();
+  assert.equal(f.record().parking, undefined, 'existing recovery custody must not become an unknown park');
+  for (const key of ['state', 'parkReason', 'chatIdleLimit', 'chatResumeLimit', 'gate', 'question', 'done', 'chats'])
+    assert.deepEqual(f.record()[key], run[key]);
+  assert.equal(f.herdr.calls.filter(a => ['tab', 'workspace'].includes(a[0]) && a[1] === 'close').length, 0);
+  if (hold === 'paused') assert.equal(alerts.length, 0);
+  assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
+});
