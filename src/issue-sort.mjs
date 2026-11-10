@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-sort.prompt.md (sha256: 01b35872eb8bf099b9f89fce12ebb45df09d8a2972e7f9e58dd4ab8d1848f61e).
+// Generated from prompts/cli/issue-sort.prompt.md (sha256: 8785815f5efd4db3c6eeaf769008a51eb9d947c5fdd34d3a797cdecc3a6ba93b).
 import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea } from './autopilot-areas.mjs';
 const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/.test(x);
