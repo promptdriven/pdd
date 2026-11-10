@@ -47,8 +47,11 @@ Reconcile saved running checks independently of the current version: before a
 replacement launch, stop obsolete versions and cache `Intake check superseded`.
 The hook sweeps saved checks for the whole repository before candidate handling,
 including issues absent from rows, to enforce timeouts. Stop checks for held rows
-and cache `Intake issue held` before skipping them. Timeout wins over cancellation
-and uses `Intake agent timed out`. A stop or persistence error prevents a
+and cache `Intake issue held` before skipping them. For a still-running process,
+timeout wins over cancellation and uses `Intake agent timed out`; a process that
+already exited can still supply its result after the deadline. A stop that returns
+false while the job still reads as running raises `Intake agent could not stop`.
+A stop or persistence error prevents a
 replacement launch; leave the running record available for reconciliation.
 Completed and failed inputs remain cached, including cancelled inputs; returning
 to an old version never relaunches it. Pending augmented checks of the same issue
@@ -126,7 +129,13 @@ ready even in shadow. Do not modify the core to wire the hook.
   Redact result text before saving completed checks, acceptance drafts and question
   episodes, so resumed writes remain safe after a restart or credential rotation.
   Redact again with the current inventory before every comment write, including
-  retries from saved records. Never persist the credential inventory.
+  retries from saved records. Keep a running job's launch inventory only in host
+  memory, so rotation before result collection still redacts its old credentials.
+  Persist only a SHA-256 fingerprint of that context. After restart, collect an
+  unprocessed result only when the current inventory matches that fingerprint;
+  otherwise cache `Intake redaction context unavailable` with no public write.
+  Never persist the credential inventory. Completed sanitized results and saved
+  drafts do not require the old inventory to resume.
 - Node fs/path provide local state with an injected `fs` compatible with sync
   methods; use atomic private JSON files. Node crypto provides deterministic
   SHA-256. The injected clock `now()` returns epoch milliseconds.

@@ -261,6 +261,58 @@ test('overlapping improvement and question calls post each marked comment once',
 });
 
 for (const kind of ['improve', 'ask']) {
+  test(`uncollected ${kind} output keeps its launch redaction context across rotation`, async t => {
+    const canary = `opaque-${kind}-running-fixture-47021`;
+    const output = kind === 'improve' ? { ...improve, acceptance: [`Print ${canary} safely.`] }
+      : { ...ask, question: `Should ${canary} be accepted?` };
+    const w = world(t, [output, ready]), readJob = w.ctx.jobs.read;
+    w.ctx.env = { CUSTOM_TOKEN: canary };
+    w.ctx.jobs.read = () => ({ state: 'running', exit: null, result: null });
+    await intakeGate(w.ctx, [w.issue]);
+    w.ctx.jobs.read = readJob;
+    await intakeGate({ ...w.ctx, env: {} }, [w.issue]);
+    assert.equal(comments(w).length, 1);
+    assert.equal(comments(w)[0].includes(canary), false, 'launch credential must be redacted');
+    assert.equal(comments(w)[0].includes('[redacted]'), true);
+  });
+
+  test(`restart without the launch credential refuses uncollected ${kind} output locally`, async t => {
+    const canary = `opaque-${kind}-restart-fixture-47022`;
+    const output = kind === 'improve' ? { ...improve, acceptance: [`Print ${canary} safely.`] }
+      : { ...ask, question: `Should ${canary} be accepted?` };
+    const w = world(t, [output]), readJob = w.ctx.jobs.read;
+    w.ctx.env = { CUSTOM_TOKEN: canary };
+    w.ctx.jobs.read = () => ({ state: 'running', exit: null, result: null });
+    await intakeGate(w.ctx, [w.issue]);
+    // Reload the owner module to discard all of its process-local context.
+    const restarted = await import(`../src/autopilot-intake.mjs?restart-${kind}`);
+    w.ctx.jobs.read = readJob;
+    const result = await restarted.intakeGate({ ...w.ctx, env: {} }, [w.issue]);
+    assert.deepEqual(result.ready, []);
+    assert.equal(result.actions[0].type, 'error');
+    assert.match(result.actions[0].error, /redaction context unavailable/);
+    assert.deepEqual(w.writes, []);
+    assert.equal(w.started.length, 1);
+  });
+
+  test(`restart with the same launch context safely collects pending ${kind} output`, async t => {
+    const canary = `opaque-${kind}-same-context-fixture-47023`;
+    const output = kind === 'improve' ? { ...improve, acceptance: [`Print ${canary} safely.`] }
+      : { ...ask, question: `Should ${canary} be accepted?` };
+    const w = world(t, [output, ready]), readJob = w.ctx.jobs.read;
+    w.ctx.env = { CUSTOM_TOKEN: canary };
+    w.ctx.jobs.read = () => ({ state: 'running', exit: null, result: null });
+    await intakeGate(w.ctx, [w.issue]);
+    const restarted = await import(`../src/autopilot-intake.mjs?same-context-${kind}`);
+    w.ctx.jobs.read = readJob;
+    const result = await restarted.intakeGate(w.ctx, [w.issue]);
+    assert.equal(result.actions[0].type, kind);
+    assert.equal(comments(w).length, 1);
+    assert.equal(comments(w)[0].includes(canary), false);
+    assert.equal(comments(w)[0].includes('[redacted]'), true);
+    assert.equal(w.started.length, kind === 'improve' ? 2 : 1);
+  });
+
   test(`child-only credential is redacted in ${kind} comments and cached results resumed after rotation`, async t => {
     const canary = `opaque-${kind}-fixture-47019`;
     assert.equal(Object.values(process.env).includes(canary), false);
@@ -344,4 +396,39 @@ test('repository sweep times out saved checks even when their issue disappears f
   assert.deepEqual(w.writes, [['stop', w.started[0].id]]);
   await assert.rejects(checkIssue(w.issue, w.ports()), /timed out/);
   assert.equal(w.started.length, 1);
+});
+
+test('a refused stop leaves the old handle retryable and prevents a replacement launch', async t => {
+  const w = world(t, [ready, ready]);
+  w.ctx.jobs.read = () => ({ state: 'running', exit: null, result: null });
+  await checkIssue(w.issue, w.ports());
+  w.issue.body = 'New requirement';
+  w.ctx.jobs.stop = () => false;
+  await assert.rejects(checkIssue(w.issue, w.ports()), /stop/);
+  assert.equal(w.started.length, 1);
+  w.ctx.jobs.stop = job => { w.writes.push(['stop', job.id]); return true; };
+  assert.equal(await checkIssue(w.issue, w.ports()), null);
+  assert.equal(w.started.length, 2);
+});
+
+test('a process already exited successfully can be collected after the deadline', async t => {
+  const w = world(t, [ready]);
+  const readJob = w.ctx.jobs.read;
+  w.ctx.jobs.read = () => ({ state: 'running', exit: null, result: null });
+  await checkIssue(w.issue, w.ports());
+  w.advance(10001);
+  w.ctx.jobs.read = readJob;
+  assert.deepEqual(await checkIssue(w.issue, w.ports()), ready);
+  assert.deepEqual(w.writes, []);
+});
+
+test('reading a cached initial check preserves its pending augmented check, which still times out', async t => {
+  const w = world(t, [improve, ready]), readJob = w.ctx.jobs.read;
+  w.ctx.jobs.read = job => w.started.length === 1 ? readJob(job) : { state: 'running', exit: null, result: null };
+  assert.equal((await intakeGate(w.ctx, [w.issue])).actions.at(-1).type, 'check');
+  assert.equal((await intakeGate(w.ctx, [w.issue])).actions.at(-1).type, 'check');
+  assert.equal(w.started.length, 2); assert.equal(w.writes.filter(x => x[0] === 'stop').length, 0);
+  w.advance(10001);
+  await intakeGate(w.ctx, []);
+  assert.deepEqual(w.writes.filter(x => x[0] === 'stop'), [['stop', w.started[1].id]]);
 });
