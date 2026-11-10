@@ -1700,3 +1700,47 @@ test('H2 a Runtime report goes to the configured Runtime repository when readabl
   assert.equal(coreSettings({ autopilot: { reports: { runtimeRepo: 'promptdriven/prompt-runtime' } } }).runtimeRepo, 'promptdriven/prompt-runtime');
   assert.equal(coreSettings({ autopilot: { reports: { runtimeRepo: 'not a repo' } } }).runtimeRepo, null);
 });
+
+// ---- B (#3185): the operator's start approves the prompt changes in auto mode ---------------------------------
+const promptWith = status => `# Words\n\nCount the words of a text.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ status, operations: [] })}\n\`\`\`\n</details>\n`;
+const writePrompt = (w, n, role, status) => { const dir = join(w.job(n, role).cwd, 'prompts'); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'words.prompt.md'), promptWith(status)); };
+const WORDS = "Operator action: pdd autopilot start --engine core in auto mode for acme/widgets on machine-a at 2026-11-10T11:00:00.000Z";
+
+test('I1 in auto mode the job records the operator approval for each changed prompt; observe mode does not approve', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.state.startedAt = '2026-11-10T11:00:00.000Z';
+  w.issue(17); await w.tick();
+  const input = w.job(17, 'build').input;
+  assert.ok(input.includes(`printf '%s' '${WORDS}' | pdd approve PROMPT --said -`), 'the exact operator words');
+  assert.match(input, /commit the result in the PR/);
+  const v = await coreWorld(t, { settings: { runs: 1, mode: 'observe' } });
+  v.issue(17); await v.tick();
+  assert.doesNotMatch(v.job(17, 'build').input, /pdd approve/);
+});
+
+test('I2 a changed prompt with a draft interface is red: one repair with the approval command, then it merges; with no repairs left it ends', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.state.startedAt = '2026-11-10T11:00:00.000Z';
+  w.issue(17); await w.tick();
+  writePrompt(w, 17, 'build', 'draft');
+  const { pr } = w.build(17); await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'a draft interface starts a repair');
+  assert.match(repair.input, /draft Runtime interface: prompts\/words\.prompt\.md/); assert.ok(repair.input.includes(WORDS));
+  writePrompt(w, 17, 'repair', 'approved');
+  w.build(17, { role: 'repair' }); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  const v = await coreWorld(t, { settings: { runs: 1, repairs: 0 } });
+  v.issue(17); await v.tick(); writePrompt(v, 17, 'build', 'draft'); v.build(17); await v.tick();
+  assert.match(endComments(v, 17)[0], /draft Runtime interface/); assert.ok(v.labels(17).includes('pdd:stuck'));
+});
+
+test('I3 observe mode never approves: a draft prompt is listed in the "would merge" note, not red', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, mode: 'observe' } });
+  w.issue(17); await w.tick(); writePrompt(w, 17, 'build', 'draft');
+  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  const note = pr.comments.map(c => c.body).find(body => body.includes('would-merge'));
+  assert.match(note, /- Draft prompts \(observe mode does not approve\): prompts\/words\.prompt\.md/);
+  assert.equal(w.job(17, 'repair'), undefined);
+});

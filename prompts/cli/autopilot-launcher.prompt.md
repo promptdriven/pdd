@@ -1386,7 +1386,8 @@ through this machine's alert destination with the core's cause, tried and need (
   timer, saves the agent profile and runs the first tick. With no coordinator launch,
   the start also saves `launchProfile` from the profile binding, so that a later
   start verifies the saved profile; a core state saved without one selects the agent
-  again instead of refusing. Its message names
+  again instead of refusing. Each core start saves `startedAt` (ISO time): in auto
+  mode it is the operator action that approves the jobs' prompt changes. Its message names
   `pdd autopilot status` instead of the Herdr session.
 - Timer: the core tick makes no AI call and each job phase needs a tick, so the core
   engine's timer fires every 10 minutes; the full engine's fires every 30. Start writes

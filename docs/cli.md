@@ -1421,7 +1421,12 @@ Each tick, without AI calls:
    comment, make a worktree and start one headless job. The job runs the same pdd
    as the tick (it goes first on the job's `PATH`). It makes one PR with prompt,
    tests and code, and writes one `Runtime:` line and one `Evidence:` line in the PR
-   body. It writes no review verdict: only the fresh reviewer gives one.
+   body. It writes no review verdict: only the fresh reviewer gives one. In `auto`
+   mode your `pdd autopilot start` is the approval of the job's prompt changes: the
+   job records it for each changed prompt with `pdd approve PROMPT --said -` and the
+   words "Operator action: pdd autopilot start --engine core in auto mode for REPO on
+   MACHINE at TIME", in the PR. A changed prompt that still has a draft interface is
+   red. `observe` mode never approves.
 
 Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
 refusal, no interface, a scenario limit, no verdict), the job still ships its PR with

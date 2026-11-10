@@ -278,7 +278,13 @@ any other pdd (for example an older global install).
   the tool error in the result's `runtime` with kind `runtime`. One `Evidence:` line
   in the PR body and the same text as the result's `evidence` (below). No review
   verdict or review claim (for example "Review: no must-fix") in the PR body or a
-  comment: only the core's fresh reviewer gives one. Push the job
+  comment: only the core's fresh reviewer gives one. **Approval (auto mode only):**
+  the operator's start is the approval of the job's prompt changes. For each changed
+  `*.prompt.md`, after its checks pass, the job runs `printf '%s' 'WORDS' | pdd approve
+  PROMPT --said -` with WORDS exactly `Operator action: pdd autopilot start --engine
+  core in auto mode for REPO on MACHINE at TIME` (TIME = `state.startedAt`, else
+  `state.activatedAt`) and commits the result in the PR. In observe mode the prompt has
+  no approval rule. Push the job
   branch and open one PR against BASE with `Fixes #N`; never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
   file is JSON: `outcome` `pr` with `pr`, `head`, `promptChanged` (Boolean),
@@ -357,7 +363,13 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    value is red, and the repair prompt quotes the line. Lines that disagree (PASS and
    not run) are red. The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body; else red. A body with no
-   Runtime line is red unless the result says `"promptChanged": false`. Then a
+   Runtime line is red unless the result says `"promptChanged": false`. In auto mode,
+   a changed prompt (`git diff --name-only --diff-filter=AM origin/BASE...HEAD`, after a
+   fetch of the base and the branch, read once per head and saved as `approvals`) whose
+   Runtime interface block (`interfaceBlocks` of the
+   [preflight](runtime-preflight.prompt.md)) has `status` `draft` is red, with the
+   approval command and words in the finding (one repair, then END as usual). Observe
+   mode never approves: it lists the draft prompts in its "would merge" note. Then a
    failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass); else
    a review FAIL or a failed suite. With no red finding yet, start the review and

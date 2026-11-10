@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ed69a755818a0643b0fd152f59f60fa561b9a118561ad153aeb0a4c84195d27a).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: cdc07a04b6f072ea784624e31f6f28a53e5e57bb5afe900ed693d4d39b986b7b).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -2670,6 +2670,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     // The core engine has no coordinator launch to record its profile: save it here so a later start can verify it.
     if (core && state.agent) state.launchProfile ??= profileBinding(state, p);
+    // The time of this start: in auto mode it is the operator action that approves the core jobs' prompt changes.
+    if (core) state.startedAt = new Date(p.now()).toISOString();
     state.activatedAt ??= new Date(p.now()).toISOString();
     state.coordinatorId ??= randomUUID(); state.machine ??= hostname();
     state.enabled = true; state.timerInstalled = true; state.nextTick = p.now() + intervalOf(state);
