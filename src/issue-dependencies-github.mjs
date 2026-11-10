@@ -3,7 +3,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: b502659d0e61032b8ab07ace70be7b007a0b26197b3d0306655937efffba9d3d).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 000ac32080ab3e674008e0f3e266a4b3cd5e629212d673852d23276f23167652).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1702,6 +1702,7 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
     const hasWorking = labels.includes('pdd:working');
     let current = hasWorking ? await winner(raw) : null;
     if (hasWorking && !current) return reason === 'release' ? {state: 'refused', machine: 'unknown'} : skipped;
+    const firstClaim = current;
     const suppliedIdentity = {
       coordinatorId: claim?.coordinatorId ?? coordinatorId,
       machine: claim?.machine ?? machine,
@@ -1732,6 +1733,8 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
       if (reason === 'release' && current.active === true && (!current.machine || current.machine !== machine))
         return {state: 'refused', machine: current.machine || 'unknown'};
       if (reason === 'release' && !identityMatches(current)) return skipped;
+      if (reason === 'release' && (!firstClaim || ['coordinatorId', 'machine', 'commentId', 'labelEventId']
+        .some(key => String(current[key] ?? '') !== String(firstClaim[key] ?? '')))) return skipped;
       if (reason !== 'release') {
         const expectedCoordinator = claim?.coordinatorId ?? coordinatorId;
         if (current.active === true && (!current.machine || current.machine !== machine)) return skipped;

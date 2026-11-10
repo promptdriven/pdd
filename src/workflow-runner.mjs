@@ -4337,6 +4337,15 @@ export const releaseRunClaim = saveGuard(async ({ ref, cwd, repository, machine,
   const number = Number(match.at(-1)), refRepo = match.length === 3 ? match[1] : null;
   const found = await resolveRun(String(number), { cwd }, p);
   let run = found.run ?? null, release;
+  if ((!run || !Object.hasOwn(run, 'automaticOrigin') || coordinatorId && run.automaticOrigin?.coordinatorId !== coordinatorId) && cwd) {
+    const candidates = allRuns({cancelled: true}, p).filter(item => item.number === number
+      && (!refRepo || item.repo?.toLowerCase() === refRepo.toLowerCase())
+      && (!repository || item.repo?.toLowerCase() === repository.toLowerCase())
+      && samePath(item.sourceRoot, cwd)
+      && Object.hasOwn(item, 'automaticOrigin')
+      && (!coordinatorId || item.automaticOrigin?.coordinatorId === coordinatorId));
+    run = candidates.find(item => item.claimRelease?.state === 'pending') ?? candidates.at(-1) ?? run;
+  }
   if (run) {
     try { release = acquireRunLock(run.runDir); }
     catch (error) { return fail(error.message); }

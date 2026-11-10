@@ -1453,6 +1453,8 @@ test('3157: cancel ends a parked or closing run, clears parking, releases claim 
 
 test('3157: pdd autopilot release removes pdd:working and pdd:stuck, keeps run folder/branch/PRs, and refuses another machine live claim', async t => {
   const {runAutopilotLauncher} = await import('../src/autopilot-launcher.mjs');
+  const {openRun} = await import('../src/workflow-runner.mjs');
+  const {createDependencyReadPorts} = await import('../src/issue-dependencies-github.mjs');
   const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
   const {f, tick, ports} = await setup(t);
   const run = f.record();
@@ -1484,6 +1486,14 @@ test('3157: pdd autopilot release removes pdd:working and pdd:stuck, keeps run f
   assert.ok(existsSync(after.runDir));
   assert.ok(existsSync(after.root));
   assert.deepEqual(after.pr, run.pr);
+  const opened = await openRun({ref: '17', cwd: f.source}, {...f.ports, execFile: launcherPorts.run});
+  assert.match(opened.message, /Run .* for #17 is cancelled\. Stop working on it\./);
+  assert.doesNotMatch(opened.message, /current claim ownership is unavailable/);
+  const occupied = JSON.parse((await createDependencyReadPorts({cwd: f.source}, {...f.ports, owners: undefined, execFile: launcherPorts.run}).owners.read({repository: run.repo, issues: []})).json);
+  assert.deepEqual(occupied.runs, []);
+  const statusAfter = await runAutopilotLauncher({command: 'status', cwd: f.source, env: f.ports.env}, {...launcherPorts, timer: async () => true});
+  assert.equal(statusAfter.exitCode, 0, statusAfter.message);
+  assert.match(statusAfter.message, /working 0 of 1 · parked 0/);
 
   // Another machine holds a live claim on #18: release refuses and keeps the labels.
   github.claim(18, {coordinatorId: 'other-coord', machine: 'other-machine'});
@@ -1580,7 +1590,15 @@ test('3157: expired or lost claim on tick removes pdd:working and pdd:stuck and 
   assert.equal(f.record().parking?.phase, 'parked');
   // Advance past the 4-hour claim expiry; intake observes the expired claim on this machine.
   f.tick(5 * 3600000);
-  ports.owners = {read: async () => ({json: JSON.stringify({localOwner: run.automaticOrigin.coordinatorId, claims: []})})};
+  const ghEndpoints = [];
+  let ownersReadCalls = 0;
+  ports.owners = {read: async () => { ownersReadCalls++; return {json: JSON.stringify({localOwner: run.automaticOrigin.coordinatorId, claims: []})}; }};
+  const trackGh = fallback => async (file, args, options) => {
+    if (file === 'gh' && args[0] === 'api') ghEndpoints.push({args: [...args], purpose: options?.purpose});
+    return file === 'gh' && args[0] === 'api' ? github.gh(args, options) : fallback(file, args, options);
+  };
+  ports.run = trackGh(origRun);
+  ports.execFile = f.ports.execFile = trackGh(origExec);
   ports.reconcileDependencyIntake = async () => ({
     eligible: [], queued: [], skipped: [], groups: [],
     claims: [{...active, active: false, expired: true, lastSeen: new Date(f.clock - 5 * 3600000).toISOString()}],
@@ -1589,6 +1607,11 @@ test('3157: expired or lost claim on tick removes pdd:working and pdd:stuck and 
   assert.equal(f.record().state, 'cancelled');
   assert.equal(f.record().parking, undefined);
   assert.deepEqual(github.issues.get(17).labels, []);
+  assert.equal(ownersReadCalls, 0);
+  const commentReads = ghEndpoints.filter(call => call.args.some(arg => String(arg).includes('/issues/17/comments')));
+  assert.equal(commentReads.length, 2);
+  assert.ok(commentReads[1].args.some(arg => String(arg).startsWith('If-None-Match:')));
+  assert.ok(ghEndpoints.every(call => call.purpose === 'claims'));
   const status = await runAutopilotLauncher({command: 'status', cwd: f.source, env: f.ports.env}, {...ports, timer: async () => true});
   assert.equal(status.exitCode, 0, status.message);
   assert.match(status.message, /working 0 of 1 · parked 0/);
