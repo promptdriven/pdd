@@ -10,7 +10,7 @@ import {automaticFixture} from './helpers/autopilot-run-base-fixture.mjs';
 import {packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
-import {approveRun, runStatus, stepDone, cancelRun, askPerson} from '../src/workflow-runner.mjs';
+import {approveRun, runStatus, stepDone, cancelRun, askPerson, advanceAutomaticPr1} from '../src/workflow-runner.mjs';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
 import {captureSource} from '../src/runtime-preflight.mjs';
 import {renderJson} from '../src/runtime-output.mjs';
@@ -307,6 +307,34 @@ for (const kind of ['strict', 'scope', 'custody', 'Story']) test(`#3099 publicat
   await f.scan();
   assert.equal(changed, true, 'the control must reach publication preparation');
   assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0); assert.equal(f.record().decisions.length, decisions);
+});
+
+test('#3099 concurrent full-pass publication attempts create one PR', async t => {
+  const f = await setup(t), original = f.tickPorts.execFile;
+  const path = join(f.run.root, PROMPT);
+  writeFileSync(path, readFileSync(path, 'utf8').replace(/"status":\s*"approved"/, '"status":"draft"'));
+  f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Synthetic checked draft');
+  saveCheck(f);
+  let reached, resume;
+  const preparing = new Promise(resolve => { reached = resolve; });
+  const proceed = new Promise(resolve => { resume = resolve; });
+  f.tickPorts.execFile = async (file, args, options) => {
+    const result = await original(file, args, options);
+    if (file === 'git' && args[0] === 'commit') { reached(); await proceed; }
+    return result;
+  };
+  const first = f.scan();
+  try {
+    await preparing;
+    const origin = f.record().automaticOrigin;
+    const second = await advanceAutomaticPr1({ref: '17', cwd: f.source, packageRoot,
+      coordinatorId: origin.coordinatorId, machine: origin.machine}, f.tickPorts);
+    assert.notEqual(second.exitCode, 0);
+    assert.equal(f.prs.length, 0);
+    assert.equal(f.pushes.length, 0);
+  } finally { resume(); await first; }
+  assert.equal(f.prs.length, 1);
+  assert.equal(f.pushes.length, 1);
 });
 
 for (const boundary of ['preparation', 'pre-push', 'post-push'])

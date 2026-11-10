@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6d73620aaeb8fda641459af7c5b2da946599211ab1dcfc4d3012d1756b3b5db8).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5c20e11aa636c89506780d7e63e81d2054a9ab53a8afda86e1b13a5e9e3f2807).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -163,11 +163,11 @@ export function acquireRunLock(runDir, filename = 'chat-replacement.lock') {
   }
   return () => { try { if (sameOwner(owner, readLock(path))) unlinkSync(path); } catch { /* Never remove another or unreadable owner. */ } };
 }
-async function lockedMutation(args, ports, action) {
+async function lockedMutation(args, ports, action, filename) {
   const p = deps(ports), found = await resolveRun(args.ref, { cwd: args.cwd }, p);
   if (!found.run) return action(args, ports);
   let release;
-  try { release = acquireRunLock(found.run.runDir); return await action(args, { ...ports, releaseRunLock: release }); }
+  try { release = acquireRunLock(found.run.runDir, filename); return await action(args, { ...ports, releaseRunLock: release }); }
   catch (error) { if (error.code === 'run_busy') return fail(error.message); throw error; }
   finally { release?.(); }
 }
@@ -2470,7 +2470,7 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
   publicationGate = structuredClone(run.gate);
   p.inspectProgress();
   return automaticPr1(run, area, 'check', p, [], check, packageRoot, progressRecorded);
-}));
+}, 'automatic-pr1.lock'));
 async function automaticPr1(run, area, step, p, lines, check, packageRoot, progressRecorded = () => {}) {
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
