@@ -33,14 +33,380 @@ Keep locked, dirty, untracked, unpushed, detached, replaced or unknown worktrees
 - [Workflow runner](workflow-runner.prompt.md): native generation and verification context for acquireRunLock.
 - [Agent adapters](agent-adapters.prompt.md): native generation and verification context for bounded process execution.
 
+In the Runtime interface, `cleanupWorktrees({cwd, repository})` uses `runs.listRuns({cwd, cancelled})`, `runs.readRun({runDir})`, `runs.lookup({cwd, runId, branch})`, `runs.lock({runDir})` and `process.execute({file, args, cwd})` (`gh pr list`, `git symbolic-ref`, `git status`, `git rev-list`, `git rev-parse`, `git worktree remove`), returning `{removed, kept}` arrays of run IDs without throwing. Native lock-file release callbacks and child-process execution stay a native obligation covered by `test/autopilot-cleanup.test.mjs`.
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "90dae89f95ba35245b8627cee58f736f3e1bd2cd38cb5bb09a3db708c4bcd930",
-  "reason": "Deletion safety depends on real locks, worktree identity and Git effects. Native evidence owners: test/autopilot-cleanup.test.mjs."
+  "prose_sha256": "7f7300aea95b7252a48f8e008e249a0340410a10b5509123d74e0295e9674a35",
+  "entries": [
+    {
+      "operation": "cleanupWorktrees",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "repository"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kept": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "removed",
+          "kept"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "runs.listRuns",
+        "runs.readRun",
+        "runs.lookup",
+        "runs.lock",
+        "process.execute"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "runs",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "listRuns",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "cancelled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "cwd",
+              "cancelled"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "runs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "runId": {
+                      "type": "string"
+                    },
+                    "root": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    },
+                    "runDir": {
+                      "type": "string"
+                    },
+                    "sourceRoot": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "gate": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "root",
+                    "branch",
+                    "runDir",
+                    "sourceRoot",
+                    "state",
+                    "repo",
+                    "gate"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "runs"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readRun",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runDir"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "run": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "runId": {
+                        "type": "string"
+                      },
+                      "root": {
+                        "type": "string"
+                      },
+                      "branch": {
+                        "type": "string"
+                      },
+                      "runDir": {
+                        "type": "string"
+                      },
+                      "sourceRoot": {
+                        "type": "string"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "repo": {
+                        "type": "string"
+                      },
+                      "gate": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "runId",
+                      "root",
+                      "branch",
+                      "runDir",
+                      "sourceRoot",
+                      "state",
+                      "repo",
+                      "gate"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "run"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "lookup",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "runId": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "runId",
+              "branch"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string"
+              },
+              "assignment": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "worktreePath": {
+                        "type": "string"
+                      },
+                      "branch": {
+                        "type": "string"
+                      },
+                      "runId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "worktreePath",
+                      "branch",
+                      "runId"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "assignment"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "lock",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runDir"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "acquired": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "acquired"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "process",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "execute",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file",
+              "args",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "stdout"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 32,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

@@ -13,16 +13,14 @@ All program calls use injected `execFile(file,args,{cwd})`; all config reads use
 - [Workflow runs](workflow-runs.prompt.md): required native generation context for the saved run repository, PR records and baseBranch supplied by the launcher.
 - [GitHub calls](github-calls.prompt.md): required native generation context for the default counted process adapter.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-config.readConfig binds readConfig(cwd); program.execFile binds the actual execFile(file,args,{cwd}) port. Supplied Git/GitHub observations check base decisions only. Real ancestry, repository identity and fresh live reads remain native; neither entry grants merge authority. Native evidence owners: test/autopilot-base.test.mjs.
+Runtime transport: each entry names the public operation above. `selectAutopilotBase` returns `{branch}` and raises `invalid-base-config` when `config.readConfig({cwd})` fails or returns non-object JSON, or `invalid-base-branch` when the selected branch name is invalid (`HEAD`, leading `-`, `refs/` prefix, blank) or `program.execFile` for `git check-ref-format refs/heads/<branch>` exits nonzero. `checkAutopilotBase` takes `{run, pr}` and returns `{exitCode, message}` using `program.execFile({file, args, cwd})`: on success (`exitCode: 0`), `message` is `Base check: PR #<pr> targets saved base <base>; contains default branch <defaultBranch> and newest release tag <tag_name>.` (or `no published release is present`); on refusal (`exitCode: 1`), `message` starts with `Automatic merge refused: `, including `Automatic merge refused: <base> does not contain <description> <ref> (<behind_by> commit(s) behind).` when behind (`description` is `default branch` or `newest release tag`). Native filesystem reading and counted child-process execution stay a native obligation covered by `test/autopilot-base.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "aee6c6a3124ac7d9fa88c8ecb71d119c22071138b2c73eab7e4c1eda2870e707",
+  "prose_sha256": "a30ead3c473aa6624e47d473b3055e9899c2e53220634aaf7db78f60375d8235",
   "entries": [
     {
       "operation": "selectAutopilotBase",
@@ -55,7 +53,8 @@ config.readConfig binds readConfig(cwd); program.execFile binds the actual execF
         "additionalProperties": false
       },
       "errors": [
-        "Error"
+        "invalid-base-config",
+        "invalid-base-branch"
       ],
       "resource_operations": [
         "config.readConfig",
@@ -68,8 +67,40 @@ config.readConfig binds readConfig(cwd); program.execFile binds the actual execF
         "type": "object",
         "properties": {
           "run": {
-            "type": "string",
-            "description": "JSON text encoding of the saved run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "baseBranch": {
+                "type": "string"
+              },
+              "pr": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "number": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "number"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "root",
+              "repo",
+              "baseBranch",
+              "pr"
+            ],
+            "additionalProperties": false
           },
           "pr": {
             "type": "string"
@@ -116,22 +147,21 @@ config.readConfig binds readConfig(cwd); program.execFile binds the actual execF
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing config.readConfig dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "cwd": {
+                "type": "string"
               }
             },
             "required": [
-              "args"
+              "cwd"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
+              "raw": {
                 "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                "description": "JSON text of pdd.json (use \"{}\" when missing)."
               },
               "error": {
                 "oneOf": [
@@ -145,7 +175,7 @@ config.readConfig binds readConfig(cwd); program.execFile binds the actual execF
               }
             },
             "required": [
-              "value",
+              "raw",
               "error"
             ],
             "additionalProperties": false
@@ -164,37 +194,39 @@ config.readConfig binds readConfig(cwd); program.execFile binds the actual execF
           "arguments_schema": {
             "type": "object",
             "properties": {
+              "file": {
+                "type": "string"
+              },
               "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing program.execFile dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
               }
             },
             "required": [
-              "args"
+              "file",
+              "args",
+              "cwd"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "stdout": {
+                "type": "string"
               },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "exitCode": {
+                "type": "integer"
               }
             },
             "required": [
-              "value",
-              "error"
+              "stdout",
+              "exitCode"
             ],
             "additionalProperties": false
           }
@@ -203,11 +235,10 @@ config.readConfig binds readConfig(cwd); program.execFile binds the actual execF
     }
   ],
   "limits": {
-    "max_steps": 64,
+    "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

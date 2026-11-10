@@ -1,0 +1,773 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-launcher-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`autopilotLaunchFingerprint` reads `package.json` via `files.read`, hashes the canonical launch payload via `compute.hash_utf8`, and throws `Error` when the coordinator state is invalid."
+    },
+    {
+      "id": "AC2",
+      "text": "`withAutopilotModeLock` verifies the Git root via `exec.execFile`, claims admission via `lock.claimAdmission`, runs `modeAction.run`, updates `controlRevision` via `process.uuid` and `files.write` when the state file exists, and throws `Error` when `cwd` is empty."
+    },
+    {
+      "id": "AC3",
+      "text": "`requestAutopilotCompletion` and `tickAutopilot` inspect saved launcher state via `files.read`, claim and release tick locks via `lock.claimTick` and `lock.releaseTick`, reconcile settings and issues when enabled, and throw `Error` on invalid paths."
+    },
+    {
+      "id": "AC4",
+      "text": "`runAutopilotLauncher` executes `stop`, `add`, and `status --all` through `exec.execFile`, `files`, `fs`, `lock`, `timer`, and `herdr`, refuses invalid arguments with exitCode 2, and throws `Error` when `command` is empty."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/pkg/pdd/package.json": {
+        "content": "{\"name\":\"@promptdriven/pdd\",\"version\":\"1.2.3\"}",
+        "is_symlink": false
+      }
+    },
+    "counters": {
+      "execFile": 0,
+      "mkdir": 0,
+      "readdir": 0,
+      "claimAdmission": 0,
+      "releaseAdmission": 0,
+      "claimTick": 0,
+      "releaseTick": 0,
+      "modeAction": 0,
+      "uuid": 0,
+      "settingsRead": 0,
+      "timerControl": 0,
+      "herdrCommand": 0
+    },
+    "clock_calls": [],
+    "host_calls": []
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": null
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "clock.now": {
+      "action": "port.write",
+      "world_pointer": "/clock_calls",
+      "result_template": {
+        "ms": 1730000000000
+      }
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    },
+    "process.host": {
+      "action": "port.write",
+      "world_pointer": "/host_calls",
+      "result_template": {
+        "hostname": "vm-01",
+        "platform": "linux",
+        "uid": 1000
+      }
+    },
+    "process.uuid": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/uuid",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "uuid": "rev-1"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "uuid": "rev-2"
+          }
+        }
+      ]
+    },
+    "exec.execFile": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/execFile",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "/work/pdd\n",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "/work/pdd\n",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "/work/pdd\n",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "file": "gh",
+            "args": [
+              "repo",
+              "view",
+              "--json",
+              "nameWithOwner,defaultBranchRef"
+            ],
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "{\"nameWithOwner\":\"promptdriven/pdd\",\"defaultBranchRef\":{\"name\":\"main\"}}",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "--method",
+              "POST",
+              "repos/promptdriven/pdd/labels",
+              "-f",
+              "name=pdd:autopilot",
+              "-f",
+              "color=5319e7",
+              "-f",
+              "description=Autopilot may take this old issue"
+            ],
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "{\"name\":\"pdd:autopilot\"}",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "--method",
+              "POST",
+              "repos/promptdriven/pdd/issues/42/labels",
+              "-f",
+              "labels[]=pdd:autopilot"
+            ],
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "[{\"name\":\"pdd:autopilot\"}]",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "/work/pdd\n",
+            "stderr": ""
+          }
+        }
+      ]
+    },
+    "fs.mkdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/mkdir",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/state/autopilot"
+          },
+          "result": {
+            "ok": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "path": "/state/autopilot"
+          },
+          "result": {
+            "ok": true
+          }
+        }
+      ]
+    },
+    "fs.readdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/readdir",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/state/autopilot"
+          },
+          "result": {
+            "entries": []
+          }
+        }
+      ]
+    },
+    "lock.claimAdmission": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/claimAdmission",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "stateRoot": "/state/autopilot",
+            "id": "6e0cee085113483e85c6"
+          },
+          "result": {
+            "claimed": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "stateRoot": "/state/autopilot",
+            "id": "6e0cee085113483e85c6"
+          },
+          "result": {
+            "claimed": true
+          }
+        }
+      ]
+    },
+    "lock.releaseAdmission": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/releaseAdmission",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "stateRoot": "/state/autopilot",
+            "id": "6e0cee085113483e85c6"
+          },
+          "result": {
+            "released": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "stateRoot": "/state/autopilot",
+            "id": "6e0cee085113483e85c6"
+          },
+          "result": {
+            "released": true
+          }
+        }
+      ]
+    },
+    "lock.claimTick": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/claimTick",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "lockPath": "/state/autopilot/6e0cee085113483e85c6.json.lock"
+          },
+          "result": {
+            "claimed": true
+          }
+        }
+      ]
+    },
+    "lock.releaseTick": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/releaseTick",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "lockPath": "/state/autopilot/6e0cee085113483e85c6.json.lock"
+          },
+          "result": {
+            "released": true
+          }
+        }
+      ]
+    },
+    "modeAction.run": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/modeAction",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "exitCode": 0,
+            "message": "Autopilot mode set to auto."
+          }
+        }
+      ]
+    },
+    "settings.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/settingsRead",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "exitCode": 0,
+            "mode": "off",
+            "message": "Autopilot is off in promptdriven/pdd."
+          }
+        }
+      ]
+    },
+    "timer.control": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/timerControl",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "action": "stop",
+            "id": "6e0cee085113483e85c6",
+            "stateFile": "/state/autopilot/6e0cee085113483e85c6.json"
+          },
+          "result": {
+            "active": false
+          }
+        }
+      ]
+    },
+    "herdr.command": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/herdrCommand",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "args": [
+              "server",
+              "status"
+            ]
+          },
+          "result": {
+            "running": false,
+            "result": null,
+            "error": {
+              "code": "server_not_running",
+              "message": "Herdr is not running."
+            }
+          }
+        }
+      ]
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "autopilot-launch-fingerprint-invalid",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "autopilotLaunchFingerprint",
+      "input": {
+        "state": {}
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "autopilot-launch-fingerprint-ok",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "autopilotLaunchFingerprint",
+      "input": {
+        "state": {
+          "packageRoot": "/pkg/pdd",
+          "cwd": "/work/pdd",
+          "agent": {
+            "kind": "claude"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "fingerprint": "1b2c63ce5df3951e486c7fb313352eeac663560db44f3cae45a300e28903c8f1"
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "with-autopilot-mode-lock-invalid",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "withAutopilotModeLock",
+      "input": {
+        "cwd": ""
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "with-autopilot-mode-lock-ok",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "withAutopilotModeLock",
+      "input": {
+        "cwd": "/work/pdd",
+        "stateRoot": "/state/autopilot"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 0,
+            "message": "Autopilot mode set to auto."
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/claimAdmission",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/releaseAdmission",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "request-autopilot-completion-invalid",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "requestAutopilotCompletion",
+      "input": {
+        "cwd": ""
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "request-autopilot-completion-inactive",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "requestAutopilotCompletion",
+      "input": {
+        "cwd": "/work/pdd",
+        "stateRoot": "/state/autopilot"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "inactive"
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "tick-autopilot-invalid",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "tickAutopilot",
+      "input": {
+        "stateFile": ""
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "tick-autopilot-stopped",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "tickAutopilot",
+      "input": {
+        "stateFile": "/state/autopilot/6e0cee085113483e85c6.json"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 0,
+            "message": "Autopilot stopped."
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-autopilot-launcher-invalid",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "runAutopilotLauncher",
+      "input": {
+        "command": "",
+        "cwd": "/work/pdd"
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-autopilot-launcher-status-all-empty",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "runAutopilotLauncher",
+      "input": {
+        "command": "status",
+        "cwd": "/work/pdd",
+        "all": true,
+        "stateRoot": "/state/autopilot"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 0,
+            "message": "No Autopilot on this machine."
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-autopilot-launcher-add-ok",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "runAutopilotLauncher",
+      "input": {
+        "command": "add",
+        "cwd": "/work/pdd",
+        "issues": [
+          "42"
+        ],
+        "stateRoot": "/state/autopilot"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 0,
+            "message": "Marked 1 issue(s) with pdd:autopilot."
+          }
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/counters/execFile",
+          "op": "equals",
+          "value": 6
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/files/~1state~1autopilot~16e0cee085113483e85c6.json/content",
+          "op": "contains",
+          "value": "\"addedIssues\":[42]"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-autopilot-launcher-stop-ok",
+      "entry_path": "prompts/cli/autopilot-launcher.prompt.md",
+      "operation": "runAutopilotLauncher",
+      "input": {
+        "command": "stop",
+        "cwd": "/work/pdd",
+        "stateRoot": "/state/autopilot"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 0,
+            "message": "Autopilot stopped on this machine; the current step can finish."
+          }
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/counters/timerControl",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/files/~1state~1autopilot~16e0cee085113483e85c6.json/content",
+          "op": "contains",
+          "value": "\"state\":\"stopped\""
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

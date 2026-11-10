@@ -100,7 +100,20 @@ for issues whose latest outcome is merged in the window; combine attempts of the
 same repo/issue once. Do not combine different repositories with equal issue numbers.
 `costStatusLines(report)` returns readable day/week totals and P50/P90 per merged
 issue for tokens, suite, CI, GitHub calls, person interactions, active and wait
-minutes, plus outcome counts, per-account token totals and coverage.
+minutes, plus outcome counts, per-account token totals and coverage. Specifically,
+it joins these lines with `\n`:
+- `Issue costs (local measured usage):`
+- For `key` in `["day", "week"]` (`row = report[key]`):
+  - `Last <key>: <describe(row.totals)>`
+  - `  Per merged issue (<row.mergedIssues>): P50 <describe(row.p50)>; P90 <describe(row.p90)>`
+  - For each `token` in `row.totals.tokens`:
+    `  <token.account>: <token.total> tokens (input <token.input>, cached <token.cachedInput>, output <token.output>, reasoning <token.reasoningOutput>)`
+  - When `row.coverage.length > 0`:
+    `  Coverage: <row.coverage.join(', ')>`
+- `Outcomes: running <N>, merged <N>, reverted <N>, stuck <N>, closed <N>, parked <N>`
+where `describe(row)` is `'no merged issues'` when `row` is null, else
+`<num(row.totalTokens)> tokens; CI <num(row.ciMinutes)> min; suite <num(row.suiteMinutes)> min; GitHub <row.githubCalls>; person Q/A/approvals <row.person.questions>/<row.person.answers>/<row.person.approvals>, active <num(row.person.activeMinutes)> min, wait <num(row.person.waitingMinutes)> min`,
+and `num(v)` formats null as `'unknown'` and finite numbers as `Number(v.toFixed(2))`.
 
 
 Include native auditor chats in `runDir/audits/*.json` with matching runId in
@@ -123,25 +136,739 @@ reference; this module does not load it or call it.
 - Native Node filesystem, crypto hashing, path joins and deterministic arithmetic
   are injected at the file and clock boundaries above. No AI/model call is needed.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-Only explicit measurement and supplied-data reporting are bound. Native transcript checkpoints, account hashing, session/audit reads, journal durability, CI reservation and actual GitHub accounting remain native. Native evidence owners: test/cost-ledger-repair.test.mjs, test/cost-ledger.test.mjs, test/issue-cost-ledger.vectors.test.mjs.
+Through the Runtime interface:
+- `files` (`blob`: `read`, `write`, `stat`) reads and writes session transcripts,
+  audit JSON files, `<runDir>/github-cost.jsonl`, and `<runDir>/cost-ci-<number>.json`
+  (`read` returns `{content}` or `{content: null}` when absent; `stat` returns
+  `{exists, is_symlink, size}`; `write` writes UTF-8 content and returns `{}`).
+- `fs` (`readdir`) lists `<runDir>/audits` and Codex session date directories
+  (`<config>/sessions/YYYY/MM/DD`), returning `{entries}` or `{entries: [], code: "ENOENT"}`
+  when absent.
+- `exec` (`execFile`) executes `gh api repos/<repo>/actions/runs?...` for
+  `captureClosedCi`, returning `{code, stdout, stderr}`.
+- `clock` (`now`) returns `{ms}` for `captureCosts`.
+- `compute` (`hash_utf8`) returns `{value}` (64-hex SHA-256 digest; the first 20
+  lowercase hex characters form the local hash for account `<agent>:<hash20>`,
+  session checkpoint key `<hash20>`, and Claude message id `<hash20>`).
+- `captureCosts({before, run, options})` requires a `run` object with non-empty
+  `runId` and `runDir` (otherwise throws `Error("Invalid run for cost capture")`)
+  and returns `{cost}`.
+- `applyCostMeasurement({run, input, at})` returns `{run}` or throws `Error`
+  (`"Invalid cost measurement"` or `"Cost measurement id conflict"`).
+- `recordCostGithub({runDir, entry})` requires a non-empty `runDir` string and an
+  `entry` object with nonnegative finite `at` (otherwise throws
+  `Error("Invalid GitHub cost entry")`), reads and appends `{"at":entry.at}\n` to
+  `<runDir>/github-cost.jsonl` via `files.read` and `files.write`, and returns
+  `{ok: true}`.
+- `captureClosedCi({run})` requires a `run` object with non-empty `runDir`, `repo`,
+  and `root` (otherwise throws `Error("Invalid run for CI capture")`), checks
+  `files.stat({path: "<runDir>/cost-ci-<number>.json"})` before reserving and
+  writing `<runDir>/cost-ci-<number>.json`, and returns `{ok: true}`.
+- `costReport({runs, now})` requires an array `runs` and nonnegative finite `now`
+  (otherwise throws `Error("Invalid cost report input")`) and returns the
+  `pdd.cost-report.v1` object.
+- `costStatusLines({report})` requires a `report` object with
+  `schema === "pdd.cost-report.v1"` (otherwise throws `Error("Invalid cost report")`)
+  and returns `{text}`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "f011928cc9944e0b776c087957db6344378db23f94e4cdab12da08d3b53b972b",
+  "prose_sha256": "788a95f5aa688a716d6fe478c895605f04e8eb01b6a0651772a6a7adf64aca05",
   "entries": [
+    {
+      "operation": "captureCosts",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "before": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "runDir": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "root": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "startedAt": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "integer"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "configDir": {
+                "type": "string"
+              },
+              "chats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "agent": {
+                      "type": "string"
+                    },
+                    "configDir": {
+                      "type": "string"
+                    },
+                    "session": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "agent",
+                    "configDir",
+                    "session"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "pr": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "number": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "stage": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                    "stage",
+                    "branch"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "areas": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "decisions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "decision": {
+                      "type": "string"
+                    },
+                    "gateId": {
+                      "type": "string"
+                    },
+                    "gateAt": {
+                      "type": "integer"
+                    },
+                    "at": {
+                      "type": "integer"
+                    },
+                    "stage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "decision",
+                    "gateId",
+                    "gateAt",
+                    "at",
+                    "stage"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "runId"
+            ],
+            "additionalProperties": false
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "skipCostSessions": {
+                "type": "boolean"
+              },
+              "auditRecords": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {},
+                  "required": [],
+                  "additionalProperties": false
+                }
+              },
+              "env": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "cost": {
+            "type": "object",
+            "properties": {
+              "schema": {
+                "type": "string"
+              },
+              "capturedAt": {
+                "type": "integer"
+              },
+              "outcome": {
+                "type": "string"
+              },
+              "outcomeAt": {
+                "type": "integer"
+              },
+              "tokens": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "account": {
+                      "type": "string"
+                    },
+                    "agent": {
+                      "type": "string"
+                    },
+                    "input": {
+                      "type": "integer"
+                    },
+                    "cachedInput": {
+                      "type": "integer"
+                    },
+                    "output": {
+                      "type": "integer"
+                    },
+                    "reasoningOutput": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "account",
+                    "agent",
+                    "input",
+                    "cachedInput",
+                    "output",
+                    "reasoningOutput",
+                    "total"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "sessions": {
+                "type": "object",
+                "properties": {
+                  "eec414bc659da70d2567": {
+                    "type": "object",
+                    "properties": {
+                      "account": {
+                        "type": "string"
+                      },
+                      "agent": {
+                        "type": "string"
+                      },
+                      "offset": {
+                        "type": "integer"
+                      },
+                      "usage": {
+                        "type": "object",
+                        "properties": {
+                          "input": {
+                            "type": "integer"
+                          },
+                          "cachedInput": {
+                            "type": "integer"
+                          },
+                          "output": {
+                            "type": "integer"
+                          },
+                          "reasoningOutput": {
+                            "type": "integer"
+                          },
+                          "total": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "input",
+                          "cachedInput",
+                          "output",
+                          "reasoningOutput",
+                          "total"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "messages": {
+                        "type": "object",
+                        "properties": {
+                          "3a0de37932e8b19746f2": {
+                            "type": "object",
+                            "properties": {
+                              "input": {
+                                "type": "integer"
+                              },
+                              "cachedInput": {
+                                "type": "integer"
+                              },
+                              "output": {
+                                "type": "integer"
+                              },
+                              "reasoningOutput": {
+                                "type": "integer"
+                              },
+                              "total": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "input",
+                              "cachedInput",
+                              "output",
+                              "reasoningOutput",
+                              "total"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "3a0de37932e8b19746f2"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "observed": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "account",
+                      "agent",
+                      "offset",
+                      "usage",
+                      "messages",
+                      "observed"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "eec414bc659da70d2567"
+                ],
+                "additionalProperties": false
+              },
+              "person": {
+                "type": "object",
+                "properties": {
+                  "questions": {
+                    "type": "integer"
+                  },
+                  "answers": {
+                    "type": "integer"
+                  },
+                  "approvals": {
+                    "type": "integer"
+                  },
+                  "waitingMinutes": {
+                    "type": "integer"
+                  },
+                  "activeMinutes": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "questions",
+                  "answers",
+                  "approvals",
+                  "waitingMinutes",
+                  "activeMinutes"
+                ],
+                "additionalProperties": false
+              },
+              "suiteMinutes": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ciMinutes": {
+                "type": "integer"
+              },
+              "githubCalls": {
+                "type": "integer"
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "at": {
+                      "type": "integer"
+                    },
+                    "metric": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "integer"
+                    },
+                    "account": {
+                      "type": "string"
+                    },
+                    "agent": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "at",
+                    "metric",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "measurements": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              },
+              "coverage": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "waits": {
+                "type": "object",
+                "properties": {
+                  "g:gate-1": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "gateId": {
+                        "type": "string"
+                      },
+                      "at": {
+                        "type": "integer"
+                      },
+                      "accountedAt": {
+                        "type": "integer"
+                      },
+                      "endedAt": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "gateId",
+                      "at",
+                      "accountedAt",
+                      "endedAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "g:gate-1"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "schema",
+              "capturedAt",
+              "outcome",
+              "outcomeAt",
+              "tokens",
+              "sessions",
+              "person",
+              "suiteMinutes",
+              "ciMinutes",
+              "githubCalls",
+              "events",
+              "measurements",
+              "coverage",
+              "waits"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "cost"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "clock.now",
+        "compute.hash_utf8",
+        "files.read",
+        "files.stat",
+        "fs.readdir"
+      ]
+    },
     {
       "operation": "applyCostMeasurement",
       "input_schema": {
         "type": "object",
         "properties": {
           "run": {
-            "type": "string",
-            "description": "JSON text encoding of the saved run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "cost": {
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "type": "string"
+                  },
+                  "capturedAt": {
+                    "type": "integer"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "outcomeAt": {
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "account": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "integer"
+                        },
+                        "cachedInput": {
+                          "type": "integer"
+                        },
+                        "output": {
+                          "type": "integer"
+                        },
+                        "reasoningOutput": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "account",
+                        "agent",
+                        "input",
+                        "cachedInput",
+                        "output",
+                        "reasoningOutput",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "sessions": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                  },
+                  "person": {
+                    "type": "object",
+                    "properties": {
+                      "questions": {
+                        "type": "integer"
+                      },
+                      "answers": {
+                        "type": "integer"
+                      },
+                      "approvals": {
+                        "type": "integer"
+                      },
+                      "waitingMinutes": {
+                        "type": "integer"
+                      },
+                      "activeMinutes": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "questions",
+                      "answers",
+                      "approvals",
+                      "waitingMinutes",
+                      "activeMinutes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "suiteMinutes": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ciMinutes": {
+                    "type": "integer"
+                  },
+                  "githubCalls": {
+                    "type": "integer"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "measurements": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                  },
+                  "coverage": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "waits": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "schema",
+                  "capturedAt",
+                  "outcome",
+                  "outcomeAt",
+                  "tokens",
+                  "sessions",
+                  "person",
+                  "suiteMinutes",
+                  "ciMinutes",
+                  "githubCalls",
+                  "events",
+                  "measurements",
+                  "coverage",
+                  "waits"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "runId"
+            ],
+            "additionalProperties": false
           },
           "input": {
             "type": "object",
@@ -150,20 +877,10 @@ Only explicit measurement and supplied-data reporting are bound. Native transcri
                 "type": "string"
               },
               "suiteMinutes": {
-                "type": "number"
+                "type": "integer"
               },
               "personMinutes": {
-                "type": "number"
-              },
-              "outcome": {
-                "type": "string",
-                "enum": [
-                  "merged",
-                  "reverted",
-                  "stuck",
-                  "closed",
-                  "parked"
-                ]
+                "type": "integer"
               }
             },
             "required": [
@@ -185,13 +902,210 @@ Only explicit measurement and supplied-data reporting are bound. Native transcri
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the updated run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "cost": {
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "type": "string"
+                  },
+                  "capturedAt": {
+                    "type": "integer"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "outcomeAt": {
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "account": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "integer"
+                        },
+                        "cachedInput": {
+                          "type": "integer"
+                        },
+                        "output": {
+                          "type": "integer"
+                        },
+                        "reasoningOutput": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "account",
+                        "agent",
+                        "input",
+                        "cachedInput",
+                        "output",
+                        "reasoningOutput",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "sessions": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                  },
+                  "person": {
+                    "type": "object",
+                    "properties": {
+                      "questions": {
+                        "type": "integer"
+                      },
+                      "answers": {
+                        "type": "integer"
+                      },
+                      "approvals": {
+                        "type": "integer"
+                      },
+                      "waitingMinutes": {
+                        "type": "integer"
+                      },
+                      "activeMinutes": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "questions",
+                      "answers",
+                      "approvals",
+                      "waitingMinutes",
+                      "activeMinutes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "suiteMinutes": {
+                    "type": "integer"
+                  },
+                  "ciMinutes": {
+                    "type": "integer"
+                  },
+                  "githubCalls": {
+                    "type": "integer"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "at": {
+                          "type": "integer"
+                        },
+                        "metric": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "at",
+                        "metric",
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "measurements": {
+                    "type": "object",
+                    "properties": {
+                      "suite-1": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "personMinutes": {
+                            "type": "integer"
+                          },
+                          "suiteMinutes": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "personMinutes",
+                          "suiteMinutes"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "suite-1"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "coverage": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "waits": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "schema",
+                  "capturedAt",
+                  "outcome",
+                  "outcomeAt",
+                  "tokens",
+                  "sessions",
+                  "person",
+                  "suiteMinutes",
+                  "ciMinutes",
+                  "githubCalls",
+                  "events",
+                  "measurements",
+                  "coverage",
+                  "waits"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "runId",
+              "repo",
+              "number",
+              "cost"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
-          "value"
+          "run"
         ],
         "additionalProperties": false
       },
@@ -201,13 +1115,323 @@ Only explicit measurement and supplied-data reporting are bound. Native transcri
       "resource_operations": []
     },
     {
+      "operation": "recordCostGithub",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "runDir": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "runDir",
+          "entry"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "captureClosedCi",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              },
+              "runId": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "pr": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "number": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "number",
+                    "state",
+                    "branch"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "runDir"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "exec.execFile",
+        "files.stat",
+        "files.write"
+      ]
+    },
+    {
       "operation": "costReport",
       "input_schema": {
         "type": "object",
         "properties": {
           "runs": {
-            "type": "string",
-            "description": "JSON text encoding of the saved runs. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "runId": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "number": {
+                  "type": "integer"
+                },
+                "startedAt": {
+                  "type": "integer"
+                },
+                "cost": {
+                  "type": "object",
+                  "properties": {
+                    "schema": {
+                      "type": "string"
+                    },
+                    "capturedAt": {
+                      "type": "integer"
+                    },
+                    "outcome": {
+                      "type": "string"
+                    },
+                    "outcomeAt": {
+                      "type": "integer"
+                    },
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "account": {
+                            "type": "string"
+                          },
+                          "agent": {
+                            "type": "string"
+                          },
+                          "input": {
+                            "type": "integer"
+                          },
+                          "cachedInput": {
+                            "type": "integer"
+                          },
+                          "output": {
+                            "type": "integer"
+                          },
+                          "reasoningOutput": {
+                            "type": "integer"
+                          },
+                          "total": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "account",
+                          "agent",
+                          "input",
+                          "cachedInput",
+                          "output",
+                          "reasoningOutput",
+                          "total"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "sessions": {
+                      "type": "object",
+                      "properties": {},
+                      "required": [],
+                      "additionalProperties": false
+                    },
+                    "person": {
+                      "type": "object",
+                      "properties": {
+                        "questions": {
+                          "type": "integer"
+                        },
+                        "answers": {
+                          "type": "integer"
+                        },
+                        "approvals": {
+                          "type": "integer"
+                        },
+                        "waitingMinutes": {
+                          "type": "integer"
+                        },
+                        "activeMinutes": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "questions",
+                        "answers",
+                        "approvals",
+                        "waitingMinutes",
+                        "activeMinutes"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "suiteMinutes": {
+                      "type": "integer"
+                    },
+                    "ciMinutes": {
+                      "type": "integer"
+                    },
+                    "githubCalls": {
+                      "type": "integer"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "at": {
+                            "type": "integer"
+                          },
+                          "metric": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "integer"
+                          },
+                          "account": {
+                            "type": "string"
+                          },
+                          "agent": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "at",
+                          "metric",
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "measurements": {
+                      "type": "object",
+                      "properties": {},
+                      "required": [],
+                      "additionalProperties": false
+                    },
+                    "coverage": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "waits": {
+                      "type": "object",
+                      "properties": {},
+                      "required": [],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schema",
+                    "capturedAt",
+                    "outcome",
+                    "outcomeAt",
+                    "tokens",
+                    "sessions",
+                    "person",
+                    "suiteMinutes",
+                    "ciMinutes",
+                    "githubCalls",
+                    "events",
+                    "measurements",
+                    "coverage",
+                    "waits"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "runId",
+                "repo",
+                "number",
+                "startedAt",
+                "cost"
+              ],
+              "additionalProperties": false
+            }
           },
           "now": {
             "type": "number"
@@ -222,17 +1446,757 @@ Only explicit measurement and supplied-data reporting are bound. Native transcri
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
+          "schema": {
             "type": "string",
-            "description": "JSON text encoding of the pdd.cost-report.v1 report. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "enum": [
+              "pdd.cost-report.v1"
+            ]
+          },
+          "generatedAt": {
+            "type": "number"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "repo": {
+                  "type": "string"
+                },
+                "issue": {
+                  "type": "integer"
+                },
+                "runId": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "outcomeAt": {
+                  "type": "integer"
+                },
+                "tokens": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "account": {
+                        "type": "string"
+                      },
+                      "agent": {
+                        "type": "string"
+                      },
+                      "input": {
+                        "type": "integer"
+                      },
+                      "cachedInput": {
+                        "type": "integer"
+                      },
+                      "output": {
+                        "type": "integer"
+                      },
+                      "reasoningOutput": {
+                        "type": "integer"
+                      },
+                      "total": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "account",
+                      "agent",
+                      "input",
+                      "cachedInput",
+                      "output",
+                      "reasoningOutput",
+                      "total"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "person": {
+                  "type": "object",
+                  "properties": {
+                    "questions": {
+                      "type": "integer"
+                    },
+                    "answers": {
+                      "type": "integer"
+                    },
+                    "approvals": {
+                      "type": "integer"
+                    },
+                    "waitingMinutes": {
+                      "type": "integer"
+                    },
+                    "activeMinutes": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "questions",
+                    "answers",
+                    "approvals",
+                    "waitingMinutes",
+                    "activeMinutes"
+                  ],
+                  "additionalProperties": false
+                },
+                "suiteMinutes": {
+                  "type": "integer"
+                },
+                "ciMinutes": {
+                  "type": "integer"
+                },
+                "githubCalls": {
+                  "type": "integer"
+                },
+                "coverage": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "repo",
+                "issue",
+                "runId",
+                "outcome",
+                "outcomeAt",
+                "tokens",
+                "person",
+                "suiteMinutes",
+                "ciMinutes",
+                "githubCalls",
+                "coverage"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "day": {
+            "type": "object",
+            "properties": {
+              "since": {
+                "type": "integer"
+              },
+              "totals": {
+                "type": "object",
+                "properties": {
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "account": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "integer"
+                        },
+                        "cachedInput": {
+                          "type": "integer"
+                        },
+                        "output": {
+                          "type": "integer"
+                        },
+                        "reasoningOutput": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "account",
+                        "agent",
+                        "input",
+                        "cachedInput",
+                        "output",
+                        "reasoningOutput",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "person": {
+                    "type": "object",
+                    "properties": {
+                      "questions": {
+                        "type": "integer"
+                      },
+                      "answers": {
+                        "type": "integer"
+                      },
+                      "approvals": {
+                        "type": "integer"
+                      },
+                      "waitingMinutes": {
+                        "type": "integer"
+                      },
+                      "activeMinutes": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "questions",
+                      "answers",
+                      "approvals",
+                      "waitingMinutes",
+                      "activeMinutes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "suiteMinutes": {
+                    "type": "integer"
+                  },
+                  "ciMinutes": {
+                    "type": "integer"
+                  },
+                  "githubCalls": {
+                    "type": "integer"
+                  },
+                  "totalTokens": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "tokens",
+                  "person",
+                  "suiteMinutes",
+                  "ciMinutes",
+                  "githubCalls",
+                  "totalTokens"
+                ],
+                "additionalProperties": false
+              },
+              "coverage": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mergedIssues": {
+                "type": "integer"
+              },
+              "p50": {
+                "type": "object",
+                "properties": {
+                  "totalTokens": {
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "account": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "integer"
+                        },
+                        "cachedInput": {
+                          "type": "integer"
+                        },
+                        "output": {
+                          "type": "integer"
+                        },
+                        "reasoningOutput": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "account",
+                        "agent",
+                        "input",
+                        "cachedInput",
+                        "output",
+                        "reasoningOutput",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "person": {
+                    "type": "object",
+                    "properties": {
+                      "questions": {
+                        "type": "integer"
+                      },
+                      "answers": {
+                        "type": "integer"
+                      },
+                      "approvals": {
+                        "type": "integer"
+                      },
+                      "waitingMinutes": {
+                        "type": "integer"
+                      },
+                      "activeMinutes": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "questions",
+                      "answers",
+                      "approvals",
+                      "waitingMinutes",
+                      "activeMinutes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "suiteMinutes": {
+                    "type": "integer"
+                  },
+                  "ciMinutes": {
+                    "type": "integer"
+                  },
+                  "githubCalls": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "totalTokens",
+                  "tokens",
+                  "person",
+                  "suiteMinutes",
+                  "ciMinutes",
+                  "githubCalls"
+                ],
+                "additionalProperties": false
+              },
+              "p90": {
+                "type": "object",
+                "properties": {
+                  "totalTokens": {
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "account": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "integer"
+                        },
+                        "cachedInput": {
+                          "type": "integer"
+                        },
+                        "output": {
+                          "type": "integer"
+                        },
+                        "reasoningOutput": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "account",
+                        "agent",
+                        "input",
+                        "cachedInput",
+                        "output",
+                        "reasoningOutput",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "person": {
+                    "type": "object",
+                    "properties": {
+                      "questions": {
+                        "type": "integer"
+                      },
+                      "answers": {
+                        "type": "integer"
+                      },
+                      "approvals": {
+                        "type": "integer"
+                      },
+                      "waitingMinutes": {
+                        "type": "integer"
+                      },
+                      "activeMinutes": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "questions",
+                      "answers",
+                      "approvals",
+                      "waitingMinutes",
+                      "activeMinutes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "suiteMinutes": {
+                    "type": "integer"
+                  },
+                  "ciMinutes": {
+                    "type": "integer"
+                  },
+                  "githubCalls": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "totalTokens",
+                  "tokens",
+                  "person",
+                  "suiteMinutes",
+                  "ciMinutes",
+                  "githubCalls"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "since",
+              "totals",
+              "coverage",
+              "mergedIssues",
+              "p50",
+              "p90"
+            ],
+            "additionalProperties": false
+          },
+          "week": {
+            "type": "object",
+            "properties": {
+              "since": {
+                "type": "integer"
+              },
+              "totals": {
+                "type": "object",
+                "properties": {
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "account": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "integer"
+                        },
+                        "cachedInput": {
+                          "type": "integer"
+                        },
+                        "output": {
+                          "type": "integer"
+                        },
+                        "reasoningOutput": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "account",
+                        "agent",
+                        "input",
+                        "cachedInput",
+                        "output",
+                        "reasoningOutput",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "person": {
+                    "type": "object",
+                    "properties": {
+                      "questions": {
+                        "type": "integer"
+                      },
+                      "answers": {
+                        "type": "integer"
+                      },
+                      "approvals": {
+                        "type": "integer"
+                      },
+                      "waitingMinutes": {
+                        "type": "integer"
+                      },
+                      "activeMinutes": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "questions",
+                      "answers",
+                      "approvals",
+                      "waitingMinutes",
+                      "activeMinutes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "suiteMinutes": {
+                    "type": "integer"
+                  },
+                  "ciMinutes": {
+                    "type": "integer"
+                  },
+                  "githubCalls": {
+                    "type": "integer"
+                  },
+                  "totalTokens": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "tokens",
+                  "person",
+                  "suiteMinutes",
+                  "ciMinutes",
+                  "githubCalls",
+                  "totalTokens"
+                ],
+                "additionalProperties": false
+              },
+              "coverage": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mergedIssues": {
+                "type": "integer"
+              },
+              "p50": {
+                "type": "object",
+                "properties": {
+                  "totalTokens": {
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "account": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "integer"
+                        },
+                        "cachedInput": {
+                          "type": "integer"
+                        },
+                        "output": {
+                          "type": "integer"
+                        },
+                        "reasoningOutput": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "account",
+                        "agent",
+                        "input",
+                        "cachedInput",
+                        "output",
+                        "reasoningOutput",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "person": {
+                    "type": "object",
+                    "properties": {
+                      "questions": {
+                        "type": "integer"
+                      },
+                      "answers": {
+                        "type": "integer"
+                      },
+                      "approvals": {
+                        "type": "integer"
+                      },
+                      "waitingMinutes": {
+                        "type": "integer"
+                      },
+                      "activeMinutes": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "questions",
+                      "answers",
+                      "approvals",
+                      "waitingMinutes",
+                      "activeMinutes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "suiteMinutes": {
+                    "type": "integer"
+                  },
+                  "ciMinutes": {
+                    "type": "integer"
+                  },
+                  "githubCalls": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "totalTokens",
+                  "tokens",
+                  "person",
+                  "suiteMinutes",
+                  "ciMinutes",
+                  "githubCalls"
+                ],
+                "additionalProperties": false
+              },
+              "p90": {
+                "type": "object",
+                "properties": {
+                  "totalTokens": {
+                    "type": "integer"
+                  },
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "account": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "integer"
+                        },
+                        "cachedInput": {
+                          "type": "integer"
+                        },
+                        "output": {
+                          "type": "integer"
+                        },
+                        "reasoningOutput": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "account",
+                        "agent",
+                        "input",
+                        "cachedInput",
+                        "output",
+                        "reasoningOutput",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "person": {
+                    "type": "object",
+                    "properties": {
+                      "questions": {
+                        "type": "integer"
+                      },
+                      "answers": {
+                        "type": "integer"
+                      },
+                      "approvals": {
+                        "type": "integer"
+                      },
+                      "waitingMinutes": {
+                        "type": "integer"
+                      },
+                      "activeMinutes": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "questions",
+                      "answers",
+                      "approvals",
+                      "waitingMinutes",
+                      "activeMinutes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "suiteMinutes": {
+                    "type": "integer"
+                  },
+                  "ciMinutes": {
+                    "type": "integer"
+                  },
+                  "githubCalls": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "totalTokens",
+                  "tokens",
+                  "person",
+                  "suiteMinutes",
+                  "ciMinutes",
+                  "githubCalls"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "since",
+              "totals",
+              "coverage",
+              "mergedIssues",
+              "p50",
+              "p90"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
-          "value"
+          "schema",
+          "generatedAt",
+          "runs",
+          "day",
+          "week"
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "Error"
+      ],
       "resource_operations": []
     },
     {
@@ -241,8 +2205,656 @@ Only explicit measurement and supplied-data reporting are bound. Native transcri
         "type": "object",
         "properties": {
           "report": {
-            "type": "string",
-            "description": "JSON text encoding of the cost report. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "schema": {
+                "type": "string"
+              },
+              "generatedAt": {
+                "type": "integer"
+              },
+              "runs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "repo": {
+                      "type": "string"
+                    },
+                    "issue": {
+                      "type": "integer"
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "repo",
+                    "issue",
+                    "runId",
+                    "outcome"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "day": {
+                "type": "object",
+                "properties": {
+                  "since": {
+                    "type": "integer"
+                  },
+                  "totals": {
+                    "type": "object",
+                    "properties": {
+                      "tokens": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "account": {
+                              "type": "string"
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "input": {
+                              "type": "integer"
+                            },
+                            "cachedInput": {
+                              "type": "integer"
+                            },
+                            "output": {
+                              "type": "integer"
+                            },
+                            "reasoningOutput": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "account",
+                            "agent",
+                            "input",
+                            "cachedInput",
+                            "output",
+                            "reasoningOutput",
+                            "total"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "person": {
+                        "type": "object",
+                        "properties": {
+                          "questions": {
+                            "type": "integer"
+                          },
+                          "answers": {
+                            "type": "integer"
+                          },
+                          "approvals": {
+                            "type": "integer"
+                          },
+                          "waitingMinutes": {
+                            "type": "integer"
+                          },
+                          "activeMinutes": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "questions",
+                          "answers",
+                          "approvals",
+                          "waitingMinutes",
+                          "activeMinutes"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "suiteMinutes": {
+                        "type": "integer"
+                      },
+                      "ciMinutes": {
+                        "type": "integer"
+                      },
+                      "githubCalls": {
+                        "type": "integer"
+                      },
+                      "totalTokens": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "tokens",
+                      "person",
+                      "suiteMinutes",
+                      "ciMinutes",
+                      "githubCalls",
+                      "totalTokens"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "coverage": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "mergedIssues": {
+                    "type": "integer"
+                  },
+                  "p50": {
+                    "type": "object",
+                    "properties": {
+                      "totalTokens": {
+                        "type": "integer"
+                      },
+                      "tokens": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "account": {
+                              "type": "string"
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "input": {
+                              "type": "integer"
+                            },
+                            "cachedInput": {
+                              "type": "integer"
+                            },
+                            "output": {
+                              "type": "integer"
+                            },
+                            "reasoningOutput": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "account",
+                            "agent",
+                            "input",
+                            "cachedInput",
+                            "output",
+                            "reasoningOutput",
+                            "total"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "person": {
+                        "type": "object",
+                        "properties": {
+                          "questions": {
+                            "type": "integer"
+                          },
+                          "answers": {
+                            "type": "integer"
+                          },
+                          "approvals": {
+                            "type": "integer"
+                          },
+                          "waitingMinutes": {
+                            "type": "integer"
+                          },
+                          "activeMinutes": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "questions",
+                          "answers",
+                          "approvals",
+                          "waitingMinutes",
+                          "activeMinutes"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "suiteMinutes": {
+                        "type": "integer"
+                      },
+                      "ciMinutes": {
+                        "type": "integer"
+                      },
+                      "githubCalls": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "totalTokens",
+                      "tokens",
+                      "person",
+                      "suiteMinutes",
+                      "ciMinutes",
+                      "githubCalls"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "p90": {
+                    "type": "object",
+                    "properties": {
+                      "totalTokens": {
+                        "type": "integer"
+                      },
+                      "tokens": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "account": {
+                              "type": "string"
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "input": {
+                              "type": "integer"
+                            },
+                            "cachedInput": {
+                              "type": "integer"
+                            },
+                            "output": {
+                              "type": "integer"
+                            },
+                            "reasoningOutput": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "account",
+                            "agent",
+                            "input",
+                            "cachedInput",
+                            "output",
+                            "reasoningOutput",
+                            "total"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "person": {
+                        "type": "object",
+                        "properties": {
+                          "questions": {
+                            "type": "integer"
+                          },
+                          "answers": {
+                            "type": "integer"
+                          },
+                          "approvals": {
+                            "type": "integer"
+                          },
+                          "waitingMinutes": {
+                            "type": "integer"
+                          },
+                          "activeMinutes": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "questions",
+                          "answers",
+                          "approvals",
+                          "waitingMinutes",
+                          "activeMinutes"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "suiteMinutes": {
+                        "type": "integer"
+                      },
+                      "ciMinutes": {
+                        "type": "integer"
+                      },
+                      "githubCalls": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "totalTokens",
+                      "tokens",
+                      "person",
+                      "suiteMinutes",
+                      "ciMinutes",
+                      "githubCalls"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "since",
+                  "totals",
+                  "coverage",
+                  "mergedIssues",
+                  "p50",
+                  "p90"
+                ],
+                "additionalProperties": false
+              },
+              "week": {
+                "type": "object",
+                "properties": {
+                  "since": {
+                    "type": "integer"
+                  },
+                  "totals": {
+                    "type": "object",
+                    "properties": {
+                      "tokens": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "account": {
+                              "type": "string"
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "input": {
+                              "type": "integer"
+                            },
+                            "cachedInput": {
+                              "type": "integer"
+                            },
+                            "output": {
+                              "type": "integer"
+                            },
+                            "reasoningOutput": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "account",
+                            "agent",
+                            "input",
+                            "cachedInput",
+                            "output",
+                            "reasoningOutput",
+                            "total"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "person": {
+                        "type": "object",
+                        "properties": {
+                          "questions": {
+                            "type": "integer"
+                          },
+                          "answers": {
+                            "type": "integer"
+                          },
+                          "approvals": {
+                            "type": "integer"
+                          },
+                          "waitingMinutes": {
+                            "type": "integer"
+                          },
+                          "activeMinutes": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "questions",
+                          "answers",
+                          "approvals",
+                          "waitingMinutes",
+                          "activeMinutes"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "suiteMinutes": {
+                        "type": "integer"
+                      },
+                      "ciMinutes": {
+                        "type": "integer"
+                      },
+                      "githubCalls": {
+                        "type": "integer"
+                      },
+                      "totalTokens": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "tokens",
+                      "person",
+                      "suiteMinutes",
+                      "ciMinutes",
+                      "githubCalls",
+                      "totalTokens"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "coverage": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "mergedIssues": {
+                    "type": "integer"
+                  },
+                  "p50": {
+                    "type": "object",
+                    "properties": {
+                      "totalTokens": {
+                        "type": "integer"
+                      },
+                      "tokens": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "account": {
+                              "type": "string"
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "input": {
+                              "type": "integer"
+                            },
+                            "cachedInput": {
+                              "type": "integer"
+                            },
+                            "output": {
+                              "type": "integer"
+                            },
+                            "reasoningOutput": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "account",
+                            "agent",
+                            "input",
+                            "cachedInput",
+                            "output",
+                            "reasoningOutput",
+                            "total"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "person": {
+                        "type": "object",
+                        "properties": {
+                          "questions": {
+                            "type": "integer"
+                          },
+                          "answers": {
+                            "type": "integer"
+                          },
+                          "approvals": {
+                            "type": "integer"
+                          },
+                          "waitingMinutes": {
+                            "type": "integer"
+                          },
+                          "activeMinutes": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "questions",
+                          "answers",
+                          "approvals",
+                          "waitingMinutes",
+                          "activeMinutes"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "suiteMinutes": {
+                        "type": "integer"
+                      },
+                      "ciMinutes": {
+                        "type": "integer"
+                      },
+                      "githubCalls": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "totalTokens",
+                      "tokens",
+                      "person",
+                      "suiteMinutes",
+                      "ciMinutes",
+                      "githubCalls"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "p90": {
+                    "type": "object",
+                    "properties": {
+                      "totalTokens": {
+                        "type": "integer"
+                      },
+                      "tokens": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "account": {
+                              "type": "string"
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "input": {
+                              "type": "integer"
+                            },
+                            "cachedInput": {
+                              "type": "integer"
+                            },
+                            "output": {
+                              "type": "integer"
+                            },
+                            "reasoningOutput": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "account",
+                            "agent",
+                            "input",
+                            "cachedInput",
+                            "output",
+                            "reasoningOutput",
+                            "total"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "person": {
+                        "type": "object",
+                        "properties": {
+                          "questions": {
+                            "type": "integer"
+                          },
+                          "answers": {
+                            "type": "integer"
+                          },
+                          "approvals": {
+                            "type": "integer"
+                          },
+                          "waitingMinutes": {
+                            "type": "integer"
+                          },
+                          "activeMinutes": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "questions",
+                          "answers",
+                          "approvals",
+                          "waitingMinutes",
+                          "activeMinutes"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "suiteMinutes": {
+                        "type": "integer"
+                      },
+                      "ciMinutes": {
+                        "type": "integer"
+                      },
+                      "githubCalls": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "totalTokens",
+                      "tokens",
+                      "person",
+                      "suiteMinutes",
+                      "ciMinutes",
+                      "githubCalls"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "since",
+                  "totals",
+                  "coverage",
+                  "mergedIssues",
+                  "p50",
+                  "p90"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "schema"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -253,30 +2865,299 @@ Only explicit measurement and supplied-data reporting are bound. Native transcri
       "result_schema": {
         "type": "object",
         "properties": {
-          "lines": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
+          "text": {
+            "type": "string"
           }
         },
         "required": [
-          "lines"
+          "text"
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "Error"
+      ],
       "resource_operations": []
     }
   ],
   "calls": [],
-  "resources": [],
+  "resources": [
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "now",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ms": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ms"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "exec",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "execFile",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file",
+              "args",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "stdout",
+              "stderr"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
   "limits": {
     "max_steps": 64,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

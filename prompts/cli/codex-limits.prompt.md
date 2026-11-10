@@ -41,16 +41,14 @@ Node child_process supplies a bounded subprocess transport. Protocol authority:
 [official App Server reference](https://developers.openai.com/codex/app-server).
 Only the initialization and rate-limit read protocol is required; no model call.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-Only parseCodexLimits is declared. readCodexLimits app-server framing, process termination, output bounds and account transport remain native; no simulated reply proves live account health. Native evidence owners: test/codex-limits.test.mjs.
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; optional fields retain the native defaults (`command = "codex"`). In the Runtime interface, `readCodexLimits` invokes `process.spawn({command, args, cwd, env})` with `args: ["app-server", "--listen", "stdio://"]` and reads `{stdout, stderrBytes, exitCode, timedOut, error}` containing the newline-delimited JSON frames for `id: 1` (`initialize`) and `id: 2` (`account/rateLimits/read`). Native stream framing, SIGTERM/SIGKILL timers, pipe destruction and child unref stay a native obligation covered by `test/codex-limits.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "52695d14777f4edf60aa080d87663dc504eb2ac5dabb2583310fa5f12e563960",
+  "prose_sha256": "4cd851f433cb2b82ac8ff7d43291dabbe91ff5a9d79b2a20e2b7833fed320896",
   "entries": [
     {
       "operation": "parseCodexLimits",
@@ -108,16 +106,168 @@ Only parseCodexLimits is declared. readCodexLimits app-server framing, process t
       },
       "errors": [],
       "resource_operations": []
+    },
+    {
+      "operation": "readCodexLimits",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "CODEX_HOME": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "cwd",
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "limited",
+              "unknown"
+            ]
+          },
+          "resetAt": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usedPercent": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "resetAt",
+          "usedPercent"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "process.spawn"
+      ]
     }
   ],
   "calls": [],
-  "resources": [],
+  "resources": [
+    {
+      "name": "process",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "spawn",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "CODEX_HOME": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "command",
+              "args",
+              "cwd",
+              "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "stdout": {
+                "type": "string"
+              },
+              "stderrBytes": {
+                "type": "integer"
+              },
+              "exitCode": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "timedOut": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stdout",
+              "stderrBytes",
+              "exitCode",
+              "timedOut",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
   "limits": {
-    "max_steps": 64,
+    "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

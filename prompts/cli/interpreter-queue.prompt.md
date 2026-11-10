@@ -101,14 +101,892 @@ Export configureInterpreterTestMode({env,owner,enabled},ports). Use the same que
   `interrupted` and `say` for controlled local behavior. Admission checks the
   deadline and interruption before each update and after lock acquisition.
 
+In the Runtime interface, `interpreterQueueEnvironment`, `acquireInterpreterSlot`, `markInterpreterDispatch`, `observeInterpreterRequest`, `readInterpreterProgress`, `interpreterStatusWords` and `configureInterpreterTestMode` use the `files` blob resource (`read`, `write`, `stat` for `<root>/ticket-<N>.json` and `<root>/capacity.json`), `fs` port (`readdir`, `mkdir`), `lock.acquire({directory, filename})`, `process` port (`pid`, `alive`, `interrupted`), `clock.now()` and `output.say({text})`. `readInterpreterProgress` returns `{state: null, position: null, pausedMs: 0, requests: []}` when no records exist for `cwd`. Invalid queue configuration, invalid request kind, duplicate request identity, dispatch ownership mismatch or missing test-mode owner raise `local-state-unavailable`. Native atomic temp-file rename (`wx` + `renameSync`), lock contention sleep loops and cross-process races stay a native obligation covered by `test/interpreter-queue.test.mjs`, `test/interpreter-queue-runtime.test.mjs`, `test/interpreter-queue-storage.test.mjs` and `test/interpreter-queue-repair.test.mjs`.
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "cb9a8918631d75cdcf8f8c6c63f8b875a9449d8275fe019d7e2d7d4f7161d2b6",
-  "reason": "Cross-process admission, liveness and cleanup require real concurrency evidence. Native evidence owners: test/interpreter-queue-repair.test.mjs, test/interpreter-queue-runtime.test.mjs, test/interpreter-queue-storage.test.mjs, test/interpreter-queue.test.mjs."
+  "prose_sha256": "dd90908901d69308da646c7e53fca12fa4f3be7a01beda78d2d5d2dd7ff0fa6c",
+  "entries": [
+    {
+      "operation": "interpreterQueueEnvironment",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_INTERPRETER_QUEUE": {
+                "type": "string"
+              },
+              "PDD_INTERPRETER_CONCURRENCY": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "PDD_INTERPRETER_QUEUE": {
+            "type": "string"
+          },
+          "PDD_INTERPRETER_CONCURRENCY": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "PDD_INTERPRETER_QUEUE",
+          "PDD_INTERPRETER_CONCURRENCY"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "local-state-unavailable"
+      ],
+      "resource_operations": [
+        "output.say"
+      ]
+    },
+    {
+      "operation": "acquireInterpreterSlot",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_INTERPRETER_QUEUE": {
+                "type": "string"
+              },
+              "PDD_INTERPRETER_CONCURRENCY": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_INTERPRETER_QUEUE"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "cwd",
+          "origin",
+          "requestId",
+          "kind",
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ticket": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "root",
+          "ticket"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "local-state-unavailable"
+      ],
+      "resource_operations": [
+        "files.read",
+        "files.write",
+        "files.stat",
+        "fs.readdir",
+        "fs.mkdir",
+        "lock.acquire",
+        "process.pid",
+        "process.alive",
+        "process.interrupted",
+        "clock.now",
+        "output.say"
+      ]
+    },
+    {
+      "operation": "markInterpreterDispatch",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "ticket": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "ticket"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [
+        "local-state-unavailable"
+      ],
+      "resource_operations": [
+        "files.read",
+        "files.write",
+        "files.stat",
+        "lock.acquire",
+        "process.pid",
+        "process.interrupted",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "observeInterpreterRequest",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_INTERPRETER_QUEUE": {
+                "type": "string"
+              },
+              "PDD_INTERPRETER_CONCURRENCY": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_INTERPRETER_QUEUE"
+            ],
+            "additionalProperties": false
+          },
+          "origin": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "busy": {
+            "type": "boolean"
+          },
+          "waitMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "env",
+          "origin",
+          "requestId",
+          "outcome",
+          "terminal"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [
+        "local-state-unavailable"
+      ],
+      "resource_operations": [
+        "files.read",
+        "files.write",
+        "files.stat",
+        "fs.readdir",
+        "lock.acquire",
+        "process.alive",
+        "process.interrupted",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "readInterpreterProgress",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "since": {
+            "type": "integer"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_INTERPRETER_QUEUE": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_INTERPRETER_QUEUE"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "cwd",
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pausedMs": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ticket": {
+                  "type": "integer"
+                },
+                "pid": {
+                  "type": "integer"
+                },
+                "cwd": {
+                  "type": "string"
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "requestId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "queuedAt": {
+                  "type": "integer"
+                },
+                "startedAt": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "endedAt": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "outcome": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "activeAtStart": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "activeAtEnd": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "dispatched": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ticket",
+                "pid",
+                "cwd",
+                "origin",
+                "requestId",
+                "kind",
+                "state",
+                "queuedAt",
+                "startedAt",
+                "endedAt",
+                "outcome",
+                "activeAtStart",
+                "activeAtEnd",
+                "dispatched"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "state",
+          "pausedMs",
+          "requests"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "files.read",
+        "files.stat",
+        "fs.readdir",
+        "process.alive",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "interpreterStatusWords",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "progress": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string"
+              },
+              "position": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "progress"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "configureInterpreterTestMode",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_INTERPRETER_QUEUE": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_INTERPRETER_QUEUE"
+            ],
+            "additionalProperties": false
+          },
+          "owner": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "env",
+          "owner",
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [
+        "local-state-unavailable"
+      ],
+      "resource_operations": [
+        "files.read",
+        "files.write",
+        "files.stat",
+        "fs.mkdir",
+        "lock.acquire",
+        "process.interrupted",
+        "clock.now"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "isDirectory": {
+                "type": "boolean"
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "exists",
+              "isDirectory",
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "mkdir",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "lock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "acquire",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "directory": {
+                "type": "string"
+              },
+              "filename": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "directory",
+              "filename"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "acquired": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "acquired"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "process",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "pid",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pid"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "alive",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pid"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "alive": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "alive"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "interrupted",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "interrupted": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "interrupted"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "now",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "milliseconds": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "milliseconds"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "say",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

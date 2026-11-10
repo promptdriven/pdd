@@ -1,0 +1,491 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-environment-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`classifyStuckCause`, `environmentRecovery`, `environmentStatus` and `environmentWakeTag` classify environment versus work stops, validate saved retry records and format status and wake tags, returning `work` or `null` for test failures or ineligible runs."
+    },
+    {
+      "id": "AC2",
+      "text": "`machineHealth` and `environmentHealthy` evaluate memory, disk, load, PSI, missing-tool presence and suite queue tickets through declared ports, returning `healthy: true` when thresholds and dead-runner ticket checks pass and `false` when memory/disk or tool checks fail."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/tmp/queue-ok/ticket-1.json": {
+        "content": "{\"ticket\":1,\"pid\":501,\"childPid\":502,\"state\":\"running\",\"cwd\":\"/work/other\",\"queuedAt\":1000,\"startedAt\":1001,\"finishedAt\":null}",
+        "is_symlink": false
+      }
+    },
+    "counters": {
+      "machineResources": 0,
+      "toolPresent": 0,
+      "readdir": 0,
+      "alive": 0
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": null
+      },
+      "result_value_pointer": "/content"
+    },
+    "fs.readdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/readdir",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/tmp/queue-ok"
+          },
+          "result": {
+            "exists": true,
+            "entries": [
+              "ticket-1.json"
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "process.alive": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/alive",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "pid": 501
+          },
+          "result": {
+            "alive": false
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "pid": -502
+          },
+          "result": {
+            "alive": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "host.machineResources": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/machineResources",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/work/healthy"
+          },
+          "result": {
+            "cpuCount": 8,
+            "load": 2,
+            "memory": {
+              "available": 4000000000,
+              "total": 16000000000
+            },
+            "pressure": {
+              "io": 1,
+              "memory": 2
+            },
+            "disk": {
+              "available": 5368709120,
+              "total": 21474836480
+            }
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/work/low"
+          },
+          "result": {
+            "cpuCount": 8,
+            "load": 2,
+            "memory": {
+              "available": 500000000,
+              "total": 16000000000
+            },
+            "pressure": {
+              "io": 1,
+              "memory": 2
+            },
+            "disk": {
+              "available": 536870912,
+              "total": 21474836480
+            }
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "cwd": "/work/healthy"
+          },
+          "result": {
+            "cpuCount": 8,
+            "load": 2,
+            "memory": {
+              "available": 4000000000,
+              "total": 16000000000
+            },
+            "pressure": {
+              "io": 1,
+              "memory": 2
+            },
+            "disk": {
+              "available": 5368709120,
+              "total": 21474836480
+            }
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "cwd": "/work/healthy"
+          },
+          "result": {
+            "cpuCount": 8,
+            "load": 2,
+            "memory": {
+              "available": 4000000000,
+              "total": 16000000000
+            },
+            "pressure": {
+              "io": 1,
+              "memory": 2
+            },
+            "disk": {
+              "available": 5368709120,
+              "total": 21474836480
+            }
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "host.toolPresent": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/toolPresent",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "tool": "rg"
+          },
+          "result": {
+            "present": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "tool": "rg"
+          },
+          "result": {
+            "present": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "classify-environment",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "classifyStuckCause",
+      "input": {
+        "reason": "native test suite timed out"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/cause",
+          "op": "equals",
+          "value": "environment"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "classify-work",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "classifyStuckCause",
+      "input": {
+        "reason": "2 unit tests failed during suite timeout"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/cause",
+          "op": "equals",
+          "value": "work"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "recovery-valid",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "environmentRecovery",
+      "input": {
+        "run": "{\"automaticOrigin\":true,\"state\":\"stuck\",\"parkReason\":\"disk pressure\",\"area\":0,\"areas\":[{\"steps\":[\"check\",\"verify\"]}],\"environmentRetry\":{\"at\":1700000000000,\"reason\":\"disk pressure\",\"step\":\"verify\",\"area\":0,\"attempts\":1,\"nextAt\":1700003600000}}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/value",
+          "op": "equals",
+          "value": "{\"at\":1700000000000,\"reason\":\"disk pressure\",\"step\":\"verify\",\"area\":0,\"attempts\":1,\"nextAt\":1700003600000}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "recovery-invalid",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "environmentRecovery",
+      "input": {
+        "run": "{\"automaticOrigin\":true,\"state\":\"stuck\",\"repairLimit\":true,\"parkReason\":\"disk pressure\"}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/value",
+          "op": "equals",
+          "value": "null"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "status-waiting",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "environmentStatus",
+      "input": {
+        "run": "{\"automaticOrigin\":true,\"state\":\"stuck\",\"parkReason\":\"disk pressure\",\"area\":0,\"areas\":[{\"steps\":[\"check\",\"verify\"]}],\"environmentRetry\":{\"at\":1700000000000,\"reason\":\"disk pressure\",\"step\":\"verify\",\"area\":0,\"attempts\":1,\"nextAt\":1700003600000}}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "retrying after environment failure (attempt 2 of 3, next at 2023-11-14T23:13:20.000Z): disk pressure"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "status-none",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "environmentStatus",
+      "input": {
+        "run": "{\"automaticOrigin\":true,\"state\":\"running\"}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": null
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "wake-tag-attempt-2",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "environmentWakeTag",
+      "input": {
+        "retry": "{\"at\":1700000000000,\"area\":0,\"step\":\"verify\",\"attempts\":1}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Environment validation wake for 0:verify at 2023-11-14T22:13:20.000Z attempt 2."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "wake-tag-attempt-3",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "environmentWakeTag",
+      "input": {
+        "retry": "{\"at\":1700000000000,\"area\":1,\"step\":\"check\",\"attempts\":2}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Environment validation wake for 1:check at 2023-11-14T22:13:20.000Z attempt 3."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "machine-health-ok",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "machineHealth",
+      "input": {
+        "cwd": "/work/healthy"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/healthy",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/causes",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/machineResources",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "machine-health-low",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "machineHealth",
+      "input": {
+        "cwd": "/work/low"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/healthy",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/causes",
+          "op": "equals",
+          "value": [
+            "Available memory is below 10% or cannot be read",
+            "Free disk is below 1 GiB or 5% or cannot be read"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/machineResources",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "env-healthy-ok",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "environmentHealthy",
+      "input": {
+        "cwd": "/work/healthy",
+        "reason": "missing tool: rg",
+        "platform": "linux",
+        "suiteLimit": 2,
+        "env": {
+          "PDD_SUITE_QUEUE": "/tmp/queue-ok"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/healthy",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/toolPresent",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/alive",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "env-healthy-blocked",
+      "entry_path": "prompts/cli/autopilot-environment.prompt.md",
+      "operation": "environmentHealthy",
+      "input": {
+        "cwd": "/work/healthy",
+        "reason": "missing tool: rg",
+        "platform": "linux",
+        "suiteLimit": 2,
+        "env": {
+          "PDD_SUITE_QUEUE": "/tmp/queue-ok"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/healthy",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/toolPresent",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

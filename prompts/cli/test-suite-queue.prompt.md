@@ -312,13 +312,13 @@ come from the machine resource owner.
 
 ## Dependencies
 
-- [Secret redaction](secret-redaction.prompt.md): required shared rules for every
+- Secret redaction (`secret-redaction.prompt.md`): required shared rules for every
   persisted receipt string and captured output, also used by agent guide.
 
-- [Machine observations](machine-resources.prompt.md): required shared native readers
+- Machine observations (`machine-resources.prompt.md`): required shared native readers
   and tick observation shape for machine-sized checks.
 
-- [Native admission lock](workflow-runner.prompt.md#native-admission-lock): only this
+- Native admission lock (`workflow-runner.prompt.md#native-admission-lock`): only this
   independent interface selection is required context, supplying
   `acquireRunLock` for PID/token admission ownership. No runner execution policy
   is loaded by this selection.
@@ -332,14 +332,1966 @@ and `stdout`/`stderr` write ports to fake outside effects. Execute resolves `{ex
   and process-group termination. Status uses the same filesystem, clock and PID
   liveness ports; an unavailable queue read is explicit, never idle evidence.
 
+Through the Runtime interface:
+- `files` (`blob`: `read`, `write`, `stat`) reads, writes, and stats
+  `<root>/capacity.json`, `<root>/ticket-<N>.json`, and validation log files
+  (`read` returns `{content}` or `{content: null}` when absent; `stat` returns
+  `{exists, is_symlink, size}`; `write` returns `{}`).
+- `fs` (`readdir`, `mkdir`, `mkdtemp`, `rm`) lists `<root>` (`readdir` returns
+  `{entries, code?}`), creates directories (`mkdir` returns `{ok: true}`), allocates
+  the clean suite environment directory (`mkdtemp` returns `{path}`), and removes
+  allocated private directories (`rm` returns `{ok: true}`).
+- `machine` (`observe`) returns `{cpuIds, freeMemory, load, platform, battery, virtualized, taskset}`
+  for `calculateCheckCapacity`, `configureCheckCapacity`, `readCheckStatus`, and
+  `runTestSuite`.
+- `lock` (`acquire`, `release`) acquires and releases `<root>/suite-admission.lock`
+  (`acquire` returns `{acquired: true}`; `release` returns `{released: true}`).
+- `process` (`current`, `alive`, `identity`, `groupAlive`, `spawnSuite`, `executeSuite`, `uuid`)
+  provides caller identity (`current` returns `{pid, uid}`), PID liveness (`alive`
+  returns `{alive}`), start ticks (`identity` returns `{identity}`), process-group
+  liveness (`groupAlive` returns `{alive}` as boolean or null), direct child execution
+  for `executeSuite` (`spawnSuite` returns `{pid, exitCode, signal, error}`),
+  recorded suite execution for `runTestSuite` (`executeSuite` returns
+  `{childPid, recorderPid, recorderIdentity, exitCode, signal, reason, ownershipConfirmed}`),
+  and attempt/temp UUID generation (`uuid` returns `{uuid}`).
+- `source` (`inspect`) returns `{head, fingerprint, runId, issue, error}` for `cwd`.
+- `clock` (`now`, `sleep`) returns `{ms}` and sleeps `{ms}` returning `{ok: true}`.
+- `output` (`say`) records status/announcement lines (`{text}` -> `{ok: true}`).
+- `compute` (`hash_utf8`) computes SHA-256 hex digests (`{text}` -> `{value}`).
+- `suiteQueueRoot({env})` returns `{root}` or throws `Error("The shared suite queue needs an absolute path.")`.
+- `suiteStatusWords({suite})` requires a `suite` object with a non-empty `state`
+  string (otherwise throws `Error("Invalid suite status")`) and returns `{words}`:
+  - `state === "unavailable"`: `"full test suite queue unavailable: " + suite.reason`
+  - truthy `suite.reason`: `"full test suite failed: " + suite.reason`
+  - `state === "waiting"`: `"waiting for a check slot (position " + suite.position + ")"`
+  - `state === "running"`: `"running the full test suite"`
+  - otherwise: `"full test suite finished"`
+- `calculateCheckCapacity({checks, runs})` returns the capacity object or throws
+  `Error("Machine check capacity is unavailable or invalid.")`.
+- `configureCheckCapacity({env, checks, runs, owner, resources})` returns the
+  saved capacity snapshot or throws `Error`.
+- `releaseCheckCapacity({env, owner})` returns `{released}` or throws `Error`.
+- `readCheckStatus({env, checks, runs})` returns `{...capacity, busyChecks, waitingChecks}`
+  or throws `Error`.
+- `readSuiteProgress({cwd, since, env})` requires a non-empty `cwd` string
+  (otherwise throws `Error("Invalid suite progress cwd.")`) and returns `{progress}`.
+- `executeSuite({command, cwd, env, timeoutMs, startGate, cpuIds, taskset})`
+  requires a non-blank `command` and positive `timeoutMs` (otherwise throws
+  `Error("Invalid suite execution request.")`), invokes `process.spawnSuite` with
+  `file: taskset ?? "/bin/bash"` and `args: taskset ? ["--cpu-list", cpuIds.join(","), "/bin/bash", "-c", command] : ["-c", command]`,
+  probes `process.groupAlive({pgid: pid})`, and returns
+  `{exitCode, reason, signal, ownershipConfirmed}`.
+- `runTestSuite({cwd, command, timeout, env, announceReceipt})` returns
+  `{exitCode, message}` (or throws `Error` when `env` selects a relative queue path).
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "ae26f04e24b6320fc947abd5d7e3d782b1ee31d89c1b494f03450100fa2d9061",
-  "reason": "Real child processes, shared locks, affinity and memory admission need native evidence. Native evidence owners: test/test-suite-queue.test.mjs."
+  "prose_sha256": "9fc39d6e131571032b38937024d142149fe306a7ff6d96d006f49304d6e5542c",
+  "entries": [
+    {
+      "operation": "suiteQueueRoot",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_SUITE_QUEUE": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "process.current"
+      ]
+    },
+    {
+      "operation": "suiteStatusWords",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "suite": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string"
+              },
+              "position": {
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "suite"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "words": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "words"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "calculateCheckCapacity",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "checks": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "cores": {
+            "type": "integer"
+          },
+          "usableCores": {
+            "type": "integer"
+          },
+          "cpuIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "freeMemory": {
+            "type": "number"
+          },
+          "load": {
+            "type": "number"
+          },
+          "personal": {
+            "type": "boolean"
+          },
+          "affinity": {
+            "type": "boolean"
+          },
+          "taskset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calculatedChecks": {
+            "type": "integer"
+          },
+          "checks": {
+            "type": "integer"
+          },
+          "calculatedRuns": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "coresPerCheck": {
+            "type": "integer"
+          },
+          "busy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cores",
+          "usableCores",
+          "cpuIds",
+          "freeMemory",
+          "load",
+          "personal",
+          "affinity",
+          "taskset",
+          "calculatedChecks",
+          "checks",
+          "calculatedRuns",
+          "runs",
+          "coresPerCheck",
+          "busy"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "machine.observe"
+      ]
+    },
+    {
+      "operation": "configureCheckCapacity",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_SUITE_QUEUE": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_SUITE_QUEUE"
+            ],
+            "additionalProperties": false
+          },
+          "checks": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resources": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "env",
+          "owner"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "cores": {
+            "type": "integer"
+          },
+          "usableCores": {
+            "type": "integer"
+          },
+          "cpuIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "freeMemory": {
+            "type": "number"
+          },
+          "load": {
+            "type": "number"
+          },
+          "personal": {
+            "type": "boolean"
+          },
+          "affinity": {
+            "type": "boolean"
+          },
+          "taskset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calculatedChecks": {
+            "type": "integer"
+          },
+          "checks": {
+            "type": "integer"
+          },
+          "calculatedRuns": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "coresPerCheck": {
+            "type": "integer"
+          },
+          "busy": {
+            "type": "boolean"
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observedAt": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cores",
+          "usableCores",
+          "cpuIds",
+          "freeMemory",
+          "load",
+          "personal",
+          "affinity",
+          "taskset",
+          "calculatedChecks",
+          "checks",
+          "calculatedRuns",
+          "runs",
+          "coresPerCheck",
+          "busy",
+          "owner",
+          "observedAt",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "clock.now",
+        "files.write",
+        "fs.mkdir",
+        "lock.acquire",
+        "lock.release",
+        "machine.observe",
+        "process.current"
+      ]
+    },
+    {
+      "operation": "releaseCheckCapacity",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_SUITE_QUEUE": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_SUITE_QUEUE"
+            ],
+            "additionalProperties": false
+          },
+          "owner": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "released": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "released"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "files.read",
+        "fs.rm",
+        "lock.acquire",
+        "lock.release",
+        "process.current"
+      ]
+    },
+    {
+      "operation": "readCheckStatus",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_SUITE_QUEUE": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_SUITE_QUEUE"
+            ],
+            "additionalProperties": false
+          },
+          "checks": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "cores": {
+            "type": "integer"
+          },
+          "usableCores": {
+            "type": "integer"
+          },
+          "cpuIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "freeMemory": {
+            "type": "number"
+          },
+          "load": {
+            "type": "number"
+          },
+          "personal": {
+            "type": "boolean"
+          },
+          "affinity": {
+            "type": "boolean"
+          },
+          "taskset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calculatedChecks": {
+            "type": "integer"
+          },
+          "checks": {
+            "type": "integer"
+          },
+          "calculatedRuns": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "coresPerCheck": {
+            "type": "integer"
+          },
+          "busy": {
+            "type": "boolean"
+          },
+          "busyChecks": {
+            "type": "integer"
+          },
+          "waitingChecks": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cores",
+          "usableCores",
+          "cpuIds",
+          "freeMemory",
+          "load",
+          "personal",
+          "affinity",
+          "taskset",
+          "calculatedChecks",
+          "checks",
+          "calculatedRuns",
+          "runs",
+          "coresPerCheck",
+          "busy",
+          "busyChecks",
+          "waitingChecks"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "clock.now",
+        "files.read",
+        "files.stat",
+        "fs.readdir",
+        "machine.observe",
+        "process.alive",
+        "process.current",
+        "process.identity"
+      ]
+    },
+    {
+      "operation": "readSuiteProgress",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "since": {
+            "type": "number"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_SUITE_QUEUE": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_SUITE_QUEUE"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "progress": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ticket": {
+                    "type": "integer"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "queuedAt": {
+                    "type": "integer"
+                  },
+                  "startedAt": {
+                    "type": "integer"
+                  },
+                  "finishedAt": {
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "pausedMs": {
+                    "type": "integer"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "commandFingerprint": {
+                    "type": "string"
+                  },
+                  "evidence": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "head": {
+                        "type": "string"
+                      },
+                      "fingerprint": {
+                        "type": "string"
+                      },
+                      "runId": {
+                        "type": "string"
+                      },
+                      "issue": {
+                        "type": "integer"
+                      },
+                      "error": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "head",
+                      "fingerprint",
+                      "runId",
+                      "issue",
+                      "error"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "logPath": {
+                    "type": "string"
+                  },
+                  "receiptPath": {
+                    "type": "string"
+                  },
+                  "recorderPid": {
+                    "type": "integer"
+                  },
+                  "recorderIdentity": {
+                    "type": "string"
+                  },
+                  "childPid": {
+                    "type": "integer"
+                  },
+                  "exitCode": {
+                    "type": "integer"
+                  },
+                  "signal": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "counts": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "outcome": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ticket",
+                  "state",
+                  "position",
+                  "queuedAt",
+                  "startedAt",
+                  "finishedAt",
+                  "reason",
+                  "pausedMs",
+                  "command",
+                  "commandFingerprint",
+                  "evidence",
+                  "source",
+                  "logPath",
+                  "receiptPath",
+                  "recorderPid",
+                  "recorderIdentity",
+                  "childPid",
+                  "exitCode",
+                  "signal",
+                  "counts",
+                  "outcome"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "progress"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "clock.now",
+        "files.read",
+        "files.stat",
+        "fs.readdir",
+        "process.alive",
+        "process.current",
+        "process.identity"
+      ]
+    },
+    {
+      "operation": "executeSuite",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "PATH": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PATH"
+            ],
+            "additionalProperties": false
+          },
+          "timeoutMs": {
+            "type": "integer"
+          },
+          "startGate": {
+            "type": "boolean"
+          },
+          "cpuIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "taskset": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "cwd",
+          "timeoutMs"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signal": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ownershipConfirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "exitCode",
+          "reason",
+          "ownershipConfirmed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "clock.sleep",
+        "process.groupAlive",
+        "process.spawnSuite"
+      ]
+    },
+    {
+      "operation": "runTestSuite",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "timeout": {
+            "type": "integer"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_SUITE_QUEUE": {
+                "type": "string"
+              },
+              "PDD_STATE_DIR": {
+                "type": "string"
+              },
+              "PATH": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PDD_SUITE_QUEUE"
+            ],
+            "additionalProperties": false
+          },
+          "announceReceipt": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cwd",
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exitCode",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "Error"
+      ],
+      "resource_operations": [
+        "clock.now",
+        "clock.sleep",
+        "compute.hash_utf8",
+        "files.read",
+        "files.stat",
+        "files.write",
+        "fs.mkdir",
+        "fs.mkdtemp",
+        "fs.readdir",
+        "fs.rm",
+        "lock.acquire",
+        "lock.release",
+        "machine.observe",
+        "output.say",
+        "process.alive",
+        "process.current",
+        "process.executeSuite",
+        "process.identity",
+        "process.uuid",
+        "source.inspect"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "now",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ms": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ms"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "sleep",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "ms": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ms"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ok"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "mkdir",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ok"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "mkdtemp",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "prefix": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "prefix"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "rm",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ok"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "lock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "acquire",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "acquired": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "acquired"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "release",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "released": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "released"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "machine",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "observe",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "cpuIds": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "freeMemory": {
+                "type": "number"
+              },
+              "load": {
+                "type": "number"
+              },
+              "platform": {
+                "type": "string"
+              },
+              "battery": {
+                "type": "boolean"
+              },
+              "virtualized": {
+                "type": "boolean"
+              },
+              "taskset": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "cpuIds",
+              "freeMemory",
+              "load",
+              "platform",
+              "battery",
+              "virtualized",
+              "taskset"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "say",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ok"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "process",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "alive",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pid"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "alive": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "alive"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "current",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer"
+              },
+              "uid": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pid",
+              "uid"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "executeSuite",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "POCKET_BROWSER_BIN": {
+                    "type": "string"
+                  },
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "USERPROFILE": {
+                    "type": "string"
+                  },
+                  "PDD_STATE_DIR": {
+                    "type": "string"
+                  },
+                  "XDG_CONFIG_HOME": {
+                    "type": "string"
+                  },
+                  "TMPDIR": {
+                    "type": "string"
+                  },
+                  "TMP": {
+                    "type": "string"
+                  },
+                  "TEMP": {
+                    "type": "string"
+                  },
+                  "PDD_INTERPRETER_QUEUE": {
+                    "type": "string"
+                  },
+                  "PDD_CHECK_CPUS": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "PATH",
+                  "POCKET_BROWSER_BIN",
+                  "HOME",
+                  "USERPROFILE",
+                  "PDD_STATE_DIR",
+                  "XDG_CONFIG_HOME",
+                  "TMPDIR",
+                  "TMP",
+                  "TEMP",
+                  "PDD_INTERPRETER_QUEUE",
+                  "PDD_CHECK_CPUS"
+                ],
+                "additionalProperties": false
+              },
+              "cpuIds": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "taskset": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "timeoutMs": {
+                "type": "integer"
+              },
+              "environmentRoot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "cwd",
+              "env",
+              "cpuIds",
+              "taskset",
+              "timeoutMs",
+              "environmentRoot"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "childPid": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "recorderPid": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "recorderIdentity": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "exitCode": {
+                "type": "integer"
+              },
+              "signal": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reason": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ownershipConfirmed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "exitCode",
+              "reason",
+              "ownershipConfirmed"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "groupAlive",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "pgid": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pgid"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "alive": {
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "alive"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "identity",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pid"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "identity": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "identity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "spawnSuite",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "PATH": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "PATH"
+                ],
+                "additionalProperties": false
+              },
+              "startGate": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "file",
+              "args",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "exitCode": {
+                "type": "integer"
+              },
+              "signal": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "pid",
+              "exitCode",
+              "signal",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "uuid",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "uuid": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uuid"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "source",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "inspect",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "head": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fingerprint": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "runId": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "issue": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "head",
+              "fingerprint",
+              "runId",
+              "issue",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

@@ -1,0 +1,494 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/machine-resources-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`readMachineResources` reads Linux memory (converting KiB to bytes), PSI pressure, volume space and check metadata (`cpuIds`, `platform`, `battery`, `virtualized`, `taskset`), and returns `null` for malformed or invalid metrics without hiding valid observations."
+    },
+    {
+      "id": "AC2",
+      "text": "`machineCheckPorts` returns the evaluated check observations on Linux and falls back to non-Linux defaults (`battery: false`, `virtualized: false`, `taskset: null`, `memory: null`, `load: null`) when probes fail or metrics are unavailable."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/proc/meminfo": {
+        "content": "MemTotal:       16384000 kB\nMemFree:         2048000 kB\nMemAvailable:    8192000 kB\n",
+        "is_symlink": false
+      },
+      "/proc/pressure/io": {
+        "content": "some avg10=1.25 avg60=0.50 avg300=0.10 total=100\n",
+        "is_symlink": false
+      },
+      "/proc/pressure/memory": {
+        "content": "malformed psi line\n",
+        "is_symlink": false
+      },
+      "/proc/self/status": {
+        "content": "Name:\tnode\nCpus_allowed_list:\t0-2,4\n",
+        "is_symlink": false
+      },
+      "/sys/class/power_supply/BAT0/type": {
+        "content": "Battery\n",
+        "is_symlink": false
+      },
+      "/usr/bin/taskset": {
+        "content": "binary",
+        "is_symlink": false
+      }
+    },
+    "counters": {
+      "readdir": 0,
+      "cpuCount": 0,
+      "load": 0,
+      "memory": 0,
+      "statfs": 0,
+      "detectVirt": 0
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": null
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "fs.readdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/readdir",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/sys/class/power_supply"
+          },
+          "result": {
+            "entries": [
+              "BAT0"
+            ]
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "path": "/sys/class/power_supply"
+          },
+          "result": {
+            "entries": [
+              "BAT0"
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "os.cpuCount": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/cpuCount",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "count": 8
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "count": 0
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "count": 4
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "os.load": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/load",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "value": 1.5
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "value": -1
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "value": 0.75
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {},
+          "result": {
+            "value": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "os.memory": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/memory",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "available": 4096,
+            "total": 2048
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "available": 8388608000,
+            "total": 16777216000
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "available": null,
+            "total": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "os.statfs": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/statfs",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/work/repo"
+          },
+          "result": {
+            "bavail": 500000,
+            "blocks": 1000000,
+            "bsize": 4096
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "path": "/work/missing"
+          },
+          "result": {
+            "bavail": null,
+            "blocks": null,
+            "bsize": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "os.detectVirt": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/detectVirt",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "status": 0
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "status": 0
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "status": 1
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "read-machine-linux",
+      "entry_path": "prompts/cli/machine-resources.prompt.md",
+      "operation": "readMachineResources",
+      "input": {
+        "cwd": "/work/repo",
+        "platform": "linux",
+        "includeChecks": true,
+        "env": {
+          "PATH": "/usr/local/bin:/usr/bin"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/cpuCount",
+          "op": "equals",
+          "value": 8
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/load",
+          "op": "equals",
+          "value": 1.5
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/memory",
+          "op": "equals",
+          "value": {
+            "available": 8388608000,
+            "total": 16777216000
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pressure",
+          "op": "equals",
+          "value": {
+            "io": 1.25,
+            "memory": null
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/disk",
+          "op": "equals",
+          "value": {
+            "available": 2048000000,
+            "total": 4096000000
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/check",
+          "op": "equals",
+          "value": {
+            "cpuIds": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "platform": "linux",
+            "battery": true,
+            "virtualized": true,
+            "taskset": "/usr/bin/taskset"
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/counters/statfs",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-machine-invalid",
+      "entry_path": "prompts/cli/machine-resources.prompt.md",
+      "operation": "readMachineResources",
+      "input": {
+        "cwd": "/work/missing",
+        "platform": "darwin",
+        "includeChecks": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/cpuCount",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/load",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/memory",
+          "op": "equals",
+          "value": {
+            "available": null,
+            "total": null
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pressure",
+          "op": "equals",
+          "value": {
+            "io": null,
+            "memory": null
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/disk",
+          "op": "equals",
+          "value": {
+            "available": null,
+            "total": null
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/counters/statfs",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "check-ports-linux",
+      "entry_path": "prompts/cli/machine-resources.prompt.md",
+      "operation": "machineCheckPorts",
+      "input": {
+        "platform": "linux",
+        "env": {
+          "PATH": "/usr/local/bin:/usr/bin"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "cores": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "platform": "linux",
+            "battery": true,
+            "virtualized": true,
+            "taskset": "/usr/bin/taskset",
+            "memory": 8388608000,
+            "load": 0.75
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/detectVirt",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "check-ports-fallback",
+      "entry_path": "prompts/cli/machine-resources.prompt.md",
+      "operation": "machineCheckPorts",
+      "input": {
+        "platform": "darwin",
+        "env": {
+          "PATH": "/nonexistent"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "cores": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "platform": "darwin",
+            "battery": false,
+            "virtualized": false,
+            "taskset": null,
+            "memory": null,
+            "load": null
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/detectVirt",
+          "op": "equals",
+          "value": 3
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

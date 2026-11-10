@@ -105,17 +105,78 @@ The native gh runner records each `gh` call in the GitHub call ledger of the rep
 - [Autopilot settings](autopilot.prompt.md): owns the local `pdd.json` shape and its writes. The change table above follows its rules for the local write.
 - The [CLI](pdd-cli.prompt.md) calls Publish after the mode, trust and untrust commands, and Check after `pdd autopilot start` and `pdd autopilot status`.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-Only checkAutopilotSettings is declared with supplied read-only repository/API/config replies. Publish, format-preserving updates, races, actual GitHub writes and credentials remain native; no write request is admitted by this subset. Native evidence owners: test/autopilot-github.test.mjs.
+Runtime transport: each entry names the public operation above. In the Runtime interface, `publishAutopilotSettings` and `checkAutopilotSettings` use `program.execFile({file, args, cwd})` (for `git rev-parse --show-toplevel`), `files.read({path})` (for `<root>/pdd.json`), `github.repository({})`, `github.request({method, path, body})` (where `body` in arguments and results is JSON text or `null`) and `random.shortId({})`, returning `{state, message}` without throwing. Native `gh api` subprocess execution, call counting via `nativeGithubCounter` and random hex generation stay a native obligation covered by `test/autopilot-github.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "ed65128a1b5e775655c0439a5184d388b40b5a0a8263effae69eacf3095f60b4",
+  "prose_sha256": "d8e0f4ecf470f3e40efefb224d612fe2722f6c3b7a13459fdca5f10bb9696b14",
   "entries": [
+    {
+      "operation": "publishAutopilotSettings",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "retry": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "skipped",
+              "current",
+              "written",
+              "pull-request",
+              "closed",
+              "not-updated"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "program.execFile",
+        "files.read",
+        "github.repository",
+        "github.request",
+        "random.shortId"
+      ]
+    },
     {
       "operation": "checkAutopilotSettings",
       "input_schema": {
@@ -153,49 +214,39 @@ Only checkAutopilotSettings is declared with supplied read-only repository/API/c
       },
       "errors": [],
       "resource_operations": [
-        "github.repository",
-        "github.request",
         "program.execFile",
-        "files.readFileSync",
-        "files.lstatSync",
-        "files.openSync",
-        "files.fstatSync",
-        "files.readSync",
-        "files.closeSync"
+        "files.read",
+        "github.repository",
+        "github.request"
       ]
     }
   ],
   "calls": [],
   "resources": [
     {
-      "name": "github",
-      "kind": "port",
+      "name": "files",
+      "kind": "blob",
       "access": "read",
       "operations": [
         {
-          "name": "repository",
+          "name": "read",
           "access": "read",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing github.repository dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "path": {
+                "type": "string"
               }
             },
             "required": [
-              "args"
+              "path"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
+              "content": {
                 "oneOf": [
                   {
                     "type": "string"
@@ -207,49 +258,7 @@ Only checkAutopilotSettings is declared with supplied read-only repository/API/c
               }
             },
             "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "request",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing github.request dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
+              "content"
             ],
             "additionalProperties": false
           }
@@ -267,37 +276,35 @@ Only checkAutopilotSettings is declared with supplied read-only repository/API/c
           "arguments_schema": {
             "type": "object",
             "properties": {
+              "file": {
+                "type": "string"
+              },
               "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing program.execFile dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
               }
             },
             "required": [
-              "args"
+              "file",
+              "args",
+              "cwd"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "stdout": {
+                "type": "string"
               }
             },
             "required": [
-              "value",
-              "error"
+              "stdout"
             ],
             "additionalProperties": false
           }
@@ -305,252 +312,115 @@ Only checkAutopilotSettings is declared with supplied read-only repository/API/c
       ]
     },
     {
-      "name": "files",
+      "name": "github",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "repository",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "repository": {
+                "type": "string"
+              },
+              "defaultBranch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "repository",
+              "defaultBranch"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "request",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "body": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "body"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "body": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "body"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "random",
       "kind": "port",
       "access": "read",
       "operations": [
         {
-          "name": "readFileSync",
+          "name": "shortId",
           "access": "read",
           "arguments_schema": {
             "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.readFileSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
+            "properties": {},
+            "required": [],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "id": {
+                "type": "string"
               }
             },
             "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "lstatSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.lstatSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "openSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.openSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "fstatSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.fstatSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "readSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.readSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "closeSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.closeSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
+              "id"
             ],
             "additionalProperties": false
           }
@@ -559,11 +429,10 @@ Only checkAutopilotSettings is declared with supplied read-only repository/API/c
     }
   ],
   "limits": {
-    "max_steps": 64,
+    "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

@@ -1,0 +1,1142 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/cost-ledger-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`recordCostGithub` appends a timestamped JSONL entry to `github-cost.jsonl` in the run directory via `files.read` and `files.write`, and throws `Error` when `runDir` or `entry.at` is invalid."
+    },
+    {
+      "id": "AC2",
+      "text": "`captureClosedCi` reserves `cost-ci-N.json` via `files.stat` and `files.write`, queries `gh api` via `exec.execFile` for closed or merged PR workflow runs, writes `{attempted: true, minutes, complete}`, and throws `Error` when the run input is invalid."
+    },
+    {
+      "id": "AC3",
+      "text": "`captureCosts` reads Claude or Codex session transcripts, audit directories via `fs.readdir`, `github-cost.jsonl`, and `cost-ci-N.json`, hashes account and session identities via `compute.hash_utf8`, computes person waiting minutes and outcome, and throws `Error` when `run` is invalid."
+    },
+    {
+      "id": "AC4",
+      "text": "`applyCostMeasurement` records suite minutes, active person minutes, and explicit outcomes once per measurement id, ignores identical retries, and throws `Error` on invalid input or measurement id conflicts."
+    },
+    {
+      "id": "AC5",
+      "text": "`costReport` and `costStatusLines` aggregate 1-day and 7-day totals, coverage, and merged-issue P50/P90 percentiles and format the status summary text, throwing `Error` on invalid inputs."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/home/dev/.claude/projects/-work-pdd/018f0000-0000-7000-8000-000000000001.jsonl": {
+        "content": "{\"type\":\"assistant\",\"message\":{\"id\":\"msg-1\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":30,\"output_tokens\":50}}}\n",
+        "is_symlink": false
+      }
+    },
+    "counters": {
+      "now": 0,
+      "readdir": 0,
+      "execFile": 0
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": null
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "clock.now": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/now",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "ms": 1730000060000
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    },
+    "fs.readdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/readdir",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/state/runs/run-1/audits"
+          },
+          "result": {
+            "entries": [],
+            "code": "ENOENT"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "exec.execFile": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/execFile",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/actions/runs?branch=pdd%2Fissue-42&per_page=100"
+            ],
+            "cwd": "/work/pdd"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "{\"total_count\":1,\"workflow_runs\":[{\"status\":\"completed\",\"run_attempt\":1,\"run_started_at\":\"2024-10-27T00:00:00Z\",\"updated_at\":\"2024-10-27T00:03:00Z\",\"pull_requests\":[{\"number\":42}]}]}",
+            "stderr": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "record-cost-github-invalid",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "recordCostGithub",
+      "input": {
+        "runDir": "",
+        "entry": {
+          "at": 1730000010000
+        }
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "record-cost-github-ok",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "recordCostGithub",
+      "input": {
+        "runDir": "/state/runs/run-1",
+        "entry": {
+          "at": 1730000010000
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "ok": true
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1state~1runs~1run-1~1github-cost.jsonl/content",
+          "op": "equals",
+          "value": "{\"at\":1730000010000}\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "capture-closed-ci-invalid",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "captureClosedCi",
+      "input": {
+        "run": {
+          "runDir": ""
+        }
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "capture-closed-ci-ok",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "captureClosedCi",
+      "input": {
+        "run": {
+          "runId": "run-1",
+          "runDir": "/state/runs/run-1",
+          "repo": "promptdriven/pdd",
+          "root": "/work/pdd",
+          "pr": [
+            {
+              "number": 42,
+              "state": "merged",
+              "branch": "pdd/issue-42"
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "ok": true
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/~1state~1runs~1run-1~1cost-ci-42.json/content",
+          "op": "equals",
+          "value": "{\"attempted\":true,\"minutes\":3,\"complete\":true}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "capture-costs-invalid",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "captureCosts",
+      "input": {
+        "run": {
+          "runId": ""
+        }
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "capture-costs-ok",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "captureCosts",
+      "input": {
+        "before": null,
+        "run": {
+          "runId": "run-1",
+          "runDir": "/state/runs/run-1",
+          "repo": "promptdriven/pdd",
+          "number": 42,
+          "root": "/work/pdd",
+          "state": "completed",
+          "startedAt": 1730000000000,
+          "updatedAt": 1730000060000,
+          "agent": "claude",
+          "configDir": "/home/dev/.claude",
+          "chats": [
+            {
+              "agent": "claude",
+              "configDir": "/home/dev/.claude",
+              "session": {
+                "id": "018f0000-0000-7000-8000-000000000001"
+              }
+            }
+          ],
+          "pr": [
+            {
+              "number": 42,
+              "state": "merged",
+              "stage": "code",
+              "branch": "pdd/issue-42"
+            }
+          ],
+          "areas": [
+            {
+              "name": "code"
+            }
+          ],
+          "decisions": [
+            {
+              "decision": "approve",
+              "gateId": "gate-1",
+              "gateAt": 1730000000000,
+              "at": 1730000060000,
+              "stage": "code"
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/cost",
+          "op": "equals",
+          "value": {
+            "schema": "pdd.cost.v1",
+            "capturedAt": 1730000060000,
+            "outcome": "merged",
+            "outcomeAt": 1730000060000,
+            "tokens": [
+              {
+                "account": "claude:cad15b952481d5f2c143",
+                "agent": "claude",
+                "input": 150,
+                "cachedInput": 30,
+                "output": 50,
+                "reasoningOutput": 0,
+                "total": 200
+              }
+            ],
+            "sessions": {
+              "eec414bc659da70d2567": {
+                "account": "claude:cad15b952481d5f2c143",
+                "agent": "claude",
+                "offset": 156,
+                "usage": {
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                },
+                "messages": {
+                  "3a0de37932e8b19746f2": {
+                    "input": 150,
+                    "cachedInput": 30,
+                    "output": 50,
+                    "reasoningOutput": 0,
+                    "total": 200
+                  }
+                },
+                "observed": true
+              }
+            },
+            "person": {
+              "questions": 0,
+              "answers": 0,
+              "approvals": 1,
+              "waitingMinutes": 1,
+              "activeMinutes": null
+            },
+            "suiteMinutes": null,
+            "ciMinutes": 3,
+            "githubCalls": 1,
+            "events": [
+              {
+                "at": 1730000060000,
+                "metric": "input",
+                "value": 150,
+                "account": "claude:cad15b952481d5f2c143",
+                "agent": "claude"
+              },
+              {
+                "at": 1730000060000,
+                "metric": "cachedInput",
+                "value": 30,
+                "account": "claude:cad15b952481d5f2c143",
+                "agent": "claude"
+              },
+              {
+                "at": 1730000060000,
+                "metric": "output",
+                "value": 50,
+                "account": "claude:cad15b952481d5f2c143",
+                "agent": "claude"
+              },
+              {
+                "at": 1730000060000,
+                "metric": "total",
+                "value": 200,
+                "account": "claude:cad15b952481d5f2c143",
+                "agent": "claude"
+              },
+              {
+                "at": 1730000060000,
+                "metric": "approvals",
+                "value": 1
+              },
+              {
+                "at": 1730000060000,
+                "metric": "waitingMinutes",
+                "value": 1
+              },
+              {
+                "at": 1730000060000,
+                "metric": "githubCalls",
+                "value": 1
+              },
+              {
+                "at": 1730000060000,
+                "metric": "ciMinutes",
+                "value": 3
+              }
+            ],
+            "measurements": {},
+            "coverage": [
+              "github-unattributed-excluded",
+              "person-active-unavailable",
+              "suite-unavailable"
+            ],
+            "waits": {
+              "g:gate-1": {
+                "kind": "gate",
+                "gateId": "gate-1",
+                "at": 1730000000000,
+                "accountedAt": 1730000060000,
+                "endedAt": 1730000060000
+              }
+            }
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "apply-cost-measurement-invalid",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "applyCostMeasurement",
+      "input": {
+        "run": {
+          "runId": "run-1"
+        },
+        "input": {
+          "id": "bad id!"
+        },
+        "at": 1730000060000
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "apply-cost-measurement-ok",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "applyCostMeasurement",
+      "input": {
+        "run": {
+          "runId": "run-1",
+          "repo": "promptdriven/pdd",
+          "number": 42,
+          "cost": {
+            "schema": "pdd.cost.v1",
+            "capturedAt": 1730000060000,
+            "outcome": "merged",
+            "outcomeAt": 1730000060000,
+            "tokens": [
+              {
+                "account": "claude:cad15b952481d5f2c143",
+                "agent": "claude",
+                "input": 150,
+                "cachedInput": 30,
+                "output": 50,
+                "reasoningOutput": 0,
+                "total": 200
+              }
+            ],
+            "sessions": {},
+            "person": {
+              "questions": 0,
+              "answers": 0,
+              "approvals": 1,
+              "waitingMinutes": 1,
+              "activeMinutes": null
+            },
+            "suiteMinutes": null,
+            "ciMinutes": 3,
+            "githubCalls": 1,
+            "events": [],
+            "measurements": {},
+            "coverage": [
+              "github-unattributed-excluded"
+            ],
+            "waits": {}
+          }
+        },
+        "input": {
+          "id": "suite-1",
+          "suiteMinutes": 4,
+          "personMinutes": 2
+        },
+        "at": 1730000060000
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/run",
+          "op": "equals",
+          "value": {
+            "runId": "run-1",
+            "repo": "promptdriven/pdd",
+            "number": 42,
+            "cost": {
+              "schema": "pdd.cost.v1",
+              "capturedAt": 1730000060000,
+              "outcome": "merged",
+              "outcomeAt": 1730000060000,
+              "tokens": [
+                {
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude",
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                }
+              ],
+              "sessions": {},
+              "person": {
+                "questions": 0,
+                "answers": 0,
+                "approvals": 1,
+                "waitingMinutes": 1,
+                "activeMinutes": 2
+              },
+              "suiteMinutes": 4,
+              "ciMinutes": 3,
+              "githubCalls": 1,
+              "events": [
+                {
+                  "at": 1730000060000,
+                  "metric": "suiteMinutes",
+                  "value": 4
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "activeMinutes",
+                  "value": 2
+                }
+              ],
+              "measurements": {
+                "suite-1": {
+                  "id": "suite-1",
+                  "personMinutes": 2,
+                  "suiteMinutes": 4
+                }
+              },
+              "coverage": [
+                "github-unattributed-excluded"
+              ],
+              "waits": {}
+            }
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "cost-report-invalid",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "costReport",
+      "input": {
+        "runs": [],
+        "now": -1
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "cost-report-ok",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "costReport",
+      "input": {
+        "runs": [
+          {
+            "runId": "run-1",
+            "repo": "promptdriven/pdd",
+            "number": 42,
+            "startedAt": 1730000000000,
+            "cost": {
+              "schema": "pdd.cost.v1",
+              "capturedAt": 1730000060000,
+              "outcome": "merged",
+              "outcomeAt": 1730000060000,
+              "tokens": [
+                {
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude",
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                }
+              ],
+              "sessions": {},
+              "person": {
+                "questions": 0,
+                "answers": 0,
+                "approvals": 1,
+                "waitingMinutes": 1,
+                "activeMinutes": 2
+              },
+              "suiteMinutes": 4,
+              "ciMinutes": 3,
+              "githubCalls": 1,
+              "events": [
+                {
+                  "at": 1730000060000,
+                  "metric": "input",
+                  "value": 150,
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude"
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "cachedInput",
+                  "value": 30,
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude"
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "output",
+                  "value": 50,
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude"
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "total",
+                  "value": 200,
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude"
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "approvals",
+                  "value": 1
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "waitingMinutes",
+                  "value": 1
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "githubCalls",
+                  "value": 1
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "ciMinutes",
+                  "value": 3
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "suiteMinutes",
+                  "value": 4
+                },
+                {
+                  "at": 1730000060000,
+                  "metric": "activeMinutes",
+                  "value": 2
+                }
+              ],
+              "measurements": {},
+              "coverage": [
+                "github-unattributed-excluded",
+                "person-active-unavailable",
+                "suite-unavailable"
+              ],
+              "waits": {}
+            }
+          }
+        ],
+        "now": 1730000060000
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "schema": "pdd.cost-report.v1",
+            "generatedAt": 1730000060000,
+            "runs": [
+              {
+                "repo": "promptdriven/pdd",
+                "issue": 42,
+                "runId": "run-1",
+                "outcome": "merged",
+                "outcomeAt": 1730000060000,
+                "tokens": [
+                  {
+                    "account": "claude:cad15b952481d5f2c143",
+                    "agent": "claude",
+                    "input": 150,
+                    "cachedInput": 30,
+                    "output": 50,
+                    "reasoningOutput": 0,
+                    "total": 200
+                  }
+                ],
+                "person": {
+                  "questions": 0,
+                  "answers": 0,
+                  "approvals": 1,
+                  "waitingMinutes": 1,
+                  "activeMinutes": 2
+                },
+                "suiteMinutes": 4,
+                "ciMinutes": 3,
+                "githubCalls": 1,
+                "coverage": [
+                  "github-unattributed-excluded",
+                  "person-active-unavailable",
+                  "suite-unavailable"
+                ]
+              }
+            ],
+            "day": {
+              "since": 1729913660000,
+              "totals": {
+                "tokens": [
+                  {
+                    "account": "claude:cad15b952481d5f2c143",
+                    "agent": "claude",
+                    "input": 150,
+                    "cachedInput": 30,
+                    "output": 50,
+                    "reasoningOutput": 0,
+                    "total": 200
+                  }
+                ],
+                "person": {
+                  "questions": 0,
+                  "answers": 0,
+                  "approvals": 1,
+                  "waitingMinutes": 1,
+                  "activeMinutes": 2
+                },
+                "suiteMinutes": 4,
+                "ciMinutes": 3,
+                "githubCalls": 1,
+                "totalTokens": 200
+              },
+              "coverage": [
+                "github-unattributed-excluded",
+                "person-active-unavailable",
+                "suite-unavailable"
+              ],
+              "mergedIssues": 1,
+              "p50": {
+                "totalTokens": 200,
+                "tokens": [
+                  {
+                    "account": "claude:cad15b952481d5f2c143",
+                    "agent": "claude",
+                    "input": 150,
+                    "cachedInput": 30,
+                    "output": 50,
+                    "reasoningOutput": 0,
+                    "total": 200
+                  }
+                ],
+                "person": {
+                  "questions": 0,
+                  "answers": 0,
+                  "approvals": 1,
+                  "waitingMinutes": 1,
+                  "activeMinutes": 2
+                },
+                "suiteMinutes": 4,
+                "ciMinutes": 3,
+                "githubCalls": 1
+              },
+              "p90": {
+                "totalTokens": 200,
+                "tokens": [
+                  {
+                    "account": "claude:cad15b952481d5f2c143",
+                    "agent": "claude",
+                    "input": 150,
+                    "cachedInput": 30,
+                    "output": 50,
+                    "reasoningOutput": 0,
+                    "total": 200
+                  }
+                ],
+                "person": {
+                  "questions": 0,
+                  "answers": 0,
+                  "approvals": 1,
+                  "waitingMinutes": 1,
+                  "activeMinutes": 2
+                },
+                "suiteMinutes": 4,
+                "ciMinutes": 3,
+                "githubCalls": 1
+              }
+            },
+            "week": {
+              "since": 1729395260000,
+              "totals": {
+                "tokens": [
+                  {
+                    "account": "claude:cad15b952481d5f2c143",
+                    "agent": "claude",
+                    "input": 150,
+                    "cachedInput": 30,
+                    "output": 50,
+                    "reasoningOutput": 0,
+                    "total": 200
+                  }
+                ],
+                "person": {
+                  "questions": 0,
+                  "answers": 0,
+                  "approvals": 1,
+                  "waitingMinutes": 1,
+                  "activeMinutes": 2
+                },
+                "suiteMinutes": 4,
+                "ciMinutes": 3,
+                "githubCalls": 1,
+                "totalTokens": 200
+              },
+              "coverage": [
+                "github-unattributed-excluded",
+                "person-active-unavailable",
+                "suite-unavailable"
+              ],
+              "mergedIssues": 1,
+              "p50": {
+                "totalTokens": 200,
+                "tokens": [
+                  {
+                    "account": "claude:cad15b952481d5f2c143",
+                    "agent": "claude",
+                    "input": 150,
+                    "cachedInput": 30,
+                    "output": 50,
+                    "reasoningOutput": 0,
+                    "total": 200
+                  }
+                ],
+                "person": {
+                  "questions": 0,
+                  "answers": 0,
+                  "approvals": 1,
+                  "waitingMinutes": 1,
+                  "activeMinutes": 2
+                },
+                "suiteMinutes": 4,
+                "ciMinutes": 3,
+                "githubCalls": 1
+              },
+              "p90": {
+                "totalTokens": 200,
+                "tokens": [
+                  {
+                    "account": "claude:cad15b952481d5f2c143",
+                    "agent": "claude",
+                    "input": 150,
+                    "cachedInput": 30,
+                    "output": 50,
+                    "reasoningOutput": 0,
+                    "total": 200
+                  }
+                ],
+                "person": {
+                  "questions": 0,
+                  "answers": 0,
+                  "approvals": 1,
+                  "waitingMinutes": 1,
+                  "activeMinutes": 2
+                },
+                "suiteMinutes": 4,
+                "ciMinutes": 3,
+                "githubCalls": 1
+              }
+            }
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "cost-status-lines-invalid",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "costStatusLines",
+      "input": {
+        "report": {
+          "schema": "invalid"
+        }
+      },
+      "expected_error": "Error",
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "Error"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "cost-status-lines-ok",
+      "entry_path": "prompts/cli/cost-ledger.prompt.md",
+      "operation": "costStatusLines",
+      "input": {
+        "report": {
+          "schema": "pdd.cost-report.v1",
+          "generatedAt": 1730000060000,
+          "runs": [
+            {
+              "repo": "promptdriven/pdd",
+              "issue": 42,
+              "runId": "run-1",
+              "outcome": "merged"
+            }
+          ],
+          "day": {
+            "since": 1729913660000,
+            "totals": {
+              "tokens": [
+                {
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude",
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                }
+              ],
+              "person": {
+                "questions": 0,
+                "answers": 0,
+                "approvals": 1,
+                "waitingMinutes": 1,
+                "activeMinutes": 2
+              },
+              "suiteMinutes": 4,
+              "ciMinutes": 3,
+              "githubCalls": 1,
+              "totalTokens": 200
+            },
+            "coverage": [
+              "github-unattributed-excluded",
+              "person-active-unavailable",
+              "suite-unavailable"
+            ],
+            "mergedIssues": 1,
+            "p50": {
+              "totalTokens": 200,
+              "tokens": [
+                {
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude",
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                }
+              ],
+              "person": {
+                "questions": 0,
+                "answers": 0,
+                "approvals": 1,
+                "waitingMinutes": 1,
+                "activeMinutes": 2
+              },
+              "suiteMinutes": 4,
+              "ciMinutes": 3,
+              "githubCalls": 1
+            },
+            "p90": {
+              "totalTokens": 200,
+              "tokens": [
+                {
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude",
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                }
+              ],
+              "person": {
+                "questions": 0,
+                "answers": 0,
+                "approvals": 1,
+                "waitingMinutes": 1,
+                "activeMinutes": 2
+              },
+              "suiteMinutes": 4,
+              "ciMinutes": 3,
+              "githubCalls": 1
+            }
+          },
+          "week": {
+            "since": 1729395260000,
+            "totals": {
+              "tokens": [
+                {
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude",
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                }
+              ],
+              "person": {
+                "questions": 0,
+                "answers": 0,
+                "approvals": 1,
+                "waitingMinutes": 1,
+                "activeMinutes": 2
+              },
+              "suiteMinutes": 4,
+              "ciMinutes": 3,
+              "githubCalls": 1,
+              "totalTokens": 200
+            },
+            "coverage": [
+              "github-unattributed-excluded",
+              "person-active-unavailable",
+              "suite-unavailable"
+            ],
+            "mergedIssues": 1,
+            "p50": {
+              "totalTokens": 200,
+              "tokens": [
+                {
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude",
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                }
+              ],
+              "person": {
+                "questions": 0,
+                "answers": 0,
+                "approvals": 1,
+                "waitingMinutes": 1,
+                "activeMinutes": 2
+              },
+              "suiteMinutes": 4,
+              "ciMinutes": 3,
+              "githubCalls": 1
+            },
+            "p90": {
+              "totalTokens": 200,
+              "tokens": [
+                {
+                  "account": "claude:cad15b952481d5f2c143",
+                  "agent": "claude",
+                  "input": 150,
+                  "cachedInput": 30,
+                  "output": 50,
+                  "reasoningOutput": 0,
+                  "total": 200
+                }
+              ],
+              "person": {
+                "questions": 0,
+                "answers": 0,
+                "approvals": 1,
+                "waitingMinutes": 1,
+                "activeMinutes": 2
+              },
+              "suiteMinutes": 4,
+              "ciMinutes": 3,
+              "githubCalls": 1
+            }
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Issue costs (local measured usage):\nLast day: 200 tokens; CI 3 min; suite 4 min; GitHub 1; person Q/A/approvals 0/0/1, active 2 min, wait 1 min\n  Per merged issue (1): P50 200 tokens; CI 3 min; suite 4 min; GitHub 1; person Q/A/approvals 0/0/1, active 2 min, wait 1 min; P90 200 tokens; CI 3 min; suite 4 min; GitHub 1; person Q/A/approvals 0/0/1, active 2 min, wait 1 min\n  claude:cad15b952481d5f2c143: 200 tokens (input 150, cached 30, output 50, reasoning 0)\n  Coverage: github-unattributed-excluded, person-active-unavailable, suite-unavailable\nLast week: 200 tokens; CI 3 min; suite 4 min; GitHub 1; person Q/A/approvals 0/0/1, active 2 min, wait 1 min\n  Per merged issue (1): P50 200 tokens; CI 3 min; suite 4 min; GitHub 1; person Q/A/approvals 0/0/1, active 2 min, wait 1 min; P90 200 tokens; CI 3 min; suite 4 min; GitHub 1; person Q/A/approvals 0/0/1, active 2 min, wait 1 min\n  claude:cad15b952481d5f2c143: 200 tokens (input 150, cached 30, output 50, reasoning 0)\n  Coverage: github-unattributed-excluded, person-active-unavailable, suite-unavailable\nOutcomes: running 0, merged 1, reverted 0, stuck 0, closed 0, parked 0"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

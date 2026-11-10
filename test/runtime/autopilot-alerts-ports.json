@@ -1,0 +1,345 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-alerts-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`runAutopilotAlerts` validates and saves a Slack webhook in `autopilot-alerts.json` (`exitCode: 0`), rejects non-HTTPS or unsupported webhook URLs (`exitCode: 2`), and records and sends an `alert` through `http.request` (`exitCode: 0` with `HTTP 404 no_service` recorded in `bf4e28e0718a385f034b.json`)."
+    },
+    {
+      "id": "AC2",
+      "text": "`alertStatusLine` reads the saved alert record and destination for `promptdriven/pdd` to report undelivered open alerts and the last failed delivery, and returns the empty string for an invalid repository name."
+    }
+  ],
+  "initial_world": {
+    "files": {},
+    "locks": [],
+    "unlinks": [],
+    "counters": {
+      "readdir": 0,
+      "http": 0,
+      "repository": 0,
+      "tokenCommand": 0,
+      "hostname": 0,
+      "userInfo": 0,
+      "now": 0
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": null
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "fs.readdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/readdir",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/home/ada/.local/state/pdd/autopilot"
+          },
+          "result": {
+            "entries": []
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "fs.unlink": {
+      "action": "port.write",
+      "world_pointer": "/unlinks",
+      "result_template": {
+        "removed": true
+      }
+    },
+    "http.request": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/http",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "method": "POST",
+            "url": "https://hooks.slack.com/services/T000/B000/X000",
+            "body": "{\"text\":\"PDD Autopilot alert: usage-limit (vm-1)\\nRepository: promptdriven/pdd\\nIssue: https://github.com/promptdriven/pdd/issues/12\\nCause: Codex limit reached\\nTried: Read account limits\\nNeeds: Wait for reset\\nAnswer on the GitHub issue.\"}"
+          },
+          "result": {
+            "status": 404,
+            "text": "no_service",
+            "errorCode": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "repository.get": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/repository",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "nameWithOwner": "promptdriven/pdd"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "tokenCommand.run": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/tokenCommand",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "command": "echo token",
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "",
+            "exitCode": 1
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "os.hostname": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/hostname",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "hostname": "vm-1"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "os.userInfo": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/userInfo",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "homedir": "/home/ada"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "clock.now": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/now",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "milliseconds": 1793959200000
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "lock.acquire": {
+      "action": "port.write",
+      "world_pointer": "/locks",
+      "result_template": {
+        "acquired": true
+      }
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "set-webhook-ok",
+      "entry_path": "prompts/cli/autopilot-alerts.prompt.md",
+      "operation": "runAutopilotAlerts",
+      "input": {
+        "action": "set",
+        "text": "https://hooks.slack.com/services/T000/B000/X000\n",
+        "env": {
+          "HOME": "/home/ada"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 0,
+            "message": "Saved a Slack webhook for Autopilot alerts on this machine. Run pdd autopilot alerts test to send a test message."
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1home~1ada~1.config~1pdd~1autopilot-alerts.json/content",
+          "op": "equals",
+          "value": "{\"v\":1,\"service\":\"slack\",\"url\":\"https://hooks.slack.com/services/T000/B000/X000\"}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "set-webhook-invalid",
+      "entry_path": "prompts/cli/autopilot-alerts.prompt.md",
+      "operation": "runAutopilotAlerts",
+      "input": {
+        "action": "set",
+        "text": "http://example.com/hook",
+        "env": {
+          "HOME": "/home/ada"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 2,
+            "message": "Give one Discord or Slack incoming webhook URL (https) on stdin. Nothing was saved."
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "send-alert-failed",
+      "entry_path": "prompts/cli/autopilot-alerts.prompt.md",
+      "operation": "runAutopilotAlerts",
+      "input": {
+        "action": "alert",
+        "cwd": "/work/repo",
+        "issue": "12",
+        "kind": "usage-limit",
+        "update": false,
+        "text": "{\"cause\":\"Codex limit reached\",\"tried\":\"Read account limits\",\"need\":\"Wait for reset\"}",
+        "env": {
+          "HOME": "/home/ada"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 0,
+            "message": "Alert recorded for #12 usage-limit; delivery failed (HTTP 404 no_service). pdd autopilot status shows it. Continue other work."
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/counters/http",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1home~1ada~1.local~1state~1pdd~1autopilot~1alerts~1bf4e28e0718a385f034b.json/content",
+          "op": "contains",
+          "value": "\"HTTP 404 no_service\""
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "status-line-failed",
+      "entry_path": "prompts/cli/autopilot-alerts.prompt.md",
+      "operation": "alertStatusLine",
+      "input": {
+        "repo": "promptdriven/pdd",
+        "env": {
+          "HOME": "/home/ada"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Alerts: 1 open alert not delivered; last delivery failed (HTTP 404 no_service) for #12 usage-limit at 2026-11-06T10:00:00.000Z; check with pdd autopilot alerts test."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "status-line-invalid-repo",
+      "entry_path": "prompts/cli/autopilot-alerts.prompt.md",
+      "operation": "alertStatusLine",
+      "input": {
+        "repo": "invalid",
+        "env": {
+          "HOME": "/home/ada"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": ""
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

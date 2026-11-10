@@ -1,0 +1,380 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-github-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`publishAutopilotSettings` reads the default-branch `pdd.json` and open settings PRs through `github.request`, writes the updated `pdd.json` on `main` when direct PUT succeeds (`written`), and returns `not-updated` with the retry command when GitHub refuses with HTTP 500."
+    },
+    {
+      "id": "AC2",
+      "text": "`checkAutopilotSettings` compares the local `pdd.json` against the default-branch copy on GitHub, returning `different` with the warning and repair command when they differ and `unknown` when the local `pdd.json` is invalid JSON."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/work/repo/pdd.json": {
+        "content": "{\"autopilot\":{\"mode\":\"auto\",\"trust\":[]}}",
+        "is_symlink": false
+      },
+      "/work/broken/pdd.json": {
+        "content": "not-json",
+        "is_symlink": false
+      }
+    },
+    "counters": {
+      "execFile": 0,
+      "repository": 0,
+      "request": 0,
+      "shortId": 0
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": null
+      },
+      "result_value_pointer": "/content"
+    },
+    "program.execFile": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/execFile",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "/work/repo\n"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "/work/repo\n"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "/work/repo\n"
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/work/broken"
+          },
+          "result": {
+            "stdout": "/work/broken\n"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "github.repository": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/repository",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "repository": "promptdriven/pdd",
+            "defaultBranch": "main"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "repository": "promptdriven/pdd",
+            "defaultBranch": "main"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "repository": "promptdriven/pdd",
+            "defaultBranch": "main"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "github.request": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/request",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "method": "GET",
+            "path": "repos/promptdriven/pdd/contents/pdd.json?ref=main",
+            "body": null
+          },
+          "result": {
+            "status": 404,
+            "body": null
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "method": "GET",
+            "path": "repos/promptdriven/pdd/pulls?state=open&base=main&per_page=100&page=1",
+            "body": null
+          },
+          "result": {
+            "status": 200,
+            "body": "[]"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "method": "PUT",
+            "path": "repos/promptdriven/pdd/contents/pdd.json",
+            "body": "{\"message\":\"Set PDD Autopilot mode to auto\",\"content\":\"ewogICJhdXRvcGlsb3QiOiB7CiAgICAibW9kZSI6ICJhdXRvIiwKICAgICJ0cnVzdCI6IFtdCiAgfQp9Cg==\",\"branch\":\"main\"}"
+          },
+          "result": {
+            "status": 200,
+            "body": "{\"commit\":{\"html_url\":\"https://github.com/promptdriven/pdd/commit/1111111111111111111111111111111111111111\"}}"
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "method": "GET",
+            "path": "repos/promptdriven/pdd/contents/pdd.json?ref=main",
+            "body": null
+          },
+          "result": {
+            "status": 404,
+            "body": null
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "method": "GET",
+            "path": "repos/promptdriven/pdd/pulls?state=open&base=main&per_page=100&page=1",
+            "body": null
+          },
+          "result": {
+            "status": 200,
+            "body": "[]"
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "method": "PUT",
+            "path": "repos/promptdriven/pdd/contents/pdd.json",
+            "body": "{\"message\":\"Set PDD Autopilot mode to observe\",\"content\":\"ewogICJhdXRvcGlsb3QiOiB7CiAgICAibW9kZSI6ICJvYnNlcnZlIiwKICAgICJ0cnVzdCI6IFtdCiAgfQp9Cg==\",\"branch\":\"main\"}"
+          },
+          "result": {
+            "status": 500,
+            "body": "{}"
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {
+            "method": "GET",
+            "path": "repos/promptdriven/pdd/contents/pdd.json?ref=main",
+            "body": null
+          },
+          "result": {
+            "status": 404,
+            "body": null
+          }
+        },
+        {
+          "call_index": 8,
+          "args": {
+            "method": "GET",
+            "path": "repos/promptdriven/pdd/pulls?state=open&base=main&per_page=100&page=1",
+            "body": null
+          },
+          "result": {
+            "status": 200,
+            "body": "[]"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "random.shortId": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/shortId",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "id": "a1b2c3d4"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "publish-written",
+      "entry_path": "prompts/cli/autopilot-github.prompt.md",
+      "operation": "publishAutopilotSettings",
+      "input": {
+        "cwd": "/work/repo",
+        "action": "mode",
+        "mode": "auto",
+        "retry": "pdd autopilot auto"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "written",
+            "message": "Updated pdd.json on GitHub (main): https://github.com/promptdriven/pdd/commit/1111111111111111111111111111111111111111\npdd.json on GitHub is updated. To update your local copy, run git restore pdd.json, then git pull."
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/counters/request",
+          "op": "equals",
+          "value": 3
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "publish-not-updated",
+      "entry_path": "prompts/cli/autopilot-github.prompt.md",
+      "operation": "publishAutopilotSettings",
+      "input": {
+        "cwd": "/work/repo",
+        "action": "mode",
+        "mode": "observe",
+        "retry": "pdd autopilot observe"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "not-updated",
+            "message": "pdd.json on GitHub was not updated: GitHub refused the change (HTTP 500). This checkout has the new setting. To retry, run pdd autopilot observe."
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/counters/request",
+          "op": "equals",
+          "value": 6
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "check-different",
+      "entry_path": "prompts/cli/autopilot-github.prompt.md",
+      "operation": "checkAutopilotSettings",
+      "input": {
+        "cwd": "/work/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "different",
+            "message": "Warning: pdd.json on GitHub (main) has other Autopilot settings (GitHub: off, trust (none); this checkout: auto, trust (none)). Autopilot workers use the GitHub copy. To change the GitHub copy, run pdd autopilot auto."
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/request",
+          "op": "equals",
+          "value": 8
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "check-unknown",
+      "entry_path": "prompts/cli/autopilot-github.prompt.md",
+      "operation": "checkAutopilotSettings",
+      "input": {
+        "cwd": "/work/broken"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "unknown",
+            "message": ""
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/execFile",
+          "op": "equals",
+          "value": 4
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

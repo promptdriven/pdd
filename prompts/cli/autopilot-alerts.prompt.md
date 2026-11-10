@@ -351,17 +351,100 @@ again.
   throws `run_busy` (default: workflow runner `acquireRunLock`); `sleep(ms)`
   waits between lock attempts (default: native timer). Tests inject `http`; no test sends a real webhook request.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-Only the read-only status line is declared from supplied destination/record observations. Destination validation through runAutopilotAlerts, private writes, token commands, HMAC/digest, live delivery/readback and incident durability remain native. Native evidence owners: test/autopilot-alerts.test.mjs.
+Runtime transport: each entry names the public operation above. In the Runtime interface, `runAutopilotAlerts` and `alertStatusLine` use `files` (`read`, `write`, `stat`), `fs` (`readdir`, `unlink`), `http.request({method, url, body})`, `repository.get({cwd})`, `tokenCommand.run({command, cwd})`, `os.hostname({})`, `os.userInfo({})`, `clock.now({})`, `lock.acquire({directory, filename})` and `compute.hash_utf8({text})`, returning `{exitCode, message}` and `{text}` without throwing. Native `0600`/`0700` file modes, atomic temp-file replacement, shell token subprocess execution and live HTTP `fetch` stay a native obligation covered by `test/autopilot-alerts.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "9cdf2ff581bd91873f8c10dde74591d3a7e44d6f5cf2ef0b7acb12cf46dd1431",
+  "prose_sha256": "87d63092726ae99c2b74d35ac2444dd768c0bf45dd56fc97f690b088e98d1232",
   "entries": [
+    {
+      "operation": "runAutopilotAlerts",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "issue": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "update": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          },
+          "discordChannel": {
+            "type": "string"
+          },
+          "tokenCommand": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "HOME": {
+                "type": "string"
+              },
+              "XDG_CONFIG_HOME": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "action",
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exitCode",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "files.read",
+        "files.write",
+        "files.stat",
+        "fs.readdir",
+        "fs.unlink",
+        "http.request",
+        "repository.get",
+        "tokenCommand.run",
+        "os.hostname",
+        "os.userInfo",
+        "clock.now",
+        "lock.acquire",
+        "compute.hash_utf8"
+      ]
+    },
     {
       "operation": "alertStatusLine",
       "input_schema": {
@@ -371,12 +454,22 @@ Only the read-only status line is declared from supplied destination/record obse
             "type": "string"
           },
           "env": {
-            "type": "string",
-            "description": "JSON text encoding of the environment. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "HOME": {
+                "type": "string"
+              },
+              "XDG_CONFIG_HOME": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
           }
         },
         "required": [
-          "repo"
+          "repo",
+          "env"
         ],
         "additionalProperties": false
       },
@@ -394,42 +487,39 @@ Only the read-only status line is declared from supplied destination/record obse
       },
       "errors": [],
       "resource_operations": [
-        "fs.readFileSync",
-        "fs.statSync"
+        "files.read",
+        "files.stat",
+        "os.userInfo",
+        "compute.hash_utf8"
       ]
     }
   ],
   "calls": [],
   "resources": [
     {
-      "name": "fs",
-      "kind": "port",
-      "access": "read",
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
       "operations": [
         {
-          "name": "readFileSync",
+          "name": "read",
           "access": "read",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing fs.readFileSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "path": {
+                "type": "string"
               }
             },
             "required": [
-              "args"
+              "path"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
+              "content": {
                 "oneOf": [
                   {
                     "type": "string"
@@ -441,36 +531,159 @@ Only the read-only status line is declared from supplied destination/record obse
               }
             },
             "required": [
-              "value",
-              "error"
+              "content"
             ],
             "additionalProperties": false
           }
         },
         {
-          "name": "statSync",
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "stat",
           "access": "read",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing fs.statSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "path": {
+                "type": "string"
               }
             },
             "required": [
-              "args"
+              "path"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "exists": {
+                "type": "boolean"
               },
-              "error": {
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "unlink",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "removed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "removed"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "http",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "request",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "body": {
                 "oneOf": [
                   {
                     "type": "string"
@@ -482,8 +695,289 @@ Only the read-only status line is declared from supplied destination/record obse
               }
             },
             "required": [
-              "value",
-              "error"
+              "method",
+              "url",
+              "body"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "errorCode": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "text",
+              "errorCode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "repository",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "get",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "nameWithOwner": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "nameWithOwner"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "tokenCommand",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "run",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "stdout": {
+                "type": "string"
+              },
+              "exitCode": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "stdout",
+              "exitCode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "os",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hostname",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "hostname": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "hostname"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "userInfo",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "homedir": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "homedir"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "now",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "milliseconds": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "milliseconds"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "lock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "acquire",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "directory": {
+                "type": "string"
+              },
+              "filename": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "directory",
+              "filename"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "acquired": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "acquired"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
             ],
             "additionalProperties": false
           }
@@ -495,8 +989,7 @@ Only the read-only status line is declared from supplied destination/record obse
     "max_steps": 64,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

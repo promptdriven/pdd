@@ -1,0 +1,206 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/codex-limits-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`parseCodexLimits` classifies healthy and limited `codex` rate-limit buckets, converts reached reset seconds to epoch milliseconds using the latest reached window, and returns `unknown` with `null` metrics for malformed windows."
+    },
+    {
+      "id": "AC2",
+      "text": "`readCodexLimits` spawns `app-server --listen stdio://`, validates the `id: 1` and `id: 2` protocol frames to normalize rate limits, and returns `unknown` with `null` metrics on subprocess or protocol failure."
+    }
+  ],
+  "initial_world": {
+    "spawn_counter": 0
+  },
+  "simulation": {
+    "process.spawn": {
+      "action": "fixture.lookup",
+      "world_pointer": "/spawn_counter",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "command": "codex",
+            "args": [
+              "app-server",
+              "--listen",
+              "stdio://"
+            ],
+            "cwd": "/work/repo",
+            "env": {
+              "CODEX_HOME": "/home/ada/.codex"
+            }
+          },
+          "result": {
+            "stdout": "{\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"codex\"}}}\n{\"id\":2,\"result\":{\"rateLimitsByLimitId\":{\"codex\":{\"primary\":{\"usedPercent\":100,\"resetsAt\":1700005000},\"secondary\":{\"usedPercent\":25,\"resetsAt\":1700009000}}}}}\n",
+            "stderrBytes": 0,
+            "exitCode": 0,
+            "timedOut": false,
+            "error": ""
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "command": "codex",
+            "args": [
+              "app-server",
+              "--listen",
+              "stdio://"
+            ],
+            "cwd": "/work/broken",
+            "env": {
+              "CODEX_HOME": "/home/ada/.codex"
+            }
+          },
+          "result": {
+            "stdout": "[]\n",
+            "stderrBytes": 0,
+            "exitCode": 1,
+            "timedOut": false,
+            "error": "ENOENT"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "parse-healthy",
+      "entry_path": "prompts/cli/codex-limits.prompt.md",
+      "operation": "parseCodexLimits",
+      "input": {
+        "reply": "{\"rateLimitsByLimitId\":{\"codex\":{\"primary\":{\"usedPercent\":42,\"resetsAt\":1700000000},\"secondary\":{\"usedPercent\":80,\"resetsAt\":1700003600}}}}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "healthy",
+            "resetAt": null,
+            "usedPercent": 80
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "parse-limited",
+      "entry_path": "prompts/cli/codex-limits.prompt.md",
+      "operation": "parseCodexLimits",
+      "input": {
+        "reply": "{\"rateLimits\":{\"primary\":{\"usedPercent\":100,\"resetsAt\":1700001000},\"secondary\":{\"usedPercent\":100,\"resetsAt\":1700002000}}}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "limited",
+            "resetAt": 1700002000000,
+            "usedPercent": 100
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "parse-invalid",
+      "entry_path": "prompts/cli/codex-limits.prompt.md",
+      "operation": "parseCodexLimits",
+      "input": {
+        "reply": "{\"rateLimits\":{\"primary\":{\"usedPercent\":-5,\"resetsAt\":1700001000}}}"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "unknown",
+            "resetAt": null,
+            "usedPercent": null
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-limits-ok",
+      "entry_path": "prompts/cli/codex-limits.prompt.md",
+      "operation": "readCodexLimits",
+      "input": {
+        "command": "codex",
+        "cwd": "/work/repo",
+        "env": {
+          "CODEX_HOME": "/home/ada/.codex"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "limited",
+            "resetAt": 1700005000000,
+            "usedPercent": 100
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/spawn_counter",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-limits-protocol-error",
+      "entry_path": "prompts/cli/codex-limits.prompt.md",
+      "operation": "readCodexLimits",
+      "input": {
+        "command": "codex",
+        "cwd": "/work/broken",
+        "env": {
+          "CODEX_HOME": "/home/ada/.codex"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "unknown",
+            "resetAt": null,
+            "usedPercent": null
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/spawn_counter",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

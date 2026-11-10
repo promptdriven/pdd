@@ -1,0 +1,371 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-base-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`selectAutopilotBase` reads `autopilot.base` via `config.readConfig`, validates `refs/heads/BRANCH` via `program.execFile`, and raises `invalid-base-branch` for disallowed branch names such as `HEAD`."
+    },
+    {
+      "id": "AC2",
+      "text": "`checkAutopilotBase` verifies the PR target, default branch and newest non-draft release ancestry via `program.execFile`, returning exit 0 when `release/next` contains `main` and `v1.2.0` and exit 1 when `release/next` is 2 commits behind `v1.2.0`."
+    }
+  ],
+  "initial_world": {
+    "config_counter": 0,
+    "exec_counter": 0
+  },
+  "simulation": {
+    "config.readConfig": {
+      "action": "fixture.lookup",
+      "world_pointer": "/config_counter",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "raw": "{\"autopilot\":{\"base\":\"release/next\"}}",
+            "error": null
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/work/bad"
+          },
+          "result": {
+            "raw": "{\"autopilot\":{\"base\":\"HEAD\"}}",
+            "error": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "program.execFile": {
+      "action": "fixture.lookup",
+      "world_pointer": "/exec_counter",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "file": "git",
+            "args": [
+              "check-ref-format",
+              "refs/heads/release/next"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/pulls/42"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "{\"number\":42,\"base\":{\"ref\":\"release/next\",\"repo\":{\"full_name\":\"promptdriven/pdd\"}}}",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "{\"default_branch\":\"main\"}",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/releases?per_page=100",
+              "--paginate",
+              "--slurp"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "[[{\"draft\":false,\"tag_name\":\"v1.2.0\",\"published_at\":\"2026-11-01T00:00:00Z\"}]]",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/compare/main...release%2Fnext"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "{\"behind_by\":0,\"status\":\"ahead\"}",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/compare/v1.2.0...release%2Fnext"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "{\"behind_by\":0,\"status\":\"identical\"}",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/pulls/42"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "{\"number\":42,\"base\":{\"ref\":\"release/next\",\"repo\":{\"full_name\":\"promptdriven/pdd\"}}}",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 8,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "{\"default_branch\":\"main\"}",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 9,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/releases?per_page=100",
+              "--paginate",
+              "--slurp"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "[[{\"draft\":false,\"tag_name\":\"v1.2.0\",\"published_at\":\"2026-11-01T00:00:00Z\"}]]",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 10,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/compare/main...release%2Fnext"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "{\"behind_by\":0,\"status\":\"ahead\"}",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 11,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/compare/v1.2.0...release%2Fnext"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "stdout": "{\"behind_by\":2,\"status\":\"behind\"}",
+            "exitCode": 0
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "select-configured-base",
+      "entry_path": "prompts/cli/autopilot-base.prompt.md",
+      "operation": "selectAutopilotBase",
+      "input": {
+        "cwd": "/work/repo",
+        "defaultBranch": "main"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/branch",
+          "op": "equals",
+          "value": "release/next"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/config_counter",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/exec_counter",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "select-invalid-branch",
+      "entry_path": "prompts/cli/autopilot-base.prompt.md",
+      "operation": "selectAutopilotBase",
+      "input": {
+        "cwd": "/work/bad",
+        "defaultBranch": "main"
+      },
+      "expected_error": "invalid-base-branch",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-base-branch"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/config_counter",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/exec_counter",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "check-base-ok",
+      "entry_path": "prompts/cli/autopilot-base.prompt.md",
+      "operation": "checkAutopilotBase",
+      "input": {
+        "run": {
+          "root": "/work/repo",
+          "repo": "promptdriven/pdd",
+          "baseBranch": "release/next",
+          "pr": [
+            {
+              "number": 42
+            }
+          ]
+        },
+        "pr": "42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 0,
+            "message": "Base check: PR #42 targets saved base release/next; contains default branch main and newest release tag v1.2.0."
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/exec_counter",
+          "op": "equals",
+          "value": 6
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "check-base-behind",
+      "entry_path": "prompts/cli/autopilot-base.prompt.md",
+      "operation": "checkAutopilotBase",
+      "input": {
+        "run": {
+          "root": "/work/repo",
+          "repo": "promptdriven/pdd",
+          "baseBranch": "release/next",
+          "pr": [
+            {
+              "number": 42
+            }
+          ]
+        },
+        "pr": "42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "exitCode": 1,
+            "message": "Automatic merge refused: release/next does not contain newest release tag v1.2.0 (2 commit(s) behind)."
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/exec_counter",
+          "op": "equals",
+          "value": 11
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

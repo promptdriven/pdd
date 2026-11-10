@@ -1,0 +1,494 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-cleanup-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`cleanupWorktrees` removes an ended run worktree (`run-10000001`) only after locking and re-reading the run, verifying original allocation, confirming all PRs are closed or merged, and verifying a clean worktree at the upstream commit."
+    },
+    {
+      "id": "AC2",
+      "text": "`cleanupWorktrees` retains a candidate run worktree (`run-20000002`) in `kept` without calling `git worktree remove` when its PR is still open or verification fails."
+    }
+  ],
+  "initial_world": {
+    "counters": {
+      "listRuns": 0,
+      "readRun": 0,
+      "lookup": 0,
+      "lock": 0,
+      "execute": 0
+    }
+  },
+  "simulation": {
+    "runs.listRuns": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/listRuns",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/work/repo",
+            "cancelled": true
+          },
+          "result": {
+            "runs": [
+              {
+                "runId": "run-10000001",
+                "root": "/work/wt/issue-10",
+                "branch": "pdd/issue-10",
+                "runDir": "/work/repo/.git/pdd/runs/10",
+                "sourceRoot": "/work/repo",
+                "state": "completed",
+                "repo": "promptdriven/pdd",
+                "gate": null
+              }
+            ]
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/work/repo",
+            "cancelled": true
+          },
+          "result": {
+            "runs": [
+              {
+                "runId": "run-10000001",
+                "root": "/work/wt/issue-10",
+                "branch": "pdd/issue-10",
+                "runDir": "/work/repo/.git/pdd/runs/10",
+                "sourceRoot": "/work/repo",
+                "state": "completed",
+                "repo": "promptdriven/pdd",
+                "gate": null
+              }
+            ]
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "cwd": "/work/repo-keep",
+            "cancelled": true
+          },
+          "result": {
+            "runs": [
+              {
+                "runId": "run-20000002",
+                "root": "/work/wt/issue-20",
+                "branch": "pdd/issue-20",
+                "runDir": "/work/repo-keep/.git/pdd/runs/20",
+                "sourceRoot": "/work/repo-keep",
+                "state": "completed",
+                "repo": "promptdriven/pdd",
+                "gate": null
+              }
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "runs.readRun": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/readRun",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "runDir": "/work/repo/.git/pdd/runs/10"
+          },
+          "result": {
+            "run": {
+              "runId": "run-10000001",
+              "root": "/work/wt/issue-10",
+              "branch": "pdd/issue-10",
+              "runDir": "/work/repo/.git/pdd/runs/10",
+              "sourceRoot": "/work/repo",
+              "state": "completed",
+              "repo": "promptdriven/pdd",
+              "gate": null
+            }
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "runDir": "/work/repo/.git/pdd/runs/10"
+          },
+          "result": {
+            "run": {
+              "runId": "run-10000001",
+              "root": "/work/wt/issue-10",
+              "branch": "pdd/issue-10",
+              "runDir": "/work/repo/.git/pdd/runs/10",
+              "sourceRoot": "/work/repo",
+              "state": "completed",
+              "repo": "promptdriven/pdd",
+              "gate": null
+            }
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "runDir": "/work/repo/.git/pdd/runs/10"
+          },
+          "result": {
+            "run": {
+              "runId": "run-10000001",
+              "root": "/work/wt/issue-10",
+              "branch": "pdd/issue-10",
+              "runDir": "/work/repo/.git/pdd/runs/10",
+              "sourceRoot": "/work/repo",
+              "state": "completed",
+              "repo": "promptdriven/pdd",
+              "gate": null
+            }
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "runDir": "/work/repo-keep/.git/pdd/runs/20"
+          },
+          "result": {
+            "run": {
+              "runId": "run-20000002",
+              "root": "/work/wt/issue-20",
+              "branch": "pdd/issue-20",
+              "runDir": "/work/repo-keep/.git/pdd/runs/20",
+              "sourceRoot": "/work/repo-keep",
+              "state": "completed",
+              "repo": "promptdriven/pdd",
+              "gate": null
+            }
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "runDir": "/work/repo-keep/.git/pdd/runs/20"
+          },
+          "result": {
+            "run": {
+              "runId": "run-20000002",
+              "root": "/work/wt/issue-20",
+              "branch": "pdd/issue-20",
+              "runDir": "/work/repo-keep/.git/pdd/runs/20",
+              "sourceRoot": "/work/repo-keep",
+              "state": "completed",
+              "repo": "promptdriven/pdd",
+              "gate": null
+            }
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "runs.lookup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/lookup",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/work/repo",
+            "runId": "run-10000001",
+            "branch": "pdd/issue-10"
+          },
+          "result": {
+            "state": "ready",
+            "assignment": {
+              "worktreePath": "/work/wt/issue-10",
+              "branch": "pdd/issue-10",
+              "runId": "run-10000001"
+            }
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/work/repo-keep",
+            "runId": "run-20000002",
+            "branch": "pdd/issue-20"
+          },
+          "result": {
+            "state": "ready",
+            "assignment": {
+              "worktreePath": "/work/wt/issue-20",
+              "branch": "pdd/issue-20",
+              "runId": "run-20000002"
+            }
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "runs.lock": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/lock",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "runDir": "/work/repo/.git/pdd/runs/10"
+          },
+          "result": {
+            "acquired": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "runDir": "/work/repo-keep/.git/pdd/runs/20"
+          },
+          "result": {
+            "acquired": true
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "process.execute": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/execute",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "file": "gh",
+            "args": [
+              "pr",
+              "list",
+              "--repo",
+              "promptdriven/pdd",
+              "--state",
+              "all",
+              "--head",
+              "pdd/issue-10",
+              "--limit",
+              "100",
+              "--json",
+              "state,headRefName"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "[{\"state\":\"MERGED\",\"headRefName\":\"pdd/issue-10\"}]\n"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "file": "git",
+            "args": [
+              "symbolic-ref",
+              "--quiet",
+              "--short",
+              "HEAD"
+            ],
+            "cwd": "/work/wt/issue-10"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "pdd/issue-10\n"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "file": "git",
+            "args": [
+              "status",
+              "--porcelain=v1",
+              "--untracked-files=all"
+            ],
+            "cwd": "/work/wt/issue-10"
+          },
+          "result": {
+            "code": 0,
+            "stdout": ""
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-list",
+              "--count",
+              "@{upstream}..HEAD"
+            ],
+            "cwd": "/work/wt/issue-10"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "0\n"
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--verify",
+              "HEAD"
+            ],
+            "cwd": "/work/wt/issue-10"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "1111111111111111111111111111111111111111\n"
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--verify",
+              "@{upstream}"
+            ],
+            "cwd": "/work/wt/issue-10"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "1111111111111111111111111111111111111111\n"
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {
+            "file": "git",
+            "args": [
+              "worktree",
+              "remove",
+              "/work/wt/issue-10"
+            ],
+            "cwd": "/work/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": ""
+          }
+        },
+        {
+          "call_index": 8,
+          "args": {
+            "file": "gh",
+            "args": [
+              "pr",
+              "list",
+              "--repo",
+              "promptdriven/pdd",
+              "--state",
+              "all",
+              "--head",
+              "pdd/issue-20",
+              "--limit",
+              "100",
+              "--json",
+              "state,headRefName"
+            ],
+            "cwd": "/work/repo-keep"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "[{\"state\":\"OPEN\",\"headRefName\":\"pdd/issue-20\"}]\n"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "remove-ended-worktree",
+      "entry_path": "prompts/cli/autopilot-cleanup.prompt.md",
+      "operation": "cleanupWorktrees",
+      "input": {
+        "cwd": "/work/repo",
+        "repository": "promptdriven/pdd"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "removed": [
+              "run-10000001"
+            ],
+            "kept": []
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/counters/lock",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/counters/execute",
+          "op": "equals",
+          "value": 7
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "keep-open-pr-worktree",
+      "entry_path": "prompts/cli/autopilot-cleanup.prompt.md",
+      "operation": "cleanupWorktrees",
+      "input": {
+        "cwd": "/work/repo-keep",
+        "repository": "promptdriven/pdd"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "removed": [],
+            "kept": [
+              "run-20000002"
+            ]
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/lock",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/counters/execute",
+          "op": "equals",
+          "value": 8
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

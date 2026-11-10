@@ -1,0 +1,717 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/interpreter-queue-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`interpreterQueueEnvironment`, `acquireInterpreterSlot`, `markInterpreterDispatch` and `observeInterpreterRequest` resolve queue settings, allocate and mark running tickets, record terminal verdicts in `ticket-1.json` and `capacity.json`, and raise `local-state-unavailable` for relative paths, duplicate requests or repeated dispatch marks."
+    },
+    {
+      "id": "AC2",
+      "text": "`readInterpreterProgress`, `interpreterStatusWords` and `configureInterpreterTestMode` report ticket progress and status lines, persist test-mode owner leases in `capacity.json`, and return empty progress or raise `local-state-unavailable` when no matching records exist or the owner is blank."
+    }
+  ],
+  "initial_world": {
+    "files": {},
+    "mkdirs": [],
+    "locks": [],
+    "messages": [],
+    "counters": {
+      "readdir": 0,
+      "pid": 0,
+      "alive": 0,
+      "interrupted": 0,
+      "now": 0
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": null
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "fs.readdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/readdir",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/tmp/pdd-interp"
+          },
+          "result": {
+            "exists": false,
+            "isDirectory": false,
+            "entries": []
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "path": "/tmp/pdd-interp"
+          },
+          "result": {
+            "exists": true,
+            "isDirectory": true,
+            "entries": [
+              "ticket-1.json"
+            ]
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "path": "/tmp/pdd-interp"
+          },
+          "result": {
+            "exists": true,
+            "isDirectory": true,
+            "entries": [
+              "ticket-1.json"
+            ]
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "path": "/tmp/pdd-interp"
+          },
+          "result": {
+            "exists": true,
+            "isDirectory": true,
+            "entries": [
+              "ticket-1.json"
+            ]
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "path": "/tmp/pdd-interp"
+          },
+          "result": {
+            "exists": true,
+            "isDirectory": true,
+            "entries": [
+              "ticket-1.json"
+            ]
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "path": "/tmp/pdd-interp"
+          },
+          "result": {
+            "exists": true,
+            "isDirectory": true,
+            "entries": [
+              "ticket-1.json"
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "fs.mkdir": {
+      "action": "port.write",
+      "world_pointer": "/mkdirs",
+      "result_template": {}
+    },
+    "lock.acquire": {
+      "action": "port.write",
+      "world_pointer": "/locks",
+      "result_template": {
+        "acquired": true
+      }
+    },
+    "process.pid": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/pid",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "pid": 4242
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "pid": 4242
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "pid": 4242
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {},
+          "result": {
+            "pid": 4242
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "process.alive": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/alive",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "pid": 4242
+          },
+          "result": {
+            "alive": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "pid": 4242
+          },
+          "result": {
+            "alive": true
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "pid": 4242
+          },
+          "result": {
+            "alive": true
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "process.interrupted": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/interrupted",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "interrupted": false
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "interrupted": false
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "interrupted": false
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {},
+          "result": {
+            "interrupted": false
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {},
+          "result": {
+            "interrupted": false
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {},
+          "result": {
+            "interrupted": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "clock.now": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/now",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "milliseconds": 100000
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "milliseconds": 100000
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "milliseconds": 100000
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {},
+          "result": {
+            "milliseconds": 100000
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {},
+          "result": {
+            "milliseconds": 100000
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {},
+          "result": {
+            "milliseconds": 100000
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {},
+          "result": {
+            "milliseconds": 105000
+          }
+        },
+        {
+          "call_index": 8,
+          "args": {},
+          "result": {
+            "milliseconds": 105000
+          }
+        },
+        {
+          "call_index": 9,
+          "args": {},
+          "result": {
+            "milliseconds": 105000
+          }
+        },
+        {
+          "call_index": 10,
+          "args": {},
+          "result": {
+            "milliseconds": 110000
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "output.say": {
+      "action": "port.write",
+      "world_pointer": "/messages",
+      "result_template": {}
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "env-valid-warning",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "interpreterQueueEnvironment",
+      "input": {
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp",
+          "PDD_INTERPRETER_CONCURRENCY": "invalid"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp",
+            "PDD_INTERPRETER_CONCURRENCY": "2"
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/messages/0/text",
+          "op": "equals",
+          "value": "Warning: PDD_INTERPRETER_CONCURRENCY must be a positive safe integer; using 2."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "env-relative-error",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "interpreterQueueEnvironment",
+      "input": {
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "relative/queue"
+        }
+      },
+      "expected_error": "local-state-unavailable",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "local-state-unavailable"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "acquire-slot-ok",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "acquireInterpreterSlot",
+      "input": {
+        "cwd": "/work/repo",
+        "origin": "https://runtime.promptdriven.ai",
+        "requestId": "req-1",
+        "kind": "lint",
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp",
+          "PDD_INTERPRETER_CONCURRENCY": "2"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "root": "/tmp/pdd-interp",
+            "ticket": 1
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1tmp~1pdd-interp~1ticket-1.json/content",
+          "op": "contains",
+          "value": "\"state\":\"running\""
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "acquire-slot-duplicate-error",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "acquireInterpreterSlot",
+      "input": {
+        "cwd": "/work/repo",
+        "origin": "https://runtime.promptdriven.ai",
+        "requestId": "req-1",
+        "kind": "lint",
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp",
+          "PDD_INTERPRETER_CONCURRENCY": "2"
+        }
+      },
+      "expected_error": "local-state-unavailable",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "local-state-unavailable"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "mark-dispatch-ok",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "markInterpreterDispatch",
+      "input": {
+        "root": "/tmp/pdd-interp",
+        "ticket": 1
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1tmp~1pdd-interp~1ticket-1.json/content",
+          "op": "contains",
+          "value": "\"dispatched\":true"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "mark-dispatch-twice-error",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "markInterpreterDispatch",
+      "input": {
+        "root": "/tmp/pdd-interp",
+        "ticket": 1
+      },
+      "expected_error": "local-state-unavailable",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "local-state-unavailable"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "observe-verdict-ok",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "observeInterpreterRequest",
+      "input": {
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp",
+          "PDD_INTERPRETER_CONCURRENCY": "2"
+        },
+        "origin": "https://runtime.promptdriven.ai",
+        "requestId": "req-1",
+        "outcome": "verdict",
+        "terminal": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1tmp~1pdd-interp~1ticket-1.json/content",
+          "op": "contains",
+          "value": "\"outcome\":\"verdict\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1tmp~1pdd-interp~1capacity.json/content",
+          "op": "contains",
+          "value": "\"limit\":2"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "observe-relative-error",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "observeInterpreterRequest",
+      "input": {
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "relative/queue"
+        },
+        "origin": "https://runtime.promptdriven.ai",
+        "requestId": "req-1",
+        "outcome": "verdict",
+        "terminal": true
+      },
+      "expected_error": "local-state-unavailable",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "local-state-unavailable"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-progress-finished",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "readInterpreterProgress",
+      "input": {
+        "cwd": "/work/repo",
+        "since": 0,
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "finished"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/requests",
+          "op": "count",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-progress-empty",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "readInterpreterProgress",
+      "input": {
+        "cwd": "/work/other",
+        "since": 0,
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/requests",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "status-words-waiting",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "interpreterStatusWords",
+      "input": {
+        "progress": {
+          "state": "waiting",
+          "position": 2
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "waiting for an interpreter slot (position 2)"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "status-words-unavailable",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "interpreterStatusWords",
+      "input": {
+        "progress": {
+          "state": "unavailable",
+          "position": null,
+          "reason": "Queue root is not a directory."
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "interpreter queue unavailable: Queue root is not a directory."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "test-mode-enable",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "configureInterpreterTestMode",
+      "input": {
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp"
+        },
+        "owner": "/work/repo",
+        "enabled": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/~1tmp~1pdd-interp~1capacity.json/content",
+          "op": "contains",
+          "value": "\"/work/repo\""
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "test-mode-missing-owner",
+      "entry_path": "prompts/cli/interpreter-queue.prompt.md",
+      "operation": "configureInterpreterTestMode",
+      "input": {
+        "env": {
+          "PDD_INTERPRETER_QUEUE": "/tmp/pdd-interp"
+        },
+        "owner": "",
+        "enabled": true
+      },
+      "expected_error": "local-state-unavailable",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "local-state-unavailable"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

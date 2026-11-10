@@ -93,16 +93,14 @@ applying retry-only load, pressure, tool and queue restrictions.
 Node filesystem and OS adapters supply bounded local host observations. No hosted
 interpreter binding is declared; native tests cover the public module boundary.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-Only the supplied-data classification, recovery and wake operations are declared. environmentHealthy and machineHealth host/process/queue probes remain native. The previous unbound statement applies to those effects. Native evidence owners: test/autopilot-environment-health.test.mjs, test/autopilot-environment-isolation.test.mjs, test/autopilot-environment-retry.test.mjs, test/autopilot-environment-tick.test.mjs.
+Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. In the Runtime interface, `machineHealth({cwd})` and `environmentHealthy({cwd, reason, platform, suiteLimit, env})` use `host.machineResources({cwd})`, `host.toolPresent({tool})`, `fs.readdir({path})`, `files.read({path})` and `process.alive({pid})`, returning `{healthy, causes, resources}` (`causes` are `"Available memory is below 10% or cannot be read"` and `"Free disk is below 1 GiB or 5% or cannot be read"`) and `{healthy}` respectively without throwing. Native OS signal probing and filesystem access stay a native obligation covered by `test/autopilot-environment-health.test.mjs`, `test/autopilot-environment-isolation.test.mjs`, `test/autopilot-environment-retry.test.mjs` and `test/autopilot-environment-tick.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "037cfb93505e4bbd349b4222edf0c8fd7842cc6df462183c63a9d1ef11bed825",
+  "prose_sha256": "fb3b82223106e3b51ad33a858f2aeb61cbd9c78eff057cd5b976ba6c4de47713",
   "entries": [
     {
       "operation": "classifyStuckCause",
@@ -238,16 +236,543 @@ Only the supplied-data classification, recovery and wake operations are declared
       },
       "errors": [],
       "resource_operations": []
+    },
+    {
+      "operation": "machineHealth",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "healthy": {
+            "type": "boolean"
+          },
+          "causes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resources": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "cpuCount": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "load": {
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "memory": {
+                    "type": "object",
+                    "properties": {
+                      "available": {
+                        "oneOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "total": {
+                        "oneOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "available",
+                      "total"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "pressure": {
+                    "type": "object",
+                    "properties": {
+                      "io": {
+                        "oneOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "memory": {
+                        "oneOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "io",
+                      "memory"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "disk": {
+                    "type": "object",
+                    "properties": {
+                      "available": {
+                        "oneOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "total": {
+                        "oneOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "available",
+                      "total"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "cpuCount",
+                  "load",
+                  "memory",
+                  "pressure",
+                  "disk"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "healthy",
+          "causes",
+          "resources"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "host.machineResources"
+      ]
+    },
+    {
+      "operation": "environmentHealthy",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "suiteLimit": {
+            "type": "integer"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_SUITE_QUEUE": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "cwd",
+          "reason",
+          "platform",
+          "suiteLimit",
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "healthy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "healthy"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "host.machineResources",
+        "host.toolPresent",
+        "fs.readdir",
+        "files.read",
+        "process.alive"
+      ]
     }
   ],
   "calls": [],
-  "resources": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "exists",
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "process",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "alive",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pid"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "alive": {
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "alive"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "host",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "machineResources",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "cpuCount": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "load": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "memory": {
+                "type": "object",
+                "properties": {
+                  "available": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "total": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "available",
+                  "total"
+                ],
+                "additionalProperties": false
+              },
+              "pressure": {
+                "type": "object",
+                "properties": {
+                  "io": {
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "memory": {
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "io",
+                  "memory"
+                ],
+                "additionalProperties": false
+              },
+              "disk": {
+                "type": "object",
+                "properties": {
+                  "available": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "total": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "available",
+                  "total"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "cpuCount",
+              "load",
+              "memory",
+              "pressure",
+              "disk"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "toolPresent",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tool"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "present": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "present"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
   "limits": {
     "max_steps": 64,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>
