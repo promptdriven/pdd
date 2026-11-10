@@ -73,14 +73,20 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
 
 - Load the complete [Prompting guide](../../docs/prompting-guide.md) for authoring/generation; it owns module contracts and preservation.
 - Runtime: Node `child_process.execFile`, `crypto.randomUUID`, `fs/promises`, `fs.constants`, `path`, `util`, and installed normal Git. Filesystem metadata creation/reads/fsync are helper-owned; execFile is the sole injected port. Tests use disposable real local repositories and injected command failures, with no live GitHub/native actions.
-- In Runtime checks, `git.execFile({file, args, cwd})` binds `ports.execFile`, and `fs` (`inspectPath`, `readRecord`, `saveClaim`, `unlinkClaim`) binds canonical path checks and durable run-index/issue-claim records; `githubOriginRepository` returns `{repository}`. Real hardlink inodes, directory fsyncs and concurrent process races stay in `test/workflow-worktree.test.mjs`.
+- In Runtime checks, `git.execFile({file, args, cwd})` binds `ports.execFile`; `files` (`stat`, `read`, `write`) binds durable JSON records under `<commonDir>/pdd/worktree-assignments/`; and `fs` (`statPath`, `link`, `unlink`, `randomUUID`) supplies `lstat`/`realpath` inode and canonical-path metadata (`dev`, `ino`, `nlink`, `isDirectory`, `isFile`, `canonicalPath`), hard-link creation, claim removal, and UUIDv4 generation, while `githubOriginRepository` returns `{repository}`:
+  1. For every operation other than `githubOriginRepository`, first resolve checkout context in `cwd` by calling `git.execFile` three times in this exact order: `["rev-parse", "--show-toplevel"]` (`sourceRoot`), `["rev-parse", "--path-format=absolute", "--git-common-dir"]` (`commonDir`), and `["remote", "get-url", "origin"]` (parsed with `githubOriginRepository`), and verify `sourceRoot` and `commonDir` with `fs.statPath`.
+  2. In `lookupRepositoryParent`: if `repository` disagrees with the origin repository or `commonDir` disagrees with the resolved `commonDir`, return `{"state": "recovery_required", "root": null, "bare": null}` without further `git.execFile` calls. Otherwise call `git.execFile` once in `sourceRoot` with `["worktree", "list", "--porcelain", "-z"]`, verify primary `R` with `fs.statPath`, and when `R === sourceRoot` (no `bare` token), return `{"state": "ready", "root": R, "bare": false}`.
+  3. In `allocateIssueWorktree`: if `repository` disagrees with the origin repository, return `{"state": "conflict", "assignment": null, "message": "The requested repository does not match this checkout origin."}` without further `git.execFile` calls. Otherwise check `files.stat` on `runPath = "<commonDir>/pdd/worktree-assignments/runs/<runId>.json"` and `issuePath = "<commonDir>/pdd/worktree-assignments/issues/<issueNumber>.json"`. When both have `exists: false`, call `git.execFile` in `sourceRoot` with `["worktree", "list", "--porcelain", "-z"]` and `["rev-parse", "--verify", baseRef]`, verify `<R>.pdd-worktrees` with `fs.statPath`, call `fs.randomUUID({})` for `<UUID>`, write `JSON.stringify(assignment) + "\n"` with `files.write({path: runPath, content})`, link the claim with `fs.link({sourcePath: runPath, targetPath: issuePath})`, call `git.execFile` in `sourceRoot` with `["worktree", "add", "-b", branch, worktreePath, baseSha]`, and reconcile the worktree by calling `git.execFile` four times in this exact order: `["worktree", "list", "--porcelain", "-z"]` in `sourceRoot`, then `["rev-parse", "--path-format=absolute", "--git-dir"]`, `["symbolic-ref", "--quiet", "--short", "HEAD"]`, and `["rev-parse", "--verify", "HEAD"]` in `worktreePath`.
+  4. In `lookupIssueWorktree`: check `files.stat({path: runPath})`. If `exists` is false, return `{"state": "recovery_required", "assignment": null, "message": "The original worktree assignment is absent, incomplete or changed. Inspect this same run; do not allocate again."}` without further `git.execFile` calls. Otherwise read `runPath` and `issuePath` with `files.read`, verify with `fs.statPath` that both records share `dev`, `ino` and `nlink === 2` and that `worktreePath`, `<worktreePath>/.git` and `gitDir` match, and reconcile by calling `git.execFile` four times in this exact order: `["worktree", "list", "--porcelain", "-z"]` in `sourceRoot`, then `["rev-parse", "--path-format=absolute", "--git-dir"]`, `["symbolic-ref", "--quiet", "--short", "HEAD"]`, and `["rev-parse", "--verify", "HEAD"]` in `worktreePath`.
+  5. In `releaseIssueClaim`: check `files.stat({path: issuePath})`. If `exists` is false, return `{"state": "released", "assignment": null, "message": "The issue has no claim."}`. Otherwise read `issuePath` with `files.read` and verify `issuePath` with `fs.statPath`; if `claim.runId !== runId || claim.issueNumber !== issueNumber`, return `{"state": "conflict", "assignment": null, "message": "The issue claim belongs to another run."}` without calling `fs.unlink`. Otherwise call `fs.unlink({path: issuePath})` and return `{"state": "released", "assignment": null, "message": "The issue claim is free; the old worktree and branch stay."}`.
+  Real `O_EXCL` creation, directory fsyncs and concurrent process races stay in `test/workflow-worktree.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "678cda8c43cc6a2cb855bd543016e6bcf08ef3e93c5240da36c34cfadcc4b25a",
+  "prose_sha256": "af669a5767b8a3244aa9c7f1fdc9fab4b89e0e42599bacfc8c3f1a6b7fc76794",
   "entries": [
     {
       "operation": "githubOriginRepository",
@@ -181,7 +187,7 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
       "errors": [],
       "resource_operations": [
         "git.execFile",
-        "fs.inspectPath"
+        "fs.statPath"
       ]
     },
     {
@@ -308,9 +314,12 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
       "errors": [],
       "resource_operations": [
         "git.execFile",
-        "fs.inspectPath",
-        "fs.readRecord",
-        "fs.saveClaim"
+        "files.stat",
+        "files.read",
+        "files.write",
+        "fs.statPath",
+        "fs.link",
+        "fs.randomUUID"
       ]
     },
     {
@@ -424,8 +433,9 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
       "errors": [],
       "resource_operations": [
         "git.execFile",
-        "fs.inspectPath",
-        "fs.readRecord"
+        "files.stat",
+        "files.read",
+        "fs.statPath"
       ]
     },
     {
@@ -477,9 +487,10 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
       "errors": [],
       "resource_operations": [
         "git.execFile",
-        "fs.inspectPath",
-        "fs.readRecord",
-        "fs.unlinkClaim"
+        "files.stat",
+        "files.read",
+        "fs.statPath",
+        "fs.unlink"
       ]
     }
   ],
@@ -531,8 +542,107 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
             },
             "required": [
               "stdout",
+              "stderr",
               "code"
             ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
             "additionalProperties": false
           }
         }
@@ -544,7 +654,7 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
       "access": "write",
       "operations": [
         {
-          "name": "inspectPath",
+          "name": "statPath",
           "access": "read",
           "arguments_schema": {
             "type": "object",
@@ -572,20 +682,67 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
               },
               "canonicalPath": {
                 "type": "string"
+              },
+              "dev": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ino": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "nlink": {
+                "type": "integer",
+                "minimum": 0
               }
             },
             "required": [
               "exists",
               "isDirectory",
               "isFile",
-              "canonicalPath"
+              "canonicalPath",
+              "dev",
+              "ino",
+              "nlink"
             ],
             "additionalProperties": false
           }
         },
         {
-          "name": "readRecord",
-          "access": "read",
+          "name": "link",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "sourcePath": {
+                "type": "string"
+              },
+              "targetPath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sourcePath",
+              "targetPath"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "linked": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "linked"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "unlink",
+          "access": "write",
           "arguments_schema": {
             "type": "object",
             "properties": {
@@ -601,91 +758,6 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
           "result_schema": {
             "type": "object",
             "properties": {
-              "exists": {
-                "type": "boolean"
-              },
-              "validLink": {
-                "type": "boolean"
-              },
-              "json": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "exists",
-              "validLink",
-              "json"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "saveClaim",
-          "access": "write",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "runPath": {
-                "type": "string"
-              },
-              "issuePath": {
-                "type": "string"
-              },
-              "json": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "runPath",
-              "issuePath",
-              "json"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "status": {
-                "type": "string",
-                "enum": [
-                  "saved",
-                  "run_exists",
-                  "issue_exists",
-                  "error"
-                ]
-              }
-            },
-            "required": [
-              "status"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "unlinkClaim",
-          "access": "write",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "issuePath": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "issuePath"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
               "removed": {
                 "type": "boolean"
               }
@@ -695,13 +767,35 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
             ],
             "additionalProperties": false
           }
+        },
+        {
+          "name": "randomUUID",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "uuid": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uuid"
+            ],
+            "additionalProperties": false
+          }
         }
       ]
     }
   ],
   "limits": {
-    "max_steps": 32,
-    "max_model_calls": 12
+    "max_steps": 40,
+    "max_model_calls": 16
   },
   "conventions": []
 }

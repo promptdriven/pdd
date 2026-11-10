@@ -50,24 +50,7 @@
         }
       }
     ],
-    "exec_cases": [
-      {
-        "cwd": "/work/ok",
-        "reply": {
-          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4999\r\nx-ratelimit-limit: 5000\r\nx-ratelimit-reset: 200\r\n\r\n{}",
-          "stderr": "",
-          "exitCode": 0
-        }
-      },
-      {
-        "cwd": "/work/fail",
-        "reply": {
-          "stdout": "",
-          "stderr": "gh: HTTP 502",
-          "exitCode": 1
-        }
-      }
-    ],
+    "exec_calls": 0,
     "runs": [
       {
         "cwd": "/work/ok",
@@ -85,6 +68,8 @@
     "cost_records": [],
     "clock_calls": [],
     "ledgers": [],
+    "counted_runners": [],
+    "native_runners": [],
     "etag_caches": [],
     "floor_guards": []
   },
@@ -117,7 +102,7 @@
       "path_argument_pointer": "/path",
       "content_argument_pointer": "/content",
       "result_template": {},
-      "result_value_pointer": ""
+      "result_value_pointer": null
     },
     "fs.readdir": {
       "action": "collection.get",
@@ -132,18 +117,84 @@
       "result_value_pointer": ""
     },
     "exec.run": {
-      "action": "collection.get",
-      "world_pointer": "/exec_cases",
-      "key_argument_pointer": "/cwd",
-      "value_argument_pointer": null,
-      "item_key_pointer": "/cwd",
-      "item_value_pointer": "/reply",
-      "result_template": {
-        "stdout": "",
-        "stderr": "exec failed",
-        "exitCode": 1
-      },
-      "result_value_pointer": ""
+      "action": "fixture.lookup",
+      "world_pointer": "/exec_calls",
+      "result_template": null,
+      "result_value_pointer": "",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/issues"
+            ],
+            "options": {
+              "cwd": "/work/ok"
+            }
+          },
+          "result": {
+            "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4999\r\nx-ratelimit-limit: 5000\r\nx-ratelimit-reset: 200\r\n\r\n{}",
+            "stderr": "",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/issues"
+            ],
+            "options": {
+              "cwd": "/work/fail"
+            }
+          },
+          "result": {
+            "stdout": "",
+            "stderr": "gh: HTTP 502",
+            "exitCode": 1
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/issues"
+            ],
+            "options": {
+              "cwd": "/work/ok"
+            }
+          },
+          "result": {
+            "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4998\r\nx-ratelimit-limit: 5000\r\nx-ratelimit-reset: 200\r\n\r\n{}",
+            "stderr": "",
+            "exitCode": 0
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "file": "gh",
+            "args": [
+              "api",
+              "repos/promptdriven/pdd/issues"
+            ],
+            "options": {
+              "cwd": "/work/fail"
+            }
+          },
+          "result": {
+            "stdout": "",
+            "stderr": "gh: HTTP 503",
+            "exitCode": 1
+          }
+        }
+      ]
     },
     "clock.now": {
       "action": "port.write",
@@ -184,6 +235,54 @@
     "ledgers.load": {
       "action": "collection.get",
       "world_pointer": "/ledgers",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    },
+    "counted_runners.store": {
+      "action": "collection.merge",
+      "world_pointer": "/counted_runners",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/config",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    },
+    "counted_runners.load": {
+      "action": "collection.get",
+      "world_pointer": "/counted_runners",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    },
+    "native_runners.store": {
+      "action": "collection.merge",
+      "world_pointer": "/native_runners",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/config",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    },
+    "native_runners.load": {
+      "action": "collection.get",
+      "world_pointer": "/native_runners",
       "key_argument_pointer": "/handle",
       "value_argument_pointer": null,
       "item_key_pointer": "/handle",
@@ -533,8 +632,12 @@
       "input": {
         "endpoint": "repos/promptdriven/pdd/issues?per_page=2",
         "items": [
-          1,
-          2
+          {
+            "id": 1
+          },
+          {
+            "id": 2
+          }
         ],
         "next": ""
       },
@@ -556,7 +659,9 @@
       "input": {
         "endpoint": "repos/promptdriven/pdd/issues?per_page=2",
         "items": [
-          1
+          {
+            "id": 1
+          }
         ],
         "next": ""
       },
@@ -665,7 +770,7 @@
           }
         },
         "entry": {
-          "at": 95000,
+          "at": 7900000,
           "api": "rest",
           "purpose": "pulls",
           "status": 200
@@ -674,10 +779,17 @@
       "checks": [
         {
           "criterion_id": "AC2",
-          "target": "result",
-          "path": "",
+          "target": "world",
+          "path": "/files/~1state~1github~1bf4e28e0718a385f034b.jsonl/content",
+          "op": "contains",
+          "value": "\"at\":7900000"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
           "op": "equals",
-          "value": {}
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -703,10 +815,17 @@
       "checks": [
         {
           "criterion_id": "AC2",
-          "target": "result",
-          "path": "",
+          "target": "world",
+          "path": "/files/~1empty~1github~1bf4e28e0718a385f034b.jsonl/content",
+          "op": "contains",
+          "value": "\"status\":null"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
           "op": "equals",
-          "value": {}
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -727,10 +846,47 @@
       "checks": [
         {
           "criterion_id": "AC2",
-          "target": "result",
-          "path": "",
+          "target": "world",
+          "path": "/files/~1state~1github~1bf4e28e0718a385f034b.jsonl/content",
+          "op": "contains",
+          "value": "\"at\":7900000"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
           "op": "equals",
-          "value": {}
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ledger-read-after-compact",
+      "entry_path": "prompts/cli/github-calls.prompt.md",
+      "operation": "read",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "ledger-create",
+            "path": "/handle"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/entries",
+          "op": "count",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/entries/0/at",
+          "op": "equals",
+          "value": 7900000
         }
       ],
       "model": "gpt-6.1-sol"
@@ -751,10 +907,17 @@
       "checks": [
         {
           "criterion_id": "AC2",
-          "target": "result",
-          "path": "",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
           "op": "equals",
-          "value": {}
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/~1empty~1github~1bf4e28e0718a385f034b.jsonl/content",
+          "op": "contains",
+          "value": "\"at\":96000"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -771,8 +934,22 @@
           "criterion_id": "AC2",
           "target": "result",
           "path": "/entries",
+          "op": "count",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/entries/0/at",
           "op": "equals",
-          "value": []
+          "value": 7900000
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/entries/0/purpose",
+          "op": "equals",
+          "value": "pulls"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -796,21 +973,45 @@
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "count-calls-ok",
+      "step_id": "count-runner-create",
       "entry_path": "prompts/cli/github-calls.prompt.md",
       "operation": "countGithubCalls",
       "input": {
+        "purpose": "issues",
+        "ledger": {
+          "file": "/state/github/bf4e28e0718a385f034b.jsonl",
+          "repository": "promptdriven/pdd"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/counted_runners/0/handle",
+          "op": "exists"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "count-calls-ok",
+      "entry_path": "prompts/cli/github-calls.prompt.md",
+      "operation": "runCountedGithubCall",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "count-runner-create",
+            "path": "/handle"
+          }
+        },
         "file": "gh",
         "args": [
           "api",
           "repos/promptdriven/pdd/issues"
         ],
         "options": {
-          "cwd": "/work/ok"
-        },
-        "purpose": "issues",
-        "ledger": {
-          "file": "/state/github/bf4e28e0718a385f034b.jsonl",
+          "cwd": "/work/ok",
+          "purpose": "pulls",
           "repository": "promptdriven/pdd"
         }
       },
@@ -821,6 +1022,27 @@
           "path": "/exitCode",
           "op": "equals",
           "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/exec_calls",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/files/~1state~1github~1bf4e28e0718a385f034b.jsonl/content",
+          "op": "contains",
+          "value": "\"remaining\":4999"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -828,8 +1050,14 @@
     {
       "step_id": "count-calls-fail",
       "entry_path": "prompts/cli/github-calls.prompt.md",
-      "operation": "countGithubCalls",
+      "operation": "runCountedGithubCall",
       "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "count-runner-create",
+            "path": "/handle"
+          }
+        },
         "file": "gh",
         "args": [
           "api",
@@ -837,9 +1065,7 @@
         ],
         "options": {
           "cwd": "/work/fail"
-        },
-        "purpose": null,
-        "ledger": null
+        }
       },
       "expected_error": "exec-failed",
       "checks": [
@@ -849,23 +1075,36 @@
           "path": "/code",
           "op": "equals",
           "value": "exec-failed"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/exec_calls",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/files/~1state~1github~1bf4e28e0718a385f034b.jsonl/content",
+          "op": "contains",
+          "value": "\"status\":502"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "native-counter-ok",
+      "step_id": "native-runner-create",
       "entry_path": "prompts/cli/github-calls.prompt.md",
       "operation": "nativeGithubCounter",
       "input": {
-        "file": "gh",
-        "args": [
-          "api",
-          "repos/promptdriven/pdd/issues"
-        ],
-        "options": {
-          "cwd": "/work/ok"
-        },
         "env": {
           "HOME": "/home/dev"
         },
@@ -875,10 +1114,80 @@
       "checks": [
         {
           "criterion_id": "AC3",
+          "target": "world",
+          "path": "/native_runners/0/handle",
+          "op": "exists"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "native-counter-ok",
+      "entry_path": "prompts/cli/github-calls.prompt.md",
+      "operation": "runNativeGithubCounter",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "native-runner-create",
+            "path": "/handle"
+          }
+        },
+        "file": "gh",
+        "args": [
+          "api",
+          "repos/promptdriven/pdd/issues"
+        ],
+        "options": {
+          "cwd": "/work/ok",
+          "purpose": "claims",
+          "repository": "promptdriven/pdd"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/exec_calls",
+          "op": "equals",
+          "value": 3
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/cost_records/0",
+          "op": "equals",
+          "value": {
+            "runDir": "/work/repo/.git/pdd/runs/10",
+            "at": 100000
+          }
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/files/~1state~1github~1bf4e28e0718a385f034b.jsonl/content",
+          "op": "contains",
+          "value": "\"remaining\":4998"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/github-calls-cost-recordGithub",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -886,8 +1195,14 @@
     {
       "step_id": "native-counter-fail",
       "entry_path": "prompts/cli/github-calls.prompt.md",
-      "operation": "nativeGithubCounter",
+      "operation": "runNativeGithubCounter",
       "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "native-runner-create",
+            "path": "/handle"
+          }
+        },
         "file": "gh",
         "args": [
           "api",
@@ -895,12 +1210,7 @@
         ],
         "options": {
           "cwd": "/work/fail"
-        },
-        "env": {
-          "HOME": "/home/dev"
-        },
-        "stateRoot": "/state",
-        "purpose": null
+        }
       },
       "expected_error": "exec-failed",
       "checks": [
@@ -910,6 +1220,34 @@
           "path": "/code",
           "op": "equals",
           "value": "exec-failed"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/exec_calls",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/files/~1state~1github~1bf4e28e0718a385f034b.jsonl/content",
+          "op": "contains",
+          "value": "\"status\":503"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/github-calls-cost-recordGithub",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1053,6 +1391,42 @@
       "model": "gpt-6.1-sol"
     },
     {
+      "step_id": "budget-low",
+      "entry_path": "prompts/cli/github-calls.prompt.md",
+      "operation": "githubBudget",
+      "input": {
+        "usage": {
+          "counted": 1500,
+          "rate": {
+            "core": {
+              "remaining": 3500,
+              "limit": 5000,
+              "resetAt": 200000
+            }
+          }
+        },
+        "share": 30,
+        "floor": 1000
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "low"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/allowed",
+          "op": "equals",
+          "value": 1500
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
       "step_id": "budget-reserve",
       "entry_path": "prompts/cli/github-calls.prompt.md",
       "operation": "githubBudget",
@@ -1188,10 +1562,10 @@
       "checks": [
         {
           "criterion_id": "AC5",
-          "target": "result",
-          "path": "",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
           "op": "equals",
-          "value": {}
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1264,10 +1638,17 @@
       "checks": [
         {
           "criterion_id": "AC5",
-          "target": "result",
-          "path": "",
+          "target": "calls",
+          "path": "/resources/github-calls-etag_caches-store",
           "op": "equals",
-          "value": {}
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/github-calls-clock-now",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1292,10 +1673,17 @@
       "checks": [
         {
           "criterion_id": "AC5",
-          "target": "result",
-          "path": "",
+          "target": "calls",
+          "path": "/resources/github-calls-etag_caches-store",
           "op": "equals",
-          "value": {}
+          "value": 0
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/github-calls-clock-now",
+          "op": "equals",
+          "value": 0
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1315,10 +1703,41 @@
       "checks": [
         {
           "criterion_id": "AC5",
-          "target": "result",
-          "path": "",
+          "target": "calls",
+          "path": "/resources/github-calls-files-write",
           "op": "equals",
-          "value": {}
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/files/~1state~1github~1bf4e28e0718a385f034b.etags.json/content",
+          "op": "contains",
+          "value": "\"w2\""
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "etag-get-after-save",
+      "entry_path": "prompts/cli/github-calls.prompt.md",
+      "operation": "get",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "etag-create",
+            "path": "/handle"
+          }
+        },
+        "endpoint": "repos/promptdriven/pdd/pulls"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/entry/etag",
+          "op": "equals",
+          "value": "\"w2\""
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1365,6 +1784,37 @@
           "target": "world",
           "path": "/floor_guards/1/handle",
           "op": "exists"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "guard-seeded-blocked",
+      "entry_path": "prompts/cli/github-calls.prompt.md",
+      "operation": "blocked",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "guard-create-seeded",
+            "path": "/handle"
+          }
+        },
+        "resource": "core"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/blocked",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/stopped",
+          "op": "equals",
+          "value": true
         }
       ],
       "model": "gpt-6.1-sol"

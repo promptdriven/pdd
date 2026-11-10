@@ -21,6 +21,10 @@
   ],
   "initial_world": {
     "files": {
+      "/repo/prompts/cli/alpha.prompt.md": {
+        "content": "# Alpha prompt\n",
+        "is_symlink": false
+      },
       "/repo/prompts/cli/hello.prompt.md": {
         "content": "# Hello prompt\n",
         "is_symlink": false
@@ -59,6 +63,7 @@
           "status": 0,
           "files": [
             "prompts/cli/hello.prompt.md",
+            "prompts/cli/alpha.prompt.md",
             "test/runtime/orphan.json",
             "user_stories/hello.md"
           ]
@@ -158,6 +163,13 @@
           "target": "result",
           "path": "/prompts/0/path",
           "op": "equals",
+          "value": "prompts/cli/alpha.prompt.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/prompts/1/path",
+          "op": "equals",
           "value": "prompts/cli/hello.prompt.md"
         },
         {
@@ -191,6 +203,13 @@
           "path": "/refusals/0/code",
           "op": "equals",
           "value": "interface-missing"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/warnings/0",
+          "op": "contains",
+          "value": "user_stories/hello.md"
         }
       ],
       "model": "gpt-6.1-sol"

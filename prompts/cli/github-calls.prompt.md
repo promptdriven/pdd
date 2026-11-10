@@ -244,14 +244,14 @@ pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)
 uses the ETag cache, the full-last-page rule and the floor guard.
 
-In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`) hold the state of `GithubLedger`, `GithubEtagCache` and `GithubFloorGuard` handles; `compute.hash_utf8` hashes lowercase `owner/name`; `files` (`read`, `write`, `stat`) and `fs.readdir` bind ledger and ETag files; `exec.run` binds the wrapped subprocess runner (`countGithubCalls` and `nativeGithubCounter` raise `exec-failed` when `exec.run` returns a nonzero `exitCode` after recording the call); `clock.now` binds `now`; and `cost` (`findRun`, `recordGithub`) binds per-run cost attribution. Real atomic temp-file renames, file modes and live `gh` processes stay in `test/github-calls.test.mjs`.
+In Runtime checks, `ledgers`, `etag_caches`, `floor_guards`, `counted_runners` and `native_runners` (`store`, `load`) hold the state of `GithubLedger`, `GithubEtagCache`, `GithubFloorGuard`, `CountedGithubRunner` (`countGithubCalls` factory and `runCountedGithubCall` runner method) and `NativeGithubRunner` (`nativeGithubCounter` factory and `runNativeGithubCounter` runner method) handles; `compute.hash_utf8` hashes lowercase `owner/name`; `files` (`read`, `write`, `stat`) and `fs.readdir` bind ledger and ETag files; `exec.run({file, args, options})` binds the wrapped subprocess runner after removing `options.purpose` and `options.repository` (`runCountedGithubCall` and `runNativeGithubCounter` raise `exec-failed` when `exec.run` returns a nonzero `exitCode` after recording the call); `clock.now` binds `now`; and `cost` (`findRun`, `recordGithub`) binds per-run cost attribution. `compact` skips `files.write` when no entry is older than `now - 7200000`; `set` skips `clock.now` and `etag_caches.store` when `entry.etag` is empty; `save` skips `files.read` and `files.write` when no entry was read or set; and `runNativeGithubCounter` calls `cost.findRun({cwd})` after `exec.run` (calling `clock.now` and `cost.recordGithub` when `runDir` is non-null) and checks `files.stat` on the ledger path before reading and appending with `files.read` and `files.write`. Real atomic temp-file renames, file modes, live `gh` processes, exported constants (`GITHUB_PURPOSES`, `GITHUB_SHARE`, `GITHUB_FLOOR`), instance properties (`ledger.file`, `ledger.repository`, `cache.file`, `guard.floor`, `guard.stopped` getter), and default Git common-dir `costRun` discovery stay in `test/github-calls.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "9e78024c7b26e40a589d27302e03ece583f8bfb0b38bd8ba435ce1f66e910e7a",
+  "prose_sha256": "9b059435d3aaac205ca4e6cefc591f9917efedc7021f82032f12973b2bf12eda",
   "entries": [
     {
       "operation": "githubCall",
@@ -414,24 +414,10 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
                     "type": "integer"
                   },
                   "etag": {
-                    "oneOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "type": "string"
                   },
                   "link": {
-                    "oneOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "type": "string"
                   },
                   "rate": {
                     "oneOf": [
@@ -966,31 +952,6 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
       "input_schema": {
         "type": "object",
         "properties": {
-          "file": {
-            "type": "string"
-          },
-          "args": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "options": {
-            "type": "object",
-            "properties": {
-              "cwd": {
-                "type": "string"
-              },
-              "purpose": {
-                "type": "string"
-              },
-              "repository": {
-                "type": "string"
-              }
-            },
-            "required": [],
-            "additionalProperties": false
-          },
           "purpose": {
             "oneOf": [
               {
@@ -1025,7 +986,67 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
             ]
           }
         },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
         "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "factory",
+        "type": "CountedGithubRunner",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "counted_runners.store"
+      ]
+    },
+    {
+      "operation": "runCountedGithubCall",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "handle",
           "file",
           "args"
         ],
@@ -1054,7 +1075,13 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
       "errors": [
         "exec-failed"
       ],
+      "instance": {
+        "kind": "method",
+        "type": "CountedGithubRunner",
+        "path": "/handle"
+      },
       "resource_operations": [
+        "counted_runners.load",
         "exec.run",
         "clock.now",
         "files.read",
@@ -1066,31 +1093,6 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
       "input_schema": {
         "type": "object",
         "properties": {
-          "file": {
-            "type": "string"
-          },
-          "args": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "options": {
-            "type": "object",
-            "properties": {
-              "cwd": {
-                "type": "string"
-              },
-              "purpose": {
-                "type": "string"
-              },
-              "repository": {
-                "type": "string"
-              }
-            },
-            "required": [],
-            "additionalProperties": false
-          },
           "env": {
             "type": "object",
             "properties": {
@@ -1122,7 +1124,67 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
             ]
           }
         },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
         "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "factory",
+        "type": "NativeGithubRunner",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "native_runners.store"
+      ]
+    },
+    {
+      "operation": "runNativeGithubCounter",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "handle",
           "file",
           "args"
         ],
@@ -1151,7 +1213,13 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
       "errors": [
         "exec-failed"
       ],
+      "instance": {
+        "kind": "method",
+        "type": "NativeGithubRunner",
+        "path": "/handle"
+      },
       "resource_operations": [
+        "native_runners.load",
         "exec.run",
         "clock.now",
         "compute.hash_utf8",
@@ -2094,7 +2162,16 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
           "items": {
             "type": "array",
             "items": {
-              "type": "integer"
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
             }
           },
           "next": {
@@ -2580,13 +2657,201 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
       ]
     },
     {
+      "name": "counted_runners",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "config"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "native_runners",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "config"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
       "name": "exec",
       "kind": "port",
-      "access": "read",
+      "access": "write",
       "operations": [
         {
           "name": "run",
-          "access": "read",
+          "access": "write",
           "arguments_schema": {
             "type": "object",
             "properties": {
@@ -2599,13 +2864,27 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
                   "type": "string"
                 }
               },
-              "cwd": {
-                "type": "string"
+              "options": {
+                "type": "object",
+                "properties": {
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "purpose": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
               }
             },
             "required": [
               "file",
-              "args"
+              "args",
+              "options"
             ],
             "additionalProperties": false
           },
@@ -2752,15 +3031,23 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
       "convention": "handle"
     },
     {
-      "path": "/entries/17/result_schema/properties/handle",
+      "path": "/entries/11/result_schema/properties/handle",
       "convention": "handle"
     },
     {
-      "path": "/entries/18/input_schema/properties/handle",
+      "path": "/entries/12/input_schema/properties/handle",
       "convention": "handle"
     },
     {
-      "path": "/entries/19/input_schema/properties/handle",
+      "path": "/entries/13/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/14/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/19/result_schema/properties/handle",
       "convention": "handle"
     },
     {
@@ -2768,7 +3055,7 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
       "convention": "handle"
     },
     {
-      "path": "/entries/21/result_schema/properties/handle",
+      "path": "/entries/21/input_schema/properties/handle",
       "convention": "handle"
     },
     {
@@ -2776,7 +3063,15 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
       "convention": "handle"
     },
     {
-      "path": "/entries/23/input_schema/properties/handle",
+      "path": "/entries/23/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/24/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/25/input_schema/properties/handle",
       "convention": "handle"
     }
   ],
@@ -2785,6 +3080,14 @@ In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`)
     {
       "name": "GithubLedger",
       "resource": "ledgers"
+    },
+    {
+      "name": "CountedGithubRunner",
+      "resource": "counted_runners"
+    },
+    {
+      "name": "NativeGithubRunner",
+      "resource": "native_runners"
     },
     {
       "name": "GithubEtagCache",

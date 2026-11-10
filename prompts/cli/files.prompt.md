@@ -52,14 +52,14 @@ an inventory, not a pass verdict. Use injected stdout/stderr ports for output.
 
 - [Shared authored-file reader](runtime-preflight.prompt.md): required generation,
   verification and testing context for all parsing, pairing and refusal rules.
-- In Runtime checks, `git.topLevel({cwd})` and `git.listFiles({root})` supply the repository root and Git-visible relative paths (a nonzero `git.listFiles` status raises `source-unavailable`), `files.stat({path})` and `files.read({path})` read blobs under `<root>/<path>`, and `output.stdout({text})` and `output.stderr({text})` receive CLI output while `runProjectFiles` returns `{exitCode}`. Real Git subprocesses, symlink races and native filesystem permissions stay in `test/cli.test.mjs`.
+- In Runtime checks, `git.topLevel({cwd})` and `git.listFiles({root})` supply the repository root and Git-visible relative paths (a nonzero `git.listFiles` status raises `source-unavailable`), `files.stat({path})` and `files.read({path})` read blobs under `<root>/<path>`, and `output.stdout({text})` and `output.stderr({text})` receive CLI output while `runProjectFiles` returns `{exitCode}`. Real Git subprocesses, symlink races, native filesystem permissions and the live `runtime-preflight.mjs` call closure stay in `test/shared-file-reader.test.mjs` and `test/cli.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "87db4ba934faf7eb1df3b60740e70912c741486169206e587d1cf48ad5b0b825",
+  "prose_sha256": "bd298b96b70db5dedaeeed8039182427acb8a74bce6fd4a3d423d19fb77bbddb",
   "entries": [
     {
       "operation": "inspectProjectFiles",
