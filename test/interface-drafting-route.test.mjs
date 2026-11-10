@@ -50,37 +50,57 @@ async function admit(t,setup,operation,input,inspect) {
   assert.equal(fake.posts.filter(p=>p.command==='check').length,0);
 }
 
-test('3130 prose percent drafts an executable number transport and reaches Runtime lint',async t=>{
+test('3130 prose percent keeps unrepresented domain limits open for review',async t=>{
   const {setup,prose}=formatter(t,'percent'),result=await draft(setup);
-  assert.equal(result.code,0,'PROSE_PERCENT_DRAFT_INCOMPLETE');
-  const text=prompt(setup),iface=parse(text);
+  assert.equal(result.code,4,'MISSING_SAFE_INTEGER_OR_ERROR_SEMANTICS_WAS_NOT_REPORTED');
+  const text=prompt(setup),iface=parse(text),row=result.report.rows[0];
   assert.equal(text.replace(interfaceBlocks(text)[0][0],''),prose);
-  assert.equal(iface.prose_sha256,proseSha256(text));assert.equal(Object.hasOwn(iface,'kind'),false);
+  assert.equal(iface.prose_sha256,proseSha256(text));assert.equal(iface.kind,'partial');
   const {description:inputDescription,...inputSchema}=iface.entries[0].input_schema;
   const {description:resultDescription,...resultSchema}=iface.entries[0].result_schema;
   assert.deepEqual({...iface.entries[0],input_schema:inputSchema,result_schema:resultSchema},{operation:'formatPercent',input_schema:object({basisPoints:{type:'number'}}),result_schema:object({text:{type:'string'}}),errors:['invalid-basis-points']});
   assert.equal(typeof inputDescription,'string');assert.equal(typeof resultDescription,'string');
-  const coverage=result.report.rows[0].prose_coverage;
-  assert.ok(coverage.length>0);assert.ok(coverage.every(row=>row.pointers.length>0));
-  for(const row of coverage) {
-    if(row.pointers.includes('/entries/0/input_schema')) assert.ok(inputDescription.includes(row.sentence));
-    if(row.pointers.includes('/entries/0/result_schema')) assert.ok(resultDescription.includes(row.sentence));
+  for(const sentence of [
+    'Accept a Number only if it is a safe integer.',
+    'Fractions, non-number values, NaN, infinities and unsafe integers are refused.',
+    'Throw a `RangeError` with `code` equal to `invalid-basis-points`.',
+    'Public binding: module function `formatPercent(basisPoints)` in `src/percent.js`, exported from `tiny-format/percent`.',
+    'This is new behavior authorized by issue #20; existing price, duration and word contracts remain unchanged.',
+  ]) {
+    const item=row.prose_coverage.find(claim=>claim.sentence===sentence);
+    assert.ok(item,sentence);assert.notEqual(item.status,'mapped',sentence);
+    assert.deepEqual(item.pointers,[],sentence);assert.deepEqual(item.mappings,[],sentence);
+    assert.equal(row.questions.filter(question=>question.sentence===sentence).length,1,sentence);
   }
+  assert.ok(row.prose_coverage.some(item=>item.sentence.includes('In the Runtime interface')&&item.status==='mapped'));
   assert.deepEqual(iface.limits,{max_steps:4,max_model_calls:2});
-  assert.deepEqual(result.report.rows[0].draft_budget,{source:'command-default',limits:{max_steps:4,max_model_calls:2}});
+  assert.deepEqual(row.draft_budget,{source:'command-default',limits:{max_steps:4,max_model_calls:2}});
   assert.equal(JSON.parse(readFileSync(join(setup.repo,'.pdd/interface-drafts.json'),'utf8'))[PLACE].mode,'prose');
-  await admit(t,setup,'formatPercent',{basisPoints:1250},i=>assert.equal(i.entries[0].input_schema.properties.basisPoints.type,'number'));
+  const formatting=row.prose_coverage.find(item=>item.sentence.startsWith('Show the exact rate'));
+  assert.ok(formatting?.pointers.some(pointer=>pointer.startsWith('/entries/0/result_schema')));
+  assert.ok(resultDescription.includes(formatting.sentence));
 });
 
-test('3130 prose bytes preserves all six rejection transport shapes through Runtime lint',async t=>{
+test('3130 prose bytes preserves representative rejection shapes and leaves exact domain limits for review',async t=>{
   const {setup,prose}=formatter(t,'bytes'),result=await draft(setup);
-  assert.equal(result.code,0,'PROSE_BYTES_DRAFT_INCOMPLETE');
-  const text=prompt(setup),iface=parse(text),input=iface.entries[0].input_schema;
+  assert.equal(result.code,4,'MISSING_SAFE_INTEGER_OR_ERROR_SEMANTICS_WAS_NOT_REPORTED');
+  const text=prompt(setup),iface=parse(text),input=iface.entries[0].input_schema,row=result.report.rows[0];
   assert.equal(text.replace(interfaceBlocks(text)[0][0],''),prose);
+  assert.equal(iface.kind,'partial');
   assert.deepEqual(input.properties.bytes.oneOf.map(s=>s.type),['number','string','boolean','null','array','object']);
   for(const bytes of [0,1536,1.5,-1,'1024',true,null,[1],{}]) assert.deepEqual(checkInput({bytes},input,0).refusals,[]);
   assert.deepEqual(iface.entries[0].errors,['invalid-bytes']);
-  await admit(t,setup,'formatBytes',{bytes:1536},i=>assert.equal(i.entries[0].input_schema.properties.bytes.oneOf.length,6));
+  for(const sentence of [
+    'Accept only a nonnegative safe integer Number, including negative zero.',
+    'Negative values, fractions, non-number values, NaN, infinities and unsafe integers throw `RangeError` with `code` equal to `invalid-bytes`.',
+    'Do not coerce inputs.',
+  ]) {
+    const item=row.prose_coverage.find(claim=>claim.sentence===sentence);
+    assert.ok(item,sentence);assert.notEqual(item.status,'mapped',sentence);
+    assert.deepEqual(item.pointers,[],sentence);assert.deepEqual(item.mappings,[],sentence);
+    assert.equal(row.questions.filter(question=>question.sentence===sentence).length,1,sentence);
+  }
+  assert.ok(row.prose_coverage.some(item=>item.sentence.includes('operation `formatBytes`')&&item.status==='mapped'));
 });
 
 test('3130 missing facts have field questions and a complete contract recovery command',async t=>{

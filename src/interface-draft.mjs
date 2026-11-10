@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: f0b467370a40aee6827ede07bbba496c071a047f1bf8430350c886fa7ae2b347).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 3a8977dd053b08c511c9114a094832c543a604a90ba875c970be483c27982ad7).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -113,18 +113,13 @@ function proseCoverage(text, transport, errors) {
   const grammar=[
     [/^(?:In the Runtime interface, |The Runtime interface uses JSON transport: )?operation [\s\S]+\.$/i,s=>['','In the Runtime interface, ','The Runtime interface uses JSON transport: '].some(prefix=>s===prefix+transport),[input,result]],
     [/^(?:There are |This is pure behavior: )?no external resources, operating-system commands(?:,| or) (?:or )?(?:saved data|persistent state)\.$/i,null,['/calls','/resources']],
-    [/^(?:Throw a |Negative values, fractions, non-number values, NaN, infinities and unsafe integers throw )`RangeError` with `code` equal to `[^`]+`\.$/,s=>errors.some(code=>s.includes('`'+code+'`')),['/entries/0/errors']],
-    [/^Public binding: module function `[^`]+` in `[^`]+`, exported (?:from|at) `[^`]+`\.$/,null,['/entries/0/operation']],
-    [/^(?:It takes a Number of basis points and returns a string|It returns a string|`text` is the returned string)\.$/,null,[input,result]],
+    [/^100 basis points equal one percent\.$/,null,[result]],
     [/^Its input schema admits representative JSON shapes for rejection; the native function rejects every non-number, including arbitrary JavaScript objects\.$/,null,[input]],
     // Numeric formatting rules are retained verbatim as result/input descriptions, not executable schema constraints.
     [/^(?:This module displays a basis-point rate as a percentage beside a price|It owns the percentage format of the library|This module formats downloaded file sizes so they are easy to scan in a list|It owns byte-count formatting)\.$/,null,[result]],
-    [/^This is new behavior authorized by issue #\d+; existing price, duration and word contracts remain unchanged\.$/,null,['/entries/0/operation']],
-    [/^(?:100 basis points equal one percent|Accept a Number only if it is a safe integer|Accept only a nonnegative safe integer Number, including negative zero|Do not coerce inputs|No input is rounded)\.$/,null,[input]],
     [/^(?:Show the exact rate with two decimal digits and a trailing `%`, without spaces or grouping separators|Use the magnitude for the digits and a leading minus sign for negative rates|Zero, including negative zero, is `0\.00%`|Rates above 100 percent are allowed; do not clamp or round|Use powers of 1,024 for B, KiB, MiB, GiB, TiB and PiB, respectively|Select the largest unit whose size is no greater than the input, capped at PiB; zero uses B|Divide by that unit's size and round down to a whole number|Return its ungrouped decimal digits, one space, and the unit name)\.$/,null,[result]],
     [/^For example, (?:-?\d+ is `-?[0-9.]+%`(?:, |, and | and )?)+\.$/,null,[result]],
     [/^For example, (?:[\d, -]+(?:and [\d-]+ )?(?:produce|produces) `[^`]+`(?:, |, and | and )?)+\.$/,null,[result]],
-    [/^Fractions, non-number values, NaN, infinities and unsafe integers are refused\.$/,null,['/entries/0/errors']],
     [/^(?:Preserve existing helpers and add no dependencies|None)\.$/,null,['/calls','/resources']],
   ];
   if(!transport) return sentences.map(sentence=>({sentence,pointers:[]}));
@@ -344,13 +339,51 @@ const schemaMeaning=value=>{
   if(Array.isArray(schema.oneOf)) schema.oneOf=schema.oneOf.map(schemaMeaning);
   return schema;
 };
-// Type requirements qualify retained prose. Ambiguous bindings remain review work.
-const hasType=(schema,type)=>schema?.type===type || type==='number' && schema?.type==='integer' || schema?.oneOf?.some(item=>hasType(item,type));
+// Type requirements qualify retained prose. A matching union branch cannot prove an exclusive or bounded claim.
+const directType=(schema,type)=>schema?.type===type || type==='number' && schema?.type==='integer';
+function typeBranches(schema,type,suffix='') {
+  if(Array.isArray(schema?.oneOf)) return schema.oneOf.flatMap((item,index)=>typeBranches(item,type,`${suffix}/oneOf/${index}`));
+  return directType(schema,type) ? [{schema,suffix}] : [];
+}
+const schemaAlternatives=schema=>Array.isArray(schema?.oneOf) && schema.oneOf.length ? schema.oneOf : [schema];
+function numericQualifiersMatch(schema,sentence) {
+  const safe=/\bsafe\s+integer\b/i.test(sentence), nonnegative=/\bnon-?negative\b/i.test(sentence);
+  if(!safe && !nonnegative) return true;
+  const alternatives=schemaAlternatives(schema);
+  return alternatives.every(branch=>{
+    if(branch?.type!=='number' && branch?.type!=='integer') return false;
+    if(Array.isArray(branch.enum)) return branch.enum.every(value=>typeof value==='number' && (!safe || Number.isSafeInteger(value)) && (!nonnegative || value>=0));
+    const integer=branch.type==='integer' || branch.type==='number' && branch.multipleOf===1;
+    const boundedSafe=integer && typeof branch.minimum==='number' && branch.minimum>=-9007199254740991
+      && typeof branch.maximum==='number' && branch.maximum<=9007199254740991;
+    return (!safe || boundedSafe) && (!nonnegative || typeof branch.minimum==='number' && branch.minimum>=0);
+  });
+}
 const shorthandTransport = text => /^(?:In the Runtime interface,\s*|The Runtime interface uses JSON transport:\s*)?operation\s+`([\w$]+)`\s+takes\s+`\{\s*([\w$]+)\s*\}`\s+and\s+returns\s+`\{\s*([\w$]+)\s*\}`(?:,\s*where\s+`([\w$]+)`\s+is\s+(?:that|the(?:\s+returned)?)\s+(Number|String|Boolean|numeric|number|string|boolean|integer))?\.$/i.exec(text);
 const behaviorRule = /\b(?:decimal digits|lowercase suffix|leading|trailing|grouping|separators?|clamp|powers of|largest unit|round down|last (?:two )?digits?|formats as|disk|audit|telemetry|persists?|remote\s+service|database)\b/i;
-function sentenceTypes(sentence,entry) {
-  let conflicting=false,unresolved=false;
-  const keys=new Set(),errorNames=new Set(['Error','RangeError','TypeError','SyntaxError','code',...(entry?.errors ?? [])]);
+function purposeMatches(operation,verb,sentence) {
+  const normalize=word=>word==='percentage'?'percent':word.endsWith('ies')?word.slice(0,-3)+'y':word.endsWith('s')?word.slice(0,-1):word;
+  const operationWords=operation.replace(/([a-z0-9])([A-Z])/g,'$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(normalize);
+  const sentenceWords=(sentence.toLowerCase().match(/[a-z0-9]+/g) ?? []).map(normalize);
+  return operationWords.length>1 && operationWords[0]===normalize(verb)
+    && operationWords.slice(1).every(word=>sentenceWords.includes(word));
+}
+function sentenceTypes(sentence,entry,returnedField) {
+  let conflicting=false,unresolved=false,typed=false;
+  const keys=new Map(),errorNames=new Set(['Error','RangeError','TypeError','SyntaxError','code',...(entry?.errors ?? [])]);
+  const only=/\b(?:accept(?:s|ed)?|takes?)\s+only\b|\bonly\s+if\b|\b(?:exclusively|nothing but)\b/i.test(sentence);
+  const addType=(schemaKey,target,suffix,type)=>{
+    typed=true;
+    const branches=typeBranches(target,type);
+    if(!branches.length) {conflicting=true;return;}
+    const alternatives=schemaAlternatives(target);
+    if(only && alternatives.some(branch=>!directType(branch,type))) {conflicting=true;return;}
+    if((type==='number'||type==='integer') && !numericQualifiersMatch(target,sentence)) {
+      if(only) conflicting=true; else unresolved=true;
+      return;
+    }
+    for(const branch of branches) keys.set(`${schemaKey}${suffix}${branch.suffix}`,branch.schema);
+  };
   for(const token of sentence.matchAll(/\b(Number|String|Boolean|numeric|number|string|boolean|integer)\b/g)) {
     const before=sentence.slice(0,token.index),after=sentence.slice(token.index+token[0].length);
     if(/non-$/i.test(before)) continue;
@@ -362,24 +395,28 @@ function sentenceTypes(sentence,entry) {
     const result=/\b(?:result|output|returns?|returned)\b/i.test(clause);
     const schemas=input===result ? ['input_schema','result_schema'] : [input?'input_schema':'result_schema'];
     const names=[...new Set([...clause.matchAll(/`\{?([\w$]+)\}?`/g)].map(match=>match[1]).filter(name=>!errorNames.has(name)))];
-    const named=schemas.flatMap(key=>names.flatMap(name=>entry?.[key]?.properties?.[name] ? [{key,schema:entry[key].properties[name]}] : []));
-    let target=named.length===1 ? named[0] : null;
-    if(!names.length && input!==result) {
-      const fields=Object.values(entry?.[schemas[0]]?.properties ?? {});
-      if(fields.length===1) target={key:schemas[0],schema:fields[0]};
+    const named=schemas.flatMap(key=>names.flatMap(name=>entry?.[key]?.properties?.[name] ? [{key,name,schema:entry[key].properties[name]}] : []));
+    let targets=named.length===1 ? named : [];
+    if(!names.length && input && !result) {
+      const fields=Object.entries(entry?.input_schema?.properties ?? {});
+      if(fields.length===1) targets=[{key:'input_schema',name:fields[0][0],schema:fields[0][1]}];
+      else unresolved=true;
+    } else if(!names.length && result) {
+      // A scalar return claim needs prose that identifies the returned result property.
+      targets=returnedField && entry?.result_schema?.properties?.[returnedField]
+        ? [{key:'result_schema',name:returnedField,schema:entry.result_schema.properties[returnedField]}]
+        : [{key:'result_schema',name:null,schema:entry?.result_schema}];
     }
-    if(!target) {unresolved=true;continue;}
+    if(!targets.length) {unresolved=true;continue;}
     const type=token[0].toLowerCase()==='numeric'?'number':token[0].toLowerCase();
-    if(!hasType(target.schema,type)) conflicting=true;
-    else keys.add(target.key);
+    for(const target of targets) addType(target.key,target.schema,target.name?`/properties/${target.name}`:'',type);
   }
-  if(!keys.size && !conflicting && !unresolved && /\b(?:input|takes?|accepts?)\b/i.test(sentence) && /\bsafe\s+integer\b/i.test(sentence)) {
-    const fields=Object.values(entry?.input_schema?.properties ?? {});
+  if(!typed && /\bsafe\s+integer\b/i.test(sentence)) {
+    const fields=Object.entries(entry?.input_schema?.properties ?? {});
     if(fields.length!==1) unresolved=true;
-    else if(!hasType(fields[0],'number')) conflicting=true;
-    else keys.add('input_schema');
+    else addType('input_schema',fields[0][1],`/properties/${fields[0][0]}`,'number');
   }
-  return {conflicting,unresolved,keys:[...keys]};
+  return {conflicting,unresolved,keys:[...keys].map(([pointer,meaning])=>({pointer,meaning}))};
 }
 // This is review evidence, not a proof that arbitrary prose has been compiled.
 function sentenceCoverage(sources,expanded) {
@@ -404,35 +441,39 @@ function sentenceCoverage(sources,expanded) {
     // None is dependency syntax, not a claim about effects.
     const content=prose.replace(/^(## Dependencies\s*\n)\s*None\.\s*$/m,'');
     const rows=proseCoverage(content,declaration?.[0],actual?.errors ?? []);
+    const returnedField=declaration?.[5] ?? rows.map(row=>{const short=shorthandTransport(row.sentence);return short?.[4]===short?.[3]?short?.[4]:undefined;}).find(Boolean);
     const multipleTransports=rows.filter(row=>transportDeclaration(row.sentence) || shorthandTransport(row.sentence)).length>1;
     return rows.map(row=>{
       const sentence=row.sentence;
       let mappings=[];
       const entry=multipleTransports ? undefined : actual;
       const targetIndex=multipleTransports ? -1 : actualIndex;
-      let {conflicting,unresolved,keys}=sentenceTypes(sentence,entry);
+      let {conflicting,unresolved,keys}=sentenceTypes(sentence,entry,returnedField);
       const ownDeclaration=transportDeclaration(sentence);
       const ownExpected=ownDeclaration && (ownDeclaration[0]===declaration?.[0] ? expected : proseInterface(sentence,true)?.iface);
       const ownIndex=ownDeclaration ? (expanded.entries?.findIndex(item=>item.operation===ownDeclaration[1]) ?? -1) : -1;
       const ownActual=expanded.entries?.[ownIndex];
       const ownShort=shorthandTransport(sentence);
       const binding=/^(?:Public binding:\s*(?:module\s+)?function\s+`([\w$]+)(?:\([^`]*\))?`(?:\s+in\s+`[^`]+`(?:,\s*exported\s+(?:from|at)\s+`[^`]+`)?)?|Export\s+`([\w$]+)\([^`]*\)`|`[^`]+`\s+exports\s+(?:module\s+)?function\s+`?([\w$]+)\([^`]*\)`?)\.$/i.exec(sentence);
-      const opPurpose=/^Operation\s+`([\w$]+)`\s+(?:turns|formats|displays|shows|counts|computes|calculates|parses|validates|converts)\b[^;]*\.$/i.exec(sentence);
-      const modulePurpose=/^(?:This module\s+(?:formats|displays|shows|counts|computes|calculates|parses|validates|converts|renders|builds|creates|manages|provides|implements|checks|turns|owns|handles)\b[^;]*|It owns\b[^;]*|Own\s+`[^`]+`|(?:This is new behavior authorized by issue #\d+;\s*)?existing\b[^.]*(?:remain unchanged|must not change))\.$/i.test(sentence);
+      const opPurpose=/^Operation\s+`([\w$]+)`\s+(turns|formats|displays|shows|counts|computes|calculates|parses|validates|converts)\b[^;]*\.$/i.exec(sentence);
+      const modulePurpose=/^This module\s+(formats|displays|shows|counts|computes|calculates|parses|validates|converts|renders|builds|creates|manages|provides|implements|checks|turns|handles)\b[^;]*\.$/i.exec(sentence);
       const errorCodes=[
         ...[...sentence.matchAll(/\bcode`?(?:\s+property)?\s+(?:equal to|is)\s+`"?([^"`]+)"?`/gi)].map(m=>m[1]),
         ...[...sentence.matchAll(/\berror(?:\s+code)?\s+`"?([^"`]+)"?`/gi)].map(m=>m[1]),
       ];
+      const scopeClaim=/\bexisting\b[^.]*\b(?:remain unchanged|must not change)\b/i.test(sentence);
+      const errorClassClaim=/\b[A-Z][A-Za-z]*Error\b/.test(sentence);
       const refusalClause=/^(?:Reject\s+(?:negative\b|fractions\b|non-numbers?\b|invalid\b)[^.]*|[^.]*\b(?:fractions|non-numbers?(?:\s+values)?|NaN|infinities|unsafe\s+integers)\b[^.]*\bare\s+(?:refused|rejected)|Do not (?:coerce|round)\s+inputs?(?:\s+or\s+\w+)?|No input is (?:rounded|coerced)|Nothing is (?:rounded|coerced))\.$/i.test(sentence);
       if(binding) {
         const opName=binding[1] ?? binding[2] ?? binding[3];
         const bindIndex=expanded.entries?.findIndex(item=>item.operation===opName) ?? -1;
-        if(bindIndex>=0 && !conflicting && !unresolved) mappings=[{pointer:`/entries/${bindIndex}/operation`,meaning:expanded.entries[bindIndex].operation}];
-        else if(bindIndex<0 && expanded.entries?.length) conflicting=true;
+        // Runtime entries name operations; they do not declare native binding metadata.
+        if(bindIndex>=0) unresolved=true;
+        else if(expanded.entries?.length) conflicting=true;
       }
       if(opPurpose) {
         const opIndex=expanded.entries?.findIndex(item=>item.operation===opPurpose[1]) ?? -1;
-        if(opIndex>=0 && !conflicting && !unresolved && !behaviorRule.test(sentence)) mappings=[{pointer:`/entries/${opIndex}/operation`,meaning:expanded.entries[opIndex].operation}];
+        if(opIndex>=0 && purposeMatches(expanded.entries[opIndex].operation,opPurpose[2],sentence) && !conflicting && !unresolved && !behaviorRule.test(sentence)) mappings=[{pointer:`/entries/${opIndex}/operation`,meaning:expanded.entries[opIndex].operation}];
         else if(opIndex<0 && expanded.entries?.length) conflicting=true;
       }
       if(ownDeclaration && ownExpected) {
@@ -452,24 +493,27 @@ function sentenceCoverage(sources,expanded) {
         unresolved=!expanded.entries?.length;
         if(!unresolved) {
           conflicting=!shortActual || !hasOnlyField(shortActual.input_schema,inField) || !hasOnlyField(shortActual.result_schema,outField)
-            || Boolean(whereField && (!whereSchema || !hasType(whereSchema,whereType)));
+            || Boolean(whereField && (!whereSchema || !directType(whereSchema,whereType)));
           if(!conflicting) mappings=['operation','input_schema','result_schema'].map(key=>({pointer:`/entries/${shortIndex}/${key}`,meaning:shortActual[key]}));
         }
       }
       if(errorCodes.length) {
         if(targetIndex>=0 && Array.isArray(entry?.errors) && errorCodes.every(code=>entry.errors.includes(code))) {
-          if(!conflicting && !unresolved) mappings=[...keys.map(key=>({pointer:`/entries/${targetIndex}/${key}`,meaning:entry[key]})),{pointer:`/entries/${targetIndex}/errors`,meaning:entry.errors}];
+          if(/\b[A-Z][A-Za-z]*Error\b/.test(sentence)) unresolved=true;
+          else if(!conflicting && !unresolved) mappings=[...keys.map(({pointer,meaning})=>({pointer:`/entries/${targetIndex}/${pointer}`,meaning})),{pointer:`/entries/${targetIndex}/errors`,meaning:entry.errors}];
         } else if(expanded.entries?.length) conflicting=true;
+      } else if(errorClassClaim) {
+        unresolved=true;
       } else if(refusalClause && !behaviorRule.test(sentence)) {
-        if(targetIndex>=0 && Array.isArray(entry?.errors) && entry.errors.length>0) {
-          if(!conflicting && !unresolved) mappings=[{pointer:`/entries/${targetIndex}/errors`,meaning:entry.errors}];
-        } else if(targetIndex>=0 && Array.isArray(entry?.errors) && entry.errors.length===0 && /\b(?:reject|refused|rejected)\b/i.test(sentence)) conflicting=true;
+        // Error-code presence does not state which inputs raise the error or how inputs are transformed.
+        if(targetIndex>=0 && Array.isArray(entry?.errors) && entry.errors.length===0 && /\b(?:reject|refused|rejected)\b/i.test(sentence)) conflicting=true;
+        else unresolved=true;
       }
-      if(!mappings.length && modulePurpose && !behaviorRule.test(sentence) && !conflicting && !unresolved && targetIndex>=0 && typeof entry?.operation==='string' && entry.operation.trim()) {
+      if(!mappings.length && modulePurpose && !behaviorRule.test(sentence) && !conflicting && !unresolved && targetIndex>=0 && typeof entry?.operation==='string' && entry.operation.trim() && purposeMatches(entry.operation,modulePurpose[1],sentence)) {
         mappings=[{pointer:`/entries/${targetIndex}/operation`,meaning:entry.operation}];
       }
       if(!mappings.length && !conflicting && !unresolved && targetIndex>=0 && !behaviorRule.test(sentence)) {
-        if(keys.length) mappings=keys.map(key=>({pointer:`/entries/${targetIndex}/${key}`,meaning:entry[key]}));
+        if(keys.length) mappings=keys.map(({pointer,meaning})=>({pointer:`/entries/${targetIndex}/${pointer}`,meaning}));
         else if(/^Its input schema admits representative JSON shapes for rejection\b/i.test(sentence)) {
           const admits=Object.values(entry?.input_schema?.properties ?? {}).some(prop=>Array.isArray(prop?.oneOf) && prop.oneOf.length>1);
           if(admits) mappings=[{pointer:`/entries/${targetIndex}/input_schema`,meaning:entry.input_schema}];
@@ -480,7 +524,7 @@ function sentenceCoverage(sources,expanded) {
         conflicting=!!(expanded.calls?.length || expanded.resources?.length);
         if(!conflicting && Array.isArray(expanded.calls) && Array.isArray(expanded.resources)) mappings=['calls','resources'].map(key=>({pointer:'/'+key,meaning:expanded[key]}));
       }
-      if(!conflicting && !unresolved && !mappings.length) mappings=described.filter(({meaning})=>{
+      if(!binding && !scopeClaim && !conflicting && !unresolved && !mappings.length) mappings=described.filter(({meaning})=>{
         // A whole sentence must occur in a retained description. Substrings of longer clauses do not qualify.
         return proseCoverage(meaning.description).some(row=>row.sentence===sentence);
       });

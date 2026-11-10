@@ -77,8 +77,9 @@ for(const route of ['prose','embedded','import']) {
     }
   });
 }
-test('3130 integration: inferred formatting maps to a field that retains its whole meaning',t=>{
-  const r=draft(setup(t,prose));assert.equal(r.code,0);
+test('3130 integration: inferred formatting maps while missing numeric bounds stay a review question',t=>{
+  const r=draft(setup(t,prose));assert.equal(r.code,4);assert.equal(r.iface.kind,'partial');
+  assert.ok(r.row.questions.some(item=>item.sentence==='Accept a Number only if it is a safe integer.'));
   const row=r.row.prose_coverage.find(row=>row.sentence===formatting);
   assert.ok(row.pointers.length);
   for(const pointer of row.pointers) assert.ok(at(r.iface,pointer)?.description?.includes(formatting),'FORMATTING_MEANING_MISSING_AT_POINTER');
@@ -189,16 +190,24 @@ for (const context of ['fragment', 'cycle']) test('integration 013: person appro
 });
 
 const ordinalMapped=[
-  ['This module formats an English ordinal for a nonnegative safe integer.',['/entries/0/operation']],
-  ['It owns ordinal suffix selection for the library.',['/entries/0/operation']],
-  ['Existing money, duration and word modules must not change.',['/entries/0/operation']],
-  ['Public binding: module function `formatOrdinal(value)` in `src/ordinal.js`, exported at `tiny-format/ordinal`.',['/entries/0/operation']],
-  ['It returns a string.',['/entries/0/result_schema']],
+  ['Operation `formatOrdinal` formats an English ordinal.',['/entries/0/operation']],
+  ['This module formats English ordinals.',['/entries/0/operation']],
   ['In the Runtime interface, operation `formatOrdinal` takes `{value}` and returns `{text}`, where `text` is that string.',['/entries/0/operation','/entries/0/input_schema','/entries/0/result_schema']],
-  ['Accept only a JavaScript Number that is a nonnegative safe integer.',['/entries/0/input_schema']],
-  ['Reject negative numbers, fractions, non-numbers, NaN, infinities and unsafe integers without coercion or rounding.',['/entries/0/errors']],
-  ['Throw a `RangeError` with `code` equal to `invalid-ordinal`.',['/entries/0/errors']],
+  ['The error code `invalid-ordinal` is declared.',['/entries/0/errors']],
+  ['The returned `text` is a string.',['/entries/0/result_schema/properties/text']],
+  ['It returns a string.',['/entries/0/result_schema/properties/text']],
   ['There are no external resources, operating-system commands or saved data.',['/calls','/resources']],
+];
+const ordinalReview=[
+  ['This module formats an English ordinal for a nonnegative safe integer.','unmapped'],
+  ['It owns ordinal suffix selection for the library.','unmapped'],
+  ['Existing money, duration and word modules must not change.','unmapped'],
+  ['Public binding: module function `formatOrdinal(value)` in `src/ordinal.js`, exported at `tiny-format/ordinal`.','unmapped'],
+  ['Accept only a JavaScript Number that is a nonnegative safe integer.','conflicting'],
+  ['Reject negative numbers, fractions, non-numbers, NaN, infinities and unsafe integers without coercion or rounding.','unmapped'],
+  ['Throw a `RangeError` with `code` equal to `invalid-ordinal`.','unmapped'],
+  ['Throw a `TypeError` with `code` equal to `invalid-ordinal`.','unmapped'],
+  ['Throw a `RangeError` with `code` equal to `invalid-input`.','conflicting'],
 ];
 const ordinalBehavior=[
   'Write the value as decimal digits without grouping or spaces, followed immediately by a lowercase suffix.',
@@ -231,9 +240,11 @@ const ordinalContract={
 const ordinalProse=[
   '# ordinal',
   '',
-  ordinalMapped.slice(0,3).map(([s])=>s).join(' '),
+  ordinalMapped[0][0]+' '+ordinalMapped[1][0]+' '+ordinalReview[0][0]+' '+ordinalReview[1][0]+' '+ordinalReview[2][0],
   '',
-  ordinalMapped.slice(3,6).map(([s])=>s).join(' '),
+  ordinalReview[3][0]+' '+ordinalMapped[5][0]+' '+ordinalMapped[4][0],
+  '',
+  ordinalMapped[2][0]+' '+ordinalMapped[3][0],
   '',
   '## Ordinal format',
   '',
@@ -241,9 +252,9 @@ const ordinalProse=[
   '',
   '## Refused values',
   '',
-  ordinalMapped.slice(6,9).map(([s])=>s).join(' '),
+  ordinalReview.slice(4).map(([sentence])=>sentence).join(' '),
   '',
-  ordinalMapped[9][0],
+  ordinalMapped[6][0],
   '',
   '## Dependencies',
   '',
@@ -251,21 +262,46 @@ const ordinalProse=[
   '',
 ].join('\n');
 
-test('3130 #39 ordinal purpose, public binding, input/result type and declared error sentences map without questions',t=>{
+test('3130 #39 ordinal coverage maps only the declared meaning and keeps scope or unsupported claims open',t=>{
   const describedContract=structuredClone(ordinalContract);
-  describedContract.entries[0].result_schema.description=ordinalBehavior.join(' ');
+  describedContract.entries[0].result_schema.description=[...ordinalBehavior,ordinalReview[2][0],ordinalReview[3][0]].join(' ');
   const r=draft(setup(t,ordinalProse,{'contracts/ordinal.json':describedContract}),['--contract','contracts/ordinal.json']);
   assert.equal(r.code,0);assert.equal(r.row.lint_clean,true);
-  assert.equal(r.iface.status,'draft');assert.equal(r.row.questions,undefined);
+  assert.equal(r.iface.status,'draft');assert.ok(r.row.questions.length);
   for(const [sentence,expectedPointers] of ordinalMapped) {
     const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
     assert.ok(row,sentence);retained(r,row);
     assert.deepEqual(row.pointers,expectedPointers,sentence);
   }
+  for(const [sentence,status] of ordinalReview) {
+    const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+    assert.ok(row,sentence);assert.equal(row.status,status,sentence);
+    assert.deepEqual(row.pointers,[],sentence);assert.deepEqual(row.mappings,[],sentence);
+    assert.equal(r.row.questions.filter(q=>q.sentence===sentence).length,1,sentence);
+  }
   for(const sentence of ordinalBehavior) {
     const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
     assert.ok(row,sentence);retained(r,row);
   }
+});
+
+test('3130 #39 a safe integer claim maps when type and bounds retain it',t=>{
+  const claim='Accept only a JavaScript Number that is a nonnegative safe integer.';
+  const exact=structuredClone(ordinalContract);
+  exact.entries[0].input_schema.properties.value={type:'integer',minimum:0,maximum:9007199254740991};
+  const prose='# ordinal\n\n'+claim+'\n\n## Dependencies\n\nNone.\n';
+  const r=draft(setup(t,prose,{'contracts/ordinal.json':exact}),['--contract','contracts/ordinal.json']);
+  assert.equal(r.code,0);const row=r.row.prose_coverage.find(item=>item.sentence===claim);
+  retained(r,row);assert.deepEqual(row.pointers,['/entries/0/input_schema/properties/value']);
+});
+
+test('3130 #39 an object result field does not prove a scalar return without a prose binding',t=>{
+  const text=ordinalProse.replace(ordinalMapped[2][0],'').replace(ordinalMapped[3][0],'');
+  const r=draft(setup(t,text,{'contracts/ordinal.json':ordinalContract}),['--contract','contracts/ordinal.json']);
+  assert.equal(r.code,0);
+  const row=r.row.prose_coverage.find(item=>item.sentence==='It returns a string.');
+  assert.equal(row?.status,'conflicting');assert.deepEqual(row?.pointers,[]);assert.deepEqual(row?.mappings,[]);
+  assert.equal(r.row.questions.filter(q=>q.sentence===row.sentence).length,1);
 });
 
 test('3130 #39 real behavior rules with no entry stay unmapped and ask one grouped question while covered sentences map',async t=>{
@@ -277,6 +313,12 @@ test('3130 #39 real behavior rules with no entry stay unmapped and ask one group
     assert.ok(row,sentence);retained(r,row);
     assert.deepEqual(row.pointers,expectedPointers,sentence);
     assert.equal(r.row.questions.some(q=>q.sentence===sentence),false,sentence);
+  }
+  for(const [sentence,status] of ordinalReview) {
+    const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+    assert.ok(row,sentence);assert.equal(row.status,status,sentence);
+    assert.deepEqual(row.pointers,[]);assert.deepEqual(row.mappings,[]);
+    assert.equal(r.row.questions.filter(q=>q.sentence===sentence).length,1,sentence);
   }
   for(const sentence of ordinalBehavior) {
     const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
@@ -290,6 +332,7 @@ test('3130 #39 real behavior rules with no entry stay unmapped and ask one group
   const code=await runApprove({cwd:f.repo,words:[PLACE],automatic:true,tests:'node --test tests/coverage.test.mjs'},
     {stdout,stderr,interactive:false,runNativeTests(){nativeCalls++;return {code:0,stdout:'# tests 1\n# pass 1\n# fail 0\n'};}});
   assert.equal(code,4);assert.equal(nativeCalls,0);
+  for(const [sentence] of ordinalReview) assert.ok(stderr.text.includes(JSON.stringify(sentence)),sentence);
   for(const sentence of ordinalBehavior) assert.ok(stderr.text.includes(JSON.stringify(sentence)));
   for(const [sentence] of ordinalMapped) assert.equal(stderr.text.includes(JSON.stringify(sentence)),false,sentence);
 });
@@ -314,7 +357,7 @@ for(const [label,mutate,expectedConflicts] of [
   const f=setup(t,ordinalProse,{'contracts/ordinal.json':bad,'tests/coverage.test.mjs':'export {};\n'});
   const r=draft(f,['--contract','contracts/ordinal.json']);
   assert.equal(r.code,0);
-  assert.equal(r.row.prose_coverage.find(item=>item.sentence===ordinalMapped[0][0])?.status,'mapped');
+  assert.equal(r.row.prose_coverage.find(item=>item.sentence===ordinalMapped[0][0])?.status,label==='public binding conflict'?'conflicting':'mapped');
   for(const sentence of expectedConflicts) {
     const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
     assert.ok(row,sentence);
