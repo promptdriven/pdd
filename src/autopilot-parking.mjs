@@ -1,4 +1,5 @@
 // Source: prompts/cli/autopilot-parking.prompt.md.
+import {runtimeEvidence} from './autopilot-self-report.mjs';
 import {environmentRecovery} from './autopilot-environment.mjs';
 
 const ended = run => ['completed', 'cancelled'].includes(run.state);
@@ -50,6 +51,9 @@ export function interpreterWaitFor(run) {
 }
 export function blockerFor(run) {
   if (ended(run)) return null;
+  if (run.blockedOn && !['runtime', 'interpreter'].includes(run.blockedOn.kind)) return run.blockedOn;
+  if (run.parking?.blocker?.kind === 'runtime' && run.parking.blocker.evidence === runtimeEvidence(run)
+    && !(run.question && !run.question.answeredAt)) return run.parking.blocker;
   if (run.blockedOn) return run.blockedOn;
   if (run.runtimeWait) return {kind: 'interpreter', until: null};
   if (!stopped(run) && !run.parking && !run.gate && !(run.question && !run.question.answeredAt)) return null;
@@ -110,11 +114,22 @@ export function parkingSummary(runs, limit, now) {
     return {number: run.number, reasons: hold ? {[hold]: 1, ...(now - run.parking.at >= 60_000 ? {'closing-retry': 1} : {})}
       : Object.keys(run.parking.closeReasons ?? {}).length ? run.parking.closeReasons : {'cleanup-pending': 1}};
   });
-  return {working, parked: parked.length, blockers, wakePending: [], limit, closing};
+  const waits = parked.map(run => ({number: run.number, condition: wakeCondition(run.parking.blocker)}));
+  return {waits, working, parked: parked.length, blockers, wakePending: [], limit, closing};
+}
+export function wakeCondition(blocker) {
+  const issue = /^(?:#)?([1-9][0-9]*)$/.exec(blocker?.until ?? '')?.[1];
+  if (blocker?.kind === 'runtime') return `when Runtime issue #${issue} closes or a later check gets a verdict`;
+  if (blocker?.kind === 'binding') return `when the owning prompt or interface changes on the base${issue ? ` or issue #${issue} closes` : ''}`;
+  if (issue) return `when issue #${issue} closes${['pdd','pdd-route'].includes(blocker.kind) ? ' or the installed PDD has the fix' : ''}`;
+  return ({person: 'when the pending question or gate has a reply', pdd: 'when the installed PDD has the required fix', 'pdd-route': 'when the installed PDD has the required route',
+    interpreter: 'when the interpreter recovery check permits a wake', environment: 'when the environment is healthy and retry is due', account: `when the account limit resets at ${blocker?.until ?? 'an unknown time'}`,
+    github: `when the GitHub limit resets at ${blocker?.until ?? 'an unknown time'}`, ci: 'when CI has a result', review: 'when review has a result'})[blocker?.kind] ?? 'when an explicit reply or retry is recorded';
 }
 export function parkingWords(summary, interpreter) {
   const s = summary ?? {working: 0, parked: 0, blockers: {}, limit: 0};
   return `working ${s.working} of ${s.limit} · parked ${s.parked}${s.parked ? ` (${Object.entries(s.blockers).map(([name, count]) => `${name} ${count}`).join(', ')})` : ''}`
+    + (s.waits?.length ? ` · ${s.waits.map(row => `#${row.number}: ${row.condition}`).join('; ')}` : '')
     + (s.closing?.length ? ` · closing ${s.closing.map(row => `#${row.number} (${Object.entries(row.reasons).map(([reason,count]) => `${reason} ${count}`).join(', ')})`).join('; ')}` : '')
     + (interpreter?.testMode ? ` · interpreter: test mode (${interpreter.streak} no-verdict in a row)` : '');
 }
@@ -133,7 +148,8 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     // A finished check can change its saved result at an unchanged gate.
     const saved = blockerFor({...run, parking: undefined});
     // Native check/limit evidence can refine a generic gate; explicit named waits win.
-    const observed = !saved || saved.kind === 'person' ? await ports.observeBlocker?.(run) : null;
+    const observed = !saved || ['person', 'interpreter', 'runtime', 'binding'].includes(saved.kind) ? await ports.observeBlocker?.(run) : null;
+    if (observed?.kind === 'pdd-pending') continue;
     // Unclassified stops also release native resources after a short grace.
     // Their original recovery counters and alert custody survive the park.
     const graceHold = needsGrace(run);

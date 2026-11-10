@@ -301,6 +301,16 @@ time. Status does not probe an account or the machine. Before any observation,
 health is unknown. If no issue can own an alert, health stays visible and the
 next tick attaches the incident when an issue is known.
 
+When a run stops or crashes from a failure in pdd, Autopilot or the Runtime
+service, Autopilot runs one fresh read-only diagnose session and files or
+comments on an issue in `promptdriven/pdd` with `pdd:self-report` (plus
+`pdd:runtime-report` for Runtime causes). Set `autopilot.selfReport` in
+`pdd.json` to `auto`, `ask` or `off` (default `auto` inside `promptdriven/*`,
+ask once elsewhere). New self-reports are capped at 5 per machine per UTC day;
+additional occurrences comment on an open issue. The run parks on the issue and
+wakes when that issue closes. `pdd autopilot status` and the cost ledger show
+`Self-reports: filed N, commented M, skipped K`.
+
 When the GitHub budget permits reads, the tick removes an ended run's worktree only after a read-only PR lookup shows
 its branch closed or merged. It verifies allocator identity, a clean worktree,
 and a branch equal to its tracked upstream. Dirty, unpushed, active, waiting,

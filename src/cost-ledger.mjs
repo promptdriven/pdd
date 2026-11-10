@@ -1,4 +1,4 @@
-// Generated from prompts/cli/cost-ledger.prompt.md (sha256: b205da6f02f5e138f2e198de3533689069f0c3d4a717f5b20d30c5a7fd21b823).
+// Generated from prompts/cli/cost-ledger.prompt.md (sha256: bc60d55e1320b9f6e595e5c410ac1419109030f546086985e5fc53f348ef0c05).
 import * as nativeFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -10,7 +10,9 @@ const number = value => typeof value === 'number' && Number.isFinite(value) && v
 const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 20);
 const keys = ['input', 'cachedInput', 'output', 'reasoningOutput', 'total'];
 const outcomes = ['merged', 'reverted', 'stuck', 'closed', 'parked'];
+const selfReportKeys = ['filed', 'commented', 'skipped'];
 const emptyTokens = () => Object.fromEntries(keys.map(key => [key, 0]));
+const emptySelfReports = () => ({ filed: 0, commented: 0, skipped: 0 });
 const readJson = (fs, file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 const expand = (path, home) => typeof path === 'string' && path ? path.replace(/^~(?=\/|$)/, home) : null;
 const event = (cost, at, metric, value, extra = {}) => { if (value > 0 || value === 0 && (['suiteMinutes', 'ciMinutes', 'activeMinutes'].includes(metric) || metric === 'total' && extra.account && !cost.tokens.some(row => row.account === extra.account))) cost.events.push({ at, metric, value, ...extra }); };
@@ -18,6 +20,7 @@ const event = (cost, at, metric, value, extra = {}) => { if (value > 0 || value 
 function initial(run, at) {
   return { schema: 'pdd.cost.v1', capturedAt: at, outcome: outcome(run), outcomeAt: run.cancelled?.at ?? run.updatedAt ?? at, tokens: [], sessions: {},
     person: { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null },
+    selfReports: emptySelfReports(),
     suiteMinutes: null, ciMinutes: null, githubCalls: 0, events: [], measurements: {}, coverage: ['not-captured'], waits: {} };
 }
 
@@ -175,14 +178,49 @@ function outcome(run) {
   if (last?.state === 'closed') return 'closed';
   return 'running';
 }
+function captureSelfReports(cost, before, run, at) {
+  cost.selfReports ??= emptySelfReports();
+  for (const key of selfReportKeys) cost.selfReports[key] = Number(cost.selfReports[key]) || 0;
+  for (const source of [before?.selfReports, run?.selfReports]) {
+    if (!source) continue;
+    if (Array.isArray(source)) {
+      for (const item of source) {
+        if (!item || typeof item !== 'object' || !selfReportKeys.includes(item.action)) continue;
+        const id = `sr:${item.id ?? `${item.at ?? at}:${item.signature ?? ''}:${item.action}`}`;
+        if (cost.waits[id]) continue;
+        const eventAt = number(item.at) ? item.at : at;
+        cost.waits[id] = { kind: 'self-report', at: eventAt, action: item.action };
+        cost.selfReports[item.action] = (cost.selfReports[item.action] ?? 0) + 1;
+        event(cost, eventAt, `selfReports.${item.action}`, 1);
+      }
+    } else if (typeof source === 'object') {
+      for (const key of selfReportKeys) {
+        const nextVal = Number(source[key]) || 0;
+        const prevVal = Number(cost.selfReports[key]) || 0;
+        if (nextVal > prevVal) {
+          event(cost, at, `selfReports.${key}`, nextVal - prevVal);
+          cost.selfReports[key] = nextVal;
+        }
+      }
+    }
+  }
+}
+const selfReportChats = run => Array.isArray(run?.selfReports)
+  ? run.selfReports.filter(item => uuid(item?.session?.id)).map(item => ({
+      agent: item.session.agent ?? run.agent ?? 'codex',
+      session: { id: item.session.id },
+      startedAt: number(item.session.at) ? item.session.at : run.startedAt,
+    }))
+  : [];
 export function captureCosts(before, run, ports = {}) {
   const at = (ports.now ?? Date.now)(), fs = ports.fs ?? nativeFs;
   const cost = structuredClone(run.cost?.schema === 'pdd.cost.v1' ? run.cost : before?.cost?.schema === 'pdd.cost.v1' ? before.cost : initial(run, at));
   cost.coverage = [];
-  const chats = [...savedChats(before), ...savedChats(run), ...auditChats(run, fs, cost, ports.auditRecords)];
+  const chats = [...savedChats(before), ...savedChats(run), ...auditChats(run, fs, cost, ports.auditRecords), ...selfReportChats(before), ...selfReportChats(run)];
   if (ports.skipCostSessions) cost.coverage.push('session-capture-deferred');
   else captureTokens(cost, run, chats, ports, at);
   capturePerson(cost, before, run, at);
+  captureSelfReports(cost, before, run, at);
   const next = outcome({ ...run, cost });
   if (next !== cost.outcome) { cost.outcome = next; cost.outcomeAt = at; }
   const calls = (() => { try { return fs.readFileSync(join(run.runDir, 'github-cost.jsonl'), 'utf8').split('\n').filter(line => { try { return number(JSON.parse(line).at); } catch { return false; } }).length; } catch { return 0; } })();
@@ -249,7 +287,7 @@ export async function captureClosedCi(run, ports = {}) {
 }
 
 function total(costs) {
-  const tokens = new Map(), person = { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null };
+  const tokens = new Map(), person = { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null }, selfReports = emptySelfReports();
   let suiteMinutes = null, ciMinutes = null, githubCalls = 0;
   for (const cost of costs) {
     for (const row of cost.tokens) {
@@ -257,20 +295,25 @@ function total(costs) {
       for (const key of keys) tokens.get(row.account)[key] += row[key];
     }
     for (const key of Object.keys(person)) if (cost.person[key] !== null) person[key] = (person[key] ?? 0) + cost.person[key];
+    for (const key of selfReportKeys) selfReports[key] += Number(cost.selfReports?.[key]) || 0;
     if (cost.suiteMinutes !== null) suiteMinutes = (suiteMinutes ?? 0) + cost.suiteMinutes;
     if (cost.ciMinutes !== null) ciMinutes = (ciMinutes ?? 0) + cost.ciMinutes;
     githubCalls += cost.githubCalls;
   }
-  return { totalTokens: tokens.size ? [...tokens.values()].reduce((sum, row) => sum + row.total, 0) : null, tokens: [...tokens.values()].sort((a,b) => a.account.localeCompare(b.account)), person, suiteMinutes, ciMinutes, githubCalls };
+  return { totalTokens: tokens.size ? [...tokens.values()].reduce((sum, row) => sum + row.total, 0) : null, tokens: [...tokens.values()].sort((a,b) => a.account.localeCompare(b.account)), person, selfReports, suiteMinutes, ciMinutes, githubCalls };
 }
 function eventsTotal(events) {
-  const result = { tokens: [], person: { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null }, suiteMinutes: null, ciMinutes: null, githubCalls: 0 };
+  const result = { tokens: [], person: { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null }, selfReports: emptySelfReports(), suiteMinutes: null, ciMinutes: null, githubCalls: 0 };
   for (const e of events) {
     if (keys.includes(e.metric) && e.account) {
       let row = result.tokens.find(row => row.account === e.account);
       if (!row) { row = { account: e.account, agent: e.agent, ...emptyTokens() }; result.tokens.push(row); }
       row[e.metric] += e.value;
     } else if (Object.hasOwn(result.person, e.metric)) result.person[e.metric] = (result.person[e.metric] ?? 0) + e.value;
+    else if (typeof e.metric === 'string' && e.metric.startsWith('selfReports.')) {
+      const k = e.metric.slice(12);
+      if (selfReportKeys.includes(k)) result.selfReports[k] = (result.selfReports[k] ?? 0) + e.value;
+    }
     else if (['suiteMinutes', 'ciMinutes', 'githubCalls'].includes(e.metric)) result[e.metric] = (result[e.metric] ?? 0) + e.value;
   }
   result.totalTokens = result.tokens.length ? result.tokens.reduce((sum, row) => sum + row.total, 0) : null;
@@ -282,6 +325,7 @@ function percentile(rows, q) {
   const result = total([]);
   for (const key of ['totalTokens','suiteMinutes','ciMinutes','githubCalls']) result[key] = rank(rows.map(row => row[key]).filter(number));
   for (const key of Object.keys(result.person)) result.person[key] = rank(rows.map(row => row.person[key]).filter(number));
+  for (const key of selfReportKeys) result.selfReports[key] = rank(rows.map(row => row.selfReports?.[key] ?? 0).filter(number));
   for (const account of new Set(rows.flatMap(row => row.tokens.map(token => token.account)))) {
     const token = rows.flatMap(row => row.tokens).find(row => row.account === account);
     result.tokens.push({ account, agent: token.agent, ...Object.fromEntries(keys.map(key => [key, rank(rows.map(row => row.tokens.find(token => token.account === account)?.[key] ?? 0))])) });
@@ -289,9 +333,14 @@ function percentile(rows, q) {
   return result;
 }
 export function costReport(runs, now) {
-  const costs = runs.map(run => ({ run, cost: run.cost ?? initial(run, now) }));
+  const costs = runs.map(run => {
+    const cost = structuredClone(run.cost ?? initial(run, now));
+    captureSelfReports(cost, null, run, now);
+    return { run, cost };
+  });
   const publicRows = costs.map(({ run, cost }) => ({ repo: run.repo, issue: run.number, runId: run.runId,
-    ...Object.fromEntries(['outcome','outcomeAt','tokens','person','suiteMinutes','ciMinutes','githubCalls','coverage'].map(key => [key, cost[key]])) }));
+    ...Object.fromEntries(['outcome','outcomeAt','tokens','person','selfReports','suiteMinutes','ciMinutes','githubCalls','coverage'].map(key => [key, cost[key]])) }));
+  const selfReports = total(costs.map(c => c.cost)).selfReports;
   const window = days => {
     const since = now - days * DAY, groups = new Map();
     for (const row of costs) { const key = `${row.run.repo.toLowerCase()}#${row.run.number}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
@@ -302,17 +351,20 @@ export function costReport(runs, now) {
     return { since, totals: eventsTotal(costs.flatMap(row => row.cost.events).filter(e => e.at > since && e.at <= now)),
       coverage: [...new Set(costs.flatMap(row => row.cost.coverage))].sort(), mergedIssues: merged.length, p50: percentile(merged, 0.5), p90: percentile(merged, 0.9) };
   };
-  return { schema: 'pdd.cost-report.v1', generatedAt: now, runs: publicRows, day: window(1), week: window(7) };
+  return { schema: 'pdd.cost-report.v1', generatedAt: now, selfReports, runs: publicRows, day: window(1), week: window(7) };
 }
 export function costStatusLines(report) {
   const num = value => value === null ? 'unknown' : Number(value.toFixed(2));
-  const describe = row => row ? `${num(row.totalTokens)} tokens; CI ${num(row.ciMinutes)} min; suite ${num(row.suiteMinutes)} min; GitHub ${row.githubCalls}; person Q/A/approvals ${row.person.questions}/${row.person.answers}/${row.person.approvals}, active ${num(row.person.activeMinutes)} min, wait ${num(row.person.waitingMinutes)} min` : 'no merged issues';
+  const srText = sr => `${sr?.filed ?? 0} filed, ${sr?.commented ?? 0} commented, ${sr?.skipped ?? 0} skipped`;
+  const describe = row => row ? `${num(row.totalTokens)} tokens; CI ${num(row.ciMinutes)} min; suite ${num(row.suiteMinutes)} min; GitHub ${row.githubCalls}; self-reports ${srText(row.selfReports)}; person Q/A/approvals ${row.person.questions}/${row.person.answers}/${row.person.approvals}, active ${num(row.person.activeMinutes)} min, wait ${num(row.person.waitingMinutes)} min` : 'no merged issues';
   const lines = ['Issue costs (local measured usage):'];
   for (const key of ['day','week']) {
     const row = report[key]; lines.push(`Last ${key}: ${describe(row.totals)}`, `  Per merged issue (${row.mergedIssues}): P50 ${describe(row.p50)}; P90 ${describe(row.p90)}`);
     for (const token of row.totals.tokens) lines.push(`  ${token.account}: ${token.total} tokens (input ${token.input}, cached ${token.cachedInput}, output ${token.output}, reasoning ${token.reasoningOutput})`);
     if (row.coverage.length) lines.push(`  Coverage: ${row.coverage.join(', ')}`);
   }
+  const sr = report.selfReports ?? emptySelfReports();
+  lines.push(`Self-reports: filed ${sr.filed ?? 0}, commented ${sr.commented ?? 0}, skipped ${sr.skipped ?? 0}`);
   lines.push(`Outcomes: ${['running',...outcomes].map(outcome => `${outcome} ${report.runs.filter(row => row.outcome === outcome).length}`).join(', ')}`);
   return lines.join('\n');
 }

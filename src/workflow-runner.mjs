@@ -1,4 +1,5 @@
 import {routeQuestionFor, idleParkingBlocker, idleSince, interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
+import {recordCommandCrash} from './autopilot-self-report.mjs';
 import { selectAutopilotBase } from './autopilot-base.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
 
@@ -10,7 +11,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2a47f692dd11eae221b5f2cce66e2f7b276ca9098512e2ef5061a53fb191ba1e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6ba55bd08475a66e3cf1a0181506c1be05b92a17e766b0ef8b90d3540a4da5e9).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -249,7 +250,11 @@ function publicationUpdate(run,keys=[]) {
 function saveGuard(action) {
   return async (...args)=>{
     try { return await action(...args); }
-    catch(error){if(error?.code==='workflow_run_save_failed' || error?.code==='workflow_progress_refused')return fail(error.message);throw error;}
+    catch(error){
+      if(error?.code==='workflow_run_save_failed' || error?.code==='workflow_progress_refused')return fail(error.message);
+      try { recordCommandCrash({ cwd: args[0]?.cwd, ref: args[0]?.ref, command: action.name || 'workflow', error }, args[1]); } catch {}
+      throw error;
+    }
   };
 }
 
@@ -5303,6 +5308,8 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
         delete fresh.routeWait;
       }
       endRuntimeWait(fresh); delete fresh.blockedOn;
+      delete fresh.commandFailure; delete fresh.invariantFailure; delete fresh.autopilotBug;
+      try { unlinkSync(join(fresh.runDir, 'command-crash.json')); } catch {}
       // Consume the accepted stop before resume/delivery can save a new one.
       // Environment retry delivery still needs its cause for validation.
       if (fresh.parking.blocker.kind !== 'environment') {
@@ -5312,7 +5319,7 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
     fresh.parking.phase = 'waking';
     if (text) fresh.parking.text = text;
     if (fresh.parking.blocker.kind === 'pdd-route' && (fresh.gate || openQuestion(fresh))) fresh.state = 'waiting';
-    else if (fresh.parking.blocker.kind !== 'environment' && (inferredGate || !fresh.gate && !openQuestion(fresh) || ['pdd', 'pdd-route'].includes(fresh.parking.blocker.kind))) fresh.state = 'running';
+    else if (fresh.parking.blocker.kind !== 'environment' && (inferredGate || !fresh.gate && !openQuestion(fresh) || ['pdd', 'pdd-route', 'runtime'].includes(fresh.parking.blocker.kind))) fresh.state = 'running';
   });
   const result = await openRunLocked({...input, automaticResume: {...input, parked: true}}, p);
   if (result.exitCode !== 0) return {...result, recovery: 'skipped'};

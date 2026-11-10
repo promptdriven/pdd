@@ -154,6 +154,10 @@ Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr
 
 The parent alert adapter gives the real alert owner the same injected GitHub execution transport as native factory commands. Keep private state and fake HTTP delivery, including failed and uncertain replies.
 
+## Self-report command crash scenario
+
+Include a factory scenario where a `pdd` command crashes during an active automatic run. Assert that Autopilot launches one fresh read-only diagnose subagent session, files one issue in `promptdriven/pdd` with label `pdd:self-report` and the cause signature marker (never in the working repository), parks the run naming that issue as its blocker, wakes the run when the issue closes, and reports the filed self-report in status and the cost ledger.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

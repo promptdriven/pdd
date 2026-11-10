@@ -7,6 +7,7 @@ export function factoryGithub(w) {
   const f = createGithubRepoFake({repository:w.repository,owner:'example',issues:0,now:()=>w.time});
   f.add(17,{title:'Use value two',body:'The value must be 2.',created:w.time-1000,updated:w.time-1000});
   f.prs = []; f.commands = []; f.merges = [];
+  f.pddCreated = []; f.pddComments = [];
   const ok = value => ({code:0,stdout:typeof value==='string'?value:JSON.stringify(value),stderr:''});
   const flag = (a,k) => a[a.indexOf(k)+1];
   const body = (a,o) => a.includes('--body-file') && flag(a,'--body-file')!=='-' ? readFileSync(flag(a,'--body-file'),'utf8') : String(o.input ?? (a.includes('--body')?flag(a,'--body'):''));
@@ -21,6 +22,30 @@ export function factoryGithub(w) {
     if(a[0]==='api' && a[1]?.includes('/rules/branches/'))return ok([]);
     if(a[0]==='label') return ok('');
     if(a[0]==='issue') {
+      const targetRepo=a.includes('--repo')?flag(a,'--repo'):f.repo;
+      if(targetRepo==='promptdriven/pdd') {
+        if(a[1]==='list') return ok(f.pddCreated);
+        if(a[1]==='create') {
+          const number=501+f.pddCreated.length;
+          const labels=a.flatMap((v,idx)=>v==='--label'?[a[idx+1]]:[]);
+          const assignee=a.includes('--assignee')?flag(a,'--assignee'):null;
+          const issue={number,url:`https://github.com/promptdriven/pdd/issues/${number}`,state:'open',title:flag(a,'--title'),body:body(a,o),labels,assignee,comments:[],updatedAt:new Date(w.time).toISOString()};
+          f.pddCreated.push(issue);
+          return ok(issue.url+'\n');
+        }
+        if(a[1]==='comment') {
+          const n=Number(a[2]),issue=f.pddCreated.find(i=>i.number===n);
+          const text=body(a,o);
+          if(issue)issue.comments.push(text);
+          f.pddComments.push({number:n,body:text});
+          return ok('');
+        }
+        if(a[1]==='close') {
+          const n=Number(a[2]),issue=f.pddCreated.find(i=>i.number===n);
+          if(issue)issue.state='closed';
+          return ok('');
+        }
+      }
       const n=Number(a[2]);
       if(a[1]==='edit') {
         if(a.includes('--add-label')) for(const label of flag(a,'--add-label').split(',')) if(!f.issues.get(n).labels.includes(label)) f.label(n,label);
@@ -61,6 +86,12 @@ export function factoryGithub(w) {
       endpoint=endpoint?.replace('https://api.github.com/','');
       let value,handled=true;
       if(endpoint===`repos/${f.repo}`)value={full_name:f.repo,owner:{login:f.owner},default_branch:'main'};
+      else if(/^repos\/promptdriven\/pdd\/issues\/\d+$/.test(endpoint??'')) {
+        const n=Number(endpoint.split('/').at(-1));
+        const issue=f.pddCreated.find(i=>i.number===n);
+        assert.ok(issue,`unknown promptdriven/pdd issue ${n}`);
+        value={number:issue.number,state:issue.state,html_url:issue.url,title:issue.title,body:issue.body};
+      }
       else if(a.includes('PATCH') && /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(endpoint??'')) {
         assert.ok(a.includes('state=open'),'factory issue PATCH must reopen the issue');
         const issue=f.issues.get(Number(endpoint.split('/').at(-1)));assert.ok(issue);

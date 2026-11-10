@@ -89,9 +89,30 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     return result;
   };
   w.auditCalls=[];
+  w.diagnoseCalls=[];
   w.execute=async(file,a,o={})=>{
     if(file==='codex' && a[0]==='exec') {
       const input=JSON.parse(o.input.split('Task input:\n').at(-1));
+      if(input.task==='self-report-diagnose') {
+        const session=randomUUID();
+        w.diagnoseCalls.push({session,args:a,input});
+        return {code:0,stdout:JSON.stringify({type:'thread.started',thread_id:session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({
+          title:`PDD command-crash: ${input.cause.code} in ${input.cause.module} (${input.cause.fn})`,
+          problem:`${input.cause.command || 'pdd workflow'} crashed with ${input.cause.code}: ${input.cause.summary}`,
+          steps:[`Run ${input.cause.command || 'pdd workflow'} in run #${input.run?.number ?? 17}`],
+          expected:'The pdd command completes without an internal crash.',
+          actual:`${input.cause.code}: ${input.cause.summary}`,
+          evidence:input.cause.evidence || `${input.cause.module}:${input.cause.line || 1}`,
+          rootCause:{
+            module:input.cause.module || 'src/workflow-runner.mjs',
+            fn:input.cause.fn || 'stepDoneCommand',
+            line:input.cause.line || 250,
+            fileLine:`${input.cause.module || 'src/workflow-runner.mjs'}:${input.cause.line || 250}`,
+            explanation:`Crash reproduced in ${input.cause.module || 'src/workflow-runner.mjs'} (${input.cause.fn || 'stepDoneCommand'}).`,
+          },
+          signature:input.cause.signature,
+        })}})+'\n',stderr:''};
+      }
       const observations=[];
       for(const revision of [input.parent,input.merge]) {
         w.git(o.cwd,'checkout','--detach',revision);

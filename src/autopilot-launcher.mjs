@@ -1,6 +1,7 @@
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {auditMerge, pendingAudits} from './autopilot-audit.mjs';
 import {collectRouteQuestions, idleParkingBlocker, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
+import {reconcileSelfReports, SELF_REPORT_REPO} from './autopilot-self-report.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession, finishedChats} from './workflow-chat.mjs';
 import {WORKFLOW_CAPABILITIES, sweepIdleRuns, recoverAutomaticRunOwner, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
@@ -10,7 +11,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 09dd048bd02275b49d06e674c8ffed1bd8325bd8fad9d53038b820f431bbff65).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a0ef0482ce91f384e2632b8d9f8d5a84de1ef1ebbf9cf183599c7224ef8c8284).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -349,6 +350,44 @@ async function trusted(row, state, config, p) {
 // A trusted claim comment that carries a lastSeen heartbeat.
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
+async function namedIssueClosed(until, state, p, defaultRepo = state.repo) {
+  const raw = String(until ?? '');
+  const fullMatch = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$/.exec(raw);
+  const number = fullMatch ? fullMatch[2] : /^(?:#)?([1-9][0-9]*)$/.exec(raw)?.[1];
+  if (!number) return false;
+  const candidates = fullMatch ? [fullMatch[1]] : [...new Set([defaultRepo, state.repo].filter(Boolean))];
+  for (const repo of candidates) {
+    const issue = await p.execute('gh', ['api', `repos/${repo}/issues/${number}`], {purpose: 'dependencies'});
+    if (issue.code === 0) {
+      try { if (JSON.parse(issue.stdout).state === 'closed') return true; } catch {}
+    }
+  }
+  return false;
+}
+function selfReportPorts(state, p) {
+  return {
+    ...p,
+    stateFile: state.stateFile,
+    stateRoot: typeof state.stateFile === 'string' ? dirname(state.stateFile) : p.stateRoot,
+    packageRoot: state.packageRoot ?? dirname(dirname(self)),
+    agent: state.agent?.kind ?? 'codex',
+    agentCommand: state.agent?.command,
+    readCheck: async run => {
+      try {
+        const checks = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env});
+        return checks.find(row => row.kind === 'pdd test') ?? null;
+      } catch { return null; }
+    },
+    save: () => p.scanGuard?.(latest => {
+      latest.selfReports = state.selfReports;
+      latest.selfReportLedger = state.selfReportLedger;
+      latest.selfReportMachine = state.selfReportMachine;
+      latest.selfReportConsent = state.selfReportConsent;
+      latest.selfReportAsked = state.selfReportAsked;
+      latest.selfReportConsentPrompt = state.selfReportConsentPrompt;
+    }),
+  };
+}
 function parkingPorts(state, p, {localOnly = false} = {}) {
   const worker = {...workflowCleanupPorts(p,p), autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
     const result = await p.execute(file, args, options);
@@ -368,6 +407,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return Boolean(live?.alive && !['idle', 'done'].includes(live.status));
     },
     observeBlocker: async run => {
+      if (p.selfReportBlockers?.has(run.number)) return p.selfReportBlockers.get(run.number);
       if (run.blockedOn) return null;
       if (run.state === 'waiting' && run.gate?.kind === 'approve-pr' && !run.question && run.done?.check) {
         let checks;
@@ -403,8 +443,10 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run, interpreterBatch, interpreterCheck}, worker));
     },
     wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
-      text: rule?.text ?? (['pdd', 'pdd-route'].includes(run.parking.blocker.kind)
-        ? `The installed PDD contains ${run.parking.blocker.until}. ${run.parking.blocker.until === '#2897' ? 'The PR 1 re-entry and current-main integration route now exists.' : 'The required fix is available.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
+      text: rule?.text ?? (run.parking.blocker.kind === 'runtime'
+        ? `Runtime issue #${run.parking.blocker.until} is closed. Run pdd test --read${run.parking.blocker.batch ? ` ${run.parking.blocker.batch}` : ''} first and resend only a check that surely gave no verdict. Keep completed work, gates and questions.`
+        : ['pdd', 'pdd-route'].includes(run.parking.blocker.kind)
+          ? `The installed PDD contains ${run.parking.blocker.until}. ${run.parking.blocker.until === '#2897' ? 'The PR 1 re-entry and current-main integration route now exists.' : 'The required fix is available.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
       {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
@@ -413,16 +455,23 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       if (['unknown','binding'].includes(blocker.kind)) return hasParkedReply(run, worker);
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (['pdd', 'pdd-route'].includes(blocker.kind)) {
+        if (!localOnly && p.blockerCleared && await p.blockerCleared(run, blocker) === true) return true;
         const required = blocker.until === '#2897' ? 'capability:prompt-reentry' : /^#[1-9][0-9]*$/.test(blocker.until) ? `capability:issue-${blocker.until.slice(1)}` : blocker.until;
-        if (typeof required !== 'string') return false;
-        if (required.startsWith('capability:')) return (p.installedPddCapabilities ?? WORKFLOW_CAPABILITIES).includes(required.slice(11));
-        if (/^commit:[a-f0-9]{7,40}$/.test(required)) {
-          try {
-            const result = await p.execute('git', ['merge-base', '--is-ancestor', required.slice(7), 'HEAD'], {cwd: dirname(dirname(self))});
-            return result.code === 0;
-          } catch {return false;}
+        if (typeof required === 'string') {
+          if (required.startsWith('capability:') && (p.installedPddCapabilities ?? WORKFLOW_CAPABILITIES).includes(required.slice(11))) return true;
+          if (/^commit:[a-f0-9]{7,40}$/.test(required)) {
+            try {
+              const result = await p.execute('git', ['merge-base', '--is-ancestor', required.slice(7), 'HEAD'], {cwd: dirname(dirname(self))});
+              if (result.code === 0) return true;
+            } catch {}
+          }
         }
-        return false;
+        return !localOnly && await namedIssueClosed(blocker.until, state, p, SELF_REPORT_REPO);
+      }
+      if (blocker.kind === 'runtime') {
+        if (rule) return true;
+        if (!localOnly && p.blockerCleared && await p.blockerCleared(run, blocker) === true) return true;
+        return !localOnly && await namedIssueClosed(blocker.until, state, p, SELF_REPORT_REPO);
       }
       if (localOnly) return false;
       if (p.blockerCleared) return await p.blockerCleared(run, blocker) === true;
@@ -509,10 +558,23 @@ async function parkingTick(state, p, config, options = {}) {
     const ports = parkingPorts(state, p, options);
     const routes = (await ports.list()).filter(run => run.repo?.toLowerCase() === state.repo.toLowerCase() && run.sourceRoot === state.cwd
       && run.automaticOrigin?.coordinatorId === state.coordinatorId && run.automaticOrigin?.machine === state.machine);
+    if (config.mode === 'auto') {
+      p.selfReportBlockers = await reconcileSelfReports(state, selfReportPorts(state, p), config, routes, options);
+    }
     await routeQuestionsTick(state, p, config, routes, options.localOnly);
     state.parking = await reconcileParking(state, ports, {...options, policy: config.parking, release: !options.localOnly});
     state.parkedNumbers = (await ports.list()).filter(run => run.parking && !['completed', 'cancelled'].includes(run.state)).map(run => run.number);
-    await p.scanGuard(latest => {latest.parking = state.parking; latest.parkedNumbers = state.parkedNumbers; latest.parkingAlerts = state.parkingAlerts;});
+    await p.scanGuard(latest => {
+      latest.parking = state.parking;
+      latest.parkedNumbers = state.parkedNumbers;
+      latest.parkingAlerts = state.parkingAlerts;
+      if (state.selfReports) latest.selfReports = state.selfReports;
+      if (state.selfReportLedger) latest.selfReportLedger = state.selfReportLedger;
+      if (state.selfReportMachine) latest.selfReportMachine = state.selfReportMachine;
+      if (state.selfReportConsent !== undefined) latest.selfReportConsent = state.selfReportConsent;
+      if (state.selfReportAsked !== undefined) latest.selfReportAsked = state.selfReportAsked;
+      if (state.selfReportConsentPrompt !== undefined) latest.selfReportConsentPrompt = state.selfReportConsentPrompt;
+    });
   } catch (error) { p.warn(`Parking reconciliation held: ${line(error.message)}`); }
 }
 
@@ -555,7 +617,8 @@ async function resumeStoppedWorkers(state, p, recoveredRuns = null) {
     if (recoveredRuns && !recoveredRuns.has(run.runDir)) continue;
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
       || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine) continue;
-    if (run.parking) continue;
+    if (run.parking || p.selfReportBlockers?.has(run.number) || run.commandFailure || run.invariantFailure || run.autopilotBug
+      || (run.runDir && existsSync(join(run.runDir, 'command-crash.json')))) continue;
     try {
       const result = await p.scanAction(() => resumeStoppedRun({ref: String(run.number), cwd: state.cwd,
         packageRoot: state.packageRoot, coordinatorId: state.coordinatorId, machine: state.machine}, workerPorts));
@@ -2254,7 +2317,13 @@ async function localCosts(input, ports, state = {}) {
       return latest;
     }, options); } catch { return run; }
   });
-  return costReport(measured, (ports.now ?? Date.now)());
+  const report = costReport(measured, (ports.now ?? Date.now)());
+  if (state?.selfReports && typeof state.selfReports === 'object' && !Array.isArray(state.selfReports)) {
+    for (const key of ['filed', 'commented', 'skipped']) {
+      report.selfReports[key] = Math.max(report.selfReports[key] ?? 0, Number(state.selfReports[key]) || 0);
+    }
+  }
+  return report;
 }
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, checks, resumeCustody, issues = [] } = input;
@@ -2309,6 +2378,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     if (command === 'status' && input.json) {
       const folder = stateFolder(ports, p.env), routeQuestions = [], auditHolds = [];
+      const savedSelfReports = { filed: 0, commented: 0, skipped: 0 };
       for (const name of existsSync(folder) ? readdirSync(folder) : []) {
         if (!name.endsWith('.json')) continue;
         const saved = read(join(folder, name));
@@ -2316,8 +2386,17 @@ export async function runAutopilotLauncher(input, ports = {}) {
           auditHolds.push({repository:saved.repo,cwd:saved.cwd,holds:saved.auditHolds});
         if (saved?.routeQuestions && (input.all || samePath(saved.cwd, input.cwd)))
           routeQuestions.push({repository: saved.repo, cwd: saved.cwd, ...saved.routeQuestions});
+        if (saved?.selfReports && (input.all || samePath(saved.cwd, input.cwd))) {
+          for (const key of ['filed', 'commented', 'skipped']) {
+            savedSelfReports[key] += Number(saved.selfReports[key]) || 0;
+          }
+        }
       }
-      return ok(JSON.stringify({...await localCosts(input, ports), routeQuestions, auditHolds}, null, 2));
+      const costs = await localCosts(input, ports);
+      for (const key of ['filed', 'commented', 'skipped']) {
+        costs.selfReports[key] = Math.max(costs.selfReports[key] ?? 0, savedSelfReports[key]);
+      }
+      return ok(JSON.stringify({...costs, routeQuestions, auditHolds}, null, 2));
     }
     if (command === 'status' && input.all) {
       const status = await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);

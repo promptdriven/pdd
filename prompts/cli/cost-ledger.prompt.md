@@ -116,6 +116,8 @@ optional ports.auditRecords (shared records already read under repository custod
 filtered by runId, in the same session inventory and deduplication. Read through
 the filesystem port. Repeated status reads never count a session twice.
 
+Include native self-report diagnose subagent sessions in `runDir/self-reports/*.json` with matching `runId` in the same session accounting and deduplication as workflow and auditor chats. Report self-report counts `selfReports: {filed, commented, skipped}` on each run row and at the report root in `costReport`, and include `self-reports X filed, Y commented, Z skipped` in `costStatusLines`.
+
 ## Dependencies
 
 The [GitHub call counter](github-calls.prompt.md) is a navigation-only consumer

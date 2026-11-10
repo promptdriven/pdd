@@ -54,19 +54,24 @@ This bound triggers a visible retry reason, never permission to close unsafe wor
 ## Binding refusals (#3135)
 
 Recognize `binding-missing`, `missing-binding`, and an unresolved binding contract
-in a stopped run's current reason as `{kind:"binding",until:null}` before generic
+in a stopped run's current reason as `{kind:"binding",until}`; until is its named #N issue number without #, or null before generic
 unknown/interpreter/gate inference. Do not override an explicit independent
 blockedOn or current unanswered person question. This is an application binding
-hold, with no timed retry. Retain it until a bound explicit reply/retry arrives;
-never wake it through interpreter health alone. Display binding in summaries.
+hold, with no timed retry. Retain it until a bound explicit reply/retry arrives, its named issue closes, or its owning prompt or interface changes on the configured base. Never wake it through interpreter health alone. Display binding in summaries.
+
+## Self-report blockers and wake conditions
+
+Export `wakeCondition(blocker)`, returning plain words for the current clearing evidence. `parkingSummary` adds `waits`: an array of `{number,condition}` for each parked run, and `parkingWords` includes these per-run conditions. A `pdd` or `runtime` self-report blocker names its filed or matched `promptdriven/pdd` issue in `until` (`#N` or `N`) and clears when that issue closes (or when the installed PDD has the required capability/commit fix, or a later check gets a verdict for `runtime`).
 
 ## Dependencies
+
+- [Self-report filing](autopilot-self-report.prompt.md): required context for PDD and Runtime self-report blockers and issue-close wake conditions.
 
 - [Environment causes](autopilot-environment.prompt.md): required generation/runtime/testing context for eligible environmentRetry and its bounded backoff. No other dependency policy is copied here.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"5f077470122348a7186a0a2156007cf556d8501fccfae45a3919112c5a8d69e0","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status": "draft","prose_sha256":"f262d875a1282ab7ee71761f6ed157e3527f41f1cbc4f3c00cb393281808820f","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

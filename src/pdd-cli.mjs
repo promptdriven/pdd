@@ -1,9 +1,10 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8009a502eace54f3480b4d31cfe7030bc887b099c8095f33f9bca3baa246a772).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: ba629d47c32a999900a084bd8894c876e54c5cf42c44451dc89205b6b5762e6a).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
+import { recordCommandCrash } from './autopilot-self-report.mjs';
 import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
@@ -228,6 +229,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         return result.exitCode;
       } catch (error) {
+        try { recordCommandCrash({ cwd, ref: plan.operands[0], command: plan.local, error }, { env }); } catch {}
         line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`);
         return 1;
       }
@@ -254,6 +256,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid proof reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch (error) {
+        try { recordCommandCrash({ cwd, ref: plan.operands[0], command: plan.local, error }, { env }); } catch {}
         line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`); return 1;
       }
     }
@@ -263,7 +266,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const result = await viewRun({ ref: plan.operands[0], cwd });
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         return result.exitCode;
-      } catch (error) { line(stderr, `The saved run could not be read. Check pdd workflow status.${reason(error)}`); return 1; }
+      } catch (error) {
+        try { recordCommandCrash({ cwd, ref: plan.operands[0], command: plan.local, error }, { env }); } catch {}
+        line(stderr, `The saved run could not be read. Check pdd workflow status.${reason(error)}`); return 1;
+      }
     }
     case 'mcp': {
       try {
@@ -353,6 +359,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const runtime = await import('./runtime-client.mjs');
         return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
       } catch (error) {
+        try { recordCommandCrash({ cwd, command: plan.local, error }, { env }); } catch {}
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
       }

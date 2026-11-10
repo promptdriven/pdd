@@ -9,7 +9,7 @@ metadata:
 
 Before you start or use Autopilot, confirm the repo. If this folder is in no Git repo, the person named another repo or it is unclear, ask one plain question with the repos you see and wait; never pick one. Run `pdd autopilot` in that repo's folder.
 
-Read root `pdd.json`: `{"autopilot":{"mode":"off|observe|auto","trust":[...]}}` and `checker`. If `autopilot.mode` is absent or `off`, do nothing; a person leads. `observe`: do all the work; a person merges. `auto`: $pdd-merge merges under its delegation and merge rules. `pdd autopilot start` runs a tick with no AI that starts this skill only when there is work.
+Read root `pdd.json`: `{"autopilot":{"mode":"off|observe|auto","selfReport":"auto|ask|off","trust":[...]}}` and `checker`. If `autopilot.mode` is absent or `off`, do nothing; a person leads. `observe`: do all the work; a person merges. `auto`: $pdd-merge merges under its delegation and merge rules. `pdd autopilot start` runs a tick with no AI that starts this skill only when there is work.
 
 GitHub labels `pdd:working`, `pdd:stuck`, `pdd:no-verdict`, `pdd:code-pending`: add with `gh issue edit N --add-label NAME` (or `gh pr edit`); create a missing one with `gh label create NAME`.
 

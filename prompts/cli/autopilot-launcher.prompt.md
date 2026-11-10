@@ -1352,6 +1352,8 @@ person questions and explicit blockers.
 
 ## Dependencies
 
+- [Self-report filing](autopilot-self-report.prompt.md): required native generation and verification context for PDD/Autopilot and Runtime failure classification, read-only subagent diagnosis, deduplicated filing in `promptdriven/pdd`, consent, parking/wake on issue closure, and status self-report counts.
+
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
 
 - [Parking policy](autopilot-parking.prompt.md): required generation/runtime/testing context for resource-free parking, blocker shapes, wake precedence and age/count safety limits.
