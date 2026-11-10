@@ -152,6 +152,10 @@ home, config and queues. Retain this scenario as a failing assertion on the base
 
 Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr and interpreter fakes. An executable stale pdd earlier on PATH and missing Codex sign-in must produce a PATH warning and an agent failure line with concrete commands; start returns the identical diagnostics and creates no state, timers, panes, claims, GitHub writes or interpreter jobs. Run the real doctor for existing factory starts with the factory program, file, profile and health ports. Do not replace selected-profile observations with a separately healthy account. A restart with an unrelated signed-out caller must retain the healthy saved profile and coordinator identity. No real machine/account read escapes.
 
+## Automatic gate approvals in auto mode (#3145)
+
+In `auto` mode (`autopilot.mode: "auto"` and `strict_approvals` not `true`), exercise automatic approval by Autopilot across Story, plan, PR 1 (`approve-pr` and `ask-code`), and PR 2 / code PR gates with zero coordinator or person `workflow approve` calls once required checks pass and the fresh draft review records `Review: no must-fix`. Assert each auto-approval is recorded in the run record (`autoApprovals` / `decisions`) and PR approval evidence with `mode: "auto"` and the passed `checks`. Exercise a fresh Story draft review with `Review: 1 must-fix` holding the Story gate until repaired to `Review: no must-fix`, a user-facing contract change stopping with one person question (`workflow ask` / `Contract question:`), and `observe` mode / `strict_approvals: true` retaining person-approval gates.
+
 The parent alert adapter gives the real alert owner the same injected GitHub execution transport as native factory commands. Keep private state and fake HTTP delivery, including failed and uncertain replies.
 
 ## Dependencies

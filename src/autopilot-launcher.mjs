@@ -530,7 +530,7 @@ async function advanceWaitingPr1Gates(state, p, numbers = null) {
   for (const run of runs) {
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
       || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine
-      || run.state !== 'waiting' || run.gate?.kind !== 'approve-pr' || numbers && !numbers.has(run.number)) continue;
+      || run.state !== 'waiting' || !['approve', 'approve-pr', 'ask-code'].includes(run.gate?.kind) || numbers && !numbers.has(run.number)) continue;
     if (run.parking && (run.parking.phase !== 'parked' || run.parking.blocker?.kind !== 'person')) reconsider.add(run.number);
     try {
       const result = await p.scanAction(() => advanceAutomaticPr1({ref: String(run.number), cwd: state.cwd,

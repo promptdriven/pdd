@@ -694,3 +694,85 @@ test('factory 3125: a full workflow session admits healthy coordinator reuse in 
   assert.ok(w.herdr.panes.some(p=>p.pane_id===personal.result.root_pane.pane_id));
   assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });
+
+test('factory 3145: auto mode records automatic Story, plan and PR gate approvals with mode and checks without person waits',async t=>{
+  for(const workflow of ['small-change','feature']) {
+    const w=await factoryWorld(t,{workflow});await w.begin();
+    const a=scriptedAgent(w);await a.finish();
+    assert.equal(w.commands.filter(c=>c.argv[0]==='workflow'&&c.argv[1]==='approve').length,0,`${workflow} in auto mode must not wait for workflow approve`);
+    const run=w.record();
+    const expectedStages=workflow==='small-change'?['plan','build']:['story','prompt-pr','code'];
+    for(const stage of expectedStages) {
+      const d=run.decisions.find(row=>row.stage===stage&&row.decision==='approve');
+      assert.ok(d,`missing auto-approval decision for ${workflow} stage ${stage}`);
+      assert.ok(['autopilot-auto','automatic-check-pass'].includes(d.via));
+      assert.ok(['autopilot-auto','automatic-check-pass'].includes(d.evidence.route));
+      assert.equal(d.evidence.basis.mode,'auto');
+      assert.ok(Array.isArray(d.evidence.basis.checks)&&d.evidence.basis.checks.length>0);
+      assert.ok(d.evidence.basis.checks.some(c=>c.includes('no must-fix')));
+    }
+    for(const pr of w.github.prs) {
+      assert.match(pr.body,/Approved by Autopilot \(no person asked\):/);
+      assert.match(pr.body,/mode `"auto"`/);
+      assert.match(pr.body,/checks `"/);
+    }
+    const status=JSON.parse((await w.command(['workflow','status','17','--json'])).stdout).runs[0];
+    assert.ok(Array.isArray(status.autoApprovals)&&status.autoApprovals.length>=expectedStages.length);
+    await a.merge();assert.deepEqual(w.leadActions,[]);
+  }
+});
+
+test('factory 3145: fresh draft review with must-fix holds auto-approval until repaired',async t=>{
+  const w=await factoryWorld(t,{workflow:'bug'});w.draftReviewMustFix=2;
+  await w.begin();const a=scriptedAgent(w);
+  await a.until(r=>Boolean(r.gate?.automaticHold));
+  assert.equal(w.record().area,0);assert.equal(w.record().gate?.kind,'approve');
+  assert.match(w.record().gate?.automaticHold ?? '',/fresh Story draft review has 2 must-fix/);
+  assert.equal(w.record().decisions.length,0);
+  await w.tick();assert.equal(w.record().area,0);assert.equal(w.record().decisions.length,0);
+  delete w.draftReviewMustFix;
+  put(w.record().runDir,'story-review.md','Review: no must-fix\n');
+  await w.tick();
+  assert.equal(w.record().area,1,'repairing story-review.md to no must-fix advances past the Story gate on tick');
+  assert.equal(w.record().decisions[0]?.via,'autopilot-auto');
+  assert.equal(w.record().decisions[0]?.evidence?.route,'autopilot-auto');
+  assert.equal(w.record().decisions[0]?.evidence?.basis?.mode,'auto');
+  assert.ok(w.record().decisions[0]?.evidence?.basis?.checks?.includes('fresh-draft-review: no must-fix'));
+  await a.finish();
+  assert.equal(w.commands.filter(c=>c.argv[0]==='workflow'&&c.argv[1]==='approve').length,0);
+  await a.merge();assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3145: user-facing contract change asks one person question and holds auto-approval',async t=>{
+  const w=await factoryWorld(t,{workflow:'feature'});
+  w.contractQuestion='Should the public CLI flag be --value or --target?';
+  await w.begin();const a=scriptedAgent(w);
+  await a.until(r=>Boolean(r.question));
+  const held=w.record();
+  assert.equal(held.area,0);assert.equal(held.gate?.kind,'approve');
+  assert.equal(held.question?.kind,'contract-change');
+  assert.match(held.question?.text ?? '',/--value or --target/);
+  assert.match(held.gate?.automaticHold ?? '',/user-facing contract change requires a person decision/);
+  assert.equal(held.decisions.length,0);
+  await w.tick();assert.equal(w.record().area,0);assert.equal(w.record().decisions.length,0);
+  assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3145: observe mode and strict_approvals keep person gate behavior',async t=>{
+  for(const override of [{mode:'observe'},{strict:true}]) {
+    const w=await factoryWorld(t,{workflow:'bug'});await w.begin();
+    const cfg=readJson(join(w.cwd,'pdd.json'));
+    if(override.mode)cfg.autopilot.mode=override.mode;
+    if(override.strict)cfg.strict_approvals=true;
+    put(w.cwd,'pdd.json',cfg);
+    const a=scriptedAgent(w);
+    await a.step();await a.step();
+    const held=w.record();
+    assert.equal(held.area,0);assert.equal(held.gate?.kind,'approve');
+    assert.equal(held.decisions.length,0);
+    await w.tick();
+    assert.equal(w.record().area,0);assert.equal(w.record().gate?.kind,'approve');
+    assert.equal(w.record().decisions.length,0);
+    assert.deepEqual(w.leadActions,[]);
+  }
+});

@@ -26,7 +26,17 @@ export function approvalRecords(run) {
   for (const decision of run.decisions ?? []) {
     if (decision.decision !== 'approve') continue;
     if (decision.evidence) rows.push(decision.evidence);
-    else rows.push({ route: decision.via, at: decision.at, ...(decision.text !== undefined ? { words: decision.text } : {}) });
+    else rows.push({
+      route: decision.via,
+      at: decision.at,
+      ...(decision.text !== undefined ? { words: decision.text } : {}),
+      ...((decision.mode || Array.isArray(decision.checks)) ? {
+        basis: {
+          ...(decision.mode ? { mode: decision.mode } : {}),
+          ...(Array.isArray(decision.checks) ? { checks: decision.checks } : {}),
+        },
+      } : {}),
+    });
   }
   rows.push(...(run.promptApprovals ?? []));
   return rows.sort((a,b) => a.at-b.at).filter(evidence => {
@@ -40,11 +50,13 @@ export function approvalRecords(run) {
 function approvalLines(records) {
   return records.flatMap(evidence => {
     const label = evidence.route === 'said' ? 'Approved in chat:' : evidence.route === 'chat' ? 'Approved in area chat:'
-      : evidence.route === 'automatic-check-pass' ? 'Opened after a full check pass (no person asked):' : evidence.route === 'card-choice' ? 'Code PR chosen at the Story card:' : evidence.route === 'prompt-reentry' ? 'Code PR resumed under the existing automatic scope:' : 'Approved in terminal:';
+      : evidence.route === 'automatic-check-pass' ? 'Opened after a full check pass (no person asked):' : evidence.route === 'card-choice' ? 'Code PR chosen at the Story card:' : evidence.route === 'prompt-reentry' ? 'Code PR resumed under the existing automatic scope:' : evidence.route === 'autopilot-auto' ? 'Approved by Autopilot (no person asked):' : 'Approved in terminal:';
     const values = [evidence.words !== undefined && evidence.words !== null ? approvalValue(evidence.words) : null,
       evidence.actor ? `actor ${approvalValue(evidence.actor.kind)} ${approvalValue(evidence.actor.id)}` : null,
       evidence.at !== undefined ? `at ${approvalValue(new Date(evidence.at).toISOString())}` : null,
       `route ${approvalValue(evidence.route)}`,
+      evidence.basis?.mode ? `mode ${approvalValue(evidence.basis.mode)}` : null,
+      Array.isArray(evidence.basis?.checks) && evidence.basis.checks.length ? `checks ${approvalValue(evidence.basis.checks.join(', '))}` : null,
       ...(evidence.prompts ?? []).map(prompt => `${approvalValue(prompt.path)} ${approvalValue(prompt.proseSha256)}`)].filter(Boolean);
     return [`${label} ${values.join('; ')}`];
   });

@@ -15,11 +15,16 @@ test('value follows the issue',()=>assert.equal(process.env.FACTORY_MUTANT?value
 export function scriptedAgent(w) {
   const a={steps:[],briefs:[],suites:[],checks:[]};
   a.prepare=async()=>{
-    const {root}=w.record();
+    const {root,runDir}=w.record();
     if(!w.codeOnly)put(root,'value.prompt.md',valuePrompt(2));
     put(root,'user_stories/value.md','As a user, I want the value to be two, so that the result follows my request.\n\n## Acceptance criteria\n\n1. The value is 2.\n');
     put(root,'tests/value.json',scenario);
     put(root,'test/value.test.mjs',nativeTest);
+    if(!w.omitDraftReview){
+      const reviewLine=w.draftReviewMustFix?`Review: ${w.draftReviewMustFix} must-fix\n`:'Review: no must-fix\n';
+      const contractLine=w.contractQuestion?`Contract change question: ${w.contractQuestion}\n`:'';
+      put(runDir,w.workflow==='small-change'?'plan-review.md':'story-review.md',reviewLine+contractLine);
+    }
     await w.command(['test','--fill-hash'],{cwd:root});
   };
   a.native=(mutant=false)=>{
@@ -63,6 +68,7 @@ export function scriptedAgent(w) {
       if(area.replay_evidence)a.evidence();
     }
     // Recompute after formal/review in case a step committed source.
+    if(step==='review' && !w.omitCodeReview)put(run.runDir,'review.md',w.codeReviewMustFix?`Review: ${w.codeReviewMustFix} must-fix\n`:'Review: no must-fix\n');
     if(['formal','review'].includes(step) && area.replay_evidence)a.evidence();
     const verdict=w.codeOnly?'Verdict: the prompt is right; the bug is only in the CODE.':'Verdict: the bug is in the PROMPT (its check fails on the issue case).';
     const details=w.codeOnly?'Prompt unchanged; passing on old and new snapshots. Native old code fails the value assertion; corrected code passes.':'Prompt correction: old fails; new passes.';

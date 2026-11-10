@@ -58,6 +58,7 @@ the same merge.
 | Claim transfer | The old coordinator cannot continue the current chat or publish after another machine takes the claim. |
 | Base integration | A clean base merge uses the separate bounded integration counter, retains failed evidence and needs fresh validation before merge. |
 | PR 1 re-entry | The corrected prompt survives code entry and merge; expected values stay fixed. |
+| Auto-mode gate approvals | In `auto` mode, Story, plan, PR 1 and PR 2 gates record `autopilot-auto` approval with `mode "auto"` and passing checks when the fresh draft review has `Review: no must-fix`; must-fix draft reviews and user-facing contract change questions hold until resolved; `observe` mode and `strict_approvals` wait for a person. |
 | Run serialization compatibility | Without Story coverage or its recorded contract and path inventory, publication waits for a supported gate; prior decisions survive and the run reaches merge. |
 
 Synthetic operator and person actions apply only to disposable fixtures. The test

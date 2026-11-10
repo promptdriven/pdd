@@ -23,7 +23,7 @@ Workflow cleanup and pane admission use the injected workflowHerdr port, then th
 ## Waiting PR 1 gates
 
 In auto mode, every tick and completion reconciliation handles saved waiting
-PR 1 gates before dependency intake or dependency review delivery. Read this
+automatic workflow gates (`approve`, `approve-pr`, `ask-code`) before dependency intake or dependency review delivery. Read this
 checkout's runs with `listRuns`, filter to its repository, source checkout and
 current automatic coordinator/machine, and call the workflow runner's
 `advanceAutomaticPr1` boundary under the existing scan admission guard. Forward
