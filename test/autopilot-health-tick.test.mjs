@@ -114,3 +114,59 @@ test('health alert during a GitHub wait uses saved repository and webhook withou
   await f.tick(); assert.equal(gh, 0); assert.equal(f.sent.length, 1);
   assert.equal(state(f).health.paused, true); assert.equal(f.prompts.length, 0);
 });
+
+test('GitHub budget reserve and rate-limit pauses send one usage-limit alert with reset time and one recovered alert after reset', async t => {
+  const f = await launcher(t); await f.start(); f.prompts.length = 0; f.issues = [issue(12)];
+  const resetSec = Math.floor((f.time + 180_000) / 1000), resetIso = new Date(resetSec * 1000).toISOString();
+  const run = f.ports.run;
+  // Seed the GitHub rate-limit ledger below the 1000-call reserve floor via a real counted gh api header reply.
+  f.ports.run = async (command, args, ...rest) => {
+    if (command === 'gh' && args[0] === 'api') {
+      return { code: 0, stdout: `HTTP/2.0 200 OK\r\nx-ratelimit-limit: 5000\r\nx-ratelimit-remaining: 400\r\nx-ratelimit-reset: ${resetSec}\r\nx-ratelimit-resource: core\r\n\r\n[]`, stderr: '' };
+    }
+    return run(command, args, ...rest);
+  };
+  const { githubLedger, githubEntry } = await import('../src/github-calls.mjs');
+  githubLedger({ root: f.ports.stateRoot, repository: 'owner/repo' }).record(githubEntry(
+    ['api', '-i', 'repos/owner/repo/issues'],
+    { code: 0, stdout: `HTTP/2.0 200 OK\r\nx-ratelimit-limit: 5000\r\nx-ratelimit-remaining: 400\r\nx-ratelimit-reset: ${resetSec}\r\nx-ratelimit-resource: core\r\n\r\n[]`, stderr: '' },
+    'issues',
+    f.time,
+  ));
+  await f.tick();
+  assert.equal(f.prompts.length, 0, 'reserve budget must pause coordinator admission');
+  assert.equal(f.sent.length, 1, 'reserve pause sends one usage-limit alert');
+  assert.match(f.sent[0], /usage-limit/);
+  assert.ok(f.sent[0].includes(resetIso), 'alert includes the GitHub reset time');
+  assert.equal(state(f).githubLimit?.resetAt, resetSec * 1000);
+
+  // Repeated ticks while paused for the same GitHub budget window must not repeat the alert.
+  f.time += 30_000; await f.tick();
+  f.time += 30_000; await f.tick();
+  assert.equal(f.sent.length, 1, 'no repeat alert per tick during the same GitHub pause');
+
+  // After the reset window passes and GitHub reads succeed, send one recovered alert.
+  f.time = resetSec * 1000 + 1_000;
+  f.ports.run = run;
+  await f.tick();
+  assert.equal(f.sent.length, 2, 'resuming GitHub reads sends one recovered alert');
+  assert.match(f.sent[1], /recovered/);
+  assert.equal(state(f).githubLimit, undefined);
+  assert.equal(f.prompts.length, 1);
+
+  // Also verify a direct 429 rate-limit response from queryIssues pauses once and recovers once.
+  const nextResetMs = f.time + 120_000, nextResetIso = new Date(nextResetMs).toISOString();
+  f.issues = [issue(13)];
+  f.ports.queryIssues = async () => ({ status: 429, rateLimited: true, resetAt: nextResetMs, issues: [] });
+  await f.tick();
+  assert.equal(f.sent.length, 3);
+  assert.match(f.sent[2], /usage-limit/);
+  assert.ok(f.sent[2].includes(nextResetIso));
+  f.time += 30_000; await f.tick();
+  assert.equal(f.sent.length, 3, 'no repeat on paused retryAt tick');
+  f.time = nextResetMs + 1_000;
+  f.ports.queryIssues = async () => ({ status: 200, etag: '"two"', issues: structuredClone(f.issues) });
+  await f.tick();
+  assert.equal(f.sent.length, 4);
+  assert.match(f.sent[3], /recovered/);
+});

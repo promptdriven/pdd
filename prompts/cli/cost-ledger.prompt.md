@@ -53,7 +53,8 @@ only a merged final-area PR is merged. Do not guess reversions from Git history.
 
 `applyCostMeasurement(run, input, at)` accepts an object with only `id` (nonempty
 string, at most 100 safe alphanumeric/dot/underscore/hyphen characters), optional
-nonnegative finite `suiteMinutes`, `personMinutes`, and optional `outcome`
+nonnegative finite `suiteMinutes`, `personMinutes`, optional Boolean `suitePassed`,
+and optional `outcome`
 (`merged`, `reverted`, `stuck`, `closed`, `parked`). Require a metric or outcome.
 Keep each id once per attempt; equal retries have no effect, conflicting retries
 fail. It adds measured minutes and an explicit outcome without changing workflow
@@ -61,6 +62,11 @@ state, approval, progress or GitHub. It returns the updated run; invalid input
 throws a finite validation error. Explicit outcomes remain until replaced by a
 later explicit measurement. Suite measurements are elapsed runner wall time, not
 summed parallel test durations. The caller owns truthful measurement.
+
+Export `learnedSuiteTimeout(durations, options)` and `readRepositorySuiteTimeout({cwd, env, commonDir, runDir}, ports)` and `recordCostSuite({cwd, runDir, commonDir, id, suiteMinutes, passed, at, env}, ports)`.
+`learnedSuiteTimeout` takes the last 5 positive finite successful suite durations (in minutes) for the repository on this machine, computes `Math.ceil(2 * median)`, and clamps it to `[5, 120]` minutes (defaulting to `30` minutes when no successful suite duration is recorded).
+`recordCostSuite` appends `{id, at, suiteMinutes, passed}` (with no command text, paths or secrets) to `suite-cost.jsonl` in the run directory (when in a workflow run), in `commonDir/pdd/suite-cost.jsonl` (when in a Git repository), and in the machine's local cost state for the repository.
+`captureCosts` folds `runDir/suite-cost.jsonl` into `run.cost.measurements`, `run.cost.suiteMinutes`, `run.cost.suiteDurations` (successful full-suite durations, excluding `prove-` phase measurements and failed suites) and `run.cost.suiteTimeoutMinutes` (the repository's learned suite limit). `costReport` includes `suiteTimeoutMinutes` on each public run row.
 
 `recordCostGithub(runDir, entry, ports={})` appends only numeric call identity to
 `github-cost.jsonl` in that run directory, mode 0600, folder 0700. It uses the same

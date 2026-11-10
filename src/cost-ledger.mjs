@@ -1,8 +1,14 @@
-// Generated from prompts/cli/cost-ledger.prompt.md (sha256: b205da6f02f5e138f2e198de3533689069f0c3d4a717f5b20d30c5a7fd21b823).
+// Generated from prompts/cli/cost-ledger.prompt.md (sha256: 58112ca9e2dedb0f539773a8a73b358dae743f23c3dc0e7bf199c96a49b59b40).
 import * as nativeFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+
+export const SUITE_TIMEOUT_FLOOR = 5;
+export const SUITE_TIMEOUT_CEILING = 120;
+export const SUITE_TIMEOUT_DEFAULT = 30;
+export const SUITE_TIMEOUT_SAMPLE_SIZE = 5;
+export const SUITE_TIMEOUT_MULTIPLIER = 2;
 
 const DAY = 86_400_000, BYTES = 256 * 1024;
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
@@ -15,10 +21,57 @@ const readJson = (fs, file) => { try { return JSON.parse(fs.readFileSync(file, '
 const expand = (path, home) => typeof path === 'string' && path ? path.replace(/^~(?=\/|$)/, home) : null;
 const event = (cost, at, metric, value, extra = {}) => { if (value > 0 || value === 0 && (['suiteMinutes', 'ciMinutes', 'activeMinutes'].includes(metric) || metric === 'total' && extra.account && !cost.tokens.some(row => row.account === extra.account))) cost.events.push({ at, metric, value, ...extra }); };
 
+export function learnedSuiteTimeout(durations = [], {
+  floor = SUITE_TIMEOUT_FLOOR,
+  ceiling = SUITE_TIMEOUT_CEILING,
+  fallback = SUITE_TIMEOUT_DEFAULT,
+  sampleSize = SUITE_TIMEOUT_SAMPLE_SIZE,
+  multiplier = SUITE_TIMEOUT_MULTIPLIER,
+} = {}) {
+  const sample = (Array.isArray(durations) ? durations : [])
+    .filter(value => typeof value === 'number' && Number.isFinite(value) && value > 0)
+    .slice(-sampleSize);
+  if (!sample.length) return fallback;
+  const sorted = [...sample].sort((a, b) => a - b), mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  return Math.min(ceiling, Math.max(floor, Math.ceil(median * multiplier)));
+}
+
+function suiteEntriesFromCost(cost, fallbackAt = 0) {
+  const entries = [];
+  if (Array.isArray(cost?.suiteDurations)) {
+    for (const row of cost.suiteDurations) {
+      if (row && typeof row.id === 'string' && number(row.minutes) && row.minutes > 0) {
+        entries.push({ id: row.id, at: number(row.at) ? row.at : fallbackAt, minutes: row.minutes });
+      }
+    }
+  }
+  for (const [id, m] of Object.entries(cost?.measurements ?? {})) {
+    if (m && number(m.suiteMinutes) && m.suiteMinutes > 0 && m.suitePassed !== false && !id.startsWith('prove-')) {
+      entries.push({ id, at: fallbackAt, minutes: m.suiteMinutes });
+    }
+  }
+  return entries;
+}
+
+function readSuiteJsonl(fs, file) {
+  try {
+    return fs.readFileSync(file, 'utf8').split('\n').flatMap(line => {
+      if (!line.trim()) return [];
+      try {
+        const row = JSON.parse(line);
+        return row && typeof row.id === 'string' && /^[A-Za-z0-9_.-]{1,100}$/.test(row.id) && number(row.suiteMinutes) && number(row.at)
+          ? [{ id: row.id, at: row.at, suiteMinutes: row.suiteMinutes, passed: row.passed !== false }]
+          : [];
+      } catch { return []; }
+    });
+  } catch { return []; }
+}
+
 function initial(run, at) {
   return { schema: 'pdd.cost.v1', capturedAt: at, outcome: outcome(run), outcomeAt: run.cancelled?.at ?? run.updatedAt ?? at, tokens: [], sessions: {},
     person: { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null },
-    suiteMinutes: null, ciMinutes: null, githubCalls: 0, events: [], measurements: {}, coverage: ['not-captured'], waits: {} };
+    suiteMinutes: null, suiteDurations: [], suiteTimeoutMinutes: SUITE_TIMEOUT_DEFAULT, ciMinutes: null, githubCalls: 0, events: [], measurements: {}, coverage: ['not-captured'], waits: {} };
 }
 
 // Positional reads have a fixed byte budget. Incomplete rows remain for a later capture.
@@ -187,6 +240,26 @@ export function captureCosts(before, run, ports = {}) {
   if (next !== cost.outcome) { cost.outcome = next; cost.outcomeAt = at; }
   const calls = (() => { try { return fs.readFileSync(join(run.runDir, 'github-cost.jsonl'), 'utf8').split('\n').filter(line => { try { return number(JSON.parse(line).at); } catch { return false; } }).length; } catch { return 0; } })();
   event(cost, at, 'githubCalls', Math.max(0, calls - cost.githubCalls)); cost.githubCalls = Math.max(cost.githubCalls, calls);
+  cost.suiteDurations = suiteEntriesFromCost(cost, at).reduce((list, item) => {
+    if (!list.some(existing => existing.id === item.id)) list.push(item);
+    return list;
+  }, []);
+  if (typeof run.runDir === 'string' && run.runDir) {
+    for (const row of readSuiteJsonl(fs, join(run.runDir, 'suite-cost.jsonl'))) {
+      if (!cost.measurements[row.id]) applyCostMeasurement({ cost }, { id: row.id, suiteMinutes: row.suiteMinutes, suitePassed: row.passed }, row.at);
+    }
+  }
+  const repoDurations = new Map(cost.suiteDurations.map(row => [row.id, row]));
+  for (const file of [
+    typeof run.commonDir === 'string' && run.commonDir ? join(run.commonDir, 'pdd', 'suite-cost.jsonl') : null,
+    localSuiteCostFile(run.root, run.commonDir, ports.env),
+  ]) {
+    if (!file) continue;
+    for (const row of readSuiteJsonl(fs, file)) {
+      if (row.passed && row.suiteMinutes > 0 && !repoDurations.has(row.id)) repoDurations.set(row.id, { id: row.id, at: row.at, minutes: row.suiteMinutes });
+    }
+  }
+  cost.suiteTimeoutMinutes = learnedSuiteTimeout([...repoDurations.values()].sort((a, b) => a.at - b.at).map(row => row.minutes));
   let minutes = 0, known = false;
   for (const pr of run.pr ?? []) {
     const ci = readJson(fs, join(run.runDir, `cost-ci-${pr.number}.json`));
@@ -203,19 +276,81 @@ export function captureCosts(before, run, ports = {}) {
 }
 
 export function applyCostMeasurement(run, input, at) {
-  if (!input || Array.isArray(input) || typeof input !== 'object' || Object.keys(input).some(key => !['id', 'suiteMinutes', 'personMinutes', 'outcome'].includes(key)) ||
+  if (!input || Array.isArray(input) || typeof input !== 'object' || Object.keys(input).some(key => !['id', 'suiteMinutes', 'suitePassed', 'personMinutes', 'outcome'].includes(key)) ||
     typeof input.id !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(input.id) ||
     !['suiteMinutes', 'personMinutes', 'outcome'].some(key => Object.hasOwn(input, key)) ||
     ['suiteMinutes', 'personMinutes'].some(key => Object.hasOwn(input, key) && !number(input[key])) ||
+    Object.hasOwn(input, 'suitePassed') && typeof input.suitePassed !== 'boolean' ||
     Object.hasOwn(input, 'outcome') && !outcomes.includes(input.outcome)) throw Error('Invalid cost measurement');
   const value = Object.fromEntries(Object.entries(input).sort(([a], [b]) => a.localeCompare(b)));
   const cost = run.cost ??= initial(run, at), previous = cost.measurements[input.id];
+  cost.suiteDurations ??= [];
   if (previous) { if (JSON.stringify(previous) !== JSON.stringify(value)) throw Error('Cost measurement id conflict'); return run; }
   cost.measurements[input.id] = value;
-  if (Object.hasOwn(input, 'suiteMinutes')) { cost.suiteMinutes = (cost.suiteMinutes ?? 0) + input.suiteMinutes; event(cost, at, 'suiteMinutes', input.suiteMinutes); }
+  if (Object.hasOwn(input, 'suiteMinutes')) {
+    cost.suiteMinutes = (cost.suiteMinutes ?? 0) + input.suiteMinutes;
+    event(cost, at, 'suiteMinutes', input.suiteMinutes);
+    if (input.suiteMinutes > 0 && input.suitePassed !== false && !input.id.startsWith('prove-') && !cost.suiteDurations.some(row => row.id === input.id)) {
+      cost.suiteDurations.push({ id: input.id, at: number(at) ? at : 0, minutes: input.suiteMinutes });
+    }
+  }
+  cost.suiteTimeoutMinutes = learnedSuiteTimeout(cost.suiteDurations.map(row => row.minutes));
   if (Object.hasOwn(input, 'personMinutes')) { cost.person.activeMinutes = (cost.person.activeMinutes ?? 0) + input.personMinutes; event(cost, at, 'activeMinutes', input.personMinutes); }
   if (input.outcome) { cost.explicitOutcome = input.outcome; cost.outcome = input.outcome; cost.outcomeAt = at; }
   return run;
+}
+function localSuiteCostFile(cwd, commonDir, env = process.env) {
+  const key = commonDir || cwd;
+  if (typeof key !== 'string' || !key) return null;
+  const stateRoot = env.PDD_STATE_DIR ?? (env.PDD_SUITE_QUEUE ? `${env.PDD_SUITE_QUEUE}.state` : join(env.HOME || process.env.HOME || homedir(), '.local', 'state', 'pdd'));
+  return join(stateRoot, 'suite-cost', `${hash(resolve(key))}.jsonl`);
+}
+export function recordCostSuite({ cwd, runDir, commonDir, id, suiteMinutes, passed = true, at, env = process.env }, { fs = nativeFs } = {}) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(id) || !number(suiteMinutes) || !number(at)) return;
+  const line = JSON.stringify({ id, at, suiteMinutes, passed: passed !== false }) + '\n';
+  for (const target of [
+    typeof runDir === 'string' && runDir ? join(runDir, 'suite-cost.jsonl') : null,
+    typeof commonDir === 'string' && commonDir ? join(commonDir, 'pdd', 'suite-cost.jsonl') : null,
+    localSuiteCostFile(cwd, commonDir, env),
+  ]) {
+    if (!target) continue;
+    try { fs.mkdirSync(join(target, '..'), { recursive: true, mode: 0o700 }); fs.appendFileSync(target, line, { mode: 0o600 }); } catch {}
+  }
+}
+export function readRepositorySuiteTimeout({ cwd, env = process.env, commonDir = null, runDir = null } = {}, { fs = nativeFs } = {}) {
+  const seen = new Map();
+  const add = (id, at, minutes) => {
+    if (typeof id === 'string' && !id.startsWith('prove-') && number(minutes) && minutes > 0 && !seen.has(id)) {
+      seen.set(id, { id, at: number(at) ? at : 0, minutes });
+    }
+  };
+  if (typeof commonDir === 'string' && commonDir) {
+    const runsRoot = join(commonDir, 'pdd', 'runs');
+    let names = [];
+    try { names = fs.readdirSync(runsRoot); } catch {}
+    for (const name of names) {
+      const dir = join(runsRoot, name);
+      const status = readJson(fs, join(dir, 'status.json'));
+      if (status?.cost) {
+        for (const entry of suiteEntriesFromCost(status.cost, status.cost.capturedAt ?? status.startedAt ?? 0)) add(entry.id, entry.at, entry.minutes);
+      }
+      for (const row of readSuiteJsonl(fs, join(dir, 'suite-cost.jsonl'))) if (row.passed) add(row.id, row.at, row.suiteMinutes);
+    }
+    for (const row of readSuiteJsonl(fs, join(commonDir, 'pdd', 'suite-cost.jsonl'))) if (row.passed) add(row.id, row.at, row.suiteMinutes);
+  }
+  if (typeof runDir === 'string' && runDir) {
+    const status = readJson(fs, join(runDir, 'status.json'));
+    if (status?.cost) {
+      for (const entry of suiteEntriesFromCost(status.cost, status.cost.capturedAt ?? status.startedAt ?? 0)) add(entry.id, entry.at, entry.minutes);
+    }
+    for (const row of readSuiteJsonl(fs, join(runDir, 'suite-cost.jsonl'))) if (row.passed) add(row.id, row.at, row.suiteMinutes);
+  }
+  const localFile = localSuiteCostFile(cwd, commonDir, env);
+  if (localFile) {
+    for (const row of readSuiteJsonl(fs, localFile)) if (row.passed) add(row.id, row.at, row.suiteMinutes);
+  }
+  const durations = [...seen.values()].sort((a, b) => a.at - b.at).map(row => row.minutes);
+  return learnedSuiteTimeout(durations);
 }
 export function recordCostGithub(runDir, entry, { fs = nativeFs } = {}) {
   try { fs.mkdirSync(runDir, { recursive: true, mode: 0o700 }); fs.appendFileSync(join(runDir, 'github-cost.jsonl'), JSON.stringify({ at: entry.at }) + '\n', { mode: 0o600 }); } catch {}
@@ -290,8 +425,32 @@ function percentile(rows, q) {
 }
 export function costReport(runs, now) {
   const costs = runs.map(run => ({ run, cost: run.cost ?? initial(run, now) }));
-  const publicRows = costs.map(({ run, cost }) => ({ repo: run.repo, issue: run.number, runId: run.runId,
-    ...Object.fromEntries(['outcome','outcomeAt','tokens','person','suiteMinutes','ciMinutes','githubCalls','coverage'].map(key => [key, cost[key]])) }));
+  const repoTimeouts = new Map();
+  for (const { run, cost } of costs) {
+    const repoKey = String(run.repo ?? '').toLowerCase();
+    if (!repoTimeouts.has(repoKey)) repoTimeouts.set(repoKey, new Map());
+    const map = repoTimeouts.get(repoKey);
+    for (const entry of suiteEntriesFromCost(cost, cost.capturedAt ?? run.startedAt ?? 0)) {
+      if (!map.has(entry.id)) map.set(entry.id, entry);
+    }
+    for (const file of [
+      typeof run.runDir === 'string' && run.runDir ? join(run.runDir, 'suite-cost.jsonl') : null,
+      typeof run.commonDir === 'string' && run.commonDir ? join(run.commonDir, 'pdd', 'suite-cost.jsonl') : null,
+    ]) {
+      if (!file) continue;
+      for (const row of readSuiteJsonl(nativeFs, file)) {
+        if (row.passed && row.suiteMinutes > 0 && !map.has(row.id)) map.set(row.id, { id: row.id, at: row.at, minutes: row.suiteMinutes });
+      }
+    }
+  }
+  const publicRows = costs.map(({ run, cost }) => {
+    const repoMap = repoTimeouts.get(String(run.repo ?? '').toLowerCase());
+    const repoDurations = repoMap ? [...repoMap.values()].sort((a, b) => a.at - b.at).map(row => row.minutes) : [];
+    const suiteTimeoutMinutes = repoDurations.length ? learnedSuiteTimeout(repoDurations) : (cost.suiteTimeoutMinutes ?? SUITE_TIMEOUT_DEFAULT);
+    return { repo: run.repo, issue: run.number, runId: run.runId,
+      ...Object.fromEntries(['outcome','outcomeAt','tokens','person','suiteMinutes','ciMinutes','githubCalls','coverage'].map(key => [key, cost[key]])),
+      suiteTimeoutMinutes };
+  });
   const window = days => {
     const since = now - days * DAY, groups = new Map();
     for (const row of costs) { const key = `${row.run.repo.toLowerCase()}#${row.run.number}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }

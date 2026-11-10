@@ -276,3 +276,33 @@ test('CI branch read includes earlier PR heads, excludes other PRs, and reports 
   await captureClosedCi(run, ports); run.cost = captureCosts(null, run, ports);
   assert.equal(run.cost.ciMinutes, 2); assert.ok(!run.cost.coverage.includes('ci-unavailable'));
 });
+
+test('cost ledger learns repository suite timeout from 2x the median of the last 5 successful suite durations with floor and ceiling', t => {
+  const { run, ports } = world(t);
+  run.cost = captureCosts(null, run, ports);
+  assert.equal(run.cost.suiteTimeoutMinutes, 30, 'default timeout is 30 minutes before suite history exists');
+  assert.equal(costReport([run], at).runs[0].suiteTimeoutMinutes, 30);
+
+  // Very short duration clamps to the 5-minute floor.
+  applyCostMeasurement(run, { id: 'suite-fast', suiteMinutes: 1 }, at + 1000);
+  assert.equal(run.cost.suiteTimeoutMinutes, 5);
+
+  // Five recent successful durations [4, 6, 8, 10, 12] -> median 8 -> 2x median = 16 minutes.
+  for (const [index, minutes] of [4, 6, 8, 10, 12].entries()) {
+    applyCostMeasurement(run, { id: `suite-${index + 1}`, suiteMinutes: minutes }, at + (index + 2) * 1000);
+  }
+  assert.equal(run.cost.suiteTimeoutMinutes, 16);
+  assert.equal(costReport([run], at + 10_000).runs[0].suiteTimeoutMinutes, 16);
+
+  // Failed suites and prove-* phases do not shift the learned full-suite timeout.
+  applyCostMeasurement(run, { id: 'suite-failed', suiteMinutes: 55, suitePassed: false }, at + 8000);
+  applyCostMeasurement(run, { id: 'prove-head-1', suiteMinutes: 50 }, at + 9000);
+  assert.equal(run.cost.suiteTimeoutMinutes, 16);
+
+  // Long successful durations clamp to the 120-minute ceiling.
+  for (const [index, minutes] of [70, 80, 90].entries()) {
+    applyCostMeasurement(run, { id: `suite-slow-${index}`, suiteMinutes: minutes }, at + (index + 10) * 1000);
+  }
+  // Last 5 successful durations are [8, 10, 12, 70, 80, 90].slice(-5) = [10, 12, 70, 80, 90] -> median 70 -> min(120, 140) = 120.
+  assert.equal(run.cost.suiteTimeoutMinutes, 120);
+});

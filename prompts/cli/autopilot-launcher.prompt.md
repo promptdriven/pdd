@@ -521,6 +521,18 @@ machine and the settings' `github` value:
   work selection stay as usual.
 - `normal`: as before.
 
+When Autopilot pauses for the GitHub budget reserve floor (before or during intake
+or issue pagination) or for a GitHub rate limit (HTTP 429, `rateLimited`, or a
+rate-limit error with `resetAt`), send one `usage-limit` alert through
+[Autopilot alerts](autopilot-alerts.prompt.md) (or injected `sendAlert`, using the
+same port wiring as `healthAlerts`) with the reset ISO time in `cause`. Persist
+`githubLimit` on the launcher state so repeated ticks during the same pause send
+no repeat alert (only an undelivered alert retries). When a later tick completes
+its GitHub budget and issue-list check without a budget or rate-limit pause, send
+one `recovered` alert (`kind: "usage-limit"`) and clear `githubLimit` when Codex
+usage is not also holding `usage-limit`. Never send more than one GitHub limit
+alert or recovery per tick.
+
 After each intake the tick saves `{at, eligible, claims}` (when `eligible` is a
 list), and a successful heartbeat updates the saved claim's `lastSeen`. These
 are local facts for the next tick; they are not a GitHub observation. The

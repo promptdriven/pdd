@@ -82,7 +82,14 @@ export function factoryGithub(w) {
       else if(/\/pulls\/\d+(?:\?.*)?$/.test(endpoint??''))value=restPr(find(endpoint.match(/pulls\/(\d+)/)[1]));
       else if(/\/pulls\/\d+\/reviews/.test(endpoint??''))value=find(endpoint.match(/pulls\/(\d+)/)[1]).reviews;
       else handled=false;
-      if(handled) return ok(a.includes('--include')?`HTTP/2 200 OK\r\n\r\n${JSON.stringify(value)}`:a.includes('--slurp')?[value]:value);
+      if(handled) {
+        if(a.includes('--include')) {
+          if(f.now()>=f.resetAt*1000){f.resetAt=Math.floor(f.now()/1000)+3600;f.remaining=f.limit;f.graphqlRemaining=f.limit;}
+          f.remaining=Math.max(0,f.remaining-1);
+          return ok(`HTTP/2.0 200 OK\r\nX-Ratelimit-Limit: ${f.limit}\r\nX-Ratelimit-Remaining: ${f.remaining}\r\nX-Ratelimit-Reset: ${f.resetAt}\r\nX-Ratelimit-Resource: core\r\n\r\n${JSON.stringify(value)}`);
+        }
+        return ok(a.includes('--slurp')?[value]:value);
+      }
     }
     const r=await original(a,o);
     // Shared fake models gh api --include. The real CLI also uses bare JSON and slurp.

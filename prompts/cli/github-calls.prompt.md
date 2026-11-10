@@ -30,7 +30,7 @@ coordinator and worker chats make themselves are not counted.
 | `githubBudget({usage, share, floor})` | See [Budget](#budget) |
 | `githubStatusLine({usage, machine, budget})` | The one status line |
 | `githubEtagCache({root, repository, fs, now})` | `{file, get(endpoint), set(endpoint, entry), save()}` |
-| `githubFloorGuard({floor, entries, now})` | `{floor, observe(reply), blocked(resource), stopped}`: see [Floor guard](#floor-guard) |
+| `githubFloorGuard({floor, entries, now})` | `{floor, observe(reply), blocked(resource), resetAt(resource), stopped}`: see [Floor guard](#floor-guard) |
 | `githubFullLastPage(endpoint, items, next)` | True for a [full last page](#full-last-page): never read it with its ETag |
 
 `fs` is the injected file port (native `node:fs`). `now` is a clock in
@@ -203,7 +203,9 @@ each resource in `entries` (as `githubUsage` gives it) and follows each later
 reply: `observe(reply)` takes the `rate` of a `githubReply` result, and a reply
 without rate headers changes nothing. `blocked(resource)` (default `core`) is
 true while the newest remaining of that resource is less than `floor` and its
-reset is not past; then `stopped` stays true for this guard. A caller asks
+reset is not past; then `stopped` stays true for this guard. `resetAt(resource)`
+(default `core`) returns that resource's observed reset timestamp in epoch
+milliseconds when later than `now`, else null. A caller asks
 `blocked('core')` before each non-safety REST read, and `blocked('core')` and
 `blocked('graphql')` before a non-safety GraphQL read (a dependency snapshot
 without REST reads is not complete anyway), and stops that read. Safety reads (claim

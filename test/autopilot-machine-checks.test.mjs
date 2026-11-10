@@ -265,3 +265,23 @@ test('repair 1: Linux desktop child receives its reserved affinity share',async 
   assert.equal(ticket.state,'finished');assert.deepEqual(ticket.cpuIds,[8,9]);
   assert.equal(ticket.coresPerCheck,2);assert.equal(ticket.taskset,'/fake/taskset');assert.equal(ticket.reason,null);
 });
+
+test('high machine load from processes outside Autopilot reduces check slots for that tick while Autopilot load does not',async t=>{
+  const f=fixture(t,{count:64,load:36});
+  const reduced=await queue.configureCheckCapacity({env:f.env},f.ports);
+  assert.equal(reduced.calculatedChecks,2,'64 usable cores minus 36 outside load leaves 28 cores -> 2 check slots');
+  assert.equal(reduced.outsideLoad,36);
+  assert.equal(reduced.checks,2);
+  for(let i=0;i<3;i++){f.run();await until(()=>f.records().length===i+1);}
+  await until(()=>f.calls.length===2);
+  await new Promise(done=>setTimeout(done,20));
+  assert.equal(f.calls.length,2,'third check waits when outside load reduces check slots to 2');
+  assert.equal((await queue.readSuiteProgress({cwd:join(f.root,'repo-2'),env:f.env},f.ports)).state,'waiting');
+
+  // When the machine load equals only Autopilot's own running check reservations (2 * 32 = 64, or load=24 with 2 running checks), outside load is 0.
+  f.machine.load=24;
+  const ownOnly=await queue.configureCheckCapacity({env:f.env},f.ports);
+  assert.equal(ownOnly.outsideLoad,0);
+  assert.equal(ownOnly.calculatedChecks,5,'Autopilot own running check load does not reduce calculated check slots');
+  assert.equal(ownOnly.checks,5);
+});

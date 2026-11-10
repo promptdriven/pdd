@@ -30,6 +30,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   for(const dir of [w.cwd,w.home,join(base,'bin')])mkdirSync(dir,{recursive:true});
   for(const name of ['gh','herdr','codex','claude','gemini','agy','curl','wget'])writeFileSync(join(base,'bin',name),'#!/bin/sh\necho factory-external-program-denied >&2\nexit 97\n',{mode:0o700});
   writeFileSync(join(base,'bin/gh'),'#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = token ]; then echo factory-token; elif [ \"$1\" = api ] && [ \"$2\" = user ]; then echo \"example 1\"; else echo factory-native-gh-denied >&2; exit 97; fi\n',{mode:0o700});
+  writeFileSync(join(base,'bin/taskset'),'#!/bin/sh\nshift 2\nexec "$@"\n',{mode:0o700});
   symlinkSync(join(packageRoot,'bin/pdd.mjs'),join(base,'bin/pdd'));
   w.env={CI:'1',HOME:w.home,USERPROFILE:w.home,PATH:join(base,'bin')+':'+dirname(process.execPath)+':/usr/bin:/bin',XDG_CONFIG_HOME:join(base,'config'),PDD_STATE_DIR:join(base,'runtime'),PDD_INTERPRETER_QUEUE:join(base,'interpreter-queue'),PDD_SUITE_QUEUE:join(base,'suite-queue'),PDD_INTERPRETER_CONCURRENCY:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_ALLOW_PROTOCOL:'file',LANG:'C.UTF-8'};
   put(w.env.XDG_CONFIG_HOME,'pdd/autopilot-alerts.json',{v:1,service:'slack',url:'https://hooks.slack.com/services/synthetic/test/fixture'});
@@ -133,7 +134,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     const child=fork(fileURLToPath(new URL('./worker.mjs',import.meta.url)),[],{cwd:base,env:{...w.env,...env,GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:`url.${w.remote}.insteadOf`,GIT_CONFIG_VALUE_0:`https://github.com/${repository}.git`},execArgv:[],stdio:['ignore','pipe','pipe','ipc'],serialization:'advanced'});
     w.children.add(child);
     let processOut='',processErr='';child.stdout.on('data',s=>{processOut+=s;});child.stderr.on('data',s=>{processErr+=s;});
-    const request={base,cwd,packageRoot,stateRoot:w.stateRoot,stateDir:w.stateDir,layoutDirectory:w.layoutDirectory,env:{...w.env,PDD_RUNTIME_URL:w.interpreter.origin,...env},argv,stdin,operation,stateFile:w.stateFile,now:w.time};
+    const request={base,cwd,packageRoot,stateRoot:w.stateRoot,stateDir:w.stateDir,layoutDirectory:w.layoutDirectory,env:{...w.env,PDD_RUNTIME_URL:w.interpreter.origin,...env},argv,stdin,operation,stateFile:w.stateFile,now:w.time,machine:w.machine};
     const result=await new Promise((done,reject)=>{
       let settled=false;
       const timer=setTimeout(()=>{child.kill('SIGTERM');reject(Error(`factory command deadline: ${argv?.join(' ')??operation}`));},25000);
@@ -207,7 +208,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
       try {const value=JSON.parse(text.trim().split('\n').at(-1));if(value.repository&&value.issues)w.packets.push(value);}catch{}
     }
   };
-  w.start=async()=>{await w.command(['autopilot','start','--runs',String(w.runLimit??2),'--checks','1'],{actor:'operator'});w.messages();};
+  w.start=async()=>{const checksArg=w.checks===null?[]:['--checks',String(w.checks??1)];await w.command(['autopilot','start','--runs',String(w.runLimit??2),...checksArg],{actor:'operator'});w.messages();};
   w.reviewDependencies=async()=>{
     w.messages();
     for(let n=0;n<8;n++) {

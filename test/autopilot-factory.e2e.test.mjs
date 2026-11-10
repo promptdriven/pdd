@@ -694,3 +694,65 @@ test('factory 3125: a full workflow session admits healthy coordinator reuse in 
   assert.ok(w.herdr.panes.some(p=>p.pane_id===personal.result.root_pane.pane_id));
   assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });
+
+test('factory 6a: GitHub budget or rate-limit pause sends one usage-limit alert with reset time and one recovered alert after reset',async t=>{
+  const w=await factoryWorld(t);
+  const resetSec=Math.floor(w.time/1000)+600,resetIso=new Date(resetSec*1000).toISOString();
+  w.github.resetAt=resetSec;w.github.remaining=400;
+  await w.start();
+  assert.equal(w.alertDeliveries.length,1,'GitHub budget reserve pause sends one usage-limit alert');
+  assert.match(w.alertDeliveries[0],/usage-limit/);
+  assert.ok(w.alertDeliveries[0].includes(resetIso),'alert includes the GitHub reset time');
+  assert.equal(w.alerts.at(-1).kind,'usage-limit');
+  w.time+=60_000;await w.tick();
+  w.time+=60_000;await w.tick();
+  assert.equal(w.alertDeliveries.length,1,'repeated ticks while paused for the GitHub limit do not repeat the alert');
+  w.time=resetSec*1000+1000;
+  await w.tick();
+  assert.equal(w.alertDeliveries.length,2,'resuming GitHub reads sends one recovered alert');
+  assert.match(w.alertDeliveries[1],/recovered/);
+  assert.equal(w.alerts.at(-1).kind,'recovered');
+  await w.tick();
+  assert.equal(w.alertDeliveries.length,2,'no extra recovery alert on later ticks');
+  assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 6b: full-suite execution timeout follows this machine recent successful suite durations for the repository in the cost ledger',async t=>{
+  const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.until(r=>Boolean(r.done.change));
+  const run=w.record();
+  for(const [index,minutes] of [4,6,7,8,10].entries()) {
+    await w.command(['workflow','cost','17','--input','-'],{actor:'worker',cwd:run.root,stdin:JSON.stringify({id:`hist-${index+1}`,suiteMinutes:minutes})});
+  }
+  const costBefore=JSON.parse((await w.command(['workflow','cost','17'],{actor:'worker',cwd:run.root})).stdout);
+  assert.equal(costBefore.suiteTimeoutMinutes,14,'2x median of last 5 successful suite durations [4,6,7,8,10] is 14 minutes');
+  await w.command(['workflow','suite','--command',`${JSON.stringify(process.execPath)} --test test/value.test.mjs`],{actor:'worker',cwd:run.root});
+  const ticket=queueRows(w.env.PDD_SUITE_QUEUE).at(-1);
+  assert.equal(ticket.state,'finished');
+  assert.equal(ticket.timeoutMinutes,14,'suite queue uses the learned repository timeout instead of the fixed 30-minute default');
+  assert.equal(existsSync(join(w.commonDir,'pdd/suite-cost.jsonl')),true,'completed suite records its duration in the repository cost ledger');
+  await a.finish();await a.merge();assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 6c: high machine load from outside processes reduces check slots for that tick instead of overloading',async t=>{
+  const w=await factoryWorld(t);
+  w.checks=null;
+  w.machine={count:48,load:0,taskset:join(w.base,'bin/taskset')};
+  await w.begin();const a=scriptedAgent(w);await a.until(r=>Boolean(r.done.change));
+  assert.equal(w.state().checkCapacity.calculatedChecks,4,'48 usable cores with 0 outside load gives 4 check slots');
+  assert.equal(w.state().checkCapacity.checks,4);
+  w.machine={count:48,load:36,taskset:join(w.base,'bin/taskset')};
+  await w.tick();
+  assert.equal(w.state().checkCapacity.calculatedChecks,1,'high outside load (36 on 48 cores) reduces check slots to 1 for that tick');
+  assert.equal(w.state().checkCapacity.outsideLoad,36);
+  assert.equal(w.state().checkCapacity.checks,1);
+  const release=join(w.base,'outside-load-release'),started=join(w.base,'outside-load-started');
+  put(w.base,'hold-outside.mjs',`import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(started)},'started');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)}))clearInterval(timer);},10);`);
+  t.after(()=>put(w.base,'outside-load-release','release'));
+  const holder=w.command(['workflow','suite','--command',`${JSON.stringify(process.execPath)} ${JSON.stringify(join(w.base,'hold-outside.mjs'))}`],{actor:'other-worker',cwd:w.record().root});
+  await eventually(()=>existsSync(started),'first suite starts in the single remaining check slot');
+  const waiter=w.command(['workflow','suite','--command',`${JSON.stringify(process.execPath)} --test test/value.test.mjs`],{actor:'worker',cwd:w.record().root});
+  await eventually(()=>queueRows(w.env.PDD_SUITE_QUEUE).some(r=>r.state==='waiting'),'second suite waits when outside load reduced check slots');
+  assert.equal(queueRows(w.env.PDD_SUITE_QUEUE).filter(r=>r.state==='running').length,1);
+  put(w.base,'outside-load-release','release');await holder;await waiter;
+  await a.finish();await a.merge();assert.deepEqual(w.leadActions,[]);
+});

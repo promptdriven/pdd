@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: b1e53593c12693d9f4394249e176c5e5aa93c22d6adda8960d7b35a30c4ff516).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: dd5d4eaeae31f0642fef43806a67dfe86c56923bb7d5b560b12e2c7891be7f64).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -7,31 +7,41 @@ import { createHash, hash as contentDigest, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { machineCheckPorts } from './machine-resources.mjs';
+import { learnedSuiteTimeout, readRepositorySuiteTimeout, recordCostSuite } from './cost-ledger.mjs';
+export { learnedSuiteTimeout };
 
-export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
+export function calculateCheckCapacity({checks, runs, autopilotLoad} = {}, ports = {}) {
   const native = machineCheckPorts(ports.env ?? process.env, ports);
   ports = {...ports};
   for (const [name, value] of Object.entries(native)) ports[name] ??= value;
   const cpuIds = ports.cores(), freeMemory = ports.memory(),
     load = ports.load(), platform = ports.platform ?? process.platform;
+  const ownLoad = autopilotLoad ?? (typeof ports.autopilotLoad === 'function' ? ports.autopilotLoad() : ports.autopilotLoad ?? 0);
   const battery = platform === 'linux' ? ports.battery() : false;
   const virtualized = platform === 'linux' ? ports.virtualized() : false;
   const personal = platform === 'darwin' || platform === 'linux' && (battery || !virtualized);
   const taskset = platform === 'linux' ? ports.taskset() : null;
   if (typeof platform !== 'string' || typeof battery !== 'boolean' || typeof virtualized !== 'boolean' || !Array.isArray(cpuIds) || !cpuIds.length || cpuIds.some(id => !Number.isSafeInteger(id) || id < 0)
     || new Set(cpuIds).size !== cpuIds.length || !Number.isFinite(freeMemory) || freeMemory < 0
-    || !Number.isFinite(load) || load < 0 || taskset !== null && (typeof taskset !== 'string' || !isAbsolute(taskset))
+    || !Number.isFinite(load) || load < 0 || !Number.isFinite(ownLoad) || ownLoad < 0 || taskset !== null && (typeof taskset !== 'string' || !isAbsolute(taskset))
     || [checks,runs].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 1))) throw Error('Machine check capacity is unavailable or invalid.');
   const usable = cpuIds.slice(0, personal ? Math.max(1, Math.floor(cpuIds.length / 2)) : cpuIds.length);
+  const outsideLoad = Math.max(0, load - ownLoad), availableCores = Math.max(0, usable.length - outsideLoad);
   const affinity = platform === 'linux' && taskset !== null;
-  const calculatedChecks = Math.max(1, Math.min(Math.floor(usable.length / 12), Math.floor(freeMemory / (4 * 1024 ** 3)), affinity ? Infinity : 1));
+  const calculatedChecks = Math.max(1, Math.min(Math.floor(availableCores / 12), Math.floor(freeMemory / (4 * 1024 ** 3)), affinity ? Infinity : 1));
   const selected = checks ?? calculatedChecks, calculatedRuns = Math.min(Number.MAX_SAFE_INTEGER, selected * 2);
-  return {cores:cpuIds.length, usableCores:usable.length, cpuIds:usable, freeMemory, load, personal, affinity, taskset,
+  return {cores:cpuIds.length, usableCores:usable.length, cpuIds:usable, freeMemory, load, autopilotLoad:ownLoad, outsideLoad, personal, affinity, taskset,
     calculatedChecks, checks:selected, calculatedRuns, runs:runs ?? calculatedRuns,
     coresPerCheck:Math.max(1, Math.floor(usable.length / selected)), busy:load > usable.length};
 }
 const CAPACITY_LIFETIME = 31 * 60_000;
-export async function configureCheckCapacity({env = process.env, checks, runs, owner = null, resources}, ports = {}) {
+function runningAutopilotLoad(p) {
+  try {
+    return records(p).filter(row => row.state === 'running')
+      .reduce((sum, row) => sum + (Number.isSafeInteger(row.coresPerCheck) && row.coresPerCheck > 0 ? row.coresPerCheck : Array.isArray(row.cpuIds) && row.cpuIds.length ? row.cpuIds.length : 12), 0);
+  } catch { return 0; }
+}
+export async function configureCheckCapacity({env = process.env, checks, runs, autopilotLoad, owner = null, resources}, ports = {}) {
   const p = portsFor(env, ports), observedAt = p.now();
   if (owner !== null && (typeof owner !== 'string' || !owner)) throw Error('Invalid check capacity owner.');
   const shared = resources ? {
@@ -39,14 +49,15 @@ export async function configureCheckCapacity({env = process.env, checks, runs, o
     ...(resources.check ? {cores:()=>resources.check.cpuIds, platform:resources.check.platform,
       battery:()=>resources.check.battery, virtualized:()=>resources.check.virtualized, taskset:()=>resources.check.taskset} : {}),
   } : {};
-  const capacity = {...calculateCheckCapacity({checks,runs}, {...p,env,...shared}), owner, observedAt, expiresAt:observedAt + CAPACITY_LIFETIME};
   p.fs.mkdirSync(p.root, {recursive:true,mode:0o700});
-  await underLock(p, () => {
+  return underLock(p, () => {
+    const ownLoad = autopilotLoad ?? resources?.autopilotLoad ?? runningAutopilotLoad(p);
+    const capacity = {...calculateCheckCapacity({checks,runs,autopilotLoad:ownLoad}, {...p,env,...shared}), owner, observedAt, expiresAt:observedAt + CAPACITY_LIFETIME};
     const path = join(p.root, 'capacity.json'), temp = `${path}.${p.uuid()}.tmp`;
     try { p.fs.writeFileSync(temp, JSON.stringify(capacity), {mode:0o600}); p.fs.renameSync(temp,path); }
     finally { try { p.fs.unlinkSync(temp); } catch {} }
+    return capacity;
   });
-  return capacity;
 }
 export async function releaseCheckCapacity({env = process.env, owner}, ports = {}) {
   if (typeof owner !== 'string' || !owner) throw Error('Invalid check capacity owner.');
@@ -62,7 +73,7 @@ export async function releaseCheckCapacity({env = process.env, owner}, ports = {
 function admissionCapacity(p, env) {
   let value;
   try { value = JSON.parse(p.fs.readFileSync(join(p.root,'capacity.json'),'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return calculateCheckCapacity({}, {...p,env}); throw error; }
+  catch (error) { if (error.code === 'ENOENT') return calculateCheckCapacity({autopilotLoad:runningAutopilotLoad(p)}, {...p,env}); throw error; }
   if (!value || typeof value.personal !== 'boolean' || typeof value.affinity !== 'boolean'
     || value.owner !== null && (typeof value.owner !== 'string' || !value.owner)
     || !Number.isFinite(value.observedAt) || value.expiresAt !== value.observedAt + CAPACITY_LIFETIME
@@ -72,14 +83,15 @@ function admissionCapacity(p, env) {
     || value.affinity !== (typeof value.taskset === 'string' && isAbsolute(value.taskset))
     || !value.affinity && value.taskset !== null) throw Error('Invalid saved machine check capacity.');
   // Revalidate saved observations, including the derived values, before using them.
-  const result = calculateCheckCapacity({checks:value.checks,runs:value.runs}, {
+  const result = calculateCheckCapacity({checks:value.checks,runs:value.runs,autopilotLoad:value.autopilotLoad ?? 0}, {
     cores:()=>value.cpuIds, memory:()=>value.freeMemory, load:()=>value.load, platform:value.affinity?'linux':'other',
     battery:()=>false, virtualized:()=>true, taskset:()=>value.taskset,
   });
   if (result.usableCores !== value.usableCores || result.coresPerCheck !== value.coresPerCheck
     || result.busy !== value.busy || result.calculatedChecks !== value.calculatedChecks
-    || result.calculatedRuns !== value.calculatedRuns) throw Error('Invalid saved machine check capacity.');
-  if (p.now() >= value.expiresAt) return calculateCheckCapacity({}, {...p,env});
+    || result.calculatedRuns !== value.calculatedRuns
+    || value.outsideLoad !== undefined && result.outsideLoad !== value.outsideLoad) throw Error('Invalid saved machine check capacity.');
+  if (p.now() >= value.expiresAt) return calculateCheckCapacity({autopilotLoad:runningAutopilotLoad(p)}, {...p,env});
   return {...result, cores:value.cores, personal:value.personal, affinity:value.affinity, taskset:value.taskset};
 }
 export function readCheckStatus({env = process.env, checks, runs}, ports = {}) {
@@ -147,6 +159,27 @@ function sourceIdentity(cwd, p) {
   } catch (error) { source.error = error.code ?? error.message; }
   return source;
 }
+function repositoryCostContext(cwd, p) {
+  let commonDir = null, runDir = null;
+  try {
+    const top = p.git(['rev-parse', '--show-toplevel'], cwd);
+    if (top.status !== 0) return { commonDir, runDir };
+    const gitCwd = top.stdout.trim();
+    const common = p.git(['rev-parse', '--git-common-dir'], gitCwd);
+    if (common.status !== 0) return { commonDir, runDir };
+    commonDir = resolve(gitCwd, common.stdout.trim());
+    const runsRoot = join(commonDir, 'pdd', 'runs');
+    if (p.fs.existsSync(runsRoot)) {
+      for (const name of p.fs.readdirSync(runsRoot)) {
+        const dir = join(runsRoot, name), statusPath = join(dir, 'status.json');
+        if (!p.fs.existsSync(statusPath)) continue;
+        const run = JSON.parse(p.fs.readFileSync(statusPath, 'utf8'));
+        if (run.root === resolve(gitCwd)) { runDir = dir; break; }
+      }
+    }
+  } catch {}
+  return { commonDir, runDir };
+}
 function portsFor(env, ports) {
   return { fs: files, now: Date.now, sleep: delay, alive, pid: process.pid, say: text => process.stdout.write(`${text}\n`),
     execute: (command, options) => ports.spawn ? executeSuite(command, options, ports) : executeRecordedSuite(command, options, ports),
@@ -210,7 +243,7 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
   return { ticket: row.ticket, state: row.state, position: row.state === 'waiting' ? positionOf(all, row) : null,
     queuedAt: row.queuedAt, startedAt: row.startedAt, finishedAt: row.finishedAt, reason: row.reason,
     pausedMs: pausedTime(own, since, p.now()),
-    ...Object.fromEntries(['command','commandFingerprint','evidence','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','counts','outcome'].map(key=>[key,row[key] ?? null])) };
+    ...Object.fromEntries(['command','commandFingerprint','evidence','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','counts','outcome','timeoutMinutes'].map(key=>[key,row[key] ?? null])) };
 }
 export function suiteStatusWords(suite) {
   return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`
@@ -219,17 +252,19 @@ export function suiteStatusWords(suite) {
     : suite.state === 'running' ? 'running the full test suite'
     : 'full test suite finished';
 }
-export async function runTestSuite({ cwd, command, timeout = 30, env = process.env }, ports = {}) {
-  if (typeof command !== 'string' || !command.trim() || !Number.isInteger(timeout) || timeout < 1 || timeout > 120)
+export async function runTestSuite({ cwd, command, timeout, env = process.env }, ports = {}) {
+  if (typeof command !== 'string' || !command.trim() || timeout !== undefined && (!Number.isInteger(timeout) || timeout < 1 || timeout > 120))
     return { exitCode: 2, message: 'Supply a suite command and a timeout of 1 to 120 minutes.' };
   rememberSecrets(...knownSecretValues(env));
-  let p, row, environmentRoot, executionStarted = false, keepEnvironment = false;
+  let p, row, costContext = { commonDir: null, runDir: null }, environmentRoot, executionStarted = false, keepEnvironment = false;
   try {
     p = portsFor(env, ports);
+    costContext = repositoryCostContext(cwd, p);
     p.fs.mkdirSync(p.root, { recursive: true, mode: 0o700 });
     row = await underLock(p, () => {
       const all = records(p), ticket = (all.at(-1)?.ticket ?? 0) + 1;
-      const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
+      const timeoutMinutes = timeout ?? readRepositorySuiteTimeout({ cwd: resolve(cwd), env, ...costContext }, { fs: p.fs });
+      const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1', timeoutMinutes };
       const logFolder = join(env.PDD_STATE_DIR ?? join(env.HOME || process.env.HOME,'.local','state','pdd'), 'validation', createHash('sha256').update(p.root).digest('hex').slice(0,20));
       // Content identity for a validation attempt; never used to verify a password.
       Object.assign(record, {command:'[redacted]', commandFingerprint:contentDigest('sha256', command, 'hex'), source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),
@@ -260,6 +295,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
           row.cpuIds = capacity.affinity ? available.slice(0, capacity.coresPerCheck) : [];
           row.coresPerCheck = capacity.coresPerCheck; row.taskset = capacity.affinity ? capacity.taskset : null;
           row.source = ports.source ? ports.source(cwd) : sourceIdentity(cwd,p);
+          row.timeoutMinutes = timeout ?? readRepositorySuiteTimeout({ cwd: resolve(cwd), env, ...costContext }, { fs: p.fs });
           row.state = 'running'; row.startedAt = p.now(); save(p, row); return 0;
         }
         return place;
@@ -285,7 +321,8 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     }
     childEnv.PDD_CHECK_CPUS = String(row.coresPerCheck);
     executionStarted = true;
-    const result = await p.execute(command, { cwd, env:childEnv, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: Number(timeout) * 60_000,
+    const startedWall = performance.now();
+    const result = await p.execute(command, { cwd, env:childEnv, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: Number(row.timeoutMinutes) * 60_000,
       record:row, environmentRoot, secrets:knownSecretValues(env),
       onRecorder: pid => { row.recorderPid = pid; row.recorderIdentity = p.processIdentity(pid); save(p,row); keepEnvironment = true; },
       onChild: pid => { row.childPid = pid; save(p, row); } });
@@ -298,6 +335,11 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       row.state = confirmed ? 'finished' : 'running'; row.finishedAt = confirmed ? p.now() : null;
       row.reason = result.reason == null ? (!confirmed ? 'Test suite descendant ownership is unknown.' : result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null) : safeEvidenceText(result.reason);
       save(p, row);
+    }
+    if (row.state === 'finished' && row.outcome === 'completed' && Number.isInteger(row.exitCode)) {
+      const finishedAt = p.now(), elapsedMs = finishedAt - row.startedAt;
+      const suiteMinutes = (elapsedMs > 0 ? elapsedMs : Math.max(1, performance.now() - startedWall)) / 60_000;
+      recordCostSuite({ cwd: resolve(cwd), ...costContext, id: `suite-${row.ticket}-${row.startedAt}`, suiteMinutes, passed: row.exitCode === 0, at: finishedAt, env }, { fs: p.fs });
     }
     if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; output evidence: ${row.logPath}`);
     return { exitCode: result.ownershipConfirmed === false ? 1 : result.exitCode, message: row.reason ? safeEvidenceText(row.reason) : 'Full test suite finished.' };

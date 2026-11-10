@@ -234,3 +234,32 @@ for (const damage of ['malformed','unreadable']) test(`workflow JSON status expo
   assert.ok(item.words.includes(item.suite.reason),'status retains the queue read cause');
   assert.deepEqual(readFileSync(join(run.runDir,'status.json')),before);
 });
+
+test('suite time limit follows this machine recent successful suite durations for the repository in the cost ledger', async t => {
+  const f = fixture(t);
+  const durationsMinutes = [3, 6, 7, 8, 11];
+  for (let i = 0; i < durationsMinutes.length; i++) {
+    const promise = f.run(99);
+    await until(() => f.started.length === i + 1, 'suite starts');
+    f.clock += durationsMinutes[i] * 60_000;
+    f.started[i].finish(0);
+    assert.equal(await promise, 0);
+  }
+  assert.equal(f.started[0].options.timeoutMs, 30 * 60_000, 'first suite before history uses the 30-minute default');
+  // After 5 successful suites [3, 6, 7, 8, 11] min, median is 7 min -> 2x median = 14 min.
+  const sixth = f.run(99);
+  await until(() => f.started.length === 6, 'sixth suite starts with learned timeout');
+  assert.equal(f.started[5].options.timeoutMs, 14 * 60_000);
+  assert.equal((await f.status(99)).timeoutMinutes, 14);
+  f.clock += 50 * 60_000;
+  f.started[5].finish(1, 'suite failed');
+  assert.equal(await sixth, 1);
+
+  // Failed suite duration is not used to raise the learned timeout; explicit --timeout still overrides.
+  const seventh = f.run(99);
+  await until(() => f.started.length === 7, 'seventh suite starts');
+  assert.equal(f.started[6].options.timeoutMs, 14 * 60_000);
+  f.clock += 7 * 60_000;
+  f.started[6].finish(0);
+  assert.equal(await seventh, 0);
+});

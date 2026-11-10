@@ -9,9 +9,10 @@ test('bounded capacity rule: 1..128 cores, 0..32 GiB, personal and affinity mode
     for(const virtualized of [false,true]) for(const platform of ['linux','darwin']) for(const battery of [false,true]) for(const affinity of [false,true])
       for(const checks of [undefined,1,5]) {
         const personal=platform==='darwin'||battery||!virtualized, usable=personal?Math.max(1,Math.floor(count/2)):count;
-        const fromCores=Math.max(1,Math.floor(usable/12)), fromMemory=Math.max(1,Math.floor(memoryGiB/4));
-        const calculated=platform==='linux'&&affinity?Math.min(fromCores,fromMemory):1;
-        for(const load of [usable,usable+1]) {
+        const fromMemory=Math.max(1,Math.floor(memoryGiB/4));
+        for(const load of [0,usable,usable+1]) {
+          const fromCores=Math.max(1,Math.floor(Math.max(0,usable-load)/12));
+          const calculated=platform==='linux'&&affinity?Math.min(fromCores,fromMemory):1;
           const ports=checkMachine({count,free:memoryGiB*GiB,platform,battery,virtualized,taskset:affinity?'/fake/taskset':null,load}).ports;
           const got=calculateCheckCapacity({checks},ports), chosen=checks??calculated;
           assert.deepEqual([got.usableCores,got.calculatedChecks,got.checks,got.runs,got.coresPerCheck,got.busy],
@@ -19,5 +20,5 @@ test('bounded capacity rule: 1..128 cores, 0..32 GiB, personal and affinity mode
           cases++;
         }
       }
-  assert.equal(cases,405504);
+  assert.equal(cases,608256);
 });

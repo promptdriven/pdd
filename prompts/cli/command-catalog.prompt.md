@@ -74,7 +74,9 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.suite `workflow suite --command COMMAND [--timeout MIN]` (local
   `workflow-suite`): no operands, required nonblank command text enforced by
   dispatch, optional integer timeout 1 to 120 minutes. Help describes the shared
-  machine queue, machine-sized check slots and the 30-minute execution timeout. The required
+  machine queue, machine-sized check slots and the execution timeout learned from
+  recent successful suite durations in the cost ledger (30-minute default before
+  history). The required
   [queue contract](test-suite-queue.prompt.md) owns execution and status.
 
 - workflow.done `workflow done STEP [--summary TEXT] [--skipped REASON]`: STEP is a safe step name; the summary and the reason are free text. Help says it records the step with pdd's own latest `pdd <NAMES.test>`, `pdd <NAMES.lint>` and prove results (the summary is an agent note), and that --skipped records that the step was skipped, and why. Build the two command words from `NAMES`, like every other form, so a rename changes this help too.

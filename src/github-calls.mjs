@@ -1,4 +1,4 @@
-// Generated from prompts/cli/github-calls.prompt.md (sha256: fbb5690ad3092e784178e1b66b1b52a36393276c8b3bb3a50e30ed155ff46ae2).
+// Generated from prompts/cli/github-calls.prompt.md (sha256: 59f1df7e50d5876b2d9853dd40f84fe63c2c2f5fee0d5cc82571c5f78ace4b5e).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -294,6 +294,10 @@ export function githubFloorGuard({ floor = GITHUB_FLOOR, entries = [], now = Dat
       const low = !!value && value.remaining < floor && !(finite(value.resetAt) && value.resetAt <= now());
       if (low) stopped = true;
       return low;
+    },
+    resetAt(resource = 'core') {
+      const value = rate[resource];
+      return value && finite(value.resetAt) && value.resetAt > now() ? value.resetAt : null;
     },
     get stopped() { return stopped; },
   };

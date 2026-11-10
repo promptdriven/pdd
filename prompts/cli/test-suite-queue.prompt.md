@@ -30,7 +30,7 @@ Optional `onOutput(stream, bytes)` receives raw stdout/stderr buffers; without i
 output inherits the caller streams. `startGate` blocks command execution until
 `onChild(pid)` succeeds, then supplies EOF on command stdin.
 
-Export `runTestSuite({cwd, command, timeout = 30, env}, ports = {})`, returning
+Export `runTestSuite({cwd, command, timeout, env}, ports = {})`, returning
 `{exitCode, message}`, and synchronous `readSuiteProgress({cwd, since = 0, env},
 ports = {})`. The latter returns null without records, else `{ticket, state, position,
 queuedAt, startedAt, finishedAt, reason, pausedMs}`. `ticket` is the positive submission sequence number. Times are epoch milliseconds;
@@ -48,7 +48,14 @@ profile. Default to `/tmp/pdd-full-suite-UID`, with the operating system user ID
 An explicit absolute `PDD_SUITE_QUEUE` selects a shared directory; the compatibility
 `PDD_VM_SUITE_LOCK` selects `VALUE.queue` when the first variable is absent.
 Reject relative paths, blank commands and invalid timeouts before execution.
-Timeout is an integer of 1 to 120 minutes, default 30, measured only after admission.
+Explicit `timeout` is an integer of 1 to 120 minutes, measured only after admission.
+When `timeout` is omitted, learn the limit from this machine's recent successful
+suite durations for the repository in the [cost ledger](cost-ledger.prompt.md)
+(`2x` the median of the last 5 successful suite durations, rounded up to whole
+minutes, with a floor of 5 minutes, a ceiling of 120 minutes, and a 30-minute
+fallback when no successful suite duration is recorded). Store `timeoutMinutes`
+on the ticket and record each completed suite's elapsed wall time and pass/fail
+outcome in the cost ledger.
 The compatibility script accepts `--check` without executing, uses `SUITE` when
 nonblank, otherwise `POCKET_BROWSER_BIN=/usr/bin/google-chrome npm test`, and
 returns the child's status. Preserve the compatibility queued/started/finished
@@ -237,7 +244,13 @@ Personal means macOS, or Linux with a battery or without established virtualizat
 This includes Linux desktops without batteries; detected Linux VMs and containers
 without batteries retain the full machine budget. Use the first max(1, floor(cores/2))
 CPU IDs on a personal machine, else all IDs. Let U be this usable count and M be
-free bytes. Calculated slots are max(1, min(floor(U/12), floor(M/4294967296))).
+free bytes. Let `autopilotLoad` be the reserved CPU count of currently running
+suite tickets in the shared queue (or optional `autopilotLoad` input, default 0),
+and let `outsideLoad = max(0, load - autopilotLoad)` be the machine load from
+processes outside Autopilot. Let `A = max(0, U - outsideLoad)` be the usable
+cores remaining after outside work. Calculated slots are
+`max(1, min(floor(A/12), floor(M/4294967296)))`, so high outside load reduces
+Autopilot's check slots for that tick instead of overloading the machine.
 Without Linux taskset, cap calculated slots at one, since an env hint cannot
 constrain tools which ignore it. Explicit checks replaces calculated slots.
 Calculated open runs are twice the chosen slots, capped at the largest safe integer; explicit runs replaces this.
@@ -317,6 +330,9 @@ come from the machine resource owner.
 
 - [Secret redaction](secret-redaction.prompt.md): required shared rules for every
   persisted receipt string and captured output, also used by agent guide.
+
+- [Cost ledger](cost-ledger.prompt.md): required shared rules for recording
+  completed suite durations and reading the repository's learned suite time limit.
 
 - [Machine observations](machine-resources.prompt.md): required shared native readers
   and tick observation shape for machine-sized checks.

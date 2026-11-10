@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 09dd048bd02275b49d06e674c8ffed1bd8325bd8fad9d53038b820f431bbff65).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b0e887eef23526a7ca82287ae9681d73543bd48979523e7300c741f4ed5be589).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -261,7 +261,7 @@ function response(text) {
 async function issuePages(endpoint, state, p) {
   const rows = [], pages = {}; let first = true, etag, changed = false;
   while (endpoint) {
-    if (p.githubFloor?.blocked('core')) return { reserveBlocked: true };
+    if (p.githubFloor?.blocked('core')) return { reserveBlocked: true, resetAt: p.githubFloor.resetAt?.('core') ?? null };
     const old = state.pages?.[endpoint];
     const args = ['api', '--include', '--method', 'GET', endpoint];
     if (old?.etag) args.push('-H', `If-None-Match: ${old.etag}`);
@@ -731,6 +731,46 @@ async function healthAlerts(state, p, stateRoot) {
       for (const number of issues) await alert(number, kind, { cause, tried: 'Paused new admissions; kept claims, progress and heartbeats',
         need: kind === 'resource' ? 'Free disk space or memory; the tick checks again' : 'Wait for the ordinary usage window; the tick reads the limit again' });
     }
+  }
+}
+async function githubLimitAlert(state, p, stateRoot, pause) {
+  const send = input => (p.sendAlert ?? (item => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...item },
+    { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now, hostname: () => state.machine })))({ action: 'alert', cwd: state.cwd, ...input });
+  const alert = async (issue, kind, fields) => {
+    try { const reply = await send({ issue: String(issue), kind, text: JSON.stringify(fields) }); return reply?.exitCode === 0; }
+    catch { return false; }
+  };
+  if (!pause) {
+    if (!state.githubLimit) return;
+    const codexLimited = state.health && !['healthy', 'not-applicable'].includes(state.health.usage?.state);
+    if (!state.githubLimit.alerted || codexLimited || await alert(state.githubLimit.issue, 'recovered', { kind: 'usage-limit', cause: 'GitHub budget and rate limit permit work again' })) {
+      delete state.githubLimit;
+    }
+    return;
+  }
+  const issues = [...new Set([
+    state.githubLimit?.issue,
+    ...Object.values(state.health?.incidents ?? {}),
+    ...(state.githubIntake?.claims ?? []).map(claim => Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1])),
+    ...(state.githubIntake?.eligible ?? []).map(url => Number(/\/issues\/(\d+)$/.exec(url)?.[1])),
+    ...Object.keys(p.dependencySnapshot?.list?.rows ?? {}).map(Number),
+    ...Object.keys(p.dependencySnapshot?.pendingList?.rows ?? {}).map(Number),
+    ...Object.keys(p.dependencySnapshot?.issues ?? {}).map(Number),
+    ...(state.cachedIssues ?? []).filter(issue => !issue.pull_request).map(issue => issue.number),
+  ].filter(number => Number.isSafeInteger(number) && number > 0))];
+  const issue = issues[0] ?? 1;
+  const resetAt = Number.isFinite(pause.resetAt) && pause.resetAt > 0 ? pause.resetAt
+    : typeof pause.resetAt === 'string' && Number.isFinite(Date.parse(pause.resetAt)) ? Date.parse(pause.resetAt) : null;
+  const resetText = resetAt !== null ? `; resets ${new Date(resetAt).toISOString()}` : '';
+  const cause = `${pause.kind === 'budget' ? 'GitHub budget reserve floor reached' : 'GitHub rate limit reached'}${resetText}`;
+  if (!state.githubLimit) state.githubLimit = { issue, kind: pause.kind, resetAt, cause, alerted: false };
+  else { state.githubLimit.issue ??= issue; if (resetAt !== null) state.githubLimit.resetAt = resetAt; state.githubLimit.cause = cause; }
+  if (!state.githubLimit.alerted) {
+    if (await alert(state.githubLimit.issue, 'usage-limit', {
+      cause,
+      tried: 'Paused GitHub intake and issue reads until reset; kept claims, progress and heartbeats',
+      need: 'Wait for the GitHub limit reset; the tick checks again',
+    })) state.githubLimit.alerted = true;
   }
 }
 
@@ -1623,7 +1663,10 @@ async function runTick(stateFile, ports, completion) {
       };
       await resumeStoppedWorkers(state, p);
     }
-    if (state.retryAt > p.now()) return await outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
+    if (state.retryAt > p.now()) {
+      if (state.githubLimit) await githubLimitAlert(state, p, dirname(stateFile), { kind: state.githubLimit.kind ?? 'rate-limit', resetAt: state.githubLimit.resetAt ?? state.retryAt });
+      return await outcome('unknown', `GitHub rate limited; next attempt after ${new Date(state.retryAt).toISOString()}.`);
+    }
     ({budget, restLeft} = readBudget());
     // Heartbeats of this coordinator's own live claims (no AI call). A saved claim can have expired since it was
     // observed: expiry is final, so it gets no heartbeat.
@@ -1651,6 +1694,7 @@ async function runTick(stateFile, ports, completion) {
       // No rate-limit wait is saved: each tick until the reset computes the budget again and sends the heartbeats again.
       const claims = ownClaimsOf(Array.isArray(state.githubIntake?.claims) ? state.githubIntake.claims : []);
       if (!(Number.isFinite(restLeft) && restLeft < 2 * claims.length)) await sendHeartbeats(claims, true);
+      await githubLimitAlert(state, p, dirname(stateFile), { kind: 'budget', resetAt: budget.resetAt });
       return await outcome('unknown', `GitHub limit low: ${budget.remaining} ${budget.resource === 'graphql' ? 'GraphQL points' : 'REST calls'} left, below the floor of ${budget.floor}; Autopilot waits until ${new Date(budget.resetAt).toISOString()}, except the heartbeats of this machine's claims.`);
     }
     // A due relaunch wakes even without new work; the fresh chat starts with the recipe.
@@ -1721,6 +1765,8 @@ async function runTick(stateFile, ports, completion) {
       if (githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) {
         const claims = ownClaimsOf(Array.isArray(savedIntake?.claims) ? savedIntake.claims : []);
         await sendHeartbeats(claims, true);
+        const blockedResource = githubFloor.blocked('core') ? 'core' : 'graphql';
+        await githubLimitAlert(state, p, dirname(stateFile), { kind: 'budget', resetAt: githubFloor.resetAt?.(blockedResource) ?? budget.resetAt ?? null });
         return await outcome('unknown', 'GitHub limit is below the floor; dependency progress is saved until reset.');
       }
       if (Array.isArray(intake.eligible)) state.githubIntake = { at: p.now(), eligible: intake.eligible, claims: Array.isArray(intake.claims) ? intake.claims : [], groups: Array.isArray(intake.groups) ? intake.groups : [] };
@@ -1760,10 +1806,18 @@ async function runTick(stateFile, ports, completion) {
 
     try { await (p.cleanupWorktrees ?? (input => cleanupWorktrees(input, { execute: p.execute })))({ cwd: state.cwd, repository: state.repo }); } catch { /* Retain unknown worktrees. */ }
     const result = p.queryIssues ? await p.queryIssues(state) : await queryIssues(state, p);
-    if (result.reserveBlocked) return await outcome('unknown', 'GitHub limit is below the floor; retry after reset.');
-    if (result.status === 429 || result.rateLimited) { state.retryAt = result.resetAt || p.now() + INTERVAL; return await outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
+    if (result.reserveBlocked) {
+      await githubLimitAlert(state, p, dirname(stateFile), { kind: 'budget', resetAt: result.resetAt ?? githubFloor?.resetAt?.('core') ?? budget.resetAt ?? null });
+      return await outcome('unknown', 'GitHub limit is below the floor; retry after reset.');
+    }
+    if (result.status === 429 || result.rateLimited) {
+      state.retryAt = result.resetAt || p.now() + INTERVAL;
+      await githubLimitAlert(state, p, dirname(stateFile), { kind: 'rate-limit', resetAt: state.retryAt });
+      return await outcome('unknown', 'GitHub rate limited; waiting until reset.');
+    }
     if (![200, 304].includes(result.status)) throw Error('GitHub issue check failed; check gh auth status.');
     delete state.retryAt;
+    await githubLimitAlert(state, p, dirname(stateFile), null);
     if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; }
     if (result.pages) state.pages = result.pages;
     if (typeof result.since === 'string') state.issuesSince = result.since; else if (Number.isFinite(result.fullAt)) delete state.issuesSince;
@@ -2049,12 +2103,16 @@ async function runTick(stateFile, ports, completion) {
     }
     return await outcome('reconciled', [delivered ? `Autopilot offered ${work.length} issue(s).` : 'Autopilot tick complete.', ...warnings].join(' '));
   } catch (e) {
-    if (e.resetAt) { state.retryAt = e.resetAt; return await outcome('unknown', 'GitHub rate limited; waiting until reset.'); }
+    if (e.resetAt) {
+      state.retryAt = e.resetAt;
+      await githubLimitAlert(state, p, dirname(stateFile), { kind: 'rate-limit', resetAt: e.resetAt });
+      return await outcome('unknown', 'GitHub rate limited; waiting until reset.');
+    }
     throw e;
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','interpreterPattern','auditHolds']) {
+        for (const key of ['defaultBranch','baseBranch','retryAt','githubLimit','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','interpreterPattern','auditHolds']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;

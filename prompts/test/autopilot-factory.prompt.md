@@ -154,6 +154,13 @@ Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr
 
 The parent alert adapter gives the real alert owner the same injected GitHub execution transport as native factory commands. Keep private state and fake HTTP delivery, including failed and uncertain replies.
 
+## Machine fairness and GitHub-limit alert
+
+Include three factory scenarios:
+1. GitHub limit alert: when Autopilot pauses for the GitHub budget reserve floor or a GitHub rate limit, it sends one `usage-limit` alert through `src/autopilot-alerts.mjs` with the reset time, sends no repeat on another paused tick, and sends one `recovered` alert when a later tick after reset resumes normal GitHub reads.
+2. Suite time limit follows the machine: `pdd workflow suite` records completed suite durations in the cost ledger and replaces the fixed 30-minute limit with the limit learned from the repository's recent successful suite durations on this machine (2x the median of the last 5, clamped to floor 5 and ceiling 120 minutes).
+3. Other work counts: when machine load from processes outside Autopilot is high, an Autopilot tick reduces its check slots for that tick instead of overloading the machine, while load from Autopilot's own running checks does not reduce its own check slots.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

@@ -390,7 +390,10 @@ missing or invalid value uses the default.
   shows fewer calls than the floor stops the reads
   after it. A stopped `complete` keeps its request and analysis; the first tick
   after the reset saves the remaining reviews without a new analysis. Reviews
-  that were already saved are never saved twice.
+  that were already saved are never saved twice. When the tick pauses for the
+  GitHub budget or rate limit, Autopilot sends one `usage-limit` alert with the
+  reset time and no repeats per tick, and one `recovered` alert after GitHub
+  reads resume.
 
 The coordinator and worker chats go on, and their own `gh` calls are not counted.
 Safety reads, including workflow start's live subject and claim checks, trust,
@@ -998,7 +1001,10 @@ queue position. Queue waiting and suite execution pause Autopilot's stuck clock.
 A suite failure, interruption or execution timeout has its own reason and the
 `test-suite` alert kind. It does not mark the issue stuck.
 
-The execution timeout defaults to 30 minutes. `--timeout` accepts 1 to 120
+The execution timeout follows this machine's recent successful suite durations
+for the repository recorded in the cost ledger (`2x` the median of the last 5,
+with a 5-minute floor, a 120-minute ceiling, and a 30-minute default before
+suite history exists). `--timeout` accepts 1 to 120
 minutes. Waiting does not use that time. Output and exit status come from the
 suite; timeout returns 124. The runner stops the suite process group before
 releasing its slot.
@@ -1009,8 +1015,10 @@ cores (round down, minimum one). Linux desktops without batteries are included.
 Linux uses all available cores only when virtualization is detected and no battery
 is present. Detection uses `systemd-detect-virt --quiet` with a one-second timeout.
 If detection is unavailable or uncertain, Linux uses the personal-machine budget.
-With U usable cores and M free bytes, calculated check slots are
-`max(1, min(floor(U / 12), floor(M / 4294967296)))`.
+With U usable cores, M free bytes and outside load from processes outside
+Autopilot subtracted from U (`A = max(0, U - outsideLoad)`), calculated check slots are
+`max(1, min(floor(A / 12), floor(M / 4294967296)))`. High outside load reduces
+check slots for that tick instead of overloading the machine.
 Without Linux taskset, calculated slots are capped at one. With enough memory,
 Linux VMs with taskset and 4, 8, 16, 32, 64 and 96 cores get 1, 1, 1, 2, 5
 and 8 slots. A 96-core machine with 8 GiB free gets two slots.
