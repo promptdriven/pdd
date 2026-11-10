@@ -694,3 +694,40 @@ test('factory 3125: a full workflow session admits healthy coordinator reuse in 
   assert.ok(w.herdr.panes.some(p=>p.pane_id===personal.result.root_pane.pane_id));
   assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });
+
+test('factory 3157: a parked run is cancelled, its claim and labels go away, and status shows it cancelled',async t=>{
+  const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);
+  await a.until(r=>r.area===1);
+  w.github.label(17,'pdd:stuck');
+  await w.command(['workflow','status','17']);
+  await w.command(['workflow','park','--route','custom-route','--reason','Which supported PDD route handles custom-route?'],{cwd:w.record().root});
+  await w.tick();
+  assert.equal(w.record().parking?.phase,'parked');
+  assert.equal(w.record().parking?.blocker?.kind,'pdd-route');
+  assert.ok(w.github.issues.get(17).labels.includes('pdd:working'));
+  assert.ok(w.github.issues.get(17).labels.includes('pdd:stuck'));
+
+  const cancel=await w.command(['workflow','cancel','17'],{actor:'person'});
+  assert.equal(cancel.code,0,cancel.stderr);
+  assert.equal(w.record().state,'cancelled');
+  assert.equal(w.record().parking,undefined);
+  assert.ok(!w.github.issues.get(17).labels.includes('pdd:working'));
+  assert.ok(!w.github.issues.get(17).labels.includes('pdd:stuck'));
+  assert.equal(existsSync(join(w.commonDir,'pdd/worktree-assignments/issues/17.json')),false);
+
+  const detail=await w.command(['workflow','status','17'],{actor:'person'});
+  assert.equal(detail.code,0,detail.stderr);
+  assert.match(detail.stdout,/State: cancelled/);
+  assert.doesNotMatch(detail.stdout,/Parking:|parked/);
+
+  const activeJson=await w.command(['workflow','status','--all','--json'],{actor:'person'});
+  assert.equal(JSON.parse(activeJson.stdout).runs.find(r=>r.number===17),undefined);
+  const allJson=await w.command(['workflow','status','--all','--cancelled','--json'],{actor:'person'});
+  const row=JSON.parse(allJson.stdout).runs.find(r=>r.number===17);
+  assert.equal(row.group,'cancelled');
+  assert.equal(row.words,'cancelled');
+
+  await w.tick();
+  const autoStatus=await w.command(['autopilot','status'],{actor:'person'});
+  assert.match(autoStatus.stdout,/working 0 of \d+ · parked 0/);
+});

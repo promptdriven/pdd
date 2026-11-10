@@ -1399,3 +1399,118 @@ for(const facts of [{reason:{code:'binding-missing'}},{refusals:[{code:'binding-
     await tick();assert.equal(f.record().parking?.blocker.kind,'binding','3135_SAVED_RESULT_BINDING');
     f.tick();await tick();assert.equal(f.record().parking?.blocker.kind,'binding');
   });
+
+test('3157: cancel ends a parked or closing run, clears parking, releases claim and removes pdd:working and pdd:stuck', async t => {
+  const {cancelRun, runStatus} = await import('../src/workflow-runner.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, tick} = await setup(t);
+  const run = f.record();
+  run.state = 'paused';
+  run.blockedOn = {kind: 'pdd-route', until: 'capability:route-custom'};
+  run.routeWait = {kind: 'custom', step: 'reproduce', question: 'Which supported PDD route?', at: f.clock, until: 'capability:route-custom'};
+  save(f, run);
+  await tick();
+  assert.equal(f.record().parking?.phase, 'parked');
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 17, now: () => f.clock});
+  const comment = github.claim(17, {coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine});
+  github.label(17, 'pdd:stuck');
+  const parked = f.record();
+  parked.automaticOrigin.claim = {commentId: comment.id, labelEventId: github.issues.get(17).timeline.find(e => e.label === 'pdd:working').id};
+  save(f, parked);
+  const ports = {...f.ports, authority: {read: async () => ({authority: 'trusted'})}, execFile: async (file, args, options) =>
+    file === 'gh' && args[0] === 'api' ? github.gh(args, options) : f.ports.execFile(file, args, options)};
+  const cancelled = await cancelRun({ref: '17', cwd: f.source}, ports);
+  assert.equal(cancelled.exitCode, 0, cancelled.message);
+  const after = f.record();
+  assert.equal(after.state, 'cancelled');
+  assert.equal(after.parking, undefined);
+  assert.equal(after.blockedOn, undefined);
+  assert.equal(after.routeWait, undefined);
+  assert.deepEqual(github.issues.get(17).labels, []);
+  assert.equal(existsSync(join(run.commonDir, 'pdd/worktree-assignments/issues/17.json')), false);
+  const detailOut = await runStatus({ref: '17', cwd: f.source}, ports);
+  assert.match(detailOut.message, /State: cancelled/);
+  assert.doesNotMatch(detailOut.message, /Parking:|parked/);
+  const activeOut = await runStatus({all: true, json: true, cwd: f.source}, ports);
+  assert.equal(JSON.parse(activeOut.message).runs.find(r => r.number === 17), undefined);
+  const listOut = await runStatus({all: true, cancelled: true, json: true, cwd: f.source}, ports);
+  const row = JSON.parse(listOut.message).runs.find(r => r.number === 17);
+  assert.equal(row.group, 'cancelled');
+  assert.equal(row.words, 'cancelled');
+});
+
+test('3157: pdd autopilot release removes pdd:working and pdd:stuck, keeps run folder/branch/PRs, and refuses another machine live claim', async t => {
+  const {runAutopilotLauncher} = await import('../src/autopilot-launcher.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, tick, ports} = await setup(t);
+  const run = f.record();
+  run.state = 'paused';
+  run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'};
+  run.pr = [{number: 101, url: 'https://github.com/example/project/pull/101', stage: 'story', state: 'open', ci: 'passing'}];
+  save(f, run);
+  await tick();
+  assert.equal(f.record().parking?.phase, 'parked');
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  const comment = github.claim(17, {coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine});
+  github.label(17, 'pdd:stuck');
+  const parked = f.record();
+  parked.automaticOrigin.claim = {commentId: comment.id, labelEventId: github.issues.get(17).timeline.find(e => e.label === 'pdd:working').id};
+  save(f, parked);
+  const launcherPorts = {...ports, authority: {read: async () => ({authority: 'trusted'})}, run: async (file, args, options) => {
+    if (file === 'gh' && args[0] === 'api') return github.gh(args, options);
+    if (file === 'gh' && args[0] === 'repo') return {code: 0, stdout: JSON.stringify({nameWithOwner: run.repo, url: `https://github.com/${run.repo}`, defaultBranchRef: {name: 'main'}}), stderr: ''};
+    return ports.run(file, args, options);
+  }};
+  const released = await runAutopilotLauncher({command: 'release', cwd: f.source, env: f.ports.env, issues: ['17']}, launcherPorts);
+  assert.equal(released.exitCode, 0, released.message);
+  assert.deepEqual(github.issues.get(17).labels, []);
+  const after = f.record();
+  assert.equal(after.parking, undefined);
+  assert.ok(existsSync(after.runDir));
+  assert.ok(existsSync(after.root));
+  assert.deepEqual(after.pr, run.pr);
+
+  // Another machine holds a live claim on #18: release refuses and keeps the labels.
+  github.claim(18, {coordinatorId: 'other-coord', machine: 'other-machine'});
+  github.label(18, 'pdd:stuck');
+  const refused = await runAutopilotLauncher({command: 'release', cwd: f.source, env: f.ports.env, issues: ['18']}, launcherPorts);
+  assert.equal(refused.exitCode, 1);
+  assert.match(refused.message, /other-machine holds a live claim/);
+  assert.deepEqual(github.issues.get(18).labels.sort(), ['pdd:stuck', 'pdd:working']);
+});
+
+test('3157: expired or lost claim on tick removes pdd:working and pdd:stuck and status shows no stale claim for ended runs', async t => {
+  const {runAutopilotLauncher} = await import('../src/autopilot-launcher.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, tick, stateFile, ports} = await setup(t);
+  fullTicks(f, stateFile, ports);
+  const run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 17, now: () => f.clock});
+  const comment = github.claim(17, {coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine});
+  github.label(17, 'pdd:stuck');
+  const eventId = github.issues.get(17).timeline.find(e => e.label === 'pdd:working').id;
+  run.automaticOrigin.claim = {commentId: comment.id, labelEventId: eventId};
+  run.state = 'stuck';
+  run.parkReason = 'Repair limit reached in build: take the stuck path';
+  save(f, run);
+  await tick();
+  assert.equal(f.record().parking?.phase, 'parked');
+  // Advance past the 4-hour claim expiry; intake observes the expired claim on this machine.
+  f.tick(5 * 3600000);
+  const origRun = ports.run, origExec = f.ports.execFile;
+  ports.run = async (file, args, options) => file === 'gh' && args[0] === 'api' ? github.gh(args, options) : origRun(file, args, options);
+  ports.execFile = f.ports.execFile = async (file, args, options) => file === 'gh' && args[0] === 'api' ? github.gh(args, options) : origExec(file, args, options);
+  ports.authority = {read: async () => ({authority: 'trusted'})};
+  ports.owners = {read: async () => ({json: JSON.stringify({localOwner: run.automaticOrigin.coordinatorId, claims: []})})};
+  ports.reconcileDependencyIntake = async () => ({
+    eligible: [], queued: [], skipped: [], groups: [],
+    claims: [{issue: run.issue.url, active: false, expired: true, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, commentId: comment.id, labelEventId: eventId, lastSeen: new Date(f.clock - 5 * 3600000).toISOString()}],
+  });
+  await tick();
+  assert.equal(f.record().state, 'cancelled');
+  assert.equal(f.record().parking, undefined);
+  assert.deepEqual(github.issues.get(17).labels, []);
+  const status = await runAutopilotLauncher({command: 'status', cwd: f.source, env: f.ports.env}, {...ports, timer: async () => true});
+  assert.equal(status.exitCode, 0, status.message);
+  assert.match(status.message, /working 0 of 1 · parked 0/);
+});

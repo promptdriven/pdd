@@ -12,11 +12,13 @@ person's interactive coding agent in a dedicated Herdr session. It adds no
 approval, merge, quota-reset or headless execution route. Its read-only base check refuses unsafe merge targets without performing a merge. Preserve existing
 setup, workflow and interpreter behavior.
 
-`runAutopilotLauncher` accepts command start, stop, status or add, cwd, packageRoot, env,
+`runAutopilotLauncher` accepts command start, stop, status, add or release, cwd, packageRoot, env,
 issues (argv issue references), and optional runs and checks text. Tests may inject `checkCapacityPorts` for the
 shared queue machine/filesystem ports independently of the launcher process port. Return `{exitCode,message}`.
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
+
+Catalog command `release` (`pdd autopilot release ISSUE`) releases this machine's own Autopilot claim on `ISSUE` through the shared `releaseParkedClaim` / `releaseRunClaim` path, removing `pdd:working` and `pdd:stuck` from the issue within the existing GitHub budget rules while keeping the run folder, branch and PRs. If another machine holds a live claim on the issue, refuse with exit code 1. Clear any local parking and stale saved intake claim on this machine so `status` never shows a stale claim for an ended or released run. During each tick when GitHub budget permits, for local automatic runs on this machine whose run is `cancelled` or whose admitted claim expired or was lost without a live replacement claim, remove `pdd:working` and `pdd:stuck` through `releaseParkedClaim` and end any still-open local run whose claim expired or was lost.
 
 Workflow cleanup and pane admission use the injected workflowHerdr port, then the injected herdr port, with the native pdd-session transport only as fallback. This port is separate from coordinator transport. Before fresh intake, bind the runner's idle sweep to pane admission alongside finished cleanup; idle cleanup uses the existing parking and resume route.
 

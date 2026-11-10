@@ -17,7 +17,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['interface.draft', 'metrics', 'metrics.export', 'metrics.import', 'metrics.record', 'autopilot.doctor', 'autopilot.start', 'autopilot.audit', 'autopilot.check-base', 'autopilot.stop', 'autopilot.status', 'autopilot.add', 'autopilot.alert', 'autopilot.alerts', 'graph', 'dependencies.prepare', 'dependencies.complete', 'workflow.suite', 'workflow.park', 'workflow.yield', 'product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.resend', 'workflow.card', 'workflow.changes', 'workflow.tidy', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'files', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['interface.draft', 'metrics', 'metrics.export', 'metrics.import', 'metrics.record', 'autopilot.doctor', 'autopilot.start', 'autopilot.audit', 'autopilot.check-base', 'autopilot.stop', 'autopilot.status', 'autopilot.add', 'autopilot.release', 'autopilot.alert', 'autopilot.alerts', 'graph', 'dependencies.prepare', 'dependencies.complete', 'workflow.suite', 'workflow.park', 'workflow.yield', 'product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.resend', 'workflow.card', 'workflow.changes', 'workflow.tidy', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'files', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -207,4 +207,14 @@ test('2640 CLI parses and forwards --adopt-corpus exactly and retains startup ex
   assert.equal(code,2);assert.equal(input.adoptCorpus,'/approval folder/corpus.json');assert.equal(input.name,'replay');assert.equal(input.base,'main');assert.match(stderr.text,/Cannot adopt/);assert.equal(stdout.text,'');
   for(const option of [[],[''],['a','--adopt-corpus','b']])assert.throws(()=>parseArgv(['workflow','run','replay','17','--adopt-corpus',...option]),CommandInputError);
   for(const shell of ['bash','zsh'])assert.match(renderCompletion(shell),/--adopt-corpus/);
+});
+
+test('3157 autopilot release routes issue reference to runAutopilotLauncher', async () => {
+  const stdout = capture(), stderr = capture(); let received;
+  const autopilotLauncher = { runAutopilotLauncher: async input => { received = input; return { exitCode: 0, message: 'Released the Autopilot claim for owner/repo#17.' }; } };
+  assert.equal(await runPdd(['autopilot', 'release', 'owner/repo#17'], { autopilotLauncher, cwd: '/chosen', packageRoot: '/bundle', stdout, stderr }), 0);
+  assert.equal(received.command, 'release');
+  assert.deepEqual(received.issues, ['owner/repo#17']);
+  assert.equal(stdout.text, 'Released the Autopilot claim for owner/repo#17.\n');
+  assert.throws(() => parseArgv(['autopilot', 'release']), CommandInputError);
 });

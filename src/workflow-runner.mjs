@@ -9,7 +9,7 @@ import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
-import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
+import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
 // Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2a47f692dd11eae221b5f2cce66e2f7b276ca9098512e2ef5061a53fb191ba1e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
@@ -720,10 +720,25 @@ async function chatContinuationOwnership(run, p, {releaseUnowned = false} = {}) 
       throw Object.assign(Error('Claim custody changed before handover.'), {code: 'workflow_progress_refused'});
     latest.state = 'cancelled';
     latest.cancelled = {state: 'handed-over', at: p.now(), reason};
+    if (releaseUnowned) {
+      delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
+    }
     for (const chat of latest.chats ?? []) chat.endedAt ??= latest.cancelled.at;
   });
   const {warnings, kept} = await cleanupRunChats(run, {...p, progressGuard: undefined}, {force: !releaseUnowned, reason: 'handover', ...(releaseUnowned ? {graceMs:0} : {})});
-  if (releaseUnowned) await releaseIssueClaim({cwd:run.sourceRoot,issueNumber:run.number,runId:run.runId},p.commandPorts);
+  if (releaseUnowned) {
+    await releaseIssueClaim({cwd:run.sourceRoot,issueNumber:run.number,runId:run.runId},p.commandPorts);
+    if (custody.unowned && validSavedAutomaticOrigin(run)) {
+      try {
+        await (p.releaseParkedClaim ?? releaseParkedClaim)({
+          cwd: run.sourceRoot, repository: run.repo,
+          claim: {issue: run.issue.url, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim},
+          coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine,
+          runId: run.runId, branch: run.branch, reason: 'expired',
+        }, {...p, ...p.commandPorts});
+      } catch { /* Best-effort label cleanup when local handover completes. */ }
+    }
+  }
   return [reason, `This local run was handed over to another machine. The worktree stays at ${run.root}.`,
     ...warnings, ...(kept.length ? [`Kept open: ${kept.map(item => `${item.area} (${item.reason})`).join(', ')}. Retry safe cleanup with pdd workflow tidy.`] : [])].join('\n');
 }
@@ -4156,6 +4171,10 @@ export const recoverAutomaticRunOwner = saveGuard((args, ports) => lockedMutatio
   if (!run || ended(run) || !validSavedAutomaticOrigin(run) || !samePath(run.sourceRoot,input.cwd)) return skip();
   const owner = currentParkingOwner(run,p,{allowOlder:true});
   if (!owner || owner.coordinatorId !== input.coordinatorId || owner.machine !== input.machine) return skip();
+  if (input.releaseUnowned) {
+    await chatContinuationOwnership(run, p, {releaseUnowned: true});
+    return {...done(''), recovery: ended(readRun(run.runDir) ?? run) ? 'released' : 'skipped'};
+  }
   if (run.automaticOrigin.coordinatorId === owner.coordinatorId) return skip();
   const result = await recoverParkingOwner(run,owner,p);
   return result ? {...done(''),recovery:'recovered',claim:result.claim} : skip();
@@ -4225,10 +4244,56 @@ async function cancelRunCommand({ ref, cwd }, ports) {
   // No chat of a cancelled run may still read a login file.
   removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
   const cancelled={state:'cancelled',at:p.now()};
-  commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:cancelled;latest.gate=null;for(const chat of latest.chats ?? [])chat.endedAt ??= cancelled.at;});
+  commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:cancelled;latest.gate=null;delete latest.parking;delete latest.blockedOn;delete latest.parkReason;delete latest.runtimeWait;delete latest.routeWait;for(const chat of latest.chats ?? [])chat.endedAt ??= cancelled.at;});
+  if (!ports?.claimReleased && validSavedAutomaticOrigin(run)) {
+    try { await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts); } catch {}
+    try {
+      await (p.releaseParkedClaim ?? releaseParkedClaim)({
+        cwd: run.sourceRoot, repository: run.repo,
+        claim: { issue: run.issue.url, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim },
+        coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine,
+        runId: run.runId, branch: run.branch, reason: 'cancel',
+      }, {...p, ...p.commandPorts});
+    } catch {}
+  }
   return done([...warnings, `Cancelled the run for ${run.repo}#${run.number}.${kept.length ? ` Kept open: ${kept.map(item=>`${item.area} (${item.reason})`).join(', ')}. Retry: pdd workflow tidy, or cancel from another terminal.` : ' Closed its Herdr tabs.'}`,
     `The worktree stays at ${run.root} (branch ${run.branch}).`].join('\n'));
 }
+
+export const releaseRunClaim = saveGuard(async ({ ref, cwd, repository, machine, coordinatorId }, ports = {}) => {
+  const p = deps(ports);
+  const text = String(ref ?? '').trim().replace(/\/$/, '');
+  const match = /^#?([1-9][0-9]*)$/.exec(text) ?? /^([^/\s#]+\/[^/\s#]+)#([1-9][0-9]*)$/.exec(text)
+    ?? /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]*)$/.exec(text);
+  if (!match) return fail(`"${String(ref).slice(0, 80)}" is not an issue number, owner/repo#N or issue URL.`);
+  const number = Number(match.at(-1)), refRepo = match.length === 3 ? match[1] : null;
+  const found = await resolveRun(String(number), { cwd }, p), run = found.run ?? null;
+  const repo = repository || refRepo || run?.repo;
+  if (!repo) return fail('Could not determine the GitHub repository for this issue.');
+  if (refRepo && refRepo.toLowerCase() !== repo.toLowerCase()) return fail(`Issue ${ref} does not belong to ${repo}.`);
+  const host = machine || run?.automaticOrigin?.machine || hostname();
+  const coord = coordinatorId || run?.automaticOrigin?.coordinatorId || '';
+  const issueUrl = `https://github.com/${repo}/issues/${number}`;
+  const remote = await (p.releaseParkedClaim ?? releaseParkedClaim)({
+    cwd, repository: repo,
+    claim: { issue: issueUrl, coordinatorId: coord, machine: host, ...(run?.automaticOrigin?.claim ?? {}) },
+    coordinatorId: coord, machine: host, runId: run?.runId, branch: run?.branch, reason: 'release',
+  }, {...p, ...p.commandPorts});
+  if (remote?.state === 'refused') return fail(`Cannot release ${repo}#${number}: ${remote.machine} holds a live claim.`);
+  if (remote?.state !== 'released') return fail(`Could not release the claim for ${repo}#${number}.`);
+  if (run && (!run.automaticOrigin?.machine || run.automaticOrigin.machine === host)) {
+    try { await cleanupRunChats(run, p, { force: true, reason: 'cancel' }); } catch {}
+    if (!ended(run) || run.parking) {
+      try {
+        commitRun(run, p, latest => {
+          delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
+        });
+      } catch {}
+    }
+    try { await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts); } catch {}
+  }
+  return { ...done(`Released the Autopilot claim for ${repo}#${number}.${run ? ` The worktree stays at ${run.root} (branch ${run.branch}).` : ''}`), number, repo, recovery: 'released' };
+});
 
 async function refreshPr(run, p) {
   if (!run.pr?.length || run.state === 'cancelled') return;
@@ -4384,7 +4449,7 @@ function detail(run, chat = null, facts = {}) {
       : `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.`) : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}${run.agentDefinition?.name ? ` ${JSON.stringify(run.agentDefinition.name)}` : ''}`,
     `State: ${describe(run, chat, facts)}`,
-    ...(run.parking ? [`Parking: ${run.parking.phase} (${run.parking.blocker.kind}), since ${new Date(run.parking.at).toISOString()}`] : []),
+    ...(run.parking && !ended(run) ? [`Parking: ${run.parking.phase} (${run.parking.blocker.kind}), since ${new Date(run.parking.at).toISOString()}`] : []),
     ...(['stuck', 'paused'].includes(run.state) ? [`Cause: ${run.stuckCause ?? classifyStuckCause(run.parkReason, runtimeWaiting(run))}`] : []),
     ...cleanupLines(run),
     `Launch: model ${launchProfile(run).model ?? 'account default'}; account ${launchProfile(run).configDir ?? 'default folder'}; Codex threads ${launchProfile(run).codexThreads ?? 'account default'}`,
@@ -4430,11 +4495,12 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
   const cannotWork = !problem && !question && !run.gate && running && chat === 'cannot-work' && health ? health : null;
-  const group = run.parking?.phase === 'parked' ? 'waiting' : run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : environmentRecovery(run) && environmentRecovery(run).attempts < ENVIRONMENT_BACKOFF.length ? 'working' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
+  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.parking?.phase === 'parked' ? 'waiting' : environmentRecovery(run) && environmentRecovery(run).attempts < ENVIRONMENT_BACKOFF.length ? 'working' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
     : run.state === 'stuck' || run.gate || question || cannotWork || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) && !(run.promptReturn && area?.steps.some(step=>!run.done[step])) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
-  const words = run.parking?.phase === 'parked' ? `parked (${run.parking.blocker.kind})${run.gate?.automaticHold ? ` · PR 1 waits: ${run.gate.automaticHold}` : ''}` : group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
+  const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
+    : run.parking?.phase === 'parked' ? `parked (${run.parking.blocker.kind})${run.gate?.automaticHold ? ` · PR 1 waits: ${run.gate.automaticHold}` : ''}`
     : environmentStatus(run) ? environmentStatus(run)
     : run.state === 'stuck' ? `stuck: ${stuckReason(run)}`
     : suite && (suite.state !== 'finished' || suite.reason) ? suiteStatusWords(suite)
@@ -5261,7 +5327,7 @@ export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, 
   if (remote?.state !== 'released' || !current(readRun(run.runDir))) return skipped();
   const local = await releaseIssueClaim({cwd: input.cwd, issueNumber: run.number, runId: run.runId}, p);
   if (local.state !== 'released' || !current(readRun(run.runDir))) return skipped();
-  const result = await cancelRunCommand(input, p);
+  const result = await cancelRunCommand(input, {...p, claimReleased: true});
   return {...result, recovery: result.exitCode === 0 ? 'released' : 'skipped'};
 }));
 

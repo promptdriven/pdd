@@ -38,7 +38,7 @@ repairs the named declaration, a fresh check must reach a verdict.
    identity resume without another allocation or publication.
 3. Lost verdict: ticks send nothing again; the explicit synthetic person's
    resend decision permits exactly one new attempt, then completion.
-4. A stuck run parks, keeps progress and wakes when its named blocker clears.
+4. A stuck run parks, keeps progress and wakes when its named blocker clears. A parked run that is cancelled clears its parking record, releases its claim and removes `pdd:working` and `pdd:stuck` from the issue, and status shows it cancelled.
 5. A full pane budget and full check slots defer work without losing it; release
    admits it. An undispatched dead interpreter holder is reclaimed. A dead dispatched holder keeps an unknown outcome; queue recovery never
    sends its old request again.

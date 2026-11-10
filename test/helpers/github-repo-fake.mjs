@@ -110,6 +110,13 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     if (sub === '/dependencies/blocked_by') return { status: 200, ...page(endpoint, issue.blockedBy.map(n => row(f.issues.get(n)))) };
     if (sub === '/dependencies/blocking') return { status: 200, ...page(endpoint, live().filter(other => other.blockedBy.includes(issue.number)).map(row)) };
     if (sub === '/timeline') return { status: 200, ...page(endpoint, events(issue)) };
+    const labelMatch = /^\/labels\/([^/]+)$/.exec(sub);
+    if (labelMatch && method === 'DELETE') {
+      const name = decodeURIComponent(labelMatch[1]);
+      if (!issue.labels.includes(name)) return { status: 404, body: { message: 'Label does not exist' } };
+      f.unlabel(issue.number, name);
+      return { status: 200, body: issue.labels.map(name => ({ name })) };
+    }
     return { status: 404, body: { message: 'Not Found' } };
   }
   function graphql(input) {
