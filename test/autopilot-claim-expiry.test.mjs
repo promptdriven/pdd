@@ -16,6 +16,7 @@ import { runIssueGraph } from '../src/issue-dependency-graph.mjs';
 import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { fixture as runnerFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
+import { createGithubRepoFake } from './helpers/github-repo-fake.mjs';
 
 // Issue #3032: claims carry a heartbeat, expire, and a lost claim stops work.
 const repo = 'owner/repo', hour = 60 * 60 * 1000, minute = 60 * 1000;
@@ -854,4 +855,51 @@ test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most 
       : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'), rules[0].reason);
     assert.doesNotMatch(rules[0].reason, /changed approach/);
   }
+});
+
+
+async function expiredNoRunClaimTick(t, ownership) {
+  const f = await tickFixture(t);
+  f.issues = [tickIssue(7, {labels:[{name:'pdd:working'}, {name:'pdd:stuck'}]})];
+  assert.equal((await f.start()).exitCode, 0);
+  const state = f.state();
+  let githubTime = f.time - 5 * hour;
+  const github = createGithubRepoFake({repository:repo, owner:'owner', issues:10, now:() => githubTime});
+  const comment = github.claim(7, {coordinatorId:state.coordinatorId, machine:state.machine});
+  const eventId = github.issues.get(7).timeline.filter(event => event.label === 'pdd:working').at(-1).id;
+  github.label(7, 'pdd:stuck');
+  githubTime = f.time;
+  const claim = {issue:key(7), owner:state.coordinatorId, coordinatorId:state.coordinatorId, machine:state.machine,
+    commentId:String(comment.id), labelEventId:String(eventId), active:false, expired:true, lastSeen:at(NOW - 5 * hour)};
+  f.claims = () => [claim];
+  const originalRun = f.ports.run;
+  f.ports.run = async (command, args, options={}) => command === 'gh'
+    ? github.gh(args, options) : originalRun(command, args, options);
+  f.ports.authority = {read:async () => ({authority:'trusted'})};
+  f.ports.owners = {read:async () => ({json:JSON.stringify(ownership(claim, state))})};
+  await f.tick();
+  return {f, claim, github};
+}
+
+test('3157: tick releases an expired own no-run claim after complete custody evidence', async t => {
+  const {f, github} = await expiredNoRunClaimTick(t, (observed, state) => ({
+    localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:true, runs:[], claims:[observed],
+  }));
+  assert.deepEqual(github.issues.get(7).labels, [], 'the public tick removed both labels through the shared release path');
+  assert.deepEqual(github.since(0).calls.filter(call => call.method === 'DELETE').map(call => call.endpoint.split('/labels/').at(-1)),
+    ['pdd%3Astuck', 'pdd%3Aworking']);
+  assert.deepEqual(f.state().githubIntake.claims, [], 'only the released era leaves intake');
+});
+
+test('3157: no-run expiry keeps unknown custody and a replacement era for later reconciliation', async t => {
+  for (const [name, ownership] of [
+    ['unknown custody', (claim, state) => ({localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:false, runs:[], claims:[claim]})],
+    ['replacement era', (claim, state) => ({localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:true, runs:[],
+      claims:[{...claim, commentId:'902', labelEventId:'702'}]})],
+  ]) await t.test(name, async () => {
+    const {f, claim, github} = await expiredNoRunClaimTick(t, ownership);
+    assert.deepEqual(github.issues.get(7).labels, ['pdd:working', 'pdd:stuck'], name + ': labels stay held');
+    assert.deepEqual(f.state().githubIntake.claims.map(row => [row.commentId, row.labelEventId]),
+      [[claim.commentId, claim.labelEventId]], name + ': the observed era stays for normal reconciliation');
+  });
 });

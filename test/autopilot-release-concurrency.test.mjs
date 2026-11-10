@@ -2,7 +2,7 @@ import "./helpers/test-home.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
-import {mkdirSync, realpathSync, writeFileSync} from "node:fs";
+import {mkdirSync, readFileSync, realpathSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
 import {fixture, packageRoot} from "./helpers/workflow-runner-fixture.mjs";
 import {healthyMachine} from "./helpers/healthy-machine.mjs";
@@ -74,4 +74,73 @@ for (const firstClaimPresent of [true, false]) test(`3157: public no-run release
   assert.deepEqual(github.issues.get(17).labels, ["pdd:working", "pdd:stuck"], "both replacement labels stay intact");
   assert.ok(github.issues.get(17).comments.some(comment => comment.id === replacement.commentId), "replacement claim comment remains");
   assert.ok(github.issues.get(17).timeline.some(event => event.id === replacement.eventId && event.label === "pdd:working"), "replacement era event remains");
+});
+
+
+test("3157: public release keeps a concurrent stop and fresh replacement cache", async t => {
+  const f = await fixture(t, {agent:"codex"});
+  const now = () => f.clock;
+  const github = createGithubRepoFake({repository:repo, owner:"example", issues:18, now});
+  const first = addClaimEra(github, f.clock);
+  github.label(17, "pdd:stuck");
+  const stateFolder = join(f.ports.env.HOME, ".local", "state", "pdd", "autopilot");
+  mkdirSync(stateFolder, {recursive:true});
+  const root = realpathSync(f.source), id = createHash("sha256").update(root).digest("hex").slice(0,20);
+  const stateFile = join(stateFolder, id + ".json");
+  const issue = "https://github.com/" + repo + "/issues/17";
+  const cached = {issue, owner:coordinatorId, coordinatorId, machine, active:true,
+    commentId:String(first.commentId), labelEventId:String(first.eventId)};
+  writeFileSync(join(f.source, "pdd.json"), JSON.stringify({autopilot:{mode:"auto",trust:[]}}));
+  writeFileSync(stateFile, JSON.stringify({enabled:true, defaultBranch:"main", baseBranch:"main", stateFile,
+    cwd:f.source, repo, packageRoot, runs:1, coordinatorId, machine, controlRevision:"before-release", activatedAt:1,
+    agent:{id:"codex",kind:"codex",command:"codex"}, environment:f.ports.env, retryAt:f.clock + 86400000,
+    githubIntake:{at:f.clock,eligible:[],groups:[],claims:[cached]}, parkedNumbers:[17]}));
+  const originalExec = f.ports.execFile;
+  let ports, injected = false, workingDeleted = false, replacement, stoppedRevision;
+  const fakeExec = async (file, args, options={}) => {
+    if (file === "gh" && args[0] === "api") {
+      const endpoint = args.find(value => /^repos\//.test(value));
+      const method = args.includes("--method") ? args[args.indexOf("--method") + 1] : "GET";
+      const result = await github.gh(args, options);
+      if (method === "DELETE" && endpoint?.endsWith("/labels/pdd%3Aworking")) workingDeleted = true;
+      if (!injected && workingDeleted && method === "GET" && endpoint === "repos/" + repo + "/issues/17") {
+        injected = true;
+        const stopped = await runAutopilotLauncher({command:"stop", cwd:f.source, env:f.ports.env}, ports);
+        assert.equal(stopped.exitCode, 0, stopped.message);
+        replacement = addClaimEra(github, f.clock);
+        github.label(17, "pdd:stuck");
+        const latest = JSON.parse(readFileSync(stateFile, "utf8"));
+        stoppedRevision = latest.controlRevision;
+        latest.githubIntake = {...latest.githubIntake, claims:[{issue, owner:coordinatorId, coordinatorId, machine, active:true,
+          commentId:String(replacement.commentId), labelEventId:String(replacement.eventId)}]};
+        latest.parkedNumbers = [17, 99];
+        writeFileSync(stateFile, JSON.stringify(latest));
+      }
+      return result;
+    }
+    return originalExec(file, args, options);
+  };
+  ports = {...healthyMachine, ...f.ports, checkCapacityPorts:isolatedCheckCapacity(f.base),
+    authority:{read:async()=>({authority:"trusted"})}, execFile:fakeExec,
+    run:async (file,args,options={}) => {
+      if (file === "gh" && args[0] === "api") return fakeExec(file, args, options);
+      if (file === "systemctl" || file === "launchctl") return {code:0, stdout:"", stderr:""};
+      if (file === "gh" && args[0] === "repo") return {code:0, stdout:JSON.stringify({nameWithOwner:repo,url:"https://github.com/" + repo,defaultBranchRef:{name:"main"}}), stderr:""};
+      return {code:0,...await f.ports.execFile(file,args,options)};
+    },
+    reconcileDependencyIntake:async()=>({eligible:[],claims:[],groups:[],queued:[],skipped:[]}),
+    sendDigest:async()=>({exitCode:0}),
+  };
+  const result = await runAutopilotLauncher({command:"release", cwd:f.source, env:f.ports.env, issues:["17"]}, ports);
+  assert.equal(result.exitCode, 0, result.message);
+  assert.equal(injected, true, "the concurrent stop ran after remote release and before cache pruning");
+  assert.ok(replacement);
+  const latest = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.equal(latest.enabled, false, "release does not restore enabled after stop");
+  assert.equal(latest.controlRevision, stoppedRevision, "release keeps the stop control revision");
+  assert.notEqual(latest.controlRevision, "before-release");
+  assert.deepEqual(latest.githubIntake.claims.map(claim => [claim.commentId, claim.labelEventId]),
+    [[String(replacement.commentId), String(replacement.eventId)]], "a fresh replacement cache is not pruned by issue number");
+  assert.deepEqual(latest.parkedNumbers, [17, 99], "number-only reservations stay for ordinary reconciliation");
+  assert.deepEqual(github.issues.get(17).labels, ["pdd:working", "pdd:stuck"], "the replacement era remains remote");
 });
