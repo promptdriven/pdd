@@ -154,54 +154,59 @@ test('an assigned sibling with a stale sort cannot hold free work', async () => 
   assert.equal(graph.nodes.find(n => n.key === key(2)).eligible, true, 'INTAKE_ASSIGNED_SIBLING_HOLDS_FREE_WORK');
 });
 
-test('assigned umbrella markers are not recovered from the snapshot or live index', async () => {
+test('assigned umbrella markers are not recovered from the snapshot', async () => {
   const w = fixture([1, 2, 3, 100]);
-  const marker = '<!-- pdd-issue-group:v1 shared-context -->';
   w.issues[3].assignees = [{ login: 'person' }];
+  w.issues[3].body += '\n<!-- pdd-issue-group:v1 shared-context -->';
   w.review(100);
-  const liveUmbrella = { ...w.issues[3], body: w.issues[3].body + String.fromCharCode(10) + marker };
+  const result = await complete(w, [3, 2, 1].map(n => w.record(n)));
+  assert.equal(result.state, 'complete');
+  const next = await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
+  assert.equal(next.groups.length, 1);
+  assert.notEqual(next.groups[0].umbrella, key(100), 'INTAKE_ASSIGNED_UMBRELLA_RECOVERED');
+  assert.ok(!next.groups[0].members.includes(key(100)));
+  assert.equal(w.writes.filter(x => x.issue === 100).length, 0);
+});
+
+test('assigned umbrella markers are not recovered from the live index', async () => {
+  const w = fixture([1, 2, 3]);
+  const marker = '<!-- pdd-issue-group:v1 shared-context -->';
+  const liveUmbrella = { ...w.issues[2], id: 100, number: 100, html_url: key(100),
+    assignees: [{ login: 'person' }], body: marker };
   const page = w.ports.github.page;
   let liveIndex = false, liveMarkerScans = 0;
   w.ports.github.page = async args => {
     const response = await page(args);
-    if (args.kind !== 'issues' || args.issue !== 0) return response;
-    const value = JSON.parse(response.json);
-    if (liveIndex) {
+    if (liveIndex && args.kind === 'issues' && args.issue === 0) {
       liveMarkerScans++;
-      value.items = value.items.filter(issue => issue.number !== 100);
+      const value = JSON.parse(response.json);
       value.items.push(liveUmbrella);
+      return { json: JSON.stringify(value) };
     }
-    return { json: JSON.stringify(value) };
+    return response;
   };
   const admit = w.ports.github.withSortGroupAdmission;
   w.ports.github.withSortGroupAdmission = (args, action) => admit(args, async () => {
     liveIndex = true;
     try { return await action(); } finally { liveIndex = false; }
   });
+  w.ports.github.createSortUmbrella = async ({ title, body }) => {
+    const created = { ...liveUmbrella, id: 101, number: 101, html_url: key(101), assignees: [], title, body };
+    w.issues.push(created); w.comments.set(101, []);
+    w.writes.push({ issue: 101, kind: 'umbrella', body });
+    return { json: JSON.stringify(created) };
+  };
   const { request } = await prepareDependencyIntake({ repository }, w.ports);
   const prepared = JSON.parse(request.snapshotJson);
-  assert.ok(prepared.reviews.some(review => review.issue === key(100)), 'INTAKE_ASSIGNED_UMBRELLA_NOT_REVIEWED');
-  assert.ok(!request.issues.includes(key(100)), 'INTAKE_ASSIGNED_UMBRELLA_ENQUEUED');
-  assert.ok(!prepared.issues.find(issue => issue.key === key(100)).sortText.includes(marker), 'INTAKE_UMBRELLA_MARKER_IN_SNAPSHOT');
-  const reviews = request.issues.map(issue => ({
-    analysis: 'No prerequisite is needed.',
-    base: prepared.reviews.filter(review => review.issue === issue).map(review => review.id),
-    continuation: '',
-    issue,
-    inputs: [{ key: issue, revision: prepared.issues.find(row => row.key === issue).revision }],
-    candidates: prepared.issues.map(row => ({ key: row.key, revision: row.revision })),
-    outcome: 'complete',
-    dependencies: [],
-    questions: [],
-    effects: 'none',
-  }));
-  const sorts = [3, 2, 1].map(n => w.record(n));
-  const result = await completeDependencyIntake({ request, analysis: { reviews, impactJson: '', sorts } }, w.ports);
+  assert.ok(!prepared.issues.some(issue => issue.key === key(100)), 'INTAKE_LIVE_UMBRELLA_IN_SNAPSHOT');
+  const result = await completeDependencyIntake({ request,
+    analysis: { ...analysisFor(request), sorts: [3, 2, 1].map(n => w.record(n)) } }, w.ports);
   assert.equal(result.state, 'complete');
   const snapshot = await read(w);
   assert.ok(liveMarkerScans > 0, 'INTAKE_LIVE_UMBRELLA_PATH_NOT_EXERCISED');
-  assert.ok(snapshot.sortContext.groups.length);
-  assert.ok(snapshot.sortContext.groups.every(g => g.umbrella !== key(100) && !g.members.includes(key(100))), 'INTAKE_ASSIGNED_UMBRELLA_RECOVERED');
+  assert.equal(snapshot.sortContext.groups.length, 1);
+  assert.equal(snapshot.sortContext.groups[0].umbrella, key(101), 'INTAKE_ASSIGNED_LIVE_UMBRELLA_RECOVERED');
+  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 1);
   assert.equal(w.writes.filter(x => x.issue === 100).length, 0);
 });
 

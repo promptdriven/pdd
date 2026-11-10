@@ -373,17 +373,14 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
       await refreshSavedSnapshot();
       return finish(pendingResult('write-unconfirmed', { stage: 'sort', reviewIds: ids, questions }));
     }
-    // Commit confirmed reviews and all successful sort effects together. A partial
-    // sort failure must still leave successful sibling writes visible to the next tick.
-    await refreshSavedSnapshot();
     if (sortFailures.length) {
+      // A partial failure must commit successful siblings before returning pending.
+      await refreshSavedSnapshot();
       const pending = pendingResult('write-unconfirmed', { stage: 'sort', issue: sortFailures[0].issue, reviewIds: ids, questions, rows: sortFailures.map(x => ({ key: x.issue, revision: rows(snapshot).get(x.issue) ?? '' })) });
       return finish({ ...pending, sortFailures });
     }
-  } else {
-    // Legacy callers have no sort effects, so save their reviews directly.
-    await refreshSavedSnapshot();
   }
+  await refreshSavedSnapshot();
   return finish({ state: questions.length ? 'question' : 'complete', reviewIds: ids, eligible: [], questions });
 }
 
