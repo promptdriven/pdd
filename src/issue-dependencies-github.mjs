@@ -3,7 +3,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: aebc28170168922209050d353dc52ddc80632f6592d9804dfdb7a685c56d8959).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 4b2d17f2a73d216057bb65c3e82e547a025ea8e6e03aa4d1a6ade6241f3e4903).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -966,9 +966,9 @@ export function withoutClaimHeartbeat(body) {
   return text;
 }
 
-async function winningClaim(repository, key, github, authority, now = NaN, safety = false) {
+async function winningClaim(repository, key, github, authority, now = NaN, safety = false, observedIssue = null) {
   // Claim checks are their own purpose in the GitHub call ledger; a live claim check is a safety read.
-  const i = info(key), raw = parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', ...(safety ? { safety } : {}) })).json);
+  const i = info(key), raw = observedIssue ?? parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', ...(safety ? { safety } : {}) })).json);
   if (raw.error) throw Error('Current claim issue unavailable');
   const labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
   if (!labels.includes('pdd:working')) return null;
@@ -1688,9 +1688,9 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
   const skipped = {state: 'skipped'}, i = info(claim?.issue);
   if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !machine) return skipped;
   if (ports.githubFloor?.blocked?.('core') || ports.githubFloor?.blocked?.('graphql')) return skipped;
-  const live = createDependencyReadPorts({cwd}, ports), fresh = {...live, githubCache: null, dependencyReads: undefined};
-  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, fresh), s = service(cwd, fresh);
-  const winner = () => winningClaim(repository, i.key, github, live.authority, (ports.now ?? Date.now)(), true);
+  const live = createDependencyReadPorts({cwd}, ports);
+  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, live), s = service(cwd, live);
+  const winner = observedIssue => winningClaim(repository, i.key, github, live.authority, (ports.now ?? Date.now)(), true, observedIssue);
   const removeLabel = async encoded => {
     try { await s.api(`repos/${repository}/issues/${i.issue}/labels/${encoded}`, 'DELETE', undefined, 'claims', repository); }
     catch (error) { if (!/\b404\b/.test(String(error?.message ?? ''))) throw error; }
@@ -1698,16 +1698,23 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
   if (['cancel', 'release', 'expired', 'lost'].includes(reason)) {
     const raw = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
     if (raw.error) throw Error('Current claim issue unavailable');
-    const labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
-    const current = labels.includes('pdd:working') ? await winner() : null;
-    if (current?.active === true && current.machine && current.machine !== machine)
-      return {state: 'refused', machine: current.machine};
-    if (reason !== 'release' && current && (current.machine && current.machine !== machine
-      || claim?.commentId && current.commentId && current.commentId !== String(claim.commentId)
-      || claim?.labelEventId && current.labelEventId && current.labelEventId !== String(claim.labelEventId)))
-      return skipped;
+    let labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
+    const hasWorking = labels.includes('pdd:working'), current = hasWorking ? await winner(raw) : null;
+    if (hasWorking && !current) return reason === 'release' ? {state: 'refused', machine: 'unknown'} : skipped;
+    if (reason === 'release' && current?.active === true && (!current.machine || current.machine !== machine))
+      return {state: 'refused', machine: current.machine || 'unknown'};
+    if (reason !== 'release' && current) {
+      if (current.active === true && (!current.machine || current.machine !== machine)) return skipped;
+      if (current.machine && current.machine !== machine
+        || !claim?.commentId || !claim?.labelEventId
+        || current.commentId !== String(claim.commentId) || current.labelEventId !== String(claim.labelEventId)) return skipped;
+    }
     if (labels.includes('pdd:working')) await removeLabel('pdd%3Aworking');
     if (labels.includes('pdd:stuck')) await removeLabel('pdd%3Astuck');
+    const after = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
+    if (after.error) throw Error('Claim label cleanup is not confirmed');
+    labels = after.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
+    if (labels.includes('pdd:working') || labels.includes('pdd:stuck')) return skipped;
     return {state: 'released'};
   }
   if (!runId || !branch || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !claim.commentId || !claim.labelEventId) return skipped;

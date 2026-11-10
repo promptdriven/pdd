@@ -52,7 +52,7 @@ Catalog four local routes before the product routes: `autopilot.start` (`autopil
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
-- `pdd autopilot release ISSUE`: Release this machine's claim and remove pdd:working and pdd:stuck; keep the run folder, branch and PRs.
+- `pdd autopilot release ISSUE`: End this machine's idle run, release its claim, and remove pdd:working and pdd:stuck; keep the run folder, branch and PRs. A live worker, check, or another machine's claim prevents release.
 
 Catalog two alert routes after `autopilot.add`. [Autopilot alerts](autopilot-alerts.prompt.md) owns their behavior and validation.
 

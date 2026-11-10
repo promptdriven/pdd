@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
-import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
@@ -16,6 +16,16 @@ import {checkDependencyStart} from '../src/issue-dependencies-intake.mjs';
 const save = (f, run) => writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
 const launches = f => f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run');
 const deliveries = f => f.herdr.calls.filter(args => args[0] === 'agent' && args[1] === 'prompt');
+const fixtureClaimRows = f => {
+  const folder = join(f.record().commonDir, 'pdd', 'runs');
+  try { return readdirSync(folder).filter(name => /^[1-9][0-9]*(?:-cancelled-[0-9a-f]+)?$/.test(name))
+    .map(name => JSON.parse(readFileSync(join(folder, name, 'status.json'), 'utf8')))
+    .filter(run => run.automaticOrigin && !['completed', 'cancelled'].includes(run.state))
+    .map(run => ({issue:run.issue.url, active:true, owner:run.automaticOrigin.coordinatorId,
+      coordinatorId:run.automaticOrigin.coordinatorId, machine:run.automaticOrigin.machine,
+      ...run.automaticOrigin.claim})); }
+  catch { return []; }
+};
 
 for (const absent of ['workspace', 'legacy-workspace', 'unowned-workspace', 'pane', 'starting-pane']) test(`3132 absent ${absent} completes parking and keeps resume custody`, async t => {
   const {f, tick, stateFile} = await setup(t, 'codex');
@@ -380,6 +390,8 @@ async function setup(t, agent = 'claude', name = 'small-change') {
   const warnings = [];
   const ports = {...healthyMachine, ...f.ports, sendDigest: async () => ({exitCode: 0}),
     checkCapacityPorts: isolatedCheckCapacity(f.base), run: async (file, args, options) => ({code: 0, ...await f.ports.execFile(file, args, options)}),
+    reconcileDependencyIntake: async () => ({eligible:[], claims:fixtureClaimRows(f), groups:[], queued:[], skipped:[]}),
+    refreshClaimHeartbeat: async ({at}) => ({state:'refreshed',lastSeen:at}),
     warn: message => warnings.push(message)};
   f.herdr.calls.length = 0;
   return {f, run, stateFile, ports, warnings, tick: () => tickAutopilot(stateFile, ports)};
@@ -530,7 +542,7 @@ test('3091 health pause keeps ready parked sessions closed', async t => {
 function fullTicks(f, stateFile, ports) {
   const state = JSON.parse(readFileSync(stateFile)); delete state.retryAt; state.recipeDelivered = true;
   writeFileSync(stateFile, JSON.stringify(state));
-  ports.reconcileDependencyIntake = async () => ({eligible: [], claims: [], groups: [], queued: [], skipped: []});
+  ports.reconcileDependencyIntake = async () => ({eligible: [], claims: fixtureClaimRows(f), groups: [], queued: [], skipped: []});
   ports.queryIssues = async () => ({status: 200, issues: []});
   ports.comments = async () => [];
   const herdr = ports.herdr;
@@ -578,7 +590,7 @@ test('3091 same-group intake joins the existing journal without restoring a bloc
   fullTicks(f, stateFile, ports);
   const issue = {number: 18, html_url: 'https://github.com/example/project/issues/18', title: 'Same cause', body: 'Same problem', state: 'open', labels: ['pdd:autopilot'], user: {login: 'example'}, comments: 0, updated_at: new Date(f.clock).toISOString()};
   ports.queryIssues = async () => ({status: 200, issues: [issue]});
-  ports.reconcileDependencyIntake = async () => ({eligible: [issue.html_url], claims: [], groups: [{members: [run.issue.url, issue.html_url], umbrella: run.issue.url, rootCause: 'shared cause'}], queued: [], skipped: []});
+  ports.reconcileDependencyIntake = async () => ({eligible: [issue.html_url], claims: fixtureClaimRows(f), groups: [{members: [run.issue.url, issue.html_url], umbrella: run.issue.url, rootCause: 'shared cause'}], queued: [], skipped: []});
   await tick();
   const journal = join(run.runDir, 'delivery-journal.json');
   assert.ok(existsSync(journal), JSON.stringify(warnings));
@@ -1465,7 +1477,10 @@ test('3157: pdd autopilot release removes pdd:working and pdd:stuck, keeps run f
   assert.equal(released.exitCode, 0, released.message);
   assert.deepEqual(github.issues.get(17).labels, []);
   const after = f.record();
+  assert.equal(after.state, 'cancelled');
   assert.equal(after.parking, undefined);
+  assert.equal(after.claimRelease, undefined);
+  assert.equal(existsSync(join(after.commonDir, 'pdd/worktree-assignments/issues/17.json')), false);
   assert.ok(existsSync(after.runDir));
   assert.ok(existsSync(after.root));
   assert.deepEqual(after.pr, run.pr);
@@ -1477,6 +1492,68 @@ test('3157: pdd autopilot release removes pdd:working and pdd:stuck, keeps run f
   assert.equal(refused.exitCode, 1);
   assert.match(refused.message, /other-machine holds a live claim/);
   assert.deepEqual(github.issues.get(18).labels.sort(), ['pdd:stuck', 'pdd:working']);
+});
+
+test('3157: release holds the run lock and refuses check or worker custody without changing the run or labels', async t => {
+  const {runAutopilotLauncher} = await import('../src/autopilot-launcher.mjs');
+  const {acquireRunLock} = await import('../src/workflow-runner.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f,ports}=await setup(t);
+  const run=f.record();run.state='paused';run.blockedOn={kind:'pdd',until:'capability:fixture-fix'};save(f,run);
+  const workerPane=f.herdr.paneOf(run.chats.at(-1));
+  const github=createGithubRepoFake({repository:run.repo,owner:'example',issues:18,now:()=>f.clock});
+  const comment=github.claim(17,{coordinatorId:run.automaticOrigin.coordinatorId,machine:run.automaticOrigin.machine});
+  github.label(17,'pdd:stuck');
+  const parked=f.record();parked.automaticOrigin.claim={commentId:comment.id,labelEventId:github.issues.get(17).timeline.find(e=>e.label==='pdd:working').id};save(f,parked);
+  const launcherPorts={...ports,authority:{read:async()=>({authority:'trusted'})},run:async(file,args,options)=>{
+    if(file==='gh'&&args[0]==='api')return github.gh(args,options);
+    if(file==='gh'&&args[0]==='repo')return{code:0,stdout:JSON.stringify({nameWithOwner:run.repo,url:`https://github.com/${run.repo}`,defaultBranchRef:{name:'main'}}),stderr:''};
+    return ports.run(file,args,options);
+  }};
+  const release=()=>runAutopilotLauncher({command:'release',cwd:f.source,env:f.ports.env,issues:['17']},launcherPorts);
+  const unlock=acquireRunLock(run.runDir);
+  let locked;try{locked=await release();}finally{unlock();}
+  assert.equal(locked.exitCode,1);assert.equal(f.record().state,'paused');
+  assert.deepEqual(github.issues.get(17).labels.sort(),['pdd:stuck','pdd:working']);
+  launcherPorts.readSuiteProgress=()=>({state:'running'});
+  const heldCheck=await release();assert.equal(heldCheck.exitCode,1);assert.equal(f.record().state,'paused');
+  assert.deepEqual(github.issues.get(17).labels.sort(),['pdd:stuck','pdd:working']);
+  launcherPorts.readSuiteProgress=()=>({state:'idle'});
+  workerPane.agent.agent_status='working';
+  const heldWorker=await release();assert.equal(heldWorker.exitCode,1);assert.equal(f.record().state,'paused');
+  assert.deepEqual(github.issues.get(17).labels.sort(),['pdd:stuck','pdd:working']);
+});
+
+test('3157: release refuses an unattributed working label',async t=>{
+  const {releaseParkedClaim}=await import('../src/issue-dependencies-github.mjs');
+  const {createGithubRepoFake}=await import('./helpers/github-repo-fake.mjs');
+  const {f,run,ports}=await setup(t);
+  const github=createGithubRepoFake({repository:run.repo,owner:'example',issues:18,now:()=>f.clock});
+  github.label(17,'pdd:working');github.label(17,'pdd:stuck');
+  const releasePorts={...ports,authority:{read:async()=>({authority:'trusted'})},execFile:async(file,args,options)=>
+    file==='gh'&&args[0]==='api'?github.gh(args,options):f.ports.execFile(file,args,options)};
+  const result=await releaseParkedClaim({cwd:f.source,repository:run.repo,claim:{issue:run.issue.url},machine:'park-machine',reason:'release'},releasePorts);
+  assert.deepEqual(result,{state:'refused',machine:'unknown'});
+  assert.deepEqual(github.issues.get(17).labels.sort(),['pdd:stuck','pdd:working']);
+});
+
+for (const identity of ['saved','missing']) test('3157: cancelled cleanup never strips a replacement claim when saved identity is ' + identity,async t=>{
+  const {f,tick,ports}=await setup(t);
+  const old=f.record();
+  const {createGithubRepoFake}=await import('./helpers/github-repo-fake.mjs');
+  const github=createGithubRepoFake({repository:old.repo,owner:'example',issues:18,now:()=>f.clock});
+  const claim=github.claim(17,{coordinatorId:old.automaticOrigin.coordinatorId,machine:old.automaticOrigin.machine});github.label(17,'pdd:stuck');
+  const currentEvent=github.issues.get(17).timeline.find(e=>e.label==='pdd:working').id;
+  const currentComment=claim.id;
+  old.automaticOrigin.claim=identity==='saved'?{commentId:currentComment,labelEventId:currentEvent}:{};
+  old.state='cancelled';old.cancelled={state:'cancelled',at:f.clock};save(f,old);
+  const replacement={...old,runId:'replacement-run',state:'running',automaticOrigin:{...old.automaticOrigin,claim:{commentId:currentComment,labelEventId:currentEvent}}};
+  ports.listRuns=async()=>identity==='saved'?[old,replacement]:[old];
+  let releaseCalls=0;ports.releaseParkedClaim=async()=>{releaseCalls++;return{state:'released'};};
+  ports.reconcileDependencyIntake=async()=>({eligible:[],queued:[],skipped:[],groups:[],claims:[{issue:old.issue.url,active:true,owner:old.automaticOrigin.coordinatorId,
+    coordinatorId:old.automaticOrigin.coordinatorId,machine:old.automaticOrigin.machine,commentId:currentComment,labelEventId:currentEvent}]});
+  await tick();
+  assert.equal(releaseCalls,0);assert.deepEqual(github.issues.get(17).labels.sort(),['pdd:stuck','pdd:working']);
 });
 
 test('3157: expired or lost claim on tick removes pdd:working and pdd:stuck and status shows no stale claim for ended runs', async t => {
@@ -1493,18 +1570,20 @@ test('3157: expired or lost claim on tick removes pdd:working and pdd:stuck and 
   run.state = 'stuck';
   run.parkReason = 'Repair limit reached in build: take the stuck path';
   save(f, run);
-  await tick();
-  assert.equal(f.record().parking?.phase, 'parked');
-  // Advance past the 4-hour claim expiry; intake observes the expired claim on this machine.
-  f.tick(5 * 3600000);
+  const active = {issue: run.issue.url, active: true, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, commentId: comment.id, labelEventId: eventId};
   const origRun = ports.run, origExec = f.ports.execFile;
   ports.run = async (file, args, options) => file === 'gh' && args[0] === 'api' ? github.gh(args, options) : origRun(file, args, options);
   ports.execFile = f.ports.execFile = async (file, args, options) => file === 'gh' && args[0] === 'api' ? github.gh(args, options) : origExec(file, args, options);
   ports.authority = {read: async () => ({authority: 'trusted'})};
+  ports.reconcileDependencyIntake = async () => ({eligible: [], queued: [], skipped: [], groups: [], claims: [active]});
+  await tick();
+  assert.equal(f.record().parking?.phase, 'parked');
+  // Advance past the 4-hour claim expiry; intake observes the expired claim on this machine.
+  f.tick(5 * 3600000);
   ports.owners = {read: async () => ({json: JSON.stringify({localOwner: run.automaticOrigin.coordinatorId, claims: []})})};
   ports.reconcileDependencyIntake = async () => ({
     eligible: [], queued: [], skipped: [], groups: [],
-    claims: [{issue: run.issue.url, active: false, expired: true, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, commentId: comment.id, labelEventId: eventId, lastSeen: new Date(f.clock - 5 * 3600000).toISOString()}],
+    claims: [{...active, active: false, expired: true, lastSeen: new Date(f.clock - 5 * 3600000).toISOString()}],
   });
   await tick();
   assert.equal(f.record().state, 'cancelled');
@@ -1513,4 +1592,34 @@ test('3157: expired or lost claim on tick removes pdd:working and pdd:stuck and 
   const status = await runAutopilotLauncher({command: 'status', cwd: f.source, env: f.ports.env}, {...ports, timer: async () => true});
   assert.equal(status.exitCode, 0, status.message);
   assert.match(status.message, /working 0 of 1 · parked 0/);
+});
+
+test('3157: lost working label retries leftover stuck-label cleanup after a deferred release',async t=>{
+  const {releaseParkedClaim}=await import('../src/issue-dependencies-github.mjs');
+  const {createGithubRepoFake}=await import('./helpers/github-repo-fake.mjs');
+  const {f,tick,ports,stateFile}=await setup(t);
+  fullTicks(f,stateFile,ports);
+  const run=f.record();
+  const github=createGithubRepoFake({repository:run.repo,owner:'example',issues:18,now:()=>f.clock});
+  const comment=github.claim(17,{coordinatorId:run.automaticOrigin.coordinatorId,machine:run.automaticOrigin.machine});
+  github.label(17,'pdd:stuck');
+  const eventId=github.issues.get(17).timeline.find(e=>e.label==='pdd:working').id;
+  const active={issue:run.issue.url,active:true,coordinatorId:run.automaticOrigin.coordinatorId,machine:run.automaticOrigin.machine,commentId:comment.id,labelEventId:eventId};
+  run.automaticOrigin.claim={commentId:comment.id,labelEventId:eventId};run.state='stuck';run.parkReason='Claim lost';save(f,run);
+  const origRun=ports.run,origExec=f.ports.execFile;
+  ports.run=async(file,args,options)=>file==='gh'&&args[0]==='api'?github.gh(args,options):origRun(file,args,options);
+  ports.execFile=f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='api'?github.gh(args,options):origExec(file,args,options);
+  ports.authority={read:async()=>({authority:'trusted'})};
+  ports.reconcileDependencyIntake=async()=>({eligible:[],queued:[],skipped:[],groups:[],claims:[active]});
+  await tick();
+  assert.equal(f.record().parking?.phase,'parked');
+  github.unlabel(17,'pdd:working');
+  ports.reconcileDependencyIntake=async()=>({eligible:[],queued:[],skipped:[],groups:[],claims:[]});
+  let calls=0;ports.releaseParkedClaim=async(input,p)=>++calls===1?{state:'skipped'}:releaseParkedClaim(input,p);
+  await tick();
+  assert.equal(f.record().state,'cancelled');assert.equal(f.record().claimRelease?.state,'pending');
+  assert.deepEqual(github.issues.get(17).labels,['pdd:stuck']);
+  await tick();
+  assert.equal(f.record().claimRelease,undefined);assert.deepEqual(github.issues.get(17).labels,[]);
+  assert.equal(calls,2);
 });

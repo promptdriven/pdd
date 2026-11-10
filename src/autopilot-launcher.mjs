@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 09dd048bd02275b49d06e674c8ffed1bd8325bd8fad9d53038b820f431bbff65).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d8934a3d0ff2b0f7bac02ad245fe60b9a1e4b9f068d79b8ddb6dabb5b3ba6c7e).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1689,7 +1689,7 @@ async function runTick(stateFile, ports, completion) {
     // uses the last eligible list and claims. Heartbeats of live claims keep their priority.
     const savedIntake = state.githubIntake;
     // One ETag cache for the reads of this tick: the intake's and the tick's own comment, PR and permission reads.
-    const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now }); p.etags = etags;
+    const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now }); p.etags = etags; p.githubCache = etags;
     let githubFloor;
     try { githubFloor = githubFloorGuard({ floor: githubBudgetSettings(config.github).floor, entries: githubMachineEntries({ root: p.githubRoot }), now: p.now }); } catch { githubFloor = undefined; }
     p.githubFloor = githubFloor;
@@ -1729,55 +1729,85 @@ async function runTick(stateFile, ports, completion) {
     if (paneHold) { intake.eligible = []; state.githubIntake = {...state.githubIntake,eligible:[]}; p.warn(`Autopilot waits: panes. ${paneHold}`); }
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
+    const claimsFresh = !deferIntake && Array.isArray(intake.claims) && !(intake.pending === true && intake.claims.length === 0);
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
     const recoveredRuns = new Set();
+    const allKnownRuns = await (p.listRuns ?? listRuns)({ cwd: state.cwd, cancelled: true }, { ...p, execFile: async (file, args, options) => p.execute(file, args, options) });
+    const sameIssue = (a,b) => a?.issue?.url?.toLowerCase() === b?.issue?.url?.toLowerCase()
+      && a?.repo?.toLowerCase() === b?.repo?.toLowerCase() && samePath(a?.sourceRoot,b?.sourceRoot);
+    const sameClaimEra = (claim,origin) => Boolean(origin?.claim?.commentId && origin?.claim?.labelEventId
+      && String(claim.commentId) === String(origin.claim.commentId) && String(claim.labelEventId) === String(origin.claim.labelEventId));
+    const confirmEndedRelease = candidate => {
+      let unlock;
+      try {
+        unlock = acquireRunLock(candidate.runDir);
+        const latest = readRun(candidate.runDir);
+        if (latest?.runId === candidate.runId && ['cancelled','completed'].includes(latest.state) && latest.claimRelease?.state === 'pending')
+          updateRun(latest.runDir,current => { if (current.runId === candidate.runId && current.claimRelease?.state === 'pending') delete current.claimRelease; return current; }, p);
+      } catch { /* Keep the release pending and retry after the run becomes writable. */ }
+      finally { unlock?.(); }
+    };
     // Adopt only admitted claims backed by this checkout's unfinished local runs.
     // Remote proof permits retry if the process died before the local custody write.
-    for (const candidate of await (p.listRuns ?? listRuns)({ cwd: state.cwd, cancelled: true }, { ...p, execFile: async (file, args, options) => p.execute(file, args, options) })) {
+    for (const candidate of allKnownRuns) {
       const origin = candidate.automaticOrigin;
       if (!origin || origin.machine !== state.machine
         || origin.repository?.toLowerCase() !== state.repo.toLowerCase()
         || candidate.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(candidate.sourceRoot, state.cwd)
         || !candidate.runDir || !candidate.root || !existsSync(candidate.runDir) || !existsSync(candidate.root)) continue;
+      const issueClaims = observedClaims.filter(claim => claim.issue?.toLowerCase() === candidate.issue?.url?.toLowerCase());
       const claimIndex = observedClaims.findIndex(claim => claim.issue?.toLowerCase() === candidate.issue?.url?.toLowerCase()
-        && claim.machine === state.machine && (!origin.claim?.commentId || String(claim.commentId) === String(origin.claim.commentId)));
+        && claim.machine === state.machine && sameClaimEra(claim,origin));
+      const liveReplacement = allKnownRuns.some(run => run.runId !== candidate.runId
+        && !['completed','cancelled'].includes(run.state) && sameIssue(run,candidate));
       if (candidate.state === 'cancelled') {
-        if (claimIndex >= 0) {
-          try {
-            const released = await (p.releaseParkedClaim ?? releaseParkedClaim)({
-              cwd: state.cwd, repository: state.repo, claim: observedClaims[claimIndex],
-              coordinatorId: origin.coordinatorId, machine: state.machine,
-              runId: candidate.runId, branch: candidate.branch, reason: 'cancel',
-            }, { ...p, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), ...(githubFloor ? { githubFloor } : {}) });
-            if (released?.state === 'released') observedClaims.splice(claimIndex, 1);
-          } catch (error) { p.warn(`Cancelled-run claim cleanup deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
-        }
+        if (liveReplacement || !origin.claim?.commentId || !origin.claim?.labelEventId
+          || candidate.claimRelease?.state !== 'pending' && (!claimsFresh || claimIndex < 0)) continue;
+        const newerLiveClaim = issueClaims.some(claim => claim.active === true && !sameClaimEra(claim,origin));
+        if (newerLiveClaim || githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) continue;
+        try {
+          const released = await (p.releaseParkedClaim ?? releaseParkedClaim)({
+            cwd: state.cwd, repository: state.repo,
+            claim: {issue:candidate.issue.url,coordinatorId:origin.coordinatorId,machine:origin.machine,...origin.claim},
+            coordinatorId: origin.coordinatorId, machine: state.machine,
+            runId: candidate.runId, branch: candidate.branch, reason: 'cancel',
+          }, { ...p, githubCache:etags, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), ...(githubFloor ? { githubFloor } : {}) });
+          if (released?.state === 'released') {
+            confirmEndedRelease(candidate);
+            if (claimIndex >= 0) observedClaims.splice(claimIndex, 1);
+          }
+        } catch (error) { p.warn(`Cancelled-run claim cleanup deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
         continue;
       }
-      if (candidate.state === 'completed') continue;
+      if (candidate.state === 'completed' || liveReplacement) continue;
       if (origin.coordinatorId === state.coordinatorId) {
-        if (claimIndex >= 0 && observedClaims[claimIndex].expired === true && observedClaims[claimIndex].active === false) {
+        const matching = claimIndex >= 0 ? observedClaims[claimIndex] : null;
+        const active = issueClaims.filter(claim => claim.active === true);
+        const expired = Boolean(matching?.expired === true && matching.active === false);
+        const lost = Boolean(claimsFresh && !active.length && !matching);
+        const changed = Boolean(claimsFresh && active.length && !matching);
+        if (expired || lost || changed) {
+          const claimObservation = {localOwner:state.coordinatorId,claims:issueClaims.map(claim => claim.issue === candidate.issue.url ? claim : {...claim,issue:candidate.issue.url})};
+          const releaseReason = expired ? 'expired' : 'lost';
           try {
-            const result = await p.scanAction(() => recoverAutomaticRunOwner({ref: String(candidate.number), cwd: state.cwd,
-              coordinatorId: state.coordinatorId, machine: state.machine, releaseUnowned: true}, {...workflowCleanupPorts(p, ports), autopilotStateFile: stateFile}));
-            if (result.recovery === 'released') observedClaims.splice(claimIndex, 1);
-          } catch (error) { p.warn(`Expired-claim cleanup deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
+            const result = await p.scanAction(() => recoverAutomaticRunOwner({ref:String(candidate.number),cwd:state.cwd,
+              coordinatorId:state.coordinatorId,machine:state.machine,releaseUnowned:true,
+              claimObservation,releaseReason}, {...workflowCleanupPorts(p,ports),githubCache:etags,autopilotStateFile:stateFile}));
+            if (result.recovery === 'released' && claimIndex >= 0) observedClaims.splice(claimIndex, 1);
+          } catch (error) { p.warn(`Expired or lost-claim cleanup deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
         }
         continue;
       }
       try {
         const result = await p.scanAction(() => recoverAutomaticRunOwner({ref:String(candidate.number),cwd:state.cwd,
           coordinatorId:state.coordinatorId,machine:state.machine}, {...workflowCleanupPorts(p,ports),autopilotStateFile:stateFile}));
-        if (result.recovery !== 'recovered') {
-          if (claimIndex >= 0 && observedClaims[claimIndex].expired === true && observedClaims[claimIndex].active === false)
-            observedClaims.splice(claimIndex, 1);
-          continue;
-        }
+        if (result.recovery !== 'recovered') continue;
         const index = observedClaims.findIndex(claim => claim.issue === candidate.issue?.url);
         if (index >= 0 && result.claim) observedClaims[index] = result.claim;
         recoveredRuns.add(candidate.runDir);
       } catch (error) { p.warn(`Claim recovery deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
     }
+    etags.save();
     if (config.mode === 'auto' && recoveredRuns.size) await resumeStoppedWorkers(state, p, recoveredRuns);
     // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
     // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
