@@ -434,6 +434,12 @@ test('the core engine timer fires every 10 minutes, the full engine every 30; st
     // A timer installed before the switch (or by an older pdd) keeps its interval until the next start; status says so.
     writeFileSync(f.stateFile(), JSON.stringify({ ...f.state(), timerMinutes: 30 }));
     assert.match((await f.invoke('status', { env })).message, /timer active, every 30 minutes \(run pdd autopilot start to use 10 minutes for the core engine\)/);
+    // start --mode saves the machine's core mode; pdd.json is not written.
+    const config = readFileSync(join(f.cwd, 'pdd.json'), 'utf8');
+    const observed = await f.invoke('start', { env, engine: 'core', mode: 'observe' });
+    assert.equal(observed.exitCode, 0, observed.message); assert.equal(f.state().mode, 'observe');
+    assert.match((await f.invoke('status', { env })).message, /mode observe \(this machine\)/);
+    assert.equal(readFileSync(join(f.cwd, 'pdd.json'), 'utf8'), config);
     const back = await f.invoke('start', { env, engine: 'full' });
     assert.equal(back.exitCode, 0, back.message);
     assert.equal(minutes(), 30); assert.equal(f.state().timerMinutes, 30);

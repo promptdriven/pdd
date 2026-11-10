@@ -62,8 +62,12 @@ ended or moved to the merge check before free slots are counted.
 `state` is the launcher state (`cwd`, `repo`, `coordinatorId`, `machine`,
 `baseBranch`, `agent`, `packageRoot`). Steps, in order:
 
-1. Mode `off` returns `Autopilot is off.` Mode `observe` lists the ready issues and
-   writes nothing.
+1. Mode `off` returns `Autopilot is off.` Then read `core.json` and save `lastTick`
+   (now). A **sleep gap** is a gap since the saved `lastTick` that is longer than the
+   job time limit (a laptop sleep; a clock that went back is no gap). Mode `observe`
+   does everything that `auto` does (claim, build, PR, review, suite, CI, Runtime,
+   base check, repairs, END) **except the merge** (merge check step 7); its message
+   starts `Autopilot core (observe: no merge):`.
 2. Read the open issues through `ports.listIssues()`. A failed list skips the
    person checks and intake for this tick; jobs still advance.
 3. A person stops a job by closing the issue, removing `pdd:working`, adding
@@ -81,13 +85,26 @@ ended or moved to the merge check before free slots are counted.
    [GitHub dependency reader](issue-dependencies-github.prompt.md). A claim not
    refreshed for 4 hours gets no heartbeat: expiry is final. At the GitHub reserve
    floor (`budget.state` `reserve`) the tick stops after the heartbeats.
+   **GitHub share**: every claim read through the owners port that is live (`active`,
+   not `expired`) records its `machine` with the time in `core.json` `peers` (kept 4
+   hours). The core's budget divides the launcher's `allowed` calls by k, the number
+   of machines with live claims on this repository (the saved peers, and this machine
+   when it holds a live claim; at least 1), and is `low` when `used` reaches that.
+   With a `low` budget no new job starts: intake is held with `intake held: the GitHub
+   budget is low (this machine used U of A calls in the last hour, a S% share for k
+   machine(s) with live claims)`. Jobs still advance.
 5. Advance each job, each in its own error boundary. An error saves `lastError` on
    that job, and `lastErrorTool` true when it came from a GitHub or Git call, and the
    tick continues with the next job. A job that waits with no error clears both, and
    so does a new head. A job whose advance fails on 2 ticks after its deadline ends
    (`job` / `no-result`), so no job holds a slot or a claim past its deadline plus 2
    ticks. A `running` job with no agent record (the tick died between its two saves)
-   ends at once as `no-result`.
+   ends at once as `no-result`. After a sleep gap, a job whose deadline passed in the
+   gap is this machine's fault, never a timeout or claim-expired END: a running job
+   (and a PR whose claim expired) ends as a **machine no-result**: a release with no
+   comment and no `pdd:stuck`, which is not counted for the issue (no cooldown, no
+   strike) and does not add to `streak`. A PR in its checks with a live claim gets a
+   new deadline (now plus the time limit) and goes on.
 
 **Hand-over**: a job that lost its claim to another machine stops its processes,
 changes nothing on the issue (no comment, no label), marks this machine's own open
@@ -162,8 +179,12 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    such comment that names that event, and a read of the winning claim through the
    owners port shows no other live owner. A loser deletes its own comment, removes
    its worktree and starts nothing. Two machines with one GitHub login therefore
-   agree on one winner. A claim that fails partway leaves nothing: this machine's
-   comment is deleted, and the label is removed unless another claim won.
+   agree on one winner. A claim that fails partway leaves nothing of its own: this
+   machine's comment is deleted, and the label is removed only when the winning label
+   event is its own: the era it saw after its label POST is still the current era, the
+   winner's actor is this machine's login (its comment's author, else `GET user`),
+   and no other claim comment names that event. Otherwise (another login, a later era,
+   or an error in these reads) the label stays.
 3. Close the issue's older core PRs: each open PR of this repository (not a fork)
    whose head branch starts with `pdd/core-N-` and is not the new branch, and that
    is not merged, gets `state: closed` and one short note with the marker
@@ -224,23 +245,47 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
 
 Jobs run through the [headless job runner](agent-job.prompt.md) with
 `agentCommand(state.agent)` and `jobEnvironment(env)`, in `logs/`, with id
-`N-ROLE-STAMP`. The prompt names the job's result file path.
+`N-ROLE-STAMP`. The prompt names the job's result file path. Every job runs the pdd
+that runs the tick: the tick writes `bin/pdd` in `ROOT` (`#!/bin/sh` and `exec 'NODE'
+'PACKAGE/bin/pdd.mjs' "$@"`, with this Node and this package, quoted for the shell;
+rewritten only when it differs) and puts `ROOT/bin` first on the job's `PATH`, before
+any other pdd (for example an older global install).
 
 - **Build** (in `worktrees/N`): the issue title, URL and body as data from a trusted
   author, and these rules: choose pdd-small-change, pdd-bug or pdd-feature, but make
   ONE PR with prompt, Story, tests and code; this is not a `pdd workflow run`, so no
   `pdd workflow` command, no Herdr, no person wait and no `steps/autopilot.md`;
   prompts first; focused tests, with the full test command named; when a prompt
-  changed and `pdd test` can run, run it and put exactly one `Runtime: PASS`,
-  `Runtime: FAIL (…)` or `Runtime: not run (…)` line in the PR body; push the job
+  changed, run `pdd test` for the changed Stories and put exactly one `Runtime: PASS`,
+  `Runtime: FAIL (…)` or `Runtime: not run (…)` line in the PR body. **Only a real
+  Runtime FAIL verdict is a failure** (fix the code until it passes). When Runtime
+  could not check (a lint refusal, no interface or a binding refusal, a scenario limit
+  such as a value that is not a safe integer, no verdict, an interpreter error), the
+  job does not stop and does not invent an interface: it covers the case with native
+  tests, ships the PR with `Runtime: not run (EXACT REASON)` and puts the reason and
+  the tool error in the result's `runtime` with kind `runtime`. One `Evidence:` line
+  in the PR body and the same text as the result's `evidence` (below). No review
+  verdict or review claim (for example "Review: no must-fix") in the PR body or a
+  comment: only the core's fresh reviewer gives one. Push the job
   branch and open one PR against BASE with `Fixes #N`; never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
-  file is JSON: `outcome` `pr` with `pr`, `head`, `promptChanged` (Boolean) and
-  optional `runtime {state, cause}`, or `outcome`
-  `failed` with `kind` (`runtime`, `pdd` or `job`), `component`, `code`, `cause`
-  and a short `detail` without repository code.
-- **Repair** (same worktree and branch): the red findings, then the build rules;
-  push to the same branch, no new PR.
+  file is JSON: `outcome` `pr` with `pr`, `head`, `promptChanged` (Boolean),
+  `evidence` and optional `runtime {state, cause, kind, component, code, detail}`, or
+  `outcome` `failed` with `kind` (`pdd` or `job`), `component`, `code`, `cause`
+  and a short `detail` without repository code. A Runtime check that could not run is
+  never a failure.
+- **Evidence** (for metrics): one fixed line, `Evidence: runtime=<pass|fail|not-run>
+  (<n>/<m>); vectors=<pass|fail|not-run> (<n>/<m>); formal=<proved|bounded|failed|not-run|not-applicable>;
+  tests=<pass|fail> (<n>/<m>)` (runtime = `pdd test` on the changed Stories, vectors =
+  the Story vector replays, formal = the formal tests, tests = the focused tests; a
+  count may be left out). The tick parses it with an allowlist: the first PR body line
+  that starts with `Evidence:` after the Runtime-line marks go, else the result's
+  `evidence`; each `key=value` part with a known key and value is kept once, with its
+  count when it is `n/m` with n ≤ m (never for formal); anything else is dropped. The
+  parsed value is saved on the job (`evidence`, or null) and in its history line.
+- **Repair** (same worktree and branch): the red findings, the job log folder, then
+  the build rules; push to the same branch, no new PR, and update the `Runtime:` and
+  `Evidence:` lines when they change.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
   that did not write the change. It checks the issue fit, prompt-first agreement,
   tests that fail without the fix, no weakened test, an honest Runtime line and no
@@ -283,9 +328,13 @@ Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in 
    came from a GitHub or Git call, else a `job` cause `checks-timeout`. Closed: end
    `pr-closed`. The PR head SHA, head branch or base differs from the job: end
    `head-moved`.
-2. `Runtime: not run (…)` is allowed and files no report by itself, and the PR body
-   is not rewritten. A Runtime report comes only from a failed job whose cause kind
-   is `runtime` (END).
+2. `Runtime: not run (…)` is allowed, and the PR body is not rewritten. When the
+   job's `runtime` has state `not-run` and kind `runtime` (Runtime could not check),
+   file or count one report through the [report owner](autopilot-reports.prompt.md)
+   with the cause `{kind: runtime, component, code, text, detail, shipped: true}`
+   (component default `pdd-test`, code default `not-run`), once per job and
+   component/code (`job.runtimeReport`). It never blocks or ends the job. A not-run
+   with no Runtime kind (for example no prompt changed) files nothing.
 3. Red findings. The Runtime gate is an allowlist (fail closed). A Runtime line is a
    PR body line that, after heading, list, quote, table, bold and code marks go,
    starts with "Runtime" or holds "Runtime:". Its value, after leading signs such as
@@ -311,19 +360,37 @@ Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in 
 6. The head must contain the current base tip (`compare/BASE...HEAD`,
    `behind_by` 0). When the base moved, refresh natively in the job worktree: reset to
    the job head, merge `origin/BASE` (identity "PDD Autopilot", no hooks, no signing),
-   push the branch, take the new head, and run the review and the suite again; this
-   is not a repair (at most 3 refreshes, then END `base-moving`). A merge conflict is
-   aborted and starts a repair job with the conflict as its red finding.
+   push the branch and take the new head; this is not a repair. The suite and CI
+   always run again for the new head. When the merge was clean and the PR's own
+   change is the same (the diff `origin/BASE...HEAD` before and after, without its
+   `index` lines and hunk line numbers, has the same SHA-256), the PASS review is
+   kept for the new head (`review.kept`, `keptFrom`) and the refresh does not count.
+   Otherwise the review runs again and the refresh counts (at most 3 counted
+   refreshes, then END `base-moving`). A merge conflict is aborted and starts a
+   repair job with the conflict as its red finding.
    Run `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md). A
    read failure ("could not verify", "unavailable", "retry") waits; another
    refusal ends `base-check`.
 7. Read the winning claim again: another live owner means hand-over and no merge; a
    claim that is not confirmed as this job's waits. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
-   `CI: none (…)`, the suite, the review, the PR's Runtime line and the base check,
+   `CI: none (…)`, the suite, the review (`Review: PASS from a fresh reviewer`, or
+   `Review: PASS (kept after a clean base refresh, same change)`), the PR's Runtime
+   line, the parsed evidence
+   (`Evidence: runtime=pass (11/11); …` in the fixed key order, or `Evidence: none`)
+   and the base check,
    with the marker `<!-- pdd:autopilot-core:merge:HEAD -->`. Then
    `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
    waits for the next tick. A confirmed merge closes the issue when it is open,
    removes `pdd:working`, cleans up locally (see END) and records `merged`.
+   In mode `observe`, the same comment starts `Autopilot would merge this PR (observe
+   mode): every check passed for head HEAD. It stays open and ready for review;
+   Autopilot does not merge it.` with the marker
+   `<!-- pdd:autopilot-core:would-merge:HEAD -->`. Then a draft PR is marked ready
+   (`gh pr ready`; a refusal only warns), this machine's claim comment and
+   `pdd:working` go (no issue comment, no label), the result counts (`produced`), and
+   local cleanup records `would-merge` with the evidence: validation passed, not
+   merged. The ready rule skips an issue with a `would-merge` line after its latest
+   reset, because its PR waits for a person.
 
 ## END
 
@@ -338,7 +405,11 @@ task, a time limit, red checks). It stops the job's processes and saves phase
    outcome `abandoned` and stop retrying.
 1. When the job has a PR, read it first: a merged PR finishes as merged, never as END.
    A PR that cannot be read is retried on 2 more ticks, then the END goes on.
-   Read the claim. When another machine holds it live, hand over.
+   Read the claim. When another machine holds it live, hand over. A resumed END or
+   release reads the claim again right before each write on the issue (the release's
+   claim comment and label delete, the END's dependency link and comment, and the
+   labels): when another machine owns it now, hand over and write nothing on the
+   issue.
 2. For a `runtime` or `pdd` cause, file or count one report through the
    [report owner](autopilot-reports.prompt.md) with the repository's settings.
 3. A `runtime` or `pdd` cause whose report has a GitHub reference **waits for the
@@ -348,7 +419,8 @@ task, a time limit, red checks). It stops the job's processes and saves phase
    link the issue natively: `POST repos/REPO/issues/N/dependencies/blocked_by` with
    the report's issue id. A refused link (for example across repositories) leaves
    the hidden marker in the END comment as the only record; the ready rule reads it.
-4. Post one issue comment with the cause text, kind and code, the log path, the
+4. Post one issue comment with the cause text (one final period), kind and code, the
+   log file name (`Log: \`NAME.log\` on this machine`), the
    branch and PR, `Blocked by REF` when a report has a reference (`#N` in the
    same repository), a draft note naming `pdd autopilot report`, and either "ready
    again when REF closes" or how to retry (remove `pdd:stuck`). Every comment with a
@@ -383,19 +455,25 @@ of local report drafts.
 ## Text on GitHub
 
 Every comment that this engine posts (review verdict, merge note, END comment, PR
-notes) goes through [secret redaction](secret-redaction.prompt.md) and is cut to at
+notes) first becomes public text: an absolute path (`/a/b…` or `~/a/b…`, two parts or
+more, after a space, quote, bracket, `=` or `,`) keeps only its file name; this
+machine's host name becomes `this machine`; and the local user name (the last part of
+HOME, or `ports.user`) becomes `[user]`. Texts never name another machine: a
+hand-over says "another machine holds the claim now". A cause sentence ends with one
+period, never two. Then it goes through [secret redaction](secret-redaction.prompt.md) and is cut to at
 most 20,000 characters; hidden markers at the end stay whole. A saved `lastError` is
 redacted and cut to 300 characters. The claim comment holds only the claim record.
 
 ## Machine settings
 
-`state.engine` (`core` or `full`, saved by `pdd autopilot start --engine`) and
-`state.label` (saved by `start --label`) win over `pdd.json` for this repository on
-this machine. The launcher applies them; `coreStatus` takes
-`sources: {engine, label}` (`machine` or `pdd.json`) and names the source:
-`engine core (this machine: pdd autopilot start --engine core)` or
-`engine core (pdd.json autopilot.engine)`, and `only issues with LABEL (this machine)`
-or `(pdd.json)`.
+`state.engine` (`core` or `full`, saved by `pdd autopilot start --engine`),
+`state.label` (saved by `start --label`) and `state.mode` (saved by `start --mode`)
+win over `pdd.json` for this repository on this machine. The launcher applies them;
+`coreStatus` takes `sources: {engine, label, mode}` (`machine` or `pdd.json`) and
+names the source: `engine core (this machine: pdd autopilot start --engine core)` or
+`engine core (pdd.json autopilot.engine)`, `only issues with LABEL (this machine)`
+or `(pdd.json)`, and `mode M (this machine)`; mode `observe` adds `(every check, no
+merge)`.
 
 ## Ports
 

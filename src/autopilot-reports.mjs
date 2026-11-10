@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 8c9d20e9aeeb9f5e65a369d28c8d804b32975c73f9e6112adf08eb31a930ad2c).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: a2a8f513dab59cca173b68e6cd53b08a10948d16728331e6975d7d2d5e6992aa).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -35,7 +35,8 @@ function draftFor({ cause, versions, step, words }) {
   const kind = cause.kind === 'runtime' ? 'runtime' : 'pdd';
   const title = `Autopilot report: ${kind === 'runtime' ? 'Runtime' : 'PDD'} ${slug(cause.component) || 'unknown'} ${slug(cause.code) || 'unknown'} (PDD ${minor(versions.pdd)})`;
   const tail = safeTail(cause.detail || cause.text, words);
-  const body = [`Autopilot ended one job because of a ${kind === 'runtime' ? 'Runtime' : 'PDD'} problem. The job did not wait for a fix.`, '',
+  const body = [cause.shipped ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
+    : `Autopilot ended one job because of a ${kind === 'runtime' ? 'Runtime' : 'PDD'} problem. The job did not wait for a fix.`, '',
     `- Kind: ${kind}`, `- Component: ${slug(cause.component) || 'unknown'}`, `- Error code: ${slug(cause.code) || 'unknown'}`, `- Step: ${slug(step) || 'unknown'}`,
     `- Versions: PDD ${versions.pdd ?? 'unknown'}, Node ${versions.node ?? 'unknown'}, ${versions.platform ?? 'unknown'}, agent ${versions.agent ?? 'unknown'}`, `- Seen on this machine: ${COUNT}`,
     '', 'Redacted detail (no repository code):', '', '```text', tail || '(none)', '```', '', reportMarker(fingerprint)].join('\n');
@@ -89,9 +90,17 @@ function keepDraft(fs, root, draft, now) {
   save(fs, file, { ...draft, count: (old?.count ?? 0) + 1, firstAt: old?.firstAt ?? now, lastAt: now });
 }
 
+// The owner of a cause. Test vectors are PDD's: a Runtime case, a scenario value limit (for example a value that is not
+// a safe integer) or a vector replay is kind pdd. Kind runtime is what goes in and out of Runtime: interface and binding
+// refusals, interpreter errors, no verdict, server compatibility.
+const PDD_OWNED = /scenario|vector|replay|safe-integer|integer-out-of-range|runtime-case|test-case/;
+export function reportKind(cause) {
+  return cause?.kind === 'runtime' && PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) ? 'pdd' : cause?.kind;
+}
 // File, count or keep one report for a Runtime or PDD cause. It never throws: a failed send keeps a local draft.
 export async function fileReport({ cause, mode, root, machine, versions = {}, step, words = [] }, ports = {}) {
   if (!['runtime', 'pdd'].includes(cause?.kind) || mode === 'off') return { state: 'off' };
+  cause = { ...cause, kind: reportKind(cause) };
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), draft = draftFor({ cause, versions, step, words });
   if (mode === 'file') {
     try {

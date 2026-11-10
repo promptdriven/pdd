@@ -17,7 +17,7 @@ function extend(f, w) {
   f.prs = new Map(); f.checks = new Map(); f.statuses = new Map(); f.merges = []; f.writes = [];
   const prefix = `repos/${f.repo}`;
   const restPr = pr => ({ number: pr.number, state: pr.state, merged: pr.merged, body: pr.body, title: pr.title, html_url: `https://github.com/${f.repo}/pull/${pr.number}`,
-    head: { sha: pr.head, ref: pr.branch, repo: { full_name: f.repo } }, base: { ref: pr.base, repo: { full_name: f.repo } }, merge_commit_sha: pr.mergeSha ?? null });
+    head: { sha: pr.head, ref: pr.branch, repo: { full_name: f.repo } }, base: { ref: pr.base, repo: { full_name: f.repo } }, merge_commit_sha: pr.mergeSha ?? null, draft: Boolean(pr.draft) });
   f.openPr = ({ branch, head, body = 'Fixes the issue.\n\nRuntime: PASS', base = 'main', title = 'Change' }) => {
     const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, comments: [] };
     f.prs.set(pr.number, pr); return pr;
@@ -40,6 +40,7 @@ function extend(f, w) {
       pr.draft = args.includes('--undo'); return { code: 0, stdout: '', stderr: '' };
     }
     if (args[0] !== 'api') return original(args, options);
+    if (args[4] === 'user' && methodOf(args) === 'GET') return ok(200, { login: f.owner });
     const endpoint = endpointOf(args) ?? '', method = methodOf(args), input = options.input ? JSON.parse(options.input) : undefined;
     if (!endpoint.startsWith(prefix)) return original(args, options);
     const route = endpoint.slice(prefix.length).split('?')[0];

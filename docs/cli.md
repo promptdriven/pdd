@@ -106,7 +106,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full` and `--label NAME` save this machine's engine and opt-in label for this repo; they win over `pdd.json`, and a later start without them keeps them. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
+| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME` and `--mode auto\|observe\|off` (core engine only) save this machine's engine, opt-in label and mode for this repo; they win over `pdd.json`, and a later start without them keeps them. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
@@ -1365,8 +1365,12 @@ Build scripts and commands without test results do not qualify.
 Set `autopilot.engine` to `core` in `pdd.json` to run the small native engine
 instead of the coordinator chat. The default is `full`. To choose it on one
 machine only, run `pdd autopilot start --engine core`; `--label NAME` sets the
-opt-in label the same way. The machine values win over `pdd.json`, and
-`pdd autopilot status` says where the engine and the label come from. Comments
+opt-in label and `--mode auto|observe|off` the mode the same way, on this machine
+only (`pdd autopilot observe` changes `pdd.json` instead). The machine values win over
+`pdd.json`, and `pdd autopilot status` says where the engine, the label and the mode
+come from. In `observe` mode the core does everything except the merge: when all
+checks pass, it posts "Autopilot would merge this PR (observe mode)" with the same
+evidence, keeps the PR open and ready for review, and releases the issue. Comments
 that the core engine posts are redacted for secrets and cut in length. The core engine needs no
 Herdr: `pdd autopilot doctor` skips the Herdr checks, `start` opens no Herdr
 session, and each job is a headless Codex or Claude process with a log file. A
@@ -1409,13 +1413,25 @@ Each tick, without AI calls:
    changed. A non-zero exit of the test command is red; a failure of the suite
    runner itself (it could not start, was killed or timed out) runs the suite again
    and never uses a repair. When the base moved, Autopilot merges the base into the
-   PR branch itself and checks the new head again; a merge conflict starts a repair.
+   PR branch itself and checks the new head again: the full suite and CI run again,
+   and the PASS review is kept only when the merge was clean and the PR's own change
+   is the same. A merge conflict starts a repair.
 5. Fill free slots: claim the oldest ready issue with `pdd:working` and a claim
-   comment, make a worktree and start one headless job. The job makes one PR with
-   prompt, tests and code, and writes one `Runtime:` line in the PR body.
+   comment, make a worktree and start one headless job. The job runs the same pdd
+   as the tick (it goes first on the job's `PATH`). It makes one PR with prompt,
+   tests and code, and writes one `Runtime:` line and one `Evidence:` line in the PR
+   body. It writes no review verdict: only the fresh reviewer gives one.
 
-When a job ends, the issue gets one comment with the cause and the log path and
-loses `pdd:working`. Nothing else waits on it. A job with no result (the agent
+Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
+refusal, no interface, a scenario limit, no verdict), the job still ships its PR with
+native tests and `Runtime: not run (reason)`, and Autopilot files or counts one
+report for that cause. The `Evidence:` line has a fixed form, for example
+`Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)`.
+Autopilot keeps only the known parts, saves them in its local history and repeats
+them in the merge comment.
+
+When a job ends, the issue gets one comment with the cause and the log file name
+and loses `pdd:working`. Comments show no absolute path, user name or host name. Nothing else waits on it. A job with no result (the agent
 crashed, was signed out or hit a usage limit, or the machine restarted) only
 releases the issue: no comment and no label, and its own open PR is closed with a
 short note (the branch stays). Such an end counts against the issue only when it is
@@ -1443,10 +1459,20 @@ alert. A job with a result, a review verdict or a merge sets the pause length ba
 to 1 hour. `pdd autopilot status` shows the jobs, the busy slots,
 a pause and the time it ends, and the last results from local files.
 
-A Runtime problem (no verdict, lint or binding refusal, interpreter error) or a PDD
-problem (CLI error, crash, claim or merge-check tool error) also gets one report
-for its owners in promptdriven/pdd: label `pdd:runtime` (assigned to the Runtime
-owner) or `pdd:autopilot-report`. One cause has one report: a repeat on another
+When the machine sleeps longer than the job time limit, a job that passed its time
+limit during the sleep is only released (no comment, no `pdd:stuck`, and it does not
+count against the issue); a PR that waits for its checks gets a new time limit. When
+several machines run the core on one repository, each machine's GitHub share is the
+`autopilot.github.share` divided by the number of machines with live claims, and a
+machine over its share starts no new job. A machine that finishes an END or a release
+after a pause writes nothing on an issue that another machine took over.
+
+A Runtime problem (no verdict, interface or binding refusal, interpreter error,
+server compatibility) or a PDD problem (CLI error, crash, claim or merge-check tool
+error, and test vectors: a Runtime case, a scenario value limit such as a value that
+is not a safe integer, a vector replay) also gets one report for its owners in
+promptdriven/pdd: label `pdd:runtime` (assigned to the Runtime owner) or
+`pdd:autopilot-report`. One cause has one report: a repeat on another
 day adds one "seen again" comment. Each machine files at most 3 new reports a day.
 Reports hold versions, the step, the error code and a short redacted detail,
 never code or text from your repository. With `report` `draft` (the default) the

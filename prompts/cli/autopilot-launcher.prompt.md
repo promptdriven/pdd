@@ -1361,8 +1361,12 @@ stays `full`. The full engine below is unchanged; this section only adds a branc
 
 - Engine source: `state.engine` (`core` or `full`), saved by `start --engine`, wins
   over `pdd.json`; a start without `--engine` keeps the saved value. `start --label
-  NAME` saves `state.label`, which replaces the core's `label` setting. Other values
-  of `--engine`, or a blank label, return exit code 2 before any effect. Doctor gets
+  NAME` saves `state.label`, which replaces the core's `label` setting. `start --mode
+  auto|observe|off` saves `state.mode`, which replaces the core's `mode` (the tick,
+  the start's off check and status, which names the source `this machine`); it never
+  writes `pdd.json` (unlike `pdd autopilot observe`). With an effective engine that
+  is not core, `--mode` is refused before any change. Other values of `--engine` or
+  `--mode`, or a blank label, return exit code 2 before any effect. Doctor gets
   the effective engine as `engine` in its input.
 - Tick: after the tick lock and the coordinator identity are settled, and before any
   workflow cleanup, a core engine runs the core tick and returns its result. A

@@ -20,9 +20,16 @@ by the cause kind, the text is safe, and each machine has a daily limit.
   report body ends with the hidden marker `<!-- pdd:autopilot-report:FP -->`.
 - Owner: every report goes to `promptdriven/pdd`. Runtime reports have label
   `pdd:runtime` and assignee `agarwal-ishaan`; PDD reports have label
-  `pdd:autopilot-report` and no assignee.
+  `pdd:autopilot-report` and no assignee. Test vectors are PDD's, not Runtime's:
+  `reportKind(cause)` makes a `runtime` cause kind `pdd` when its component or code
+  (as slugs) names a scenario, vector, replay, safe integer, integer out of range,
+  Runtime case or test case (for example `scenario-integer-out-of-range`), before the
+  fingerprint, title, label and owner. Kind `runtime` stays for what goes in and out
+  of Runtime: interface and binding refusals, interpreter errors, no verdict, server
+  compatibility.
 - Safe text: the title names the kind, component, code and PDD minor version. The
-  body has the kind, component, error code, step, the PDD, Node, platform and agent
+  body starts with what the job did: it ended, or, for a cause with `shipped: true`
+  (Runtime could not check), it shipped its PR with "Runtime: not run". It has the kind, component, error code, step, the PDD, Node, platform and agent
   versions, how many times this machine saw the cause (1, or the draft's count),
   and a redacted detail tail of at most 20 lines of 200 characters:
   [secret redaction](secret-redaction.prompt.md) first, then URLs become `[url]`,
