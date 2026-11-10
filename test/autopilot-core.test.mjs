@@ -66,7 +66,7 @@ test('easy issue: claim, build, review, suite, CI and base check lead to one mer
   assert.match(result.message, /1 merged/);
 });
 
-test('a job that dies releases its claim with no mark, closes its own PR and cools the issue down; the 3rd no-result in 7 days ends it', async t => {
+test('a job that dies releases its claim with no mark, closes its own PR and cools the issue down; the 3rd counted no-result in 7 days ends it', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); w.issue(18);
   await w.tick();
@@ -81,9 +81,10 @@ test('a job that dies releases its claim with no mark, closes its own PR and coo
     w.advance(25 * HOUR); await w.tick();
     assert.equal(w.started.filter(job => job.issue === 17).length, round, `#17 runs again after the cooldown (${round})`);
     w.kill(17, 'build'); await w.tick();
+    if (round === 2) { w.issue(19); await w.tick(); w.build(19); await w.tick(); }   // a result between the no-results
   }
   const ends = endComments(w, 17);
-  assert.equal(ends.length, 1, 'the 3rd no-result in 7 days is a normal END');
+  assert.equal(ends.length, 1, 'the 3rd counted no-result in 7 days is a normal END');
   assert.match(ends[0], /no result/i); assert.match(ends[0], /\.log/); assert.match(ends[0], /remove `?pdd:stuck`?/i);
   assert.deepEqual(w.labels(17).sort(), ['pdd:stuck']);
   assert.equal(w.reports.calls.length, 0, 'a job failure files no report');
@@ -832,7 +833,7 @@ test('R15 the machine pause: 3 no-result ends in a row pause new jobs for 1 h wi
   assert.equal(w.started.length, 4, 'no new job while paused');
   w.advance(31 * MIN); await w.tick(extra);
   assert.equal(w.started.length, 6, 'after the pause, intake resumes normally (both slots)');
-  assert.ok(w.started.slice(4).every(job => job.issue > 4), 'released issues cool down for 24 hours');
+  assert.ok(!w.started.slice(4).some(job => job.issue === 1), 'the counted no-result (#1, the first after a result) cools down for 24 hours');
   failAll(); await w.tick(extra);                       // still no result: the next pause is 2 h
   assert.equal(alerts.length, 2); assert.match(alerts[1].text, /paused new jobs for 2 h/);
   w.advance(121 * MIN); await w.tick(extra);
@@ -844,8 +845,8 @@ test('R15 the machine pause: 3 no-result ends in a row pause new jobs for 1 h wi
   assert.equal([...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:stuck')).length, 0, 'no healthy issue is stuck during the outage');
 });
 
-test('R15b the per-issue rule: 24 h cooldown after a no-result, the 3rd no-result in 7 days ends the issue, older ones do not count', async t => {
-  const w = await coreWorld(t, { settings: { runs: 1 } });
+test('R15b the per-issue rule: 24 h cooldown after a counted no-result, the 3rd counted no-result in 7 days ends the issue, older ones do not count', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
   w.issue(17);
   await w.tick(); w.finish(17, 'build', { code: 1 }); await w.tick();
   assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), [], 'the first no-result only releases the issue');
@@ -853,13 +854,15 @@ test('R15b the per-issue rule: 24 h cooldown after a no-result, the 3rd no-resul
   assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), [], 'cooldown: not ready for 24 hours');
   w.advance(25 * HOUR);
   assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), [17]);
-  await w.tick(); w.build(17); await w.tick();           // a PR result in between does not reset the count
+  await w.tick(); w.build(17); await w.tick();           // a PR result: the streak is 0 again
   w.review(17, 'FAIL', ['fix']); w.suite(17, 0); await w.tick();
-  w.finish(17, 'repair', { code: 1 }); await w.tick();   // the 2nd no-result: still a release
+  w.finish(17, 'repair', { code: 1 }); await w.tick();   // the 2nd counted no-result: still a release
   assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), []);
-  w.advance(25 * HOUR); await w.tick(); w.finish(17, 'build', { code: 1 }); await w.tick();
-  assert.equal(endComments(w, 17).length, 1, 'the 3rd no-result in 7 days is a normal END'); assert.ok(w.labels(17).includes('pdd:stuck'));
-  // No-result ends older than 7 days do not count.
+  w.advance(25 * HOUR); w.issue(18);
+  await w.tick(); w.build(18); await w.tick();           // #18 gives a result before #17 fails again
+  w.finish(17, 'build', { code: 1 }); await w.tick();
+  assert.equal(endComments(w, 17).length, 1, 'the 3rd counted no-result in 7 days is a normal END'); assert.ok(w.labels(17).includes('pdd:stuck'));
+  // Counted no-result ends older than 7 days do not count.
   const v = await coreWorld(t, { settings: { runs: 1 } });
   v.issue(17);
   for (let i = 0; i < 2; i++) { await v.tick(); v.kill(17, 'build'); await v.tick(); v.advance(25 * HOUR); }
@@ -1025,13 +1028,17 @@ test('R23 a reviewer that ends with no result is a no-result end: release and cl
 });
 
 test('R24 a core.json that is null, not an object or not JSON reads as not paused; a pause far in the future is broken', async t => {
-  for (const text of ['null\n', '[1,2]\n', '{"pausedUntil":"x","streak":"x","hours":3}\n', '{not json', '{"breaker":{"state":"paused"}}\n']) {
+  for (const text of ['null\n', '[1,2]\n', '{"pausedUntil":"x","streak":"x","hours":3}\n', '{not json', '{"breaker":{"state":"paused"}}\n', '{"pending":{"issue":"17","at":1}}\n', '{"pending":"x"}\n']) {
     const w = await coreWorld(t, { settings: { runs: 1 } });
     w.issue(17);
     mkdirSync(w.root, { recursive: true }); writeFileSync(join(w.root, 'core.json'), text);
     const r = await w.tick();
     assert.ok(w.job(17, 'build'), `${text}: ${r.message}`);
     assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /No pause/);
+    if (text.includes('pending')) {                      // a broken pending end writes no strike line
+      w.build(17); await w.tick();
+      assert.doesNotMatch(existsSync(join(w.root, 'history.jsonl')) ? readFileSync(join(w.root, 'history.jsonl'), 'utf8') : '', /strike/);
+    }
   }
   const w = await coreWorld(t, { settings: { runs: 2 } });
   for (let n = 1; n <= 20; n++) w.issue(n);
@@ -1045,9 +1052,9 @@ test('R24 a core.json that is null, not an object or not JSON reads as not pause
 });
 
 // ---- Review 6 regressions (each failed on e5c69aca) ----------------------------------------------------
-const outage = async (t, { runs, until, poison = () => false, ticks = 24, prepare } = {}) => {
+const outage = async (t, { runs, until, poison = () => false, ticks = 24, prepare, issues = 20 } = {}) => {
   const w = await coreWorld(t, { settings: { runs } });
-  for (let n = 1; n <= 20; n++) w.issue(n);
+  for (let n = 1; n <= issues; n++) w.issue(n);
   if (prepare) await prepare(w);
   const start = w.now(), alerts = [];
   w.down = at => until(at);
@@ -1081,23 +1088,165 @@ test('M1c two outages in one day (and a third two days later) mark no healthy is
   assert.deepEqual(stuckByNoResult(w), []);
 });
 
-test('M2 one issue that always ends with no result runs at most 3 times, then one END; the pause always ends', async t => {
+// A full life cycle: while the agent is down, every agent job exits with no result at once. While it is up, a build
+// takes `buildTicks` ticks, a review passes on the next tick and a suite passes at once.
+async function lifeCycle(t, { runs = 2, issues = 20, hours, down, buildTicks = 1, poison = () => false, poisonPr = false } = {}) {
+  const w = await coreWorld(t, { settings: { runs } });
+  for (let n = 1; n <= issues; n++) w.issue(n);
+  const start = w.now(), age = new Map();
+  for (let i = 0; i < hours * 2; i++) {
+    await w.tick();
+    const at = (w.now() - start) / HOUR;
+    for (const job of [...w.started]) {
+      if (!w.alive.has(job.pid)) continue;
+      if (job.role === 'suite') { w.suite(job.issue, 0); continue; }
+      if (down(at) || poison(job, at)) {
+        // A bad build can open its PR and then end with no result.
+        if (poisonPr && job.role === 'build' && !down(at)) w.github.openPr({ branch: job.branch, head: 'a'.repeat(40), body: `Fixes #${job.issue}` });
+        w.finish(job.issue, job.role, { code: 1 }); continue;
+      }
+      age.set(job.id, (age.get(job.id) ?? 0) + 1);
+      if (age.get(job.id) < (job.role === 'review' ? 1 : buildTicks)) continue;
+      if (job.role === 'build' || job.role === 'repair') w.build(job.issue, { role: job.role });
+      else if (job.role === 'review') w.review(job.issue, 'PASS');
+    }
+    w.advance(30 * MIN);
+  }
+  return { w, start };
+}
+const stuckNoResult = w => [...w.github.issues.values()].filter(i => i.labels.includes('pdd:stuck') && endComments(w, i.number).some(c => c.includes('/ no-result'))).map(i => i.number);
+
+// A bad issue: its no-results in the streak that the outage left only release it (at most one run); then its 3rd
+// counted no-result is one END. The history has a strike line for each of the first two.
+const strikes = (w, n) => readFileSync(join(w.root, 'history.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(row => row.issue === n && row.strike).length;
+test('M2 one issue that always ends with no result runs at most 3 counted times, then one END; the pause always ends', async t => {
   let poisonIssue = null;
-  const { w, start } = await outage(t, { runs: 2, ticks: 6 * 24, until: at => at < 3,
-    poison: (job, at) => { if (poisonIssue === null && at >= 3) poisonIssue = job.issue; return job.issue === poisonIssue; } });
+  const { w, start } = await lifeCycle(t, { runs: 2, issues: 60, hours: 80, buildTicks: 4, down: at => at < 3, poisonPr: true,
+    poison: (job, at) => { if (poisonIssue === null && at >= 3 && job.role === 'build') poisonIssue = job.issue; return job.issue === poisonIssue; } });
   assert.ok(poisonIssue);
-  assert.ok(w.started.filter(j => j.issue === poisonIssue && j.role === 'build').length <= 3);
+  assert.ok(w.started.filter(j => j.issue === poisonIssue && j.role === 'build' && j.started >= start + 3 * HOUR).length <= 4);
+  assert.equal(strikes(w, poisonIssue), 2);
   assert.equal(endComments(w, poisonIssue).length, 1); assert.ok(w.labels(poisonIssue).includes('pdd:stuck'));
   const healthy = w.started.filter(j => j.role === 'build' && j.issue !== poisonIssue && j.started >= start + 3 * HOUR);
   assert.ok(healthy.length && (healthy[0].started - start) / HOUR < 6, `a healthy job starts soon after the outage: ${healthy[0] && (healthy[0].started - start) / HOUR}`);
   assert.ok([...w.github.prs.values()].filter(pr => pr.branch.startsWith(`pdd/core-${poisonIssue}-`) && pr.state === 'open').length <= 1);
+  assert.deepEqual(stuckNoResult(w), [poisonIssue]);
 });
 
-test('M2b a 30-hour outage and an oldest issue that always fails: the pause ends, other work runs, the bad issue ends after 3 runs', async t => {
-  const { w, start } = await outage(t, { runs: 2, ticks: 2 * 24 * 5, until: at => at < 30, poison: (job, at) => job.issue === 1 && at >= 30 });
+test('M2b a 30-hour outage and an oldest issue that always fails: the pause ends, other work runs, the bad issue ends after 3 counted runs', async t => {
+  const { w, start } = await lifeCycle(t, { runs: 2, issues: 60, hours: 110, buildTicks: 4, down: at => at < 30, poisonPr: true, poison: (job, at) => job.issue === 1 && at >= 30 });
   const after = w.started.filter(j => j.role === 'build' && j.started >= start + 30 * HOUR);
   assert.ok(after.some(j => j.issue !== 1), 'other issues run after the outage');
-  assert.ok(w.started.filter(j => j.issue === 1 && j.role === 'build').length <= 3);
+  assert.ok(w.started.filter(j => j.issue === 1 && j.role === 'build' && j.started >= start + 30 * HOUR).length <= 4, 'one run in the outage streak, then 3 counted runs');
+  assert.equal(strikes(w, 1), 2);
   assert.equal(endComments(w, 1).length, 1); assert.ok(w.labels(1).includes('pdd:stuck'));
   assert.ok([...w.github.prs.values()].filter(pr => pr.branch.startsWith('pdd/core-1-') && pr.state === 'open').length <= 1, 'at most one open core PR for the issue');
+  assert.deepEqual(stuckNoResult(w), [1]);
+});
+
+// ---- Review 7 regressions (each failed on d4673c4a) ----------------------------------------------------
+test('R25 P1: one agent outage of any length marks no healthy issue stuck', async t => {
+  for (const [runs, outage] of [[2, 52], [2, 72], [1, 56]]) {
+    const { w } = await lifeCycle(t, { runs, hours: outage + 12, down: at => at < outage });
+    assert.deepEqual(stuckNoResult(w), [], `runs ${runs}, outage ${outage} h`);
+    assert.ok(w.github.merges.length >= 1, `work goes on after the ${outage} h outage`);
+  }
+});
+
+test('R25c repeated short outages (random, or down 1 or 2 h of every 5 h) mark no healthy issue stuck', async t => {
+  for (const seed of [1, 2, 3, 4]) {
+    let x = seed * 7919;
+    const rand = () => { x = (x * 48271) % 2147483647; return x / 2147483647; };
+    const windows = [];
+    for (let h = 0; h < 96;) { h += 4 + rand() * 8; const len = 1 + Math.round(rand() * 2) / 2; windows.push([h, h + len]); h += len; }
+    const { w } = await lifeCycle(t, { runs: 2, issues: 30, hours: 96, buildTicks: 4, down: at => windows.some(([a, b]) => at >= a && at < b) });
+    assert.deepEqual(stuckNoResult(w), [], `seed ${seed}`);
+  }
+  for (const up of [3, 4]) {
+    const { w } = await lifeCycle(t, { runs: 2, hours: 70, buildTicks: 4, down: at => at % 5 >= up });
+    assert.deepEqual(stuckNoResult(w), [], `down ${5 - up} h of every 5 h`);
+  }
+});
+
+test('R25b a bad issue that fails between successes still ends after 3 counted no-results', async t => {
+  const { w } = await lifeCycle(t, { runs: 2, issues: 60, hours: 80, down: () => false, poison: job => job.issue === 1 });
+  assert.equal(endComments(w, 1).length, 1); assert.ok(w.labels(1).includes('pdd:stuck'));
+  assert.ok(w.started.filter(job => job.issue === 1 && job.role === 'build').length <= 3);
+});
+
+test('R26 an END writes a reset line: a person retry starts with no cooldown and fresh counts', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.issue(17);
+  for (let i = 0; i < 3; i++) {                          // a helper issue gives a result before each no-result of #17
+    w.issue(30 + i);
+    await w.tick(); w.build(30 + i); w.kill(17, 'build'); await w.tick();
+    w.advance(25 * HOUR);
+  }
+  assert.equal(endComments(w, 17).length, 1); assert.ok(w.labels(17).includes('pdd:stuck'));
+  assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /"issue":17,"outcome":"ended"[^\n]*"reset":true/);
+  w.github.unlabel(17, 'pdd:stuck');
+  assert.ok((await readyIssues({ state: w.state, settings: w.settings }, w.ports())).includes(17), 'no cooldown after the END');
+  w.issue(40); await w.tick(); w.build(40); w.kill(17, 'build'); await w.tick();
+  assert.equal(endComments(w, 17).length, 1, 'one more no-result after the retry only releases');
+  assert.ok(!w.labels(17).includes('pdd:stuck'));
+});
+
+test('R27 a failed PR close is retried on the next tick, and the note comes after the close', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const job = w.job(17, 'build');
+  const first = w.github.openPr({ branch: job.branch, head: 'a'.repeat(40), body: 'Fixes #17' });
+  w.finish(17, 'build', { code: 1 });
+  let failed = 0;
+  const gh = w.gh;
+  w.gh = async (args, options) => (args.includes('PATCH') && args.some(a => /\/pulls\/\d+$/.test(a)) && !failed++)
+    ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: 'gh: HTTP 502' } : gh(args, options);
+  await w.tick();
+  assert.equal(first.state, 'open'); assert.equal(first.comments.length, 0, 'no "closed" note before the close');
+  await w.tick();
+  assert.equal(first.state, 'closed'); assert.equal(first.comments.filter(c => /closed/i.test(c.body)).length, 1);
+});
+
+test('R28 before a new build, other open core PRs of the issue close; a merged PR and another prefix stay', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  const old = w.github.openPr({ branch: 'pdd/core-17-old-aaaaaa', head: 'b'.repeat(40), body: 'Fixes #17' });
+  const other = w.github.openPr({ branch: 'pdd/other-17', head: 'c'.repeat(40), body: 'Fixes #17' });
+  const merged = w.github.openPr({ branch: 'pdd/core-17-done-bbbbbb', head: 'd'.repeat(40), body: 'Fixes #17' });
+  merged.state = 'closed'; merged.merged = true;
+  const neighbour = w.github.openPr({ branch: 'pdd/core-170-x-cccccc', head: 'e'.repeat(40), body: 'Fixes #170' });
+  await w.tick();
+  assert.ok(w.job(17, 'build'));
+  assert.equal(old.state, 'closed'); assert.ok(old.comments.some(c => /closed/i.test(c.body)));
+  assert.equal(other.state, 'open', 'a PR from another branch prefix stays');
+  assert.equal(merged.state, 'closed'); assert.equal(merged.merged, true);
+  assert.equal(neighbour.state, 'open', 'issue #170 is not #17');
+});
+
+test('R29 a review verdict and a merge count as results and reset the streak', async t => {
+  const w = await coreWorld(t, { settings: { runs: 3 } });
+  for (const n of [17, 18, 19, 20]) w.issue(n);
+  const alerts = [], extra = { alert: async a => alerts.push(a.text) };
+  await w.tick(extra);
+  w.build(17); w.kill(18, 'build'); w.kill(19, 'build'); await w.tick(extra);
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick(extra);
+  w.kill(20, 'build'); await w.tick(extra);
+  assert.equal(w.github.merges.length, 1); assert.equal(alerts.length, 0, 'no pause right after a merge');
+  assert.equal(JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8')).streak, 1);
+});
+
+test('R30 a suite that died 3 times counts all its tries: 3 deaths are a no-result, a mix is suite-broken', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick();
+  w.review(17, 'PASS');
+  for (let i = 0; i < 3; i++) { w.kill(17, 'suite'); await w.tick(); }
+  assert.equal(endComments(w, 17).length, 0); assert.equal(pr.state, 'closed');
+  assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /"outcome":"released"/);
+  const v = await coreWorld(t, { settings: { runs: 1, report: 'draft' } });
+  v.issue(17); await v.tick(); v.build(17); await v.tick();
+  v.review(17, 'PASS');
+  for (let i = 0; i < 2; i++) { writeFileSync(v.job(17, 'suite').log, 'Autopilot core: dependency install failed\n'); v.suite(17, 86); await v.tick(); }
+  v.kill(17, 'suite'); await v.tick();                  // only the last try died: not "died 3 times"
+  assert.match(endComments(v, 17)[0] ?? '', /Cause: pdd \/ suite-broken/);
 });

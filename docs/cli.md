@@ -1414,9 +1414,14 @@ When a job ends, the issue gets one comment with the cause and the log path and
 loses `pdd:working`. Nothing else waits on it. A job with no result (the agent
 crashed, was signed out or hit a usage limit, or the machine restarted) only
 releases the issue: no comment and no label, and its own open PR is closed with a
-short note (the branch stays). The issue then waits 24 hours before Autopilot takes
-it again. The 3rd job with no result on the same issue within 7 days ends it as
-below. When the agent failed the task, the
+short note (the branch stays). Such an end counts against the issue only when it is
+the first one after a job with a result on this machine; then the issue waits 24
+hours before Autopilot takes it again. It is a strike of the issue only when the
+next job on this machine has a result too. So an agent outage that ends two or
+more jobs gives no strike. An issue that already has 2 strikes in 7 days ends as below at its
+next counted end. An END starts the counts again, so a retry starts fresh. Before a
+new job starts, Autopilot closes the issue's older open core PRs. When the agent
+failed the task, the
 issue gets `pdd:stuck`; to retry, remove `pdd:stuck`. When a Runtime or PDD
 problem ended it and a report was filed, the issue is blocked by that report (a
 GitHub issue dependency, or a hidden marker in the comment when the report is in
@@ -1430,7 +1435,8 @@ jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs 
 1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that
 already run go on. After the pause, intake goes on as usual; if jobs still end with
 no result, the next pause is twice as long (2, 4, then 8 hours at most), with a new
-alert. A job with a result sets the pause length back to 1 hour. `pdd autopilot status` shows the jobs, the busy slots,
+alert. A job with a result, a review verdict or a merge sets the pause length back
+to 1 hour. `pdd autopilot status` shows the jobs, the busy slots,
 a pause and the time it ends, and the last results from local files.
 
 A Runtime problem (no verdict, lint or binding refusal, interpreter error) or a PDD

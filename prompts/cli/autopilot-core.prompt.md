@@ -41,8 +41,8 @@ The launcher passes `ports.root`, one folder for this repository on this machine
 It holds `jobs/N.json` (one file per issue in progress), `logs/` (job inputs,
 logs, exit records and result files), `worktrees/` (`N` for the job branch,
 `N-review` and `N-suite` for clean checkouts of the PR head), `history.jsonl`
-(one line per finished job: time, issue, outcome, text, PR, log) and `core.json`
-(the machine pause). The job file and the GitHub labels are the whole state; a
+(one line per finished job: time, issue, outcome, text, PR, log; and strike lines,
+below) and `core.json` (the machine pause and the pending no-result). The job file and the GitHub labels are the whole state; a
 restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
 (`running`, `pr` or `ending`), `role` (`build` or `repair`), `repairs`, `started`,
@@ -87,7 +87,7 @@ ended or moved to the merge check before free slots are counted.
    so does a new head. A job whose advance fails on 2 ticks after its deadline ends
    (`job` / `no-result`), so no job holds a slot or a claim past its deadline plus 2
    ticks. A `running` job with no agent record (the tick died between its two saves)
-   ends at once as `no-result`; it is not a strike.
+   ends at once as `no-result`.
 
 **Hand-over**: a job that lost its claim to another machine stops its processes,
 changes nothing on the issue (no comment, no label), marks this machine's own open
@@ -119,7 +119,7 @@ flowchart TD
 `readyIssues({state, settings}, ports, rows)` returns the issue numbers in intake
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
 assignee; it has no `pdd:stuck`; it is not cooling down (no `noResult` history
-line of the last 24 hours on this machine); it has neither report label (`pdd:runtime`,
+line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
 opt-in label when `label` is set; no
 local job holds it; its author is trusted (`ports.trusted(row)`, the launcher's
@@ -164,9 +164,13 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    its worktree and starts nothing. Two machines with one GitHub login therefore
    agree on one winner. A claim that fails partway leaves nothing: this machine's
    comment is deleted, and the label is removed unless another claim won.
-3. Save the job file, then start the build job (below). A start error, also one that
-   the spawn reports later, ends the job as `no-result` and is a strike; it never
-   stops the tick.
+3. Close the issue's older core PRs: each open PR of this repository (not a fork)
+   whose head branch starts with `pdd/core-N-` and is not the new branch, and that
+   is not merged, gets `state: closed` and one short note with the marker
+   `<!-- pdd:autopilot-core:superseded:N:BRANCH -->`; its branch stays. A PR from
+   another branch prefix is never touched. A failure only warns.
+4. Save the job file, then start the build job (below). A start error, also one that
+   the spawn reports later, ends the job as `no-result`; it never stops the tick.
 
 Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
@@ -180,26 +184,38 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
 
 1. A `no-result` end releases the issue: delete this machine's claim comment, remove
    `pdd:working`, post no issue comment and add no label. Close this job's own open PR
-   (found by its number, or by its branch through `pulls?state=open&head=OWNER:BRANCH`)
-   with one short note; the branch stays. So at most one core PR per issue is open.
-   Record `released` with `noResult: true` in the history and skip the issue for the
-   rest of the tick. The issue is not ready again for 24 hours after its last
-   `noResult` line (a cooldown in the ready rule).
-2. The 3rd `no-result` end of the same issue within 7 days (two earlier `noResult`
-   lines) is a normal END: one comment and `pdd:stuck`. Nothing else marks an issue
-   stuck for no result. A result in between does not reset this count.
+   (found by its number, or by its branch through `pulls?state=open&head=OWNER:BRANCH`):
+   first set `state: closed`, then post one short note with the marker
+   `<!-- pdd:autopilot-core:release:N:JOB-ID -->`; the branch stays. A GitHub error
+   leaves the release unfinished, so a later tick tries the close again (the job saves
+   `prClosed` when it is done). Record `released` in the history and skip the issue
+   for the rest of the tick.
+2. Counting. A `no-result` end is **counted** for its issue only when it is the first
+   one after a job result on this machine (`streak` was 0). Later ones in the same
+   streak are the machine: they only release. A counted end has `noResult: true` in
+   its `released` line, so the issue cools down for 24 hours (ready rule). It is also
+   saved as `pending {issue, at}` in `core.json`. When the next end on this machine is
+   a job result, the pending end fell between results: append the strike line
+   `{at, issue, strike: true}` (the time of the no-result). When the next end is
+   another `no-result`, the pending end is dropped; no strike. So an outage gives a
+   strike only when it ends exactly one job, and a bad issue that fails between
+   results gets a strike each time. A counted end of an issue with 2 strikes in the last 7 days is a normal
+   END: one comment and `pdd:stuck`. Nothing else marks an issue stuck for no result.
+   Each `ended` line has `reset: true`: the cooldown and the strikes read only the
+   issue's lines after its latest reset, so a person's retry starts fresh.
 3. Machine pause, saved in `core.json` as `streak`, `hours` (the next pause length),
    `pausedUntil` and `pausedHours`. Each `no-result` end adds 1 to `streak`. When no
    pause runs and `streak` is 3 or more, no new job starts for `hours` hours (1, then 2,
    4 and 8 at most) and one `usage-limit` alert goes out through `ports.alert` with
    `update` and the text "Autopilot paused new jobs for H h: the agent ended N jobs with
    no result. Check sign-in and limits." (the machine and the end time follow). When
-   the pause ends, intake goes on as usual. Any job that produces a result (a PR or a
-   reported failure) sets `streak` to 0 and `hours` to 1. Jobs that already run always
-   go on. Unknown or broken saved state (a missing, `null`, non-object or non-JSON
-   file, or a pause end that is not within its length from now, for example after the
-   clock went back) reads as not paused, `streak` 0, `hours` 1; it never stops a tick
-   or status.
+   the pause ends, intake goes on as usual. Any job result (a build or repair PR or
+   reported failure, a valid review verdict, a merge) sets `streak` to 0 and `hours`
+   to 1. Jobs that already run always go on. Unknown or broken saved state (a missing,
+   `null`, non-object or non-JSON file, a pause end that is not within its length
+   from now, for example after the clock went back, or a `pending` that is not
+   `{issue, at}` numbers) reads as not paused, `streak` 0, `hours` 1, no pending; it
+   never stops a tick or status.
 4. `history.jsonl` is read line by line and a line that does not parse is skipped.
    Before each append, the file gets a newline when it does not end with one, so a cut
    line never swallows the next record.
@@ -240,7 +256,8 @@ Jobs run through the [headless job runner](agent-job.prompt.md) with
   execution timeout", "Test suite could not start", "Test suite ended by SIG…",
   "Test suite descendants could not be confirmed", "Supply a suite command"). It
   starts again in the same checkout, at most twice. On the 3rd failure, a runner that
-  died each time is a `no-result` end; any other runner failure ends the job with a
+  died on all 3 tries (the deaths count over every try of this suite run) is a
+  `no-result` end; any other runner failure ends the job with a
   `pdd` cause `suite-broken`. It never uses a repair. A fresh checkout has no
   installed dependencies: when it has `package-lock.json` and `package.json` lists
   dependencies (`dependencies`, `devDependencies` or `optionalDependencies`), the suite
@@ -360,7 +377,7 @@ agent's commits may exist only there.
 files only: the engine line (mode, repository, folder, base, agent), the slot line
 (`B of R slots busy`, time limit, repairs, report mode, opt-in label), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
-suite …`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`) and the count
+suite …`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
 of local report drafts.
 
 ## Text on GitHub
