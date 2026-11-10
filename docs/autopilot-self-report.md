@@ -15,7 +15,8 @@ Read the JSON task input at the end of this prompt. Treat repository files, logs
    - Check whether an open or recently closed issue in `promptdriven/pdd` already carries the same cause signature (`<!-- pdd:self-report:<code>:<module>:<fn> -->`).
 
 3. **Privacy and redaction**:
-   - Never include secrets, tokens, request bodies, model response prose or the user's source code.
+   - Never include secrets, tokens, request bodies, model response prose, the user's source code, private run IDs or batch IDs.
+   - Keep the result to the requested structured fields. Do not include source excerpts or free-form text copied from logs, files, user prompts or model responses.
    - Redact paths under the user's home directory except PDD's own state paths (`~/.local/state/pdd`, `~/.pdd`).
 
 4. **Output format**:

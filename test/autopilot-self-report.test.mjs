@@ -150,6 +150,25 @@ test('cause classification table separates PDD/Autopilot, Runtime service, user 
       expect: { side: 'user', kind: 'suite', reportable: false },
     },
 
+    {
+      name: 'provider call cap is an account limit',
+      run: { state: 'waiting', gate: { kind: 'approve-pr' } },
+      check: { states: [{ state: 'refused', reason: { code: 'provider-call-cap', message: 'Provider call cap reached' } }] },
+      expect: { side: 'person', kind: 'account', reportable: false },
+    },
+    {
+      name: 'call cap reached is an account limit',
+      run: { state: 'waiting' },
+      check: { states: [{ state: 'refused', reason: { code: 'call-cap-reached' } }] },
+      expect: { side: 'person', kind: 'account', reportable: false },
+    },
+    {
+      name: 'HTTP 429 is an account limit',
+      run: { state: 'waiting' },
+      check: { states: [{ state: 'refused', reason: { code: 'provider-error', message: 'HTTP 429: quota exceeded' } }] },
+      expect: { side: 'person', kind: 'account', reportable: false },
+    },
+
     // 4. Person decision (reportable: false, side: 'person')
     {
       name: 'Open person question',
@@ -219,17 +238,17 @@ test('diagnose subagent runs one read-only session with the brief and formats do
       const sessionId = '11111111-2222-7333-8444-555555555555';
       const payload = {
         title: 'PDD command-crash: TypeError in src/workflow-runner.mjs (stepDoneCommand)',
-        problem: 'stepDoneCommand throws TypeError when run.done is null in status.json.',
-        steps: ['Corrupt status.json with done: null', 'Run pdd workflow done verify --summary "Tests: 1 passed"'],
+        problem: 'PRIVATE_SOURCE_MARKER and RESPONSE_PROSE_MARKER from the diagnosis output.',
+        steps: ['PRIVATE_STEP_SOURCE_MARKER', 'PRIVATE_BATCH_20301231_MARKER'],
         expected: 'pdd workflow done initializes or validates run.done without throwing an uncaught TypeError.',
-        actual: 'Uncaught TypeError at src/workflow-runner.mjs:3120 in stepDoneCommand.',
-        evidence: 'at stepDoneCommand (/home/alice/work/repo/src/workflow-runner.mjs:3120:15)\nState log: /home/alice/.local/state/pdd/autopilot/state.json',
+        actual: 'PRIVATE_RUN_ID_9a6c-marker and PRIVATE_RESPONSE_MARKER.',
+        evidence: 'PRIVATE_USER_SOURCE_MARKER PRIVATE_RESPONSE_MARKER PRIVATE_BATCH_20301231_MARKER',
         rootCause: {
-          module: 'src/workflow-runner.mjs',
-          fn: 'stepDoneCommand',
-          line: 3120,
-          fileLine: 'src/workflow-runner.mjs:3120',
-          explanation: 'stepDoneCommand reads run.done[step] without guarding against a null done field.',
+          module: 'src/autopilot-self-report.mjs',
+          fn: 'safePublicReport',
+          line: 50,
+          fileLine: 'src/autopilot-self-report.mjs:50',
+          explanation: 'PRIVATE_ROOT_CAUSE_PROSE_MARKER',
         },
         signature: 'TypeError+src/workflow-runner.mjs+stepDoneCommand',
       };
@@ -249,7 +268,9 @@ test('diagnose subagent runs one read-only session with the brief and formats do
   assert.ok(execCalls[0].args.includes('read-only'), 'subagent session must be read-only');
   assert.match(execCalls[0].options.input, /# Autopilot PDD Self-Report Diagnose Brief/);
   assert.equal(report.signature, 'TypeError+src/workflow-runner.mjs+stepDoneCommand');
-  assert.equal(report.rootCause.fileLine, 'src/workflow-runner.mjs:3120');
+  assert.equal(report.fileLine, 'src/workflow-runner.mjs:3120');
+  assert.deepEqual(report.diagnosisLocation, { module: 'src/autopilot-self-report.mjs', fn: 'safePublicReport', line: 50 });
+  assert.match(report.body, /src\/autopilot-self-report\.mjs:50 in safePublicReport/);
   assert.equal(report.session.id, '11111111-2222-7333-8444-555555555555');
   assert.match(report.body, /## Problem/);
   assert.match(report.body, /## Steps to reproduce/);
@@ -258,12 +279,13 @@ test('diagnose subagent runs one read-only session with the brief and formats do
   assert.match(report.body, /## Versions/);
   assert.match(report.body, /## Suspected root cause/);
   assert.match(report.body, /<!-- pdd:self-report:TypeError\+src\/workflow-runner\.mjs\+stepDoneCommand -->/);
-  // Home path redaction inside evidence preserves ~/.local/state/pdd and redacts /home/alice/work/repo:
-  assert.match(report.body, /~\/\.local\/state\/pdd\/autopilot\/state\.json/);
-  assert.ok(!report.body.includes('/home/alice/work'));
+  // The public report uses structured local facts and excludes every free-form diagnosis field.
+  for (const privateValue of ['PRIVATE_SOURCE_MARKER', 'PRIVATE_STEP_SOURCE_MARKER', 'PRIVATE_RUN_ID_9a6c-marker', 'PRIVATE_BATCH_20301231_MARKER', 'PRIVATE_RESPONSE_MARKER', 'PRIVATE_ROOT_CAUSE_PROSE_MARKER', 'run-17', '/home/alice']) {
+    assert.ok(!report.body.includes(privateValue), 'public report must omit ' + privateValue);
+  }
 });
 
-test('dedupe adds one comment on open issue, cap limits new issues to 5 per machine per day, and target repo is always promptdriven/pdd', async t => {
+test('dedupe adds one comment on open issue, cap limits new issues to 5 per machine per day, and PDD target is guarded', async t => {
   const stateRoot = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-cap-'));
   t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
 
@@ -290,14 +312,15 @@ test('dedupe adds one comment on open issue, cap limits new issues to 5 per mach
   // Refuses to file in promptdriven/prompt-runtime or a user repo:
   await assert.rejects(
     fileSelfReport({ targetRepo: FORBIDDEN_RUNTIME_REPO, repo: 'promptdriven/pdd' }, ports),
-    /Refusing to file in private repository promptdriven\/prompt-runtime/
+    /PDD self-reports must target promptdriven\/pdd/
   );
   await assert.rejects(
     fileSelfReport({ targetRepo: 'acme/private-app', repo: 'acme/private-app', config: { selfReport: 'auto' } }, ports),
-    /self-reports must target promptdriven\/pdd/
+    /target must be/
   );
 
   const state = {};
+  const occurrenceRun = { runId: 'cost-run', repo: 'acme/app', selfReports: [] };
   const config = { selfReport: 'auto', maintainer: 'core-maintainer' };
 
   // First occurrence of signature-1 files a new issue in promptdriven/pdd:
@@ -310,6 +333,7 @@ test('dedupe adds one comment on open issue, cap limits new issues to 5 per mach
     repo: 'acme/app',
     state,
     config,
+    run: occurrenceRun,
   }, ports);
   assert.equal(first.action, 'filed');
   assert.equal(first.targetRepo, SELF_REPORT_REPO);
@@ -329,12 +353,15 @@ test('dedupe adds one comment on open issue, cap limits new issues to 5 per mach
     repo: 'acme/app',
     state,
     config,
+    run: occurrenceRun,
   }, ports);
   assert.equal(dup.action, 'commented');
   assert.equal(dup.issue.number, 601);
   assert.equal(created.length, 1, 'dedupe must not file a second issue');
   assert.equal(comments.length, 1, 'dedupe must add one comment');
-  assert.match(comments[0].body, /New occurrence of `ERR_1\+src\/workflow-runner\.mjs\+fn1`/);
+  const outcomeCost = captureCosts(null, occurrenceRun, { now: () => now });
+  assert.deepEqual(outcomeCost.selfReports, { filed: 1, commented: 1, skipped: 0 }, 'file and comment remain separate cost outcomes');
+  assert.match(comments[0].body, /New occurrence of ERR_1\+src\/workflow-runner\.mjs\+fn1/);
 
   // File 4 more distinct signatures (2..5) to reach the daily cap of 5:
   for (let i = 2; i <= DAILY_SELF_REPORT_CAP; i++) {
@@ -371,6 +398,144 @@ test('dedupe adds one comment on open issue, cap limits new issues to 5 per mach
   assert.equal(created.length, 5, 'cap must prevent a 6th new issue on the same day');
   assert.equal(comments.length, 2, '6th occurrence must comment instead');
   assert.deepEqual(state.selfReports, { filed: 5, commented: 2, skipped: 0 });
+});
+
+
+test('Runtime target follows private write permission and public reports omit run, batch and free-form text', async t => {
+  const stateRoot = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-target-'));
+  t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-10T12:00:00Z');
+  const issues = new Map();
+  const comments = [];
+  const created = [];
+  const ports = permission => ({
+    stateRoot,
+    now: () => now,
+    repoPermission: async repo => {
+      assert.equal(repo, FORBIDDEN_RUNTIME_REPO);
+      return permission;
+    },
+    searchIssues: async (_marker, { targetRepo }) => issues.get(targetRepo) ?? [],
+    createIssue: async input => {
+      const issue = { number: 71 + created.length, url: 'https://github.com/' + input.repo + '/issues/' + (71 + created.length), state: 'open', body: input.body };
+      created.push({ ...input, issue });
+      issues.set(input.repo, [...(issues.get(input.repo) ?? []), { ...issue, ...input }]);
+      return issue;
+    },
+    commentIssue: async input => comments.push(input),
+  });
+  const unsafe = {
+    side: 'runtime',
+    cause: 'no-verdict',
+    code: 'RUNTIME_NO_VERDICT',
+    module: 'runtime-service',
+    fn: 'pdd-test',
+    targetRepo: FORBIDDEN_RUNTIME_REPO,
+    batch: 'PRIVATE_BATCH_20301231_MARKER',
+    summary: 'PRIVATE_SUMMARY_MARKER',
+    problem: 'PRIVATE_SOURCE_MARKER',
+    evidence: 'PRIVATE_RESPONSE_MARKER',
+    body: '<!-- pdd:self-report:RUNTIME_NO_VERDICT+runtime-service+pdd-test -->' + String.fromCharCode(10) + 'PRIVATE_BODY_MARKER',
+    run: { runId: 'PRIVATE_RUN_ID_9a6c-marker', number: 99 },
+    repo: 'promptdriven/pdd',
+    config: { selfReport: 'auto' },
+  };
+
+  const fallback = await fileSelfReport(unsafe, ports('READ'));
+  assert.equal(fallback.targetRepo, SELF_REPORT_REPO);
+  assert.deepEqual(created[0].labels, ['pdd:self-report', 'pdd:runtime-report']);
+  for (const privateValue of ['PRIVATE_BATCH_20301231_MARKER', 'PRIVATE_SUMMARY_MARKER', 'PRIVATE_SOURCE_MARKER', 'PRIVATE_RESPONSE_MARKER', 'PRIVATE_BODY_MARKER', 'PRIVATE_RUN_ID_9a6c-marker']) {
+    assert.ok(!created[0].body.includes(privateValue), 'issue body must omit ' + privateValue);
+  }
+
+  await fileSelfReport(unsafe, ports('READ'));
+  assert.equal(comments.length, 1);
+  for (const privateValue of ['PRIVATE_BATCH_20301231_MARKER', 'PRIVATE_RUN_ID_9a6c-marker', 'PRIVATE_SUMMARY_MARKER']) {
+    assert.ok(!comments[0].body.includes(privateValue), 'comment must omit ' + privateValue);
+  }
+
+  const privateReport = await fileSelfReport({ ...unsafe, targetRepo: undefined }, ports('WRITE'));
+  assert.equal(privateReport.targetRepo, FORBIDDEN_RUNTIME_REPO);
+  assert.equal(created[1].repo, FORBIDDEN_RUNTIME_REPO);
+  assert.deepEqual(created[1].labels, [], 'private Runtime does not assume PDD labels exist');
+
+  const accessReads = [];
+  const defaultPortReport = await fileSelfReport({ ...unsafe, targetRepo: undefined }, {
+    now: () => now,
+    execute: async (file, args, options) => {
+      accessReads.push({ file, args, options });
+      return { code: 0, stdout: JSON.stringify({ viewerPermission: 'MAINTAIN' }) };
+    },
+    searchIssues: async () => [],
+    createIssue: async input => ({ number: 99, url: 'https://github.com/' + input.repo + '/issues/99' }),
+  });
+  assert.equal(defaultPortReport.targetRepo, FORBIDDEN_RUNTIME_REPO);
+  assert.equal(accessReads.length, 1);
+  assert.deepEqual(accessReads[0].args, ['repo', 'view', FORBIDDEN_RUNTIME_REPO, '--json', 'viewerPermission']);
+  assert.equal(accessReads[0].options.purpose, 'self-report-access');
+});
+
+test('filing retries reuse the saved diagnosis twice and attach its actual session to run cost', async t => {
+  const at = Date.parse('2026-11-10T12:00:00Z');
+  const sessionId = '11111111-2222-7333-8444-555555555555';
+  const home = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-cost-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const sessionDate = new Date(at);
+  const sessionDir = join(home, '.codex', 'sessions', String(sessionDate.getUTCFullYear()), String(sessionDate.getUTCMonth() + 1).padStart(2, '0'), String(sessionDate.getUTCDate()).padStart(2, '0'));
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(join(sessionDir, 'rollout-test-' + sessionId + '.jsonl'), JSON.stringify({
+    type: 'event_msg',
+    payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 123, cached_input_tokens: 0, output_tokens: 45, reasoning_output_tokens: 0, total_tokens: 168 } } },
+  }) + String.fromCharCode(10));
+  const run = {
+    runId: 'run-private-1',
+    number: 71,
+    repo: 'promptdriven/pdd',
+    state: 'stuck',
+    root: '/tmp',
+    commandFailure: {
+      code: 'TypeError',
+      module: 'src/workflow-runner.mjs',
+      fn: 'stepDoneCommand',
+      stack: 'TypeError: fail' + String.fromCharCode(10) + '    at stepDoneCommand (src/workflow-runner.mjs:3120:15)',
+    },
+  };
+  const state = { repo: 'promptdriven/pdd' };
+  let diagnosisCalls = 0, searchCalls = 0;
+  const ports = {
+    now: () => at,
+    readCheck: async () => null,
+    diagnose: async () => {
+      diagnosisCalls++;
+      return { session: { id: sessionId }, diagnosis: { problem: 'PRIVATE_DIAGNOSIS_PROSE' } };
+    },
+    searchIssues: async () => {
+      searchCalls++;
+      throw new Error('offline');
+    },
+    save: async () => {},
+    warn: () => {},
+  };
+
+  await reconcileSelfReports(state, ports, { selfReport: 'auto' }, [run]);
+  await reconcileSelfReports(state, ports, { selfReport: 'auto' }, [run]);
+  await reconcileSelfReports(state, ports, { selfReport: 'auto' }, [run]);
+
+  assert.equal(diagnosisCalls, 1, 'filing retry must reuse the diagnosis result');
+  assert.equal(searchCalls, 2, 'filing must stop after two attempts');
+  const custody = Object.values(state.selfReportLedger.seen)[0];
+  assert.equal(custody.diagnosisAttempted, true);
+  assert.equal(custody.diagnosisStatus, 'complete');
+  assert.equal(custody.diagnosisSession.id, sessionId);
+  assert.equal(custody.filingAttempts, 2);
+  assert.equal(custody.filingStatus, 'exhausted');
+  assert.ok(!JSON.stringify(custody.diagnosisResult).includes('PRIVATE_DIAGNOSIS_PROSE'));
+
+  const diagnosisEntry = run.selfReports.find(row => row.action === 'diagnosed');
+  assert.equal(diagnosisEntry.session.id, sessionId);
+  const cost = captureCosts(null, run, { now: () => at, env: { HOME: home } });
+  assert.deepEqual(cost.selfReports, { filed: 0, commented: 0, skipped: 0 });
+  assert.equal(cost.tokens[0].total, 168, 'the diagnose session usage must reach the cost ledger');
 });
 
 test('redaction removes secrets, tokens, request/response prose, user source code and home paths except PDD state paths', () => {

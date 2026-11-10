@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-self-report.prompt.md (sha256: 6703e4b175ddd7f5e78fd86cc007a543ca0f196a22473c9c3179c4152b3c5612).
+// Generated from prompts/cli/autopilot-self-report.prompt.md (sha256: 6795dd6feaec282298faca686b6a2f7bc2178d6148b4c8d26ed21ba85f61871c).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -20,6 +20,98 @@ export const CONSENT_PROMPT = 'May Autopilot file PDD bug reports for failures i
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 const validLogin = value => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,38}$/i.test(value.trim());
 const utcDay = ms => new Date(Number.isFinite(ms) ? ms : Date.now()).toISOString().slice(0, 10);
+const MAX_SELF_REPORT_FILE_ATTEMPTS = 2;
+const RUNTIME_FAILURES = new Set(['no-verdict', 'runner-stopped', 'provider-error', 'server-refusal', 'timeout']);
+const PDD_FAILURES = new Set(['command-crash', 'invariant-broken', 'missing-command', 'autopilot-state']);
+
+function publicCode(value, side, cause = '') {
+  const code = String(value ?? '');
+  if (/^(?:ERR_[A-Z0-9_]{1,72}|RUNTIME_[A-Z0-9_]{1,72}|[A-Z][A-Za-z]+Error|INVARIANT_BROKEN|MISSING_COMMAND|AUTOPILOT_STATE_BUG)$/.test(code)) return code;
+  if (side === 'runtime' && RUNTIME_FAILURES.has(cause)) return 'RUNTIME_' + cause.toUpperCase().replace(/-/g, '_');
+  return side === 'runtime' ? 'RUNTIME_FAILURE' : 'ERR_PDD_INTERNAL';
+}
+
+function publicModule(value, side) {
+  if (side === 'runtime') return 'runtime-service';
+  const module = String(value ?? '');
+  return /^src\/[a-z0-9-]+\.mjs$/i.test(module) ? module : 'src/workflow-runner.mjs';
+}
+
+function publicFunction(value, side) {
+  const fn = String(value ?? '');
+  return (/^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(fn) || fn === 'pdd-test') ? fn : (side === 'runtime' ? 'pdd-test' : 'unknown');
+}
+
+function publicVersion(value) {
+  const version = String(value ?? '');
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version) ? version : 'unknown';
+}
+
+function publicDiagnosisLocation(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const module = String(value.module ?? '');
+  const fn = String(value.fn ?? '');
+  const line = Number(value.line);
+  if (!/^src\/[a-z0-9-]+\.mjs$/i.test(module)
+    || !/^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(fn)
+    || !Number.isSafeInteger(line) || line < 1 || line > 1_000_000) return null;
+  return { module, fn, line };
+}
+
+function readDiagnosisLocation(result, signature, { fs = nativeFs, packageRoot = PACKAGE_ROOT } = {}) {
+  if (!result || result.signature !== signature || !result.rootCause || typeof result.rootCause !== 'object') return null;
+  const location = publicDiagnosisLocation(result.rootCause);
+  if (!location) return null;
+  try {
+    const lineCount = fs.readFileSync(join(packageRoot, location.module), 'utf8').split(String.fromCharCode(10)).length;
+    return location.line <= lineCount ? location : null;
+  } catch { return null; }
+}
+
+function safePublicReport(report = {}) {
+  const side = report.side === 'runtime' ? 'runtime' : 'pdd';
+  const rawKind = String(report.cause ?? report.kind ?? '');
+  const cause = side === 'runtime' && RUNTIME_FAILURES.has(rawKind) ? rawKind : 'no-verdict';
+  const kind = side === 'pdd' && PDD_FAILURES.has(rawKind) ? rawKind : 'command-crash';
+  const code = publicCode(report.code, side, cause);
+  const module = publicModule(report.module, side);
+  const fn = publicFunction(report.fn, side);
+  const candidateLine = Number(report.line ?? report.rootCause?.line);
+  const line = Number.isSafeInteger(candidateLine) && candidateLine > 0 && candidateLine <= 1_000_000 ? candidateLine : 1;
+  const fileLine = side === 'runtime' ? 'Runtime service' : module + ':' + line;
+  const diagnosisLocation = side === 'pdd' ? publicDiagnosisLocation(report.diagnosisLocation) : null;
+  const signature = buildSignature(code, module, fn);
+  const summary = side === 'runtime'
+    ? 'Runtime reported a ' + cause + ' result for a PDD check.'
+    : 'Autopilot recorded a ' + kind + ' failure (' + code + ') in ' + module + ' (' + fn + ').';
+  return {
+    side, cause, kind, code, module, fn, line, fileLine, signature,
+    title: side === 'runtime'
+      ? 'Runtime report: ' + cause
+      : 'PDD ' + kind + ': ' + code + ' in ' + module + ' (' + fn + ')',
+    summary,
+    problem: summary,
+    steps: side === 'runtime'
+      ? ['Run the PDD check that uses Runtime.', 'Observe the saved Runtime result: ' + cause + '.']
+      : ['Run the affected PDD workflow operation in a controlled check.', 'Observe the saved ' + code + ' failure at ' + fileLine + '.'],
+    expected: side === 'runtime'
+      ? 'Runtime returns a check result or a clear service error.'
+      : 'PDD completes the workflow operation or records a normal refusal.',
+    actual: summary,
+    evidence: code + ' at ' + fileLine + ' (' + fn + ').',
+    rootCause: diagnosisLocation
+      ? diagnosisLocation.module + ':' + diagnosisLocation.line + ' in ' + diagnosisLocation.fn + ' (' + code + ').'
+      : fileLine + ' in ' + fn + ' (' + code + ').',
+    diagnosisLocation,
+    pddVersion: publicVersion(report.pddVersion ?? report.versions?.pdd),
+    versions: {
+      pdd: publicVersion(report.pddVersion ?? report.versions?.pdd),
+      agent: ['codex', 'claude'].includes(report.versions?.agent ?? report.agent) ? (report.versions?.agent ?? report.agent) : 'unknown',
+      node: process.version,
+      os: process.platform + ' ' + process.arch,
+    },
+  };
+}
 
 function packageVersion(fs = nativeFs, packageRoot = PACKAGE_ROOT) {
   try {
@@ -33,6 +125,17 @@ const bindingRow = row => ['binding-missing', 'missing-binding'].includes(row?.r
   || (Array.isArray(row?.refusals) ? row.refusals : []).some(r => ['binding-missing', 'missing-binding'].includes(r?.code))
   || row?.compatibility?.state === 'missing-binding';
 
+function hasAccountLimitEvidence(value) {
+  let text = '';
+  try { text = JSON.stringify(value); } catch { return false; }
+  return /provider[-_ ]call[-_ ]cap|call[-_ ]cap[-_ ]reached|HTTP\s*429|(?:budget|quota)[-_ ](?:cap|limit|exceeded|reached)|(?:provider|account)[-_ ](?:call|budget|quota|usage)[-_ ](?:cap|limit|exceeded|reached)/i.test(text);
+}
+
+function isAccountLimitFailure(check, health, run, reason = '') {
+  return ['account', 'usage-limit', 'quota'].includes(String(run?.blockedOn?.kind ?? '').toLowerCase())
+    || hasAccountLimitEvidence([check, health, run?.runtimeWait, run?.runtimeFailure, run?.blockedOn, reason]);
+}
+
 export const runtimeEvidence = run => JSON.stringify([
   run?.parkReason ?? null,
   run?.runtimeWait ?? null,
@@ -41,7 +144,7 @@ export const runtimeEvidence = run => JSON.stringify([
 ]);
 
 export function classifyRuntimeFailure(check, health = null) {
-  if (!check || typeof check !== 'object') return null;
+  if (!check || typeof check !== 'object' || hasAccountLimitEvidence([check, health])) return null;
   const rows = Array.isArray(check.states) ? check.states : Array.isArray(check.rows) ? check.rows : null;
   if (rows) {
     if (!rows.length || rows.some(row => bindingRow(row) || ['ready', 'waiting', 'sending', 'queued', 'running', 'sent'].includes(row?.state))) return null;
@@ -286,6 +389,21 @@ export function classifyFailureCause(run = {}, { check = null, health = null, co
     };
   }
 
+  // Provider/account budgets are external limits, not Runtime service defects.
+  if (isAccountLimitFailure(check, health, run, reason)) {
+    return {
+      side: 'person',
+      kind: 'account',
+      reportable: false,
+      code: null,
+      module: null,
+      fn: null,
+      signature: null,
+      summary: 'Provider or account usage limit reached',
+      evidence: '',
+    };
+  }
+
   // Runtime service classification:
   const runtimeCause = classifyRuntimeFailure(check, health)
     || (run.runtimeWait ? classifyRuntimeFailure(run.runtimeWait, health) : null)
@@ -527,24 +645,29 @@ export async function resolveSelfReportConsent({ repo, config = {}, state = {}, 
 
 export function findSourceEvidence(cause, { fs = nativeFs, packageRoot = PACKAGE_ROOT } = {}) {
   const frame = parsePddStackFrame(cause?.evidence || cause?.stack || '', cause?.module || 'src/workflow-runner.mjs', cause?.fn || 'unknown');
-  const modulePath = cause?.module && cause.module.startsWith('src/') ? cause.module : frame.module;
-  const lineNumber = Number(cause?.line || frame.line) || 1;
+  const supplied = String(cause?.module ?? '');
+  const framed = String(frame.module ?? '');
+  const modulePath = /^src\/[a-z0-9-]+\.mjs$/i.test(supplied)
+    ? supplied
+    : /^src\/[a-z0-9-]+\.mjs$/i.test(framed) ? framed : 'src/workflow-runner.mjs';
+  const requestedLine = Number(cause?.line || frame.line);
+  const lineNumber = Number.isSafeInteger(requestedLine) && requestedLine > 0 ? requestedLine : 1;
   const fullPath = join(packageRoot, modulePath);
   try {
-    const lines = fs.readFileSync(fullPath, 'utf8').split('\n');
+    const lines = fs.readFileSync(fullPath, 'utf8').split(String.fromCharCode(10));
     const clamped = Math.max(1, Math.min(lineNumber, lines.length));
-    const snippet = (lines[clamped - 1] ?? '').trim();
     return {
       module: modulePath,
       line: clamped,
-      fileLine: `${modulePath}:${clamped}`,
-      snippet: snippet.slice(0, 200),
+      fileLine: modulePath + ':' + clamped,
+      snippet: '',
     };
   } catch {
+    const clamped = Math.min(lineNumber, 1_000_000);
     return {
       module: modulePath,
-      line: lineNumber,
-      fileLine: `${modulePath}:${lineNumber}`,
+      line: clamped,
+      fileLine: modulePath + ':' + clamped,
       snippet: '',
     };
   }
@@ -637,46 +760,44 @@ function parseDiagnoseOutput(kind, stdout) {
 }
 
 export function formatSelfReportBody(report, { home, env = process.env } = {}) {
-  const r = redactSelfReport(report, { home, env });
-  const signature = r.signature || buildSignature(r.code, r.module, r.fn);
-  const markers = [`<!-- pdd:self-report:${signature} -->`];
-  if (r.side === 'runtime' && r.cause) {
-    markers.push(`<!-- pdd:runtime-cause:${r.cause} -->`);
-  }
-  const closedRef = r.closedMatch?.number ? `\nPreviously seen in closed issue #${r.closedMatch.number}.` : '';
-  const stepsText = Array.isArray(r.steps)
-    ? r.steps.map((s, idx) => `${idx + 1}. ${s}`).join('\n')
-    : r.steps || `1. Run \`${r.command || 'pdd workflow'}\` in an active automatic run.\n2. Observe the failure in \`${r.module || 'pdd'}\` (\`${r.fn || 'unknown'}\`).`;
-  const rootCauseText = r.rootCause && typeof r.rootCause === 'object'
-    ? `${r.rootCause.fileLine || `${r.rootCause.module || r.module || 'src/workflow-runner.mjs'}:${r.rootCause.line || 1}`} in \`${r.rootCause.fn || r.fn || 'unknown'}\`: ${r.rootCause.explanation || r.summary || ''}`
-    : r.rootCause || `${r.fileLine || `${r.module || 'src/workflow-runner.mjs'}:1`} in \`${r.fn || 'unknown'}\` (\`${r.code || 'ERR_PDD_INTERNAL'}\`).`;
-  return [
-    ...markers,
+  const r = safePublicReport(report);
+  const marker = '<!-- pdd:self-report:' + r.signature + ' -->';
+  const runtimeMarker = r.side === 'runtime'
+    ? String.fromCharCode(10) + '<!-- pdd:runtime-cause:' + r.cause + ' -->'
+    : '';
+  const closedNumber = Number(report?.closedMatch?.number);
+  const closedRef = Number.isSafeInteger(closedNumber) && closedNumber > 0
+    ? String.fromCharCode(10) + 'Previously seen in closed issue #' + closedNumber + '.'
+    : '';
+  const fence = String.fromCharCode(96).repeat(3) + 'text';
+  const body = [
+    marker + runtimeMarker,
     '',
     '## Problem',
-    r.problem || r.summary || 'A PDD or Runtime failure stopped the workflow run.',
+    r.problem,
     '',
     '## Steps to reproduce',
-    stepsText,
+    r.steps.map((step, index) => (index + 1) + '. ' + step).join(String.fromCharCode(10)),
     '',
     '## Expected vs. actual',
-    `- **Expected:** ${r.expected || 'The command completes without an internal PDD or Runtime error.'}`,
-    `- **Actual:** ${r.actual || r.summary || 'The command stopped with an internal failure.'}`,
+    '- **Expected:** ' + r.expected,
+    '- **Actual:** ' + r.actual,
     '',
     '## Evidence',
-    '```text',
-    String(r.evidence || r.summary || 'No stack trace recorded.').trim(),
-    '```',
+    fence,
+    r.evidence,
+    String.fromCharCode(96).repeat(3),
     '',
     '## Versions',
-    `- **pdd:** ${r.versions?.pdd || r.pddVersion || 'unknown'}`,
-    `- **Agent:** ${r.versions?.agent || r.agent || 'codex'}`,
-    `- **Node:** ${r.versions?.node || process.version}`,
-    `- **OS:** ${r.versions?.os || `${process.platform} ${process.arch}`}`,
+    '- **pdd:** ' + r.versions.pdd,
+    '- **Agent:** ' + r.versions.agent,
+    '- **Node:** ' + r.versions.node,
+    '- **OS:** ' + r.versions.os,
     '',
     '## Suspected root cause',
-    `${rootCauseText}${closedRef}`,
-  ].join('\n');
+    r.rootCause + closedRef,
+  ].join(String.fromCharCode(10));
+  return redactSelfReport(body, { home, env });
 }
 
 export async function diagnosePddFailure(run = {}, cause = {}, ports = {}) {
@@ -722,15 +843,15 @@ export async function diagnosePddFailure(run = {}, cause = {}, ports = {}) {
     },
   }, { home, env });
 
-  let subagentResult = null;
   let sessionId = null;
+  let diagnosisOutput = null;
   let agentKind = ['codex', 'claude'].includes(ports.agent ?? run.agent) ? (ports.agent ?? run.agent) : 'codex';
   let configDir = null;
 
   if (typeof ports.diagnose === 'function') {
     const reply = await ports.diagnose({ run, cause: taskInput.cause, brief, taskInput });
-    sessionId = reply?.session?.id ?? reply?.session ?? randomUUID();
-    subagentResult = reply?.diagnosis ?? reply;
+    sessionId = reply?.session?.id ?? reply?.session ?? null;
+    diagnosisOutput = reply?.diagnosis ?? reply;
   } else {
     try {
       const profile = launchProfile(run);
@@ -758,7 +879,7 @@ export async function diagnosePddFailure(run = {}, cause = {}, ports = {}) {
       if (reply && (reply.code === undefined || reply.code === 0)) {
         const parsed = parseDiagnoseOutput(agentKind, reply.stdout);
         sessionId = parsed.session;
-        subagentResult = parsed.parsed;
+        diagnosisOutput = parsed.parsed;
       }
     } catch { /* Fallback to deterministic local source diagnosis below. */ }
   }
@@ -787,57 +908,18 @@ export async function diagnosePddFailure(run = {}, cause = {}, ports = {}) {
     } catch { /* Non-fatal if runDir is read-only in a synthetic test. */ }
   }
 
-  const rawRootCause = subagentResult?.rootCause;
-  const fileLine = (typeof rawRootCause === 'object' && rawRootCause?.fileLine) || subagentResult?.fileLine || sourceInfo.fileLine;
-  const rootCause = rawRootCause && typeof rawRootCause === 'object'
-    ? {
-        module: rawRootCause.module || module,
-        fn: rawRootCause.fn || fn,
-        line: rawRootCause.line || sourceInfo.line || 1,
-        fileLine,
-        explanation: rawRootCause.explanation || `${fileLine} in ${fn} (${code})`,
-      }
-    : {
-        module,
-        fn,
-        line: sourceInfo.line || 1,
-        fileLine,
-        explanation: typeof rawRootCause === 'string' && rawRootCause
-          ? rawRootCause
-          : `${fileLine} in \`${fn}\` (\`${code}\`)${sourceInfo.snippet ? `: \`${sourceInfo.snippet}\`` : ''}`,
-      };
-  const session = sessionId ? { id: sessionId, agent: agentKind, at: now } : null;
-  const title = redactSelfReport(
-    subagentResult?.title || `PDD ${cause.kind || 'failure'}: ${code} in ${module} (${fn})`,
-    { home, env }
-  );
-
-  const report = redactSelfReport({
+  const report = safePublicReport({
     side: 'pdd',
-    kind: cause.kind || 'command-crash',
-    title,
-    signature,
+    kind: cause.kind,
     code,
     module,
     fn,
-    fileLine,
-    command: cause.command || 'pdd',
-    summary: cause.summary || `${code} in ${module}:${fn}`,
-    problem: subagentResult?.problem || `${cause.command || 'A pdd command'} failed on the PDD/Autopilot side (${cause.kind || 'command-crash'}: \`${code}\` in \`${module}\` \`${fn}\`).`,
-    steps: subagentResult?.steps || `1. Run \`${cause.command || 'pdd workflow'}\` during automatic workflow run #${run.number ?? 'unknown'}.\n2. Observe \`${code}\` thrown at \`${fileLine}\`.`,
-    expected: subagentResult?.expected || `\`${cause.command || 'pdd'}\` completes its workflow transition or reports a normal refusal without crashing.`,
-    actual: subagentResult?.actual || cause.summary || `\`${cause.command || 'pdd'}\` failed with \`${code}\` at \`${fileLine}\`.`,
-    evidence: subagentResult?.evidence || cause.evidence || cause.summary || `${code} at ${fileLine}`,
-    versions: {
-      pdd: pddVersion,
-      agent: run.agent || agentKind,
-      node: process.version,
-      os: `${process.platform} ${process.arch}`,
-    },
-    rootCause,
-    session,
-  }, { home, env });
-
+    line: sourceInfo.line,
+    pddVersion,
+    agent: agentKind,
+    diagnosisLocation: readDiagnosisLocation(diagnosisOutput, signature, { fs, packageRoot }),
+  });
+  report.session = typeof sessionId === 'string' ? { id: sessionId, agent: agentKind, at: now } : null;
   report.body = formatSelfReportBody(report, { home, env });
   return report;
 }
@@ -883,8 +965,8 @@ function ensureCounters(holder) {
 
 function recordRunSelfReport(run, entry, ports = {}) {
   if (!run || typeof run !== 'object') return;
-  if (Array.isArray(run.selfReports)) run.selfReports.push(entry);
-  else run.selfReports = [entry];
+  run.selfReports = Array.isArray(run.selfReports) ? run.selfReports : [];
+  if (!run.selfReports.some(row => row?.id === entry.id)) run.selfReports.push(entry);
   if (typeof run.runDir === 'string') {
     try {
       updateRun(run.runDir, latest => {
@@ -902,6 +984,31 @@ function recordRunSelfReport(run, entry, ports = {}) {
   }
 }
 
+async function hasRuntimeWriteAccess(ports = {}) {
+  if (typeof ports.repoPermission === 'function') {
+    try {
+      const value = await ports.repoPermission(FORBIDDEN_RUNTIME_REPO);
+      if (typeof value === 'boolean') return value;
+      const permission = typeof value === 'string' ? value : value?.viewerPermission ?? value?.permission;
+      return ['WRITE', 'MAINTAIN', 'ADMIN'].includes(String(permission ?? '').toUpperCase());
+    } catch { return false; }
+  }
+  const exec = ports.execute ?? ports.execFile;
+  if (!exec) return false;
+  try {
+    const result = await exec('gh', ['repo', 'view', FORBIDDEN_RUNTIME_REPO, '--json', 'viewerPermission'], { purpose: 'self-report-access' });
+    if (result.code !== undefined && result.code !== 0) return false;
+    const parsed = JSON.parse(result.stdout || '{}');
+    return ['WRITE', 'MAINTAIN', 'ADMIN'].includes(String(parsed.viewerPermission ?? '').toUpperCase());
+  } catch { return false; }
+}
+
+function nextSelfReportEntryId(run, signature, action, at) {
+  const prefix = String(run?.runId ?? 'run') + ':' + signature + ':' + action + ':';
+  const existing = Array.isArray(run?.selfReports) ? run.selfReports.filter(row => String(row?.id ?? '').startsWith(prefix)).length : 0;
+  return prefix + at + ':' + (existing + 1);
+}
+
 export async function fileSelfReport(input = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const env = ports.env ?? process.env;
@@ -911,23 +1018,19 @@ export async function fileSelfReport(input = {}, ports = {}) {
   const config = input.config ?? ports.config ?? {};
   const run = input.run ?? null;
   const workingRepo = String(input.repo ?? state.repo ?? run?.repo ?? '').trim();
-
-  // Target repository guard: never file in promptdriven/prompt-runtime or in a working repo other than promptdriven/pdd.
-  if (input.targetRepo && String(input.targetRepo).toLowerCase() === FORBIDDEN_RUNTIME_REPO) {
-    throw Error(`Refusing to file in private repository ${FORBIDDEN_RUNTIME_REPO}; all self-reports go to ${SELF_REPORT_REPO}.`);
-  }
-  if (input.targetRepo && String(input.targetRepo).toLowerCase() !== SELF_REPORT_REPO) {
-    throw Error(`Refusing to file self-report in ${input.targetRepo}; self-reports must target ${SELF_REPORT_REPO}.`);
-  }
-  const targetRepo = SELF_REPORT_REPO;
-
   const side = input.side === 'runtime' ? 'runtime' : 'pdd';
-  const code = input.code || (side === 'runtime' ? `RUNTIME_${String(input.cause || 'NO_VERDICT').toUpperCase().replace(/[^A-Z0-9]+/g, '_')}` : 'ERR_PDD_CRASH');
-  const module = input.module || (side === 'runtime' ? 'runtime-service' : 'src/workflow-runner.mjs');
-  const fn = input.fn || (side === 'runtime' ? 'pdd-test' : 'unknown');
-  const signature = input.signature || buildSignature(code, module, fn);
-  const marker = `<!-- pdd:self-report:${signature} -->`;
-  const runtimeMarker = side === 'runtime' && input.cause ? `<!-- pdd:runtime-cause:${input.cause} -->` : null;
+  const requestedRepo = String(input.targetRepo ?? '').trim().toLowerCase();
+  if (requestedRepo && ![SELF_REPORT_REPO, FORBIDDEN_RUNTIME_REPO].includes(requestedRepo)) {
+    throw Error('Refusing to file self-report in ' + input.targetRepo + '; target must be ' + SELF_REPORT_REPO + ' or ' + FORBIDDEN_RUNTIME_REPO + '.');
+  }
+  if (side !== 'runtime' && requestedRepo === FORBIDDEN_RUNTIME_REPO) {
+    throw Error('PDD self-reports must target ' + SELF_REPORT_REPO + '.');
+  }
+  let targetRepo = SELF_REPORT_REPO;
+  const publicReport = safePublicReport(input);
+  const { code, module, fn, signature } = publicReport;
+  const marker = '<!-- pdd:self-report:' + signature + ' -->';
+  const runtimeMarker = side === 'runtime' ? '<!-- pdd:runtime-cause:' + publicReport.cause + ' -->' : null;
 
   const counters = ensureCounters(state);
 
@@ -941,17 +1044,18 @@ export async function fileSelfReport(input = {}, ports = {}) {
     }, ports);
     if (!consent.allowed) {
       counters.skipped++;
-      const entry = { id: `${run?.runId ?? 'run'}:${signature}:${now}`, at: now, action: 'skipped', reason: consent.reason || 'consent', side, signature, issue: null };
+      const entry = { id: nextSelfReportEntryId(run, signature, 'skipped', now), at: now, action: 'skipped', reason: consent.reason || 'consent', side, signature, issue: null };
       recordRunSelfReport(run, entry, ports);
       return { action: 'skipped', reason: consent.reason || 'consent', prompt: consent.prompt ?? null, issue: null, signature, targetRepo };
     }
   }
 
-  const pddVersion = input.pddVersion || packageVersion(fs, ports.packageRoot ?? PACKAGE_ROOT);
-  const title = redactSelfReport(
-    input.title || (side === 'runtime' ? `Runtime: ${input.cause || code}` : `PDD ${input.kind || 'failure'}: ${code} in ${module} (${fn})`),
-    { home, env }
-  );
+  targetRepo = side === 'runtime' && await hasRuntimeWriteAccess(ports) ? FORBIDDEN_RUNTIME_REPO : SELF_REPORT_REPO;
+  const detectedVersion = packageVersion(fs, ports.packageRoot ?? PACKAGE_ROOT);
+  const pddVersion = publicVersion(input.pddVersion) === 'unknown' ? publicVersion(detectedVersion) : publicVersion(input.pddVersion);
+  const title = publicReport.side === 'runtime'
+    ? 'Runtime report: ' + publicReport.cause
+    : 'PDD ' + publicReport.kind + ': ' + publicReport.code + ' in ' + publicReport.module + ' (' + publicReport.fn + ')';
 
   const searchIssues = ports.searchIssues ?? (async () => {
     const exec = ports.execute ?? ports.execFile;
@@ -973,16 +1077,12 @@ export async function fileSelfReport(input = {}, ports = {}) {
   const openMatch = matching.find(row => String(row?.state ?? 'open').toLowerCase() === 'open');
   const closedMatch = !openMatch ? matching.find(row => String(row?.state ?? '').toLowerCase() === 'closed') : null;
 
-  const occurrenceComment = redactSelfReport(
-    input.commentBody || [
-      `New occurrence of \`${signature}\`:`,
-      `- **Run:** ${run?.number ? `#${run.number}` : 'unknown'}${input.batch ? ` (batch \`${input.batch}\`)` : ''}`,
-      `- **Summary:** ${oneLine(input.summary || input.problem || title)}`,
-      `- **pdd version:** ${pddVersion}`,
-      `- **Observed at:** ${new Date(now).toISOString()}`,
-    ].join('\n'),
-    { home, env }
-  );
+  const occurrenceComment = redactSelfReport([
+    'New occurrence of ' + signature + ':',
+    '- **Summary:** ' + publicReport.summary,
+    '- **pdd version:** ' + pddVersion,
+    '- **Observed at:** ' + new Date(now).toISOString(),
+  ].join(String.fromCharCode(10)), { home, env });
 
   const commentOnIssue = async issue => {
     if (typeof ports.commentIssue === 'function') {
@@ -1005,9 +1105,9 @@ export async function fileSelfReport(input = {}, ports = {}) {
     await commentOnIssue(issue);
     counters.commented++;
     const blocker = side === 'runtime'
-      ? { kind: 'runtime', until: String(issue.number), cause: input.cause || input.kind || 'no-verdict', batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
+      ? { kind: 'runtime', until: String(issue.number), cause: publicReport.cause, batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
       : { kind: 'pdd', until: `#${issue.number}` };
-    const entry = { id: `${run?.runId ?? 'run'}:${signature}`, at: now, action: 'commented', side, signature, issue, blocker, parkReason: `Blocked on ${SELF_REPORT_REPO}#${issue.number} (${signature})` };
+    const entry = { id: nextSelfReportEntryId(run, signature, 'commented', now), at: now, action: 'commented', side, signature, issue, blocker, parkReason: `Blocked on ${SELF_REPORT_REPO}#${issue.number} (${signature})` };
     recordRunSelfReport(run, entry, ports);
     return { action: 'commented', issue, signature, targetRepo, blocker };
   }
@@ -1027,34 +1127,31 @@ export async function fileSelfReport(input = {}, ports = {}) {
       await commentOnIssue(fallbackIssue);
       counters.commented++;
       const blocker = side === 'runtime'
-        ? { kind: 'runtime', until: String(fallbackIssue.number), cause: input.cause || input.kind || 'no-verdict', batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
+        ? { kind: 'runtime', until: String(fallbackIssue.number), cause: publicReport.cause, batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
         : { kind: 'pdd', until: `#${fallbackIssue.number}` };
-      const entry = { id: `${run?.runId ?? 'run'}:${signature}`, at: now, action: 'commented', capped: true, side, signature, issue: fallbackIssue, blocker, parkReason: `Blocked on ${SELF_REPORT_REPO}#${fallbackIssue.number} (${signature})` };
+      const entry = { id: nextSelfReportEntryId(run, signature, 'commented', now), at: now, action: 'commented', capped: true, side, signature, issue: fallbackIssue, blocker, parkReason: `Blocked on ${SELF_REPORT_REPO}#${fallbackIssue.number} (${signature})` };
       recordRunSelfReport(run, entry, ports);
       return { action: 'commented', capped: true, issue: fallbackIssue, signature, targetRepo, blocker };
     }
     counters.skipped++;
-    const entry = { id: `${run?.runId ?? 'run'}:${signature}`, at: now, action: 'skipped', capped: true, reason: 'daily-cap', side, signature, issue: null };
+    const entry = { id: nextSelfReportEntryId(run, signature, 'skipped', now), at: now, action: 'skipped', capped: true, reason: 'daily-cap', side, signature, issue: null };
     recordRunSelfReport(run, entry, ports);
     return { action: 'skipped', capped: true, reason: 'daily-cap', issue: null, signature, targetRepo };
   }
 
-  // 3. File one new issue in promptdriven/pdd:
-  const labels = ['pdd:self-report', ...(side === 'runtime' ? ['pdd:runtime-report'] : [])];
-  const rawMaintainer = input.maintainer ?? config?.maintainer ?? config?.pddMaintainer ?? config?.selfReportMaintainer ?? config?.runtimeOwner ?? null;
+  // 3. File one new issue in the selected target repository:
+  const labels = side === 'runtime'
+    ? (targetRepo === SELF_REPORT_REPO ? ['pdd:self-report', 'pdd:runtime-report'] : [])
+    : ['pdd:self-report'];
+  const rawMaintainer = targetRepo === FORBIDDEN_RUNTIME_REPO
+    ? input.runtimeOwner ?? config?.runtimeOwner ?? null
+    : input.maintainer ?? config?.maintainer ?? config?.pddMaintainer ?? config?.selfReportMaintainer ?? null;
   const assignee = validLogin(rawMaintainer) ? rawMaintainer.trim() : null;
-  const body = input.body && String(input.body).includes(marker)
-    ? redactSelfReport(String(input.body), { home, env })
-    : formatSelfReportBody({
-        ...input,
-        side,
-        code,
-        module,
-        fn,
-        signature,
-        pddVersion,
-        closedMatch,
-      }, { home, env });
+  const body = formatSelfReportBody({
+    ...publicReport,
+    pddVersion,
+    closedMatch,
+  }, { home, env });
 
   let createdIssue;
   if (typeof ports.createIssue === 'function') {
@@ -1096,10 +1193,10 @@ export async function fileSelfReport(input = {}, ports = {}) {
 
   counters.filed++;
   const blocker = side === 'runtime'
-    ? { kind: 'runtime', until: String(issue.number), cause: input.cause || input.kind || 'no-verdict', batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
+    ? { kind: 'runtime', until: String(issue.number), cause: publicReport.cause, batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
     : { kind: 'pdd', until: `#${issue.number}` };
   const entry = {
-    id: `${run?.runId ?? 'run'}:${signature}`,
+    id: nextSelfReportEntryId(run, signature, 'filed', now),
     at: now,
     action: 'filed',
     side,
@@ -1195,26 +1292,31 @@ export async function reconcileSelfReports(state, ports = {}, config = {}, runs 
   const blockers = new Map();
   ensureCounters(state);
   const ledger = state.selfReportLedger ??= { seen: {} };
+  ledger.seen ??= {};
+
+  const save = async () => {
+    if (typeof ports.save !== 'function') return true;
+    try { return (await ports.save()) !== false; } catch { return false; }
+  };
+  const timestamp = () => typeof ports.now === 'function' ? ports.now() : Date.now();
 
   for (const run of runs) {
     if (!run || ['completed', 'cancelled'].includes(run.state) || ['waking', 'releasing'].includes(run.parking?.phase)) continue;
-    // Leave routeWait questions to routeQuestionsTick so we reuse and never duplicate #3112:
     if (run.routeWait || run.blockedOn?.kind === 'pdd-route') continue;
 
     let check = null;
     try { check = await ports.readCheck?.(run); } catch {}
     const cause = classifyFailureCause(run, { check, fs: ports.fs ?? nativeFs });
-    if (!cause.reportable) continue;
-    if (cause.side === 'runtime' && !includeRuntime) continue;
+    if (!cause.reportable || (cause.side === 'runtime' && !includeRuntime)) continue;
 
     const prior = run.parking?.blocker ?? run.blockedOn;
     const existingEntry = Array.isArray(run.selfReports)
-      ? run.selfReports.find(r => r?.signature === cause.signature && r?.issue?.number)
+      ? run.selfReports.find(row => row?.signature === cause.signature && row?.issue?.number)
       : null;
     if (existingEntry?.issue?.number) {
       const blocker = cause.side === 'runtime'
         ? { kind: 'runtime', until: String(existingEntry.issue.number), cause: cause.kind, batch: cause.batch ?? null, checkKind: 'pdd test', evidence: runtimeEvidence(run) }
-        : { kind: 'pdd', until: `#${existingEntry.issue.number}` };
+        : { kind: 'pdd', until: '#' + existingEntry.issue.number };
       blockers.set(run.number, blocker);
       continue;
     }
@@ -1222,24 +1324,23 @@ export async function reconcileSelfReports(state, ports = {}, config = {}, runs 
       blockers.set(run.number, prior);
       continue;
     }
-
     if (localOnly) {
-      // Hold unclassified parking on the local-only pre-pass so the GitHub pass can diagnose and file the issue first.
       blockers.set(run.number, { kind: 'pdd-pending', until: null });
       continue;
     }
 
-    const key = `${run.runId ?? run.number}:${cause.signature}`;
-    if (ledger.seen[key]?.issue?.number) {
-      const savedIssue = ledger.seen[key].issue;
+    const key = String(run.runId ?? run.number) + ':' + cause.signature;
+    let custody = ledger.seen[key] ?? { signature: cause.signature, filingAttempts: 0 };
+    if (custody.issue?.number) {
       const blocker = cause.side === 'runtime'
-        ? { kind: 'runtime', until: String(savedIssue.number), cause: cause.kind, batch: cause.batch ?? null, checkKind: 'pdd test', evidence: runtimeEvidence(run) }
-        : { kind: 'pdd', until: `#${savedIssue.number}` };
+        ? { kind: 'runtime', until: String(custody.issue.number), cause: cause.kind, batch: cause.batch ?? null, checkKind: 'pdd test', evidence: runtimeEvidence(run) }
+        : { kind: 'pdd', until: '#' + custody.issue.number };
       blockers.set(run.number, blocker);
       continue;
     }
+    if (custody.filingStatus === 'exhausted' || (custody.status === 'complete' && custody.action === 'skipped')) continue;
+    if (custody.action === 'skipped' && !custody.diagnosisResult) continue;
 
-    // Check consent before launching the diagnose subagent or touching GitHub:
     const consent = await resolveSelfReportConsent({
       repo: state.repo ?? run.repo,
       config,
@@ -1247,39 +1348,132 @@ export async function reconcileSelfReports(state, ports = {}, config = {}, runs 
       ask: ports.askConsent ?? ports.confirm,
     }, ports);
     if (!consent.allowed) {
-      if (!ledger.seen[key]) {
-        ledger.seen[key] = { at: ports.now ? ports.now() : Date.now(), action: 'skipped', reason: consent.reason };
+      if (!custody.consentRecorded) {
+        const at = timestamp();
+        custody = { ...custody, at, status: 'complete', action: 'skipped', reason: consent.reason || 'consent', consentRecorded: true };
+        ledger.seen[key] = custody;
         state.selfReports.skipped++;
         recordRunSelfReport(run, {
-          id: key,
-          at: ports.now ? ports.now() : Date.now(),
+          id: key + ':skipped',
+          at,
           action: 'skipped',
-          reason: consent.reason,
+          reason: consent.reason || 'consent',
           side: cause.side,
           signature: cause.signature,
           issue: null,
         }, ports);
+        await save();
       }
-      await ports.save?.();
       continue;
     }
 
+    const savedDiagnosis = Array.isArray(run.selfReports)
+      ? run.selfReports.find(row => row?.action === 'diagnosed' && row?.signature === cause.signature && row?.result)
+      : null;
+    let report = custody.diagnosisResult
+      ? safePublicReport(custody.diagnosisResult)
+      : savedDiagnosis?.result ? safePublicReport(savedDiagnosis.result) : null;
+    let diagnosisSession = custody.diagnosisSession ?? savedDiagnosis?.session ?? null;
+    if (report && !custody.diagnosisResult) {
+      custody = {
+        ...custody,
+        diagnosisAttempted: true,
+        diagnosisStatus: 'recovered-from-run',
+        diagnosisResult: report,
+        ...(diagnosisSession ? { diagnosisSession } : {}),
+      };
+      ledger.seen[key] = custody;
+      if (!await save()) continue;
+    }
+    if (!report && custody.diagnosisAttempted) {
+      report = safePublicReport({
+        side: cause.side, kind: cause.kind, cause: cause.kind, code: cause.code, module: cause.module, fn: cause.fn, line: cause.line,
+      });
+      custody = { ...custody, diagnosisStatus: 'recovered-from-attempt', diagnosisResult: report };
+      ledger.seen[key] = custody;
+      if (!await save()) continue;
+    }
+    if (!report) {
+      const startedAt = timestamp();
+      custody = {
+        ...custody,
+        at: custody.at ?? startedAt,
+        signature: cause.signature,
+        diagnosisAttempted: true,
+        diagnosisStatus: 'started',
+        diagnosisAt: startedAt,
+        filingAttempts: Number(custody.filingAttempts) || 0,
+      };
+      ledger.seen[key] = custody;
+      if (!await save()) continue;
+
+      let diagnosed;
+      try {
+        diagnosed = cause.side === 'pdd'
+          ? await diagnosePddFailure(run, cause, ports)
+          : safePublicReport({
+              side: 'runtime',
+              cause: cause.kind,
+              kind: cause.kind,
+              code: cause.code,
+              module: cause.module,
+              fn: cause.fn,
+              line: cause.line,
+            });
+      } catch {
+        diagnosed = safePublicReport({
+          side: cause.side,
+          cause: cause.kind,
+          kind: cause.kind,
+          code: cause.code,
+          module: cause.module,
+          fn: cause.fn,
+          line: cause.line,
+        });
+      }
+      diagnosisSession = diagnosed?.session ?? null;
+      report = safePublicReport(diagnosed ?? {
+        side: cause.side, cause: cause.kind, kind: cause.kind, code: cause.code, module: cause.module, fn: cause.fn, line: cause.line,
+      });
+      custody = {
+        ...custody,
+        diagnosisStatus: 'complete',
+        diagnosisResult: report,
+        ...(diagnosisSession ? { diagnosisSession } : {}),
+      };
+      ledger.seen[key] = custody;
+      recordRunSelfReport(run, {
+        id: key + ':diagnosed',
+        at: Number(diagnosisSession?.at) || startedAt,
+        action: 'diagnosed',
+        side: cause.side,
+        signature: cause.signature,
+        issue: null,
+        result: report,
+        ...(diagnosisSession?.id ? {
+          session: {
+            id: diagnosisSession.id,
+            agent: diagnosisSession.agent ?? run.agent ?? 'codex',
+            at: Number(diagnosisSession.at) || startedAt,
+          },
+        } : {}),
+      }, ports);
+      if (!await save()) continue;
+    }
+
+    const attempts = Number(custody.filingAttempts) || 0;
+    if (attempts >= MAX_SELF_REPORT_FILE_ATTEMPTS) {
+      ledger.seen[key] = { ...custody, filingStatus: 'exhausted' };
+      await save();
+      continue;
+    }
+
+    const attempt = attempts + 1;
+    custody = { ...custody, filingAttempts: attempt, filingStatus: 'attempting', lastAttemptAt: timestamp() };
+    ledger.seen[key] = custody;
+    if (!await save()) continue;
+
     try {
-      const report = cause.side === 'pdd'
-        ? await diagnosePddFailure(run, cause, ports)
-        : {
-            side: 'runtime',
-            cause: cause.kind,
-            kind: cause.kind,
-            code: cause.code,
-            module: cause.module,
-            fn: cause.fn,
-            batch: cause.batch,
-            signature: cause.signature,
-            title: `Runtime: ${cause.kind}`,
-            summary: cause.summary,
-            evidence: cause.evidence,
-          };
       const filed = await fileSelfReport({
         ...report,
         run,
@@ -1288,17 +1482,22 @@ export async function reconcileSelfReports(state, ports = {}, config = {}, runs 
         repo: state.repo ?? run.repo,
         checkConsent: false,
       }, ports);
-      ledger.seen[key] = {
-        at: ports.now ? ports.now() : Date.now(),
+      custody = {
+        ...custody,
+        status: 'complete',
         action: filed.action,
         issue: filed.issue ?? null,
+        targetRepo: filed.targetRepo ?? null,
+        filingStatus: 'complete',
       };
-      if (filed.blocker && filed.issue?.number) {
-        blockers.set(run.number, filed.blocker);
-      }
-      await ports.save?.();
-    } catch (error) {
-      ports.warn?.(`Self-report filing held for #${run.number}: ${oneLine(error.message)}`);
+      ledger.seen[key] = custody;
+      if (filed.blocker && filed.issue?.number) blockers.set(run.number, filed.blocker);
+      await save();
+    } catch {
+      const filingStatus = attempt >= MAX_SELF_REPORT_FILE_ATTEMPTS ? 'exhausted' : 'retry';
+      ledger.seen[key] = { ...custody, filingStatus, lastFailure: 'github-filing' };
+      await save();
+      ports.warn?.('Self-report filing attempt ' + attempt + ' of ' + MAX_SELF_REPORT_FILE_ATTEMPTS + ' failed for run #' + run.number + '; the saved diagnosis is retained.');
     }
   }
   return blockers;

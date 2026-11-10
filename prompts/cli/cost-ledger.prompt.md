@@ -116,7 +116,7 @@ optional ports.auditRecords (shared records already read under repository custod
 filtered by runId, in the same session inventory and deduplication. Read through
 the filesystem port. Repeated status reads never count a session twice.
 
-Include native self-report diagnose subagent sessions in `runDir/self-reports/*.json` with matching `runId` in the same session accounting and deduplication as workflow and auditor chats. Report self-report counts `selfReports: {filed, commented, skipped}` on each run row and at the report root in `costReport`, and include `self-reports X filed, Y commented, Z skipped` in `costStatusLines`.
+Include native self-report diagnose sessions from run.selfReports entries that carry session metadata, with the same session accounting and deduplication as workflow and auditor chats. A diagnosis-only entry does not increment outcome counts. Report only filed, commented and skipped self-report outcomes on each run row and at the report root in costReport, and include the same three counts in costStatusLines.
 
 ## Dependencies
 
