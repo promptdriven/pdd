@@ -15,7 +15,7 @@ export function classifyRuntimeFailure(check, health = null) {
   const expectationCodes = new Set(['check-plan-prerequisite', 'broken-test', 'invalid-input', 'interface-missing',
     'undefined-call-bound', 'recursive-call-bound', 'auth-required', 'blocked', 'expectation-failed', 'file-rule',
     'provider-call-cap', 'call-cap-reached']);
-  const rowCodes = row => [row.reason?.code, row.note?.code, row.provider?.code, row.code,
+  const rowCodes = row => [row.reason?.code, row.note?.code, row.error?.code, row.provider?.code, row.code,
     ...(Array.isArray(row.refusals) ? row.refusals.map(refusal => refusal?.code) : [])].filter(value => typeof value === 'string');
   if (open.some(row => rowCodes(row).some(code => expectationCodes.has(code)))) return null;
   if (open.some(row => row.state === 'refused' && !rowCodes(row).some(code => runtimeCodes.has(code)))) return null;
@@ -89,10 +89,14 @@ export async function reconcileRuntimeIncidents(state, ports, config, runs, {loc
       const marker = `<!-- pdd:runtime-cause:${record.cause} -->`;
       const reported = await ports.reportRuntimeCause({cause: record.cause, marker, title: `Runtime: ${record.cause}`,
         runs: Object.values(record.runs).map(({number, batch}) => ({number, batch})), runtimeOwner: config.runtimeOwner});
-      if (!Number.isSafeInteger(reported?.number) || reported.number < 1 || typeof reported.url !== 'string') continue;
-      record.issue = {number: reported.number, url: reported.url,
-        repository: typeof reported.repository === 'string' && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(reported.repository)
-          ? reported.repository : 'promptdriven/pdd'};
+      const identity = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/issues\/([1-9][0-9]*)$/.exec(reported?.url ?? '');
+      const repository = identity?.[1];
+      if (!Number.isSafeInteger(reported?.number) || reported.number < 1 || !identity
+        || identity[2] !== String(reported.number)
+        || reported.repository !== undefined && (typeof reported.repository !== 'string'
+          || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(reported.repository)
+          || reported.repository.toLowerCase() !== repository.toLowerCase())) continue;
+      record.issue = {number: reported.number, url: reported.url, repository};
       record.dirty = false;
     } catch { /* Keep the cause pending; the shared reporter owns retry and dedupe. */ }
   }

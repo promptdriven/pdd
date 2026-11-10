@@ -78,21 +78,41 @@ async function world(t) {
       if(args[1]==='reopen')i.state='open';
       return {code:0,stdout:''};
     }
+    if(args[0]==='api' && args.includes('graphql')) {
+      const issueNumber=Number(JSON.parse(opts.input).variables.issue),issue=issues.get(issueNumber);
+      const row=issue?{state:issue.state==='closed'?'CLOSED':'OPEN',timelineItems:{nodes:issue.mergedUrl?[{closer:{__typename:'PullRequest',url:issue.mergedUrl,merged:true}}]:[]}}:null;
+      return {code:0,stdout:JSON.stringify({data:{repository:{issue:row}}})};
+    }
     if(args[0]==='api' && /\/issues\/\d+$/.test(args[1]))return {code:0,stdout:JSON.stringify(issues.get(Number(args[1].split('/').at(-1)))??{state:'open'})};
     return exec(file,args,opts);
   };
   return {...w,issues,writes,reports};
 }
 const check=(f,code='runner-stopped',batch='20261101-120000-abcd')=>({kind:'pdd test',batch,at:f.clock,tests:['tests/value.json'],states:[{test:'tests/value.json',state:'partial',reason:{code}}]});
-for(const kind of ['dependency','pdd','pdd-route','runtime'])test(`3147 any issue close wakes ${kind} once`,async t=>{
+test('3147 a closed dependency issue stays parked until a merged pull request closes it',async t=>{
   const {f,tick,ports,issues,warnings}=await world(t);
-  issues.set(321,{number:321,state:'open',body:''});ports.installedPddCapabilities=[];
-  const held=f.record();held.state='paused';held.blockedOn={kind,until:kind==='pdd'||kind==='pdd-route'?'#321':'321'};save(f,held);
+  issues.set(321,{number:321,state:'open',body:''});
+  const held=f.record();held.state='paused';held.blockedOn={kind:'dependency',until:'321'};save(f,held);
   await tick();assert.equal(f.record().parking?.phase,'parked');
   issues.get(321).state='closed';await tick();
-  assert.equal(f.record().parking,undefined,'3147_CLOSED_ISSUE_MUST_WAKE');
+  assert.equal(f.record().parking?.phase,'parked','3147_CLOSED_UNMERGED_DEPENDENCY_STAYS_PARKED');
+  issues.get(321).mergedUrl='https://github.com/example/project/pull/654';await tick();
+  assert.equal(f.record().parking,undefined,'3147_MERGED_CLOSING_PR_WAKES_DEPENDENCY');
   const sent=deliveries(f).length;await tick();assert.equal(deliveries(f).length,sent);assert.deepEqual(warnings,[]);
 });
+
+for(const kind of ['pdd','pdd-route'])test('3147 a closed '+kind+' issue waits for installed capability evidence',async t=>{
+  const {f,tick,ports,issues,warnings}=await world(t);
+  issues.set(321,{number:321,state:'open',body:''});ports.installedPddCapabilities=[];
+  const held=f.record();held.state='paused';held.blockedOn={kind,until:'#321'};save(f,held);
+  await tick();assert.equal(f.record().parking?.phase,'parked');
+  issues.get(321).state='closed';await tick();
+  assert.equal(f.record().parking?.phase,'parked','3147_ISSUE_CLOSE_IS_NOT_INSTALLED_ROUTE_EVIDENCE');
+  ports.installedPddCapabilities=['issue-321'];await tick();
+  assert.equal(f.record().parking,undefined,'3147_INSTALLED_CAPABILITY_WAKES_PDD');
+  const sent=deliveries(f).length;await tick();assert.equal(deliveries(f).length,sent);assert.deepEqual(warnings,[]);
+});
+
 for(const code of ['runner-stopped','graph-provider-failure','step_timeout','service-restarted'])test(`3147 ${code} reports a Runtime cause through the shared port despite absent health`,async t=>{
   const {f,tick,ports,issues,writes,reports,warnings}=await world(t);ports.runtimeHealth=async()=>({state:'access',detail:'HTTP 401'});
   writeFileSync(join(f.source,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',trust:[],runtimeOwner:'runtime-team'}}));
@@ -107,7 +127,11 @@ for(const code of ['runner-stopped','graph-provider-failure','step_timeout','ser
   await tick();assert.equal(issues.size,1);assert.equal(reports.length,1);assert.equal(writes.length,0);
   issues.values().next().value.state='closed';await tick();
   assert.equal(f.record().parking,undefined,'3147_RUNTIME_CLOSURE_MUST_WAKE');
-  assert.equal(f.record().done.check,undefined);assert.deepEqual(f.record().gate,held.gate);
+  assert.deepEqual(f.record().done.check,held.done.check,'3147_RUNTIME_WAKE_PRESERVES_SAVED_CHECK_ID');
+  assert.deepEqual(f.record().gate,held.gate);
+  assert.match(deliveries(f)[0][3],/pdd test --read 20261101-120000-abcd/,'3147_RUNTIME_WAKE_READS_SAME_BATCH');
+  assert.match(deliveries(f)[0][3],/pdd workflow resend 17 --said -/,'3147_RUNTIME_WAKE_REQUIRES_PERSON_AUTHORIZATION');
+  assert.doesNotMatch(deliveries(f)[0][3],/--cache-clear/,'3147_RUNTIME_WAKE_NEVER_RECOMMENDS_AUTOMATIC_RESEND');
   const sent=deliveries(f).length;await tick();assert.equal(f.record().parking,undefined,'3147_RUNNING_APPROVE_PR_RETRY_IS_NOT_A_PERSON_BLOCKER');
   assert.equal(deliveries(f).length,sent,'3147_RUNTIME_WAKE_MUST_NOT_LOOP');assert.deepEqual(warnings,[]);
 });
@@ -169,11 +193,11 @@ test('3147 repeated Runtime causes do not configure a client queue',async t=>{
   assert.equal(f.record().parking?.blocker.kind,'runtime');
 });
 
-test('3147 binding issue closure and status expose the current wake condition',async t=>{
+test('3147 binding issue closure does not wake, and status names the base or reply condition',async t=>{
   const {f,tick,issues,stateFile}=await world(t);issues.set(321,{number:321,state:'open',body:''});
-  const held=f.record();held.state='stuck';held.blockedOn={kind:'binding',until:'321'};save(f,held);
-  await tick();const status=JSON.parse(readFileSync(stateFile));assert.ok(status.parking.waits?.some(row=>row.number===17&&row.condition.includes('321')),'3147_STATUS_WAKE_CONDITION');
-  issues.get(321).state='closed';await tick();assert.equal(f.record().parking,undefined,'3147_BINDING_ISSUE_CLOSE_WAKE');
+  const held=f.record();held.state='stuck';held.blockedOn={kind:'binding',until:'321'};held.parkReason='binding refusal in value.prompt.md';save(f,held);
+  await tick();const status=JSON.parse(readFileSync(stateFile));assert.ok(status.parking.waits?.some(row=>row.number===17&&/base|reply/i.test(row.condition)),'3147_STATUS_WAKE_CONDITION');
+  issues.get(321).state='closed';await tick();assert.equal(f.record().parking?.phase,'parked','3147_BINDING_ISSUE_CLOSE_IS_NOT_EVIDENCE');
 });
 
 test('3147 Runtime reporting is injected and never writes an issue directly',async t=>{
@@ -262,4 +286,66 @@ test('3147 one shared report receives all runs with the same cause',async()=>{
   const blockers=await reconcileRuntimeIncidents(state,ports,{runtimeOwner:'runtime-team'},runs);
   assert.equal(reports.length,1);assert.deepEqual(reports[0].runs,[{number:17,batch:'20261101-120000-abcd'},{number:18,batch:'20261101-120001-abcd'}]);
   assert.equal(reports[0].runtimeOwner,'runtime-team');assert.equal(blockers.get(17).until,'501');assert.equal(blockers.get(18).until,'501');
+});
+
+test('3147 first successful binding refresh fills a missing baseline',async t=>{
+  const {f,tick,ports}=await world(t);
+  const held=f.record();held.state='stuck';held.parkReason='binding-missing: value.prompt.md';save(f,held);
+  ports.readRunResults=()=>[{kind:'pdd test',tests:['tests/value.json'],states:[{test:'tests/value.json',state:'not run',reason:{code:'binding-missing'}}]}];
+  const execute=ports.run;let failFetch=true;
+  ports.run=async(file,args,opts)=>{
+    if(file==='git'&&args[0]==='fetch'&&failFetch){failFetch=false;return {code:1,stdout:'',stderr:'temporary fetch error'};}
+    return execute(file,args,opts);
+  };
+  await tick();
+  assert.equal(f.record().parking?.phase,'parked');
+  assert.equal(f.record().parking?.blocker.revision,undefined,'3147_FAILED_REFRESH_HAS_NO_BASELINE');
+  await tick();
+  const baseline=f.record().parking?.blocker.revision;
+  assert.match(baseline,/^[a-f0-9]{64}$/,'3147_FIRST_SUCCESSFUL_REFRESH_SAVES_BASELINE');
+  writeFileSync(join(f.source,'value.prompt.md'),'changed on the base');
+  f.git(f.source,'add','.');f.git(f.source,'commit','-m','Change the owning prompt');
+  f.git(f.source,'update-ref','refs/remotes/origin/main','HEAD');
+  await tick();
+  assert.equal(f.record().parking,undefined,'3147_CHANGED_BASE_WAKES_AFTER_BASELINE');
+});
+
+test('3147 provider call caps in error.code stay local after result projection',()=>{
+  for(const code of ['provider-call-cap','call-cap-reached']) {
+    const result=classifyRuntimeFailure({states:[{test:'tests/value.json',state:'partial',error:{code,message:'configured cap reached'}}]});
+    assert.equal(result,null,'3147_ERROR_CODE_CAP_IS_NOT_RUNTIME');
+  }
+});
+
+test('3147 confirmed issue URL supplies repository; mismatched identity stays parked',async()=>{
+  const baseCheck={kind:'pdd test',batch:'20261110-120000-abcd',at:1,states:[{state:'partial',reason:{code:'runner-stopped'}}]};
+  const run={number:17,runId:'runtime-run',state:'stuck',parkReason:'Runtime check stopped'};
+  const portsFor=reported=>{
+    let closedReads=0;
+    const ports={now:()=>10,busy:async()=>false,readCheck:async()=>baseCheck,health:async()=>null,save:async()=>true,
+      reportRuntimeCause:async()=>reported,issueClosed:async issue=>{closedReads++;return false;}};
+    return {ports,closedReads:()=>closedReads};
+  };
+  const valid=portsFor({number:501,url:'https://github.com/team/private-runtime/issues/501'});
+  const state={repo:'example/project'};
+  const blockers=await reconcileRuntimeIncidents(state,valid.ports,{},[run]);
+  assert.equal(blockers.get(17).repository,'team/private-runtime','3147_REPORTER_URL_DERIVES_PRIVATE_REPOSITORY');
+  assert.equal(state.runtimeIncidents.causes['runner-stopped'].issue.repository,'team/private-runtime');
+  assert.equal(valid.closedReads(),1);
+
+  const invalid=portsFor({number:501,url:'https://github.com/team/private-runtime/issues/501',repository:'promptdriven/pdd'});
+  const state2={repo:'example/project'};
+  const refused=await reconcileRuntimeIncidents(state2,invalid.ports,{},[run]);
+  assert.equal(refused.get(17).until,null,'3147_MISMATCHED_REPORTER_IDENTITY_IS_NOT_CONFIRMED');
+  assert.equal(state2.runtimeIncidents.causes['runner-stopped'].dirty,true);
+  assert.equal(state2.runtimeIncidents.causes['runner-stopped'].issue,null);
+  assert.equal(invalid.closedReads(),0);
+
+  const incomplete=portsFor({number:501,repository:'team/private-runtime'});
+  const state3={repo:'example/project'};
+  const missingUrl=await reconcileRuntimeIncidents(state3,incomplete.ports,{},[run]);
+  assert.equal(missingUrl.get(17).until,null,'3147_REPORTER_WITHOUT_CONFIRMED_URL_STAYS_PARKED');
+  assert.equal(state3.runtimeIncidents.causes['runner-stopped'].dirty,true);
+  assert.equal(state3.runtimeIncidents.causes['runner-stopped'].issue,null);
+  assert.equal(incomplete.closedReads(),0);
 });

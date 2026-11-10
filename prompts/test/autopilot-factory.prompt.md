@@ -13,7 +13,8 @@ its `{exitCode,message}` result, including confirmed failure and unconfirmed
 delivery. Saving an incident can return zero even if delivery fails. Keep open
 incident suppression and material updates observable; never confirm every call.
 GitHub must retain mutations and answer REST, GraphQL, claims, PR head/check readback
-and merge requests. Reject unsupported service operations. The interpreter must
+and merge requests. For dependency wake, GraphQL reports a closing pull request only
+when a merged PR actually closed the named issue; closed state alone is not proof. Reject unsupported service operations. The interpreter must
 support verdict, no verdict, refusal and delayed completion. Scripted workers
 read the actual bundled workflow and step briefs and use public done, gate,
 park, open, resend, evidence and base-check commands. They must not write native
@@ -156,7 +157,7 @@ The parent alert adapter gives the real alert owner the same injected GitHub exe
 
 ## Park wake and Runtime incidents (#3147)
 
-Add one factory scenario for each behavior: any-close wake for named dependency/PDD/route/Runtime issues; binding wake for owning prompt or interface base change with unrelated-change negative control; cause-based Runtime failure parking through the injected shared reporter boundary, with no direct issue writes; three same-cause failures do not configure a client check throttle; recovery by a later same-kind verdict with one send per park; another run sending its check while a failed run parks; and status naming every parked run's wake condition. Replace the lost-verdict person-resend scenario with automatic incident recovery. Keep controlled service fakes and private queues. New regression expectations must fail on the candidate base for their named defect, not a crash or missing import.
+Add one factory scenario for each behavior: a dependency wake needs a merged pull request that closed the named issue; PDD and route waits need installed capability or ancestor-commit evidence, not issue closure alone; Runtime wake reads the same saved batch and preserves check custody; and binding wake needs an owning prompt or interface change on the base, with an unrelated-change negative control. Runtime cause handling parks only affected runs through the optional shared reporter boundary, with no direct issue writes. Three same-cause failures do not configure a client check throttle. Another run continues while a failed run parks. Status names each parked run's wake condition. Runtime recovery never starts a paid check or resends an uncertain request; a new attempt needs the existing explicit synthetic person authorization. Keep controlled service fakes and private queues. New regression expectations must fail on the candidate base for their named defect, not a crash or missing import.
 
 ## Dependencies
 

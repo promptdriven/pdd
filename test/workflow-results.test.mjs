@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRunResults, resultLines, noResultLine, usableResult, checkCause } from '../src/workflow-results.mjs';
 import { validateProofRecord } from '../src/workflow-prove.mjs';
+import { classifyRuntimeFailure } from '../src/autopilot-runtime.mjs';
 
 function folders(t) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-results-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -40,6 +41,22 @@ test('2904: reads the newest check and lint of this worktree since the run start
   assert.deepEqual(resultLines(results), [
     'pdd result: pdd test (batch 20261103-120000-bbbb, 2026-11-03T12:00:00Z, source current, engine 0123456789ab, model m): Prompt tests: ✓ 2 of 2 criteria; tests/a.json: passed',
     'pdd result: pdd lint (batch 20261103-113000-eeee, 2026-11-03T11:30:00Z): Lint: 0 of 1 tests pass. 0 AI calls. tests/a.json: partial (no-server-verdict)']);
+});
+
+
+test('3147: error-code provider caps survive saved-result projection and stay local', t => {
+  const f=folders(t);
+  for (const [index,code] of ['provider-call-cap','call-cap-reached'].entries()) {
+    const name='20261103-12000'+index+'-capx';
+    f.batch(name,{intent:'check',created_at:'2026-11-03T12:00:00Z',rows:[
+      {test:'tests/a.json',state:'unknown',error:{code,message:'configured provider cap reached'}}
+    ]});
+    const [check]=readRunResults({root:f.root,since},{env:f.env,capture:()=>{throw Error('no capture');}});
+    assert.equal(check.batch,name);
+    assert.equal(check.states[0].reason.code,code,'3147_ERROR_CODE_PRESERVED_IN_PUBLIC_REASON');
+    assert.equal(check.states[0].reason.message,'configured provider cap reached','3147_ERROR_MESSAGE_PRESERVED');
+    assert.equal(classifyRuntimeFailure(check),null,'3147_PROJECTED_CAP_IS_NOT_RUNTIME');
+  }
 });
 
 const phase = extra => ({ exitCode: null, signal: '', timedOut: false, outputLimited: false, stdoutTail: [], stderrTail: [], expectedFound: false, error: '', setupError: '', observedError: '', ...extra });

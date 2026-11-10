@@ -11,7 +11,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2a47f692dd11eae221b5f2cce66e2f7b276ca9098512e2ef5061a53fb191ba1e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: df87c2659b6ecf2750999708ec987da9320fd53e65a909eafcffec26fac5250c).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -5306,7 +5306,7 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
         if (route && fresh.question?.text === route.question && !fresh.question.answeredAt) delete fresh.question;
         delete fresh.routeWait;
       }
-      if (['runtime', 'binding'].includes(fresh.parking.blocker.kind) && inferredGate) delete fresh.done.check;
+      if (fresh.parking.blocker.kind === 'binding' && inferredGate) delete fresh.done.check;
       endRuntimeWait(fresh); delete fresh.blockedOn;
       // Consume the accepted stop before resume/delivery can save a new one.
       // Environment retry delivery still needs its cause for validation.

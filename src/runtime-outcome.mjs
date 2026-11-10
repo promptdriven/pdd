@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 9a0d07e75cccf95321abc8bc5bfb07552f87eda0a61b6896e653419100a99ba1).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: d33ab67971d4fa700b79a26a434c9b71fad07af767cf60b4663bbc1026bcb0b9).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
@@ -6,7 +6,7 @@ export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed'
 // The public result is independent of the transport state needed to resume a job.
 export function resultOutcome(row = {}) {
   const supplied = row.note ?? (row.reason && typeof row.reason === 'object' ? row.reason : null);
-  const originalCode = supplied?.code || row.code || (row.time_limit ? 'deadline' : null) || row.provider?.code || (row.state === 'sending' ? 'dispatch-uncertain' : null) || row.refusals?.[0]?.code;
+  const originalCode = supplied?.code || row.error?.code || row.code || (row.time_limit ? 'deadline' : null) || row.provider?.code || (row.state === 'sending' ? 'dispatch-uncertain' : null) || row.refusals?.[0]?.code;
   let code = ['check-busy', 'lint-busy'].includes(originalCode) ? 'server-busy' : originalCode === 'lint-pending' ? 'deadline' : originalCode;
   const states = { ready: 'waiting', queued: 'sent', running: 'sent', sending: 'partial', not_run: 'not run', unknown: 'partial' };
   let state = Object.hasOwn(states, row.state) ? states[row.state] : CHECK_STATES.includes(row.state) ? row.state : 'partial';
@@ -18,7 +18,7 @@ export function resultOutcome(row = {}) {
     failed: ['check-failed', 'A check failed.'], refused: ['admission-refused', 'Admission was refused.'],
     partial: ['no-server-verdict', 'No complete server verdict.'], 'not run': ['no-server-verdict', 'No server verdict for this test.'] };
   const [fallbackCode, fallbackMessage] = defaults[state];
-  const message = supplied?.message || (row.time_limit ? [row.time_limit.message, row.time_limit.fix].filter(Boolean).join(' ') : null) || (row.provider ? PROVIDER_TEXT : null) || row.message || (typeof row.reason === 'string' ? row.reason : null) || row.why || row.refusals?.[0]?.message || fallbackMessage;
+  const message = supplied?.message || row.error?.message || (row.time_limit ? [row.time_limit.message, row.time_limit.fix].filter(Boolean).join(' ') : null) || (row.provider ? PROVIDER_TEXT : null) || row.message || (typeof row.reason === 'string' ? row.reason : null) || row.why || row.refusals?.[0]?.message || fallbackMessage;
   return { state, reason: { code: code || fallbackCode, message } };
 }
 

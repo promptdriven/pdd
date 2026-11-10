@@ -273,9 +273,9 @@ test('factory 4: stuck run parks and its merged dependency wakes it to merge',as
   const before=w.record();await w.tick();
   assert.equal(w.record().parking?.phase,'parked',JSON.stringify({warnings:w.warnings,run:{state:w.record().state,origin:w.record().automaticOrigin,source:w.record().sourceRoot,chats:w.record().chats.map(c=>({area:c.area,session:c.session,state:c.state,closed:c.closed})),runtime:w.record().runtimeWait},state:{parking:w.state().parking,cwd:w.state().cwd,coordinatorId:w.state().coordinatorId,machine:w.state().machine}}));assert.equal(w.record().parking.blocker.kind,'dependency');
   assert.ok(!w.herdr.panes.some(p=>p.cwd===before.root),'GAP parking must give worker panes back');
-  w.github.close(18);
   const commit=w.git(w.remote,'rev-parse','main');
   w.github.prs.push({number:118,url:'https://github.com/example/project/pull/118',state:'MERGED',body:'Fixes #18',headRefName:'main',headRefOid:commit,baseRefName:'main',mergeCommit:{oid:commit}});
+  w.github.closeByPullRequest(18,118);
   w.github.issues.get(18).timeline.push({id:String(w.github.nextEvent++),event:'cross-referenced',actor:'example',created:w.time,source:{issue:{pull_request:{url:'https://api.github.com/repos/example/project/pulls/118'}}}});
   await w.tick();await w.tick();
   assert.ok(!w.record().parking || w.record().parking.phase!=='parked','GAP dependency merge did not wake the run');
@@ -698,14 +698,14 @@ test('factory 3125: a full workflow session admits healthy coordinator reuse in 
   assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });
 
-for(const kind of ['dependency','pdd','pdd-route'])test(`factory 3147: any issue close wakes ${kind}`,async t=>{
+for(const kind of ['dependency','pdd','pdd-route'])test(`factory 3147: closing an issue alone does not wake ${kind}`,async t=>{
   const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
   w.github.add(18,{title:'Blocking fix',body:'Fix the required route.',created:w.time,updated:w.time});
   const args=kind==='pdd-route'?['--route','native-replay','--until','#18']:['--blocker',kind,'--until',kind==='pdd'?'#18':'18'];
   await w.command(['workflow','park',...args,'--reason','Required fix #18'],{cwd:w.record().root});
   await w.tick();assert.equal(w.record().parking?.phase,'parked');
-  w.github.close(18);await w.tick();assert.equal(w.record().parking,undefined,'3147_FACTORY_ANY_CLOSE_WAKE');
-  const id=w.record().chats.at(-1).session.id;await w.tick();assert.equal(w.record().chats.at(-1).session.id,id);assert.deepEqual(w.leadActions,[]);
+  w.github.close(18);await w.tick();assert.equal(w.record().parking?.phase,'parked','3147_FACTORY_CLOSE_ALONE_IS_NOT_FIX_EVIDENCE');
+  assert.deepEqual(w.leadActions,[]);
 });
 
 test('factory 3147: binding hold wakes on its owning base contract only',async t=>{

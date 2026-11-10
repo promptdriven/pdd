@@ -11,7 +11,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2e0957fc01b633e152e043f910704c3837ae064c7c7f12819517807f44586bde).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ddb28754a77ccb266389480dfac3b17780fa8f77e08ee91de193d4a89aafc072).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -354,8 +354,20 @@ async function namedIssueClosed(until, state, p, repository = state.repo) {
   const number = /^(?:#)?([1-9][0-9]*)$/.exec(until ?? '')?.[1];
   if (!number || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? '')) return false;
   try {
-    const r = await p.execute('gh', ['api', `repos/${repository}/issues/${number}`], {purpose: 'dependencies'});
-    return r.code === 0 && JSON.parse(r.stdout).state === 'closed';
+    const result = await p.execute('gh', ['api', 'repos/' + repository + '/issues/' + number], {purpose: 'dependencies'});
+    return result.code === 0 && JSON.parse(result.stdout).state === 'closed';
+  } catch {return false;}
+}
+async function namedIssueMerged(until, state, p, repository = state.repo) {
+  const number = /^(?:#)?([1-9][0-9]*)$/.exec(until ?? '')?.[1];
+  if (!number || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? '')) return false;
+  try {
+    const reads = createDependencyReadPorts({cwd: state.cwd}, {
+      now: p.now, githubFloor: p.githubFloor,
+      execFile: (file, args, options) => p.execute(file, args, {purpose: 'dependencies', ...options}),
+    });
+    const fix = await reads.github.sortMergedFix({repository, issue: Number(number)});
+    return /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9][0-9]*$/.test(fix?.url ?? '');
   } catch {return false;}
 }
 async function bindingBase(run, state, p, retainedPaths, refresh = false) {
@@ -470,7 +482,10 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         const prior = run.parking?.blocker;
         const snapshot = await bindingBase(run, state, p, prior?.paths, !localOnly);
         const until = blocker.until ?? /#([1-9][0-9]*)/.exec(run.parkReason ?? '')?.[1] ?? null;
-        blocker = {...blocker, until, ...(snapshot ?? {}), ...(prior?.kind === 'binding' && prior.until === until ? prior : {})};
+        const sameBinding = prior?.kind === 'binding' && prior.until === until;
+        const baseline = {...(snapshot ?? {}), ...(sameBinding ? prior : {})};
+        if (sameBinding && !prior.revision && snapshot?.revision) baseline.revision = snapshot.revision;
+        blocker = {...blocker, until, ...baseline};
       }
       let interpreterBatch = null, interpreterCheck;
       if (blocker.kind === 'interpreter' && !interpreterWaitFor({...run, parking: null})) {
@@ -485,11 +500,11 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     },
     wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
       text: rule?.text ?? (run.parking.blocker.kind === 'runtime'
-        ? `Runtime cause ${run.parking.blocker.cause} is cleared. Read pdd test --read ${run.parking.blocker.batch} first and check for a newer own verdict. If there is still no verdict, send only its no-verdict tests once with the original --max-calls caps and --cache-clear. Keep passed and failed rows, approvals and independent questions. Runtime checks remain required.`
+        ? 'Runtime cause ' + run.parking.blocker.cause + ' is cleared. Read the same saved pdd test batch with pdd test --read ' + run.parking.blocker.batch + ' and inspect its receipt. Do not start a paid check, clear a cache or resend an uncertain request automatically. If no verdict is still saved, only a person may authorize a new attempt with pdd workflow resend ' + run.number + ' --said -. Keep passed and failed rows, approvals and independent questions. Runtime checks remain required.'
         : run.parking.blocker.kind === 'binding'
         ? 'The owning binding contract changed on the base. Read the saved pdd test result, then rerun the required prompt check for this run. Keep passed and failed rows, approvals and independent questions. Runtime checks remain required.'
         : ['pdd', 'pdd-route'].includes(run.parking.blocker.kind)
-        ? `The PDD blocker ${run.parking.blocker.until} has cleared. ${run.parking.blocker.until === '#2897' ? 'Recheck the PR 1 re-entry and current-main integration route.' : 'Recheck the supported route for this fix.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
+        ? 'The PDD blocker ' + run.parking.blocker.until + ' has cleared. ' + (run.parking.blocker.until === '#2897' ? 'Recheck the PR 1 re-entry and current-main integration route.' : 'Recheck the supported route for this fix.') + ' Continue this saved run from its retained work. Preserve approval gates and independent questions.' : undefined), expectedBlocker: run.parking.blocker},
       {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
@@ -498,7 +513,6 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       if (blocker.kind === 'unknown') return hasParkedReply(run, worker);
       if (blocker.kind === 'binding') {
         if (hasParkedReply(run, worker)) return true;
-        if (!localOnly && await namedIssueClosed(blocker.until, state, p)) return true;
         const snapshot = await bindingBase(run, state, p, blocker.paths, !localOnly);
         return Boolean(blocker.revision && snapshot?.revision && blocker.revision !== snapshot.revision);
       }
@@ -506,8 +520,9 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         || !localOnly && await namedIssueClosed(blocker.until, state, p, blocker.repository ?? state.repo);
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (['pdd', 'pdd-route'].includes(blocker.kind)) {
-        if (!localOnly && await namedIssueClosed(blocker.until, state, p)) return true;
-        const required = blocker.until === '#2897' ? 'capability:prompt-reentry' : /^#[1-9][0-9]*$/.test(blocker.until) ? `capability:issue-${blocker.until.slice(1)}` : blocker.until;
+        const required = blocker.until === '#2897' ? 'capability:prompt-reentry'
+          : /^#?[1-9][0-9]*$/.test(blocker.until ?? '') ? 'capability:issue-' + blocker.until.replace(/^#/, '')
+          : blocker.until;
         if (typeof required !== 'string') return false;
         if (required.startsWith('capability:')) return (p.installedPddCapabilities ?? WORKFLOW_CAPABILITIES).includes(required.slice(11));
         if (/^commit:[a-f0-9]{7,40}$/.test(required)) {
@@ -519,10 +534,8 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         return false;
       }
       if (localOnly) return false;
+      if (blocker.kind === 'dependency') return namedIssueMerged(blocker.until, state, p);
       if (p.blockerCleared) return await p.blockerCleared(run, blocker) === true;
-      if (blocker.kind === 'dependency') {
-        return namedIssueClosed(blocker.until, state, p);
-      }
       if (['ci', 'review'].includes(blocker.kind)) {
         const pr = run.pr?.at(-1);
         if (!pr?.url) return false;

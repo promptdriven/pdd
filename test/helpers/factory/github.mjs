@@ -11,6 +11,11 @@ export function factoryGithub(w) {
   const flag = (a,k) => a[a.indexOf(k)+1];
   const body = (a,o) => a.includes('--body-file') && flag(a,'--body-file')!=='-' ? readFileSync(flag(a,'--body-file'),'utf8') : String(o.input ?? (a.includes('--body')?flag(a,'--body'):''));
   const find = value => f.prs.find(pr=>pr.url===value || pr.number===Number(value));
+  f.closeByPullRequest = (issueNumber, pullNumber) => {
+    const issue=f.issues.get(Number(issueNumber)),pr=f.prs.find(row=>row.number===Number(pullNumber));
+    assert.ok(issue&&pr,'factory close needs an existing issue and pull request');
+    issue.closedByPullRequest=pr.number;f.close(issue.number);
+  };
   const restPr = pr => ({number:pr.number,state:pr.state.toLowerCase(),body:pr.body,merged:pr.state==='MERGED',merged_at:pr.mergedAt,merge_commit_sha:pr.mergeCommit?.oid,
     head:{sha:pr.headRefOid,ref:pr.headRefName},base:{ref:pr.baseRefName,repo:{full_name:f.repo}}});
   const original = f.gh;
@@ -66,9 +71,15 @@ export function factoryGithub(w) {
       assert.fail(`unsupported factory gh pr ${a[1]}`);
     }
     if(a[0]==='api') {
-      let endpoint=a.find(x=>x.startsWith('repos/')||x.startsWith('https://api.github.com/'));
+      let endpoint=a.includes('graphql')?'graphql':a.find(x=>x.startsWith('repos/')||x.startsWith('https://api.github.com/'));
       endpoint=endpoint?.replace('https://api.github.com/','');
       let value,handled=true;
+      if(endpoint==='graphql' && Number.isSafeInteger(Number(JSON.parse(o.input??'{}').variables?.issue))) {
+        const issue=f.issues.get(Number(JSON.parse(o.input).variables.issue));
+        const pull=issue?.closedByPullRequest && f.prs.find(row=>row.number===issue.closedByPullRequest);
+        value={data:{repository:{issue:issue?{state:issue.state==='closed'?'CLOSED':'OPEN',timelineItems:{nodes:pull?[{closer:{__typename:'PullRequest',url:pull.url,merged:pull.state==='MERGED'}}]:[]}}:null}}};
+        return ok(a.includes('--include')?`HTTP/2 200 OK\r\n\r\n${JSON.stringify(value)}`:value);
+      }
       if(endpoint===`repos/${f.repo}`)value={full_name:f.repo,owner:{login:f.owner},default_branch:'main'};
       else if(a.includes('PATCH') && /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(endpoint??'')) {
         assert.ok(a.includes('state=open'),'factory issue PATCH must reopen the issue');

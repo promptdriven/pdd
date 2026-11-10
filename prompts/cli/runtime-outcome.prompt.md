@@ -29,7 +29,7 @@ result names. Keep raw server refusal codes in refusal records.
 | unknown or missing verdict after submission | partial | no-server-verdict |
 | not_run, not run | not run | no-server-verdict |
 
-A supplied reason or note code wins over defaults. Map check-busy and lint-busy
+A supplied note or reason code wins over defaults. When those fields have no code, preserve a saved error.code before row-level fallback codes. Preserve the saved error message when no note or reason message is present. Map check-busy and lint-busy
 to server-busy. Map the internal recovery note lint-pending to public deadline
 when an invocation ends its wait for a running lint. During the original
 free lint wait, interruption uses interrupted instead. A saved read can retain

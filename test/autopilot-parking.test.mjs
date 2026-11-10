@@ -743,14 +743,22 @@ test('3091 process shutdown follows saved-session custody and frees panes only a
   await tick(); assert.equal(stopped.length, run.chats.length);
 });
 
-test('3147 dependency wakes on issue closure without a merged PR', async t => {
+test('3147 dependency waits for a merged pull request that closes the issue', async t => {
   const {f,tick,stateFile,ports}=await setup(t);const run=f.record();run.state='paused';run.blockedOn={kind:'dependency',until:'2897'};save(f,run);
-  await tick();assert.equal(f.record().parking?.phase,'parked');fullTicks(f,stateFile,ports);
-  let closed=false;const execute=f.ports.execFile;
-  f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='api'&&args[1]===`repos/${run.repo}/issues/2897`
-    ? {stdout:JSON.stringify({state:closed?'closed':'open'})}:execute(file,args,options);
-  await tick();assert.equal(f.record().parking?.phase,'parked');closed=true;await tick();
-  assert.equal(f.record().parking,undefined,'3147_DEPENDENCY_CLOSE');assert.equal(launches(f).length,1);
+  await tick();assert.equal(f.record().parking?.phase,'parked');
+  let closed=false,merged=false;const execute=f.ports.execFile;
+  f.ports.execFile=async(file,args,options)=>{
+    if(file==='gh'&&args[0]==='api'&&args.includes('graphql'))return {stdout:JSON.stringify({data:{repository:{issue:{
+      state:closed?'CLOSED':'OPEN',timelineItems:{nodes:merged?[{closer:{__typename:'PullRequest',url:'https://github.com/example/project/pull/24',merged:true}}]:[]}
+    }}}})};
+    if(file==='gh'&&args[0]==='api'&&args[1]==='repos/'+run.repo+'/issues/2897')return {stdout:JSON.stringify({state:closed?'closed':'open'})};
+    return execute(file,args,options);
+  };
+  fullTicks(f,stateFile,ports);
+  await tick();assert.equal(f.record().parking?.phase,'parked');
+  closed=true;await tick();assert.equal(f.record().parking?.phase,'parked','3147_CLOSED_WITHOUT_MERGED_PR_STAYS_PARKED');
+  merged=true;await tick();
+  assert.equal(f.record().parking,undefined,'3147_MERGED_CLOSING_PR_WAKES');assert.equal(launches(f).length,1);
 });
 
 for (const kind of ['ci', 'review']) test(`3091 ${kind} wake needs a completed result`, async t => {
