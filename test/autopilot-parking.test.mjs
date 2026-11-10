@@ -1755,7 +1755,7 @@ test('3157: explicit release of saved claim era A preserves same-machine replace
   assert.deepEqual(github.issues.get(17).labels.sort(), ['pdd:stuck', 'pdd:working']);
 });
 
-test('3157: cancel keeps retry state when local allocation is unreadable even after remote labels clear', async t => {
+test('3157: cancel keeps retry state when local allocation is unreadable and remote labels are already clear', async t => {
   const {cancelRun} = await import('../src/workflow-runner.mjs');
   const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
   const {renameSync, rmSync, mkdirSync} = await import('node:fs');
@@ -1763,13 +1763,16 @@ test('3157: cancel keeps retry state when local allocation is unreadable even af
   const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
   installClaimEra(github, run); save(f, run); github.label(17, 'pdd:stuck');
   wireClaimGithub(f, ports, github);
+  github.unlabel(17, 'pdd:working');
+  github.unlabel(17, 'pdd:stuck');
+  assert.deepEqual(github.issues.get(17).labels, [], 'remote labels are already clear before cancellation');
   const allocation = join(run.commonDir, 'pdd/worktree-assignments/issues/17.json'), unreadable = `${allocation}.unreadable`;
   renameSync(allocation, unreadable);
   mkdirSync(allocation);
   try {
     await cancelRun({ref: '17', cwd: f.source}, ports);
     assert.equal(JSON.parse(readFileSync(unreadable, 'utf8')).runId, run.runId, 'the saved local allocation remains available for recovery');
-    assert.deepEqual(github.issues.get(17).labels, [], 'remote cleanup can complete while local cleanup is unreadable');
+    assert.deepEqual(github.issues.get(17).labels, []);
     assert.equal(f.record().claimRelease?.state, 'pending');
   } finally {
     rmSync(allocation, {recursive: true, force: true});
