@@ -1,7 +1,7 @@
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5248e5492501722c55a80fef25a75dbf75d7ffc8621a0cc141e8cfd979808a0b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2c195c1dc0ae33578b5fcf0397de2d260baa786e65fc1ae2063b3f2b8679cd74).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -2484,11 +2484,18 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
 }
 
 async function recoverRestarts(context) {
-  if (context.singleAttempt || context.intent !== undefined && context.intent !== 'check') return [];
+  if (context.intent !== undefined && context.intent !== 'check') return [];
+  const liveRestarted = context.rows.some(row => {
+    if (!row.live) return false;
+    const id = row.request_ids.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
+    return sameJob(answer, id, 'check') && restarted(answer);
+  });
+  if (liveRestarted) context.continuationNotice = 'The interpreter restarted during a live check. The original result is unknown. pdd kept the same request ID and did not send another check. To run another live check, start a fresh pdd test.';
+  if (context.singleAttempt) return [];
   const eligible = context.rows.filter(row => {
     adoptClaims(context, row);
     const id = row.request_ids.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
-    return !row.restart_used && !row.restart_pending && !row.admitting && !context.restartDecisions?.has(id) && sameJob(answer, id, 'check') && restarted(answer);
+    return !row.live && !row.restart_used && !row.restart_pending && !row.admitting && !context.restartDecisions?.has(id) && sameJob(answer, id, 'check') && restarted(answer);
   });
   if (!eligible.length || context.interrupted || context.ports.now() >= context.deadline) return [];
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));

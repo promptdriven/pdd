@@ -160,6 +160,52 @@ test('LIVE-MODE2: live test config sends the three fields on check only, strips 
   assert.equal(secondJson.rows[0].cache_reason, 'runs every time: uses live resources');
 });
 
+// A live request with an unknown service-restarted receipt keeps its original identity for every recovery read.
+test('LIVE-MODE5: live service-restarted stays unknown and never creates a replacement request', async t => {
+  const { repo, home, state } = harbor(t, r => addLiveFiles(r));
+  let originalId = null;
+  const fake = await fakeRuntime(t, (entry, runtime) => {
+    if (entry.method === 'POST' && entry.command === 'lint') return { status: 200, json: runtime.lint(entry.request.requestId) };
+    if (entry.method === 'POST' && entry.command === 'check') {
+      originalId ??= entry.request.requestId;
+      return { status: 202, json: runtime.check(entry.request.requestId, 'queued') };
+    }
+    const id = entry.url.split('/').at(-1);
+    if (id === originalId) return { status: 200, json: runtime.job(id, 'check', 'unknown', {
+      exitCode: 1, refusals: [{ code: 'service-restarted' }],
+    }, 2) };
+    return { status: 200, json: runtime.check(id) };
+  });
+  const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin };
+  const first = portsFor(env);
+  const firstCode = await runCheck({ words: ['place-order'], options: { '--json': true }, cwd: repo }, first.ports);
+  const firstJson = JSON.parse(first.ports.stdout.text);
+  assert.deepEqual(fake.posts.filter(post => post.command === 'check').map(post => post.request.requestId), [originalId]);
+  assert.equal(firstCode, 3);
+  const batch = firstJson.batch;
+  assert.equal(firstJson.rows[0].state, 'partial');
+  assert.equal(firstJson.rows[0].request_id, originalId);
+  assert.equal(firstJson.rows[0].resource_mode, 'live');
+  assert.equal(firstJson.rows[0].calls, 2);
+  assert.match(first.ports.stderr.text, /fresh pdd test/i);
+  assert.deepEqual(fake.posts.filter(post => post.command === 'check').map(post => post.request.requestId), [originalId]);
+
+  for (const run of [
+    { words: [batch], options: { '--read': true } },
+    { words: [], options: { '--retry': batch } },
+  ]) {
+    const recovery = portsFor(env);
+    const code = await runCheck({ ...run, options: { '--json': true, ...run.options }, cwd: repo }, recovery.ports);
+    assert.equal(code, 3);
+    const json = JSON.parse(recovery.ports.stdout.text);
+    assert.equal(json.rows[0].state, 'partial');
+    assert.equal(json.rows[0].request_id, originalId);
+    assert.equal(json.rows[0].calls, 2);
+    assert.match(recovery.ports.stderr.text, /fresh pdd test/i);
+    assert.deepEqual(fake.posts.filter(post => post.command === 'check').map(post => post.request.requestId), [originalId]);
+  }
+});
+
 // Path safety, Git visibility, upload membership, symlink and size/schema policy refusals.
 test('LIVE-MODE3: path safety, untracked files, symlinks, upload omission, size limits and schema errors refuse locally with live-resource-policy', async t => {
   const cases = [
@@ -171,6 +217,15 @@ test('LIVE-MODE3: path safety, untracked files, symlinks, upload omission, size 
     ['simulated mode inside live', r => addLiveFiles(r, { live: { resource_mode: 'simulated', resource_bindings: 'runtime/live-resources.json', resource_run_config: 'run-config.json' } }), /resource_mode/],
     ['extra key inside live', r => addLiveFiles(r, { live: { resource_bindings: 'runtime/live-resources.json', resource_run_config: 'run-config.json', extra: true } }), /unknown keys/],
     ['wrong bindings schema', r => addLiveFiles(r, { bindings: { schema_version: 'wrong.v1', operations: [] } }), /prompt-runtime\.live-resource-bindings\.v1/],
+    ['invalid UTF-8 in bindings', r => {
+      addLiveFiles(r);
+      const path = join(r, 'runtime/live-resources.json');
+      const bytes = readFileSync(path);
+      const marker = Buffer.from('\"resource\": \"git\"');
+      const at = bytes.indexOf(marker);
+      assert.notEqual(at, -1);
+      writeFileSync(path, Buffer.concat([bytes.subarray(0, at), Buffer.from('\"resource\": \"'), Buffer.from([0xff]), Buffer.from('\"'), bytes.subarray(at + marker.length)]));
+    }, /valid UTF-8/],
     ['wrong run config schema', r => addLiveFiles(r, { runConfig: { schema_version: 'wrong.v1', mode: 'live', max_live_calls: 2, allow_live_writes: false } }), /prompt-runtime\.live-resource-run-config\.v1/],
     ['zero max_live_calls', r => addLiveFiles(r, { runConfig: { ...RUN_CONFIG_DOC, max_live_calls: 0 } }), /max_live_calls/],
     ['oversized bindings (> 65536 bytes)', r => {

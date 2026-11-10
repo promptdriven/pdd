@@ -1,11 +1,11 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b8fb2c58c2bfaf25fb4769a32462a5158f420f6dee5d762b7142612c08b43bf8).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2d8edd2f78aede3e6d70862836fca924800578873fa64ffb58de62dee7f12886).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, join, posix, isAbsolute } from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
+import { TextDecoder, isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
 import {loadRuntimeWorkspace as loadWorkspacePolicy,allowsRuntimePath,requireRuntimePath as requireWorkspacePath} from './runtime-workspace.mjs';
 
@@ -931,7 +931,7 @@ export function liveRefusal(root, found, doc) {
       }
     }
     let parsed;
-    try { parsed = JSON.parse(buf.toString('utf8')); } catch (error) {
+    try { parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buf)); } catch (error) {
       return { refusal: refusal('live-resource-policy', section, `${raw} is not valid UTF-8 JSON: ${error.message}`, { hint: LIVE_POLICY_HINT }), live: null };
     }
     if (field === 'resource_bindings') {
