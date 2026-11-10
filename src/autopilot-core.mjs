@@ -116,7 +116,7 @@ function evidenceReds(e, runtimeLine) {
     if (v?.state === 'pass' && v.total !== undefined && (v.total === 0 || v.passed < v.total)) bad.push(`${key}=pass (${v.passed}/${v.total})`);
   }
   if (e.formal?.state === 'failed') bad.push('formal=failed');
-  if (e.runtime && ['pass', 'not-run'].includes(runtimeLine) && e.runtime.state !== runtimeLine && e.runtime.state !== 'fail') bad.push(`runtime=${e.runtime.state} while the Runtime line says ${runtimeLine === 'pass' ? 'PASS' : 'not run'}`);
+  if (e.runtime && ['pass', 'not-run'].includes(runtimeLine) && e.runtime.state !== runtimeLine && e.runtime.state !== 'fail') bad.push(`runtime=${e.runtime.state} while the PR's Runtime line says ${runtimeLine === 'pass' ? 'PASS' : 'not run'}`);
   return bad.length ? [`The PR's Evidence line contradicts itself or the checks: ${bad.join(', ')}. Fix the cause, then write an Evidence line that matches what you ran.`] : [];
 }
 const evidenceText = e => e ? `Evidence: ${Object.keys(EVIDENCE).filter(key => e[key]).map(key => `${key}=${e[key].state}${e[key].total !== undefined ? ` (${e[key].passed}/${e[key].total})` : ''}`).join('; ')}` : 'Evidence: none';

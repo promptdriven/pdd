@@ -1859,7 +1859,7 @@ test('K5 a base change in a file of the PR (even outside the diff context) revie
 test('K6 evidence that contradicts itself or the Runtime line is red', async t => {
   for (const [body, finding] of [
     ['Runtime: PASS\nEvidence: runtime=fail (0/3); vectors=pass (0/0); tests=pass (3/9)', /runtime=fail, vectors=pass \(0\/0\), tests=pass \(3\/9\)/],
-    ['Runtime: not run (no interface)\nEvidence: runtime=pass (4/4); tests=pass (2/2)', /runtime=pass while the Runtime line says not run/],
+    ['Runtime: not run (no interface)\nEvidence: runtime=pass (4/4); tests=pass (2/2)', /runtime=pass while the PR's Runtime line says not run/],
     ['Runtime: PASS\nEvidence: formal=failed; tests=pass (2/2)', /formal=failed/]]) {
     const w = await coreWorld(t, { settings: { runs: 1 } });
     w.issue(17); await w.tick();
