@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-sort.prompt.md (sha256: a049bfb1a69bb2d4dc3afcb4885ab7c7cc7ebca04cb93bc936481fc0f1a94965).
+// Generated from prompts/cli/issue-sort.prompt.md (sha256: 01b35872eb8bf099b9f89fce12ebb45df09d8a2972e7f9e58dd4ab8d1848f61e).
 import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea } from './autopilot-areas.mjs';
 const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/.test(x);
@@ -80,7 +80,8 @@ export function sortPlan({ snapshot }) {
     if (record.question || record.status.state === 'unclear' || record.genuine.kind === 'unclear') { route.action = live ? 'hold' : 'question'; route.reason = 'needs-answer'; continue; }
     route.action = live ? 'hold' : 'work'; route.reason = live ? 'owned' : 'local';
   }
-  const saved = snapshot.sortContext.groups ?? [];
+  const assigned = key => snapshot.issues.find(x => x.key === key)?.assignees?.length;
+  const saved = (snapshot.sortContext.groups ?? []).map(group => ({ ...group, members: group.members.filter(key => !assigned(key)), umbrella: assigned(group.umbrella) ? '' : group.umbrella }));
   const umbrellaKeys = new Set(saved.filter(x => !x.merged && !x.members.includes(x.umbrella)).map(x => x.umbrella).filter(Boolean));
   const synthetic = issue => /<!-- pdd-issue-group:v1 ([a-z\d]+(?:-[a-z\d]+)*) -->/.test(issue.sortText ?? '');
   const byCause = new Map();
@@ -106,7 +107,7 @@ export function sortPlan({ snapshot }) {
     if (members.length < 2 && !old?.umbrella) continue;
     const keys = members.map(x => x.issue), area = [...new Set(members.map(x => x.area).filter(Boolean))].sort().join(',');
     const dedicated = members.length >= 3 || area.includes(',') || old?.umbrella && !old.members.includes(old.umbrella);
-    const recovered = snapshot.issues.filter(x => x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(`<!-- pdd-issue-group:v1 ${rootCause} -->`));
+    const recovered = snapshot.issues.filter(x => !assigned(x.key) && x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(`<!-- pdd-issue-group:v1 ${rootCause} -->`));
     if (dedicated && recovered.length > 1) {
       for (const match of recovered) { const route = routes.find(x => x.issue === match.key); if (route) { route.action = 'hold'; route.reason = 'group-umbrella-conflict'; } }
     }
@@ -127,7 +128,7 @@ export function projectSortGraph(snapshot, graph) {
   if (!snapshot.sortContext) return graph;
   const plan = sortPlan({ snapshot }), unsafeGroups = new Set();
   graph.groups = plan.groups;
-  const uncertainSibling = (area, cause) => snapshot.issues.some(issue => issue.key.startsWith(`https://github.com/${snapshot.repository.toLowerCase()}/issues/`) && issue.state === 'open' && issue.authority === 'trusted' && !selectedSort(snapshot, issue)
+  const uncertainSibling = (area, cause) => snapshot.issues.some(issue => !issue.assignees?.length && issue.key.startsWith(`https://github.com/${snapshot.repository.toLowerCase()}/issues/`) && issue.state === 'open' && issue.authority === 'trusted' && !selectedSort(snapshot, issue)
     && (issue.sorts ?? []).some(saved => saved.authority === 'trusted' && saved.intact && validSort(saved.record) && saved.record.rootCause === cause
       && resolveArea({ ...snapshot.sortContext, evidence: { paths: saved.record.paths, keywords: [issue.title, issue.sortText ?? ''], labels: issue.labels ?? [], area: saved.record.belongs.area } }).area.split(',').some(x => area.split(',').includes(x))));
   for (const group of plan.groups.filter(x => !x.merged)) {

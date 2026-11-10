@@ -10,6 +10,28 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {factoryWorld,put,readJson,valuePrompt,scenario} from './helpers/factory/world.mjs';
 
+test('factory intake: a mixed assigned and free batch starts the free issue', async t => {
+  const w = await factoryWorld(t);
+  w.github.add(19, { title: 'Person work', body: 'Keep this assigned.', assignees: ['person'], created: w.time - 1000, updated: w.time });
+  await w.start();
+  await w.reviewDependencies();
+  const completed = w.commands.filter(c => c.argv[0] === 'dependencies' && c.argv[1] === 'complete');
+  assert.ok(completed.length);
+  assert.ok(completed.every(c => JSON.parse(c.stdout).state === 'complete'), 'INTAKE_FACTORY_SORT_PENDING');
+  // Do not tick again: completion must deliver eligible free work immediately.
+  const packet = [...w.packets].reverse().find(p => p.issues.some(i => i.number === 17 && i.eligible));
+  assert.ok(packet, 'INTAKE_FACTORY_FREE_NOT_ELIGIBLE');
+  assert.ok(w.github.reviewComments(17).length > 0);
+  assert.equal(w.github.issues.get(17).comments.filter(c => c.body.includes('<!-- pdd-issue-sort:v1 -->')).length, 1);
+  const issue = packet.issues.find(i => i.number === 17);
+  w.github.claim(17, { coordinatorId: w.state().coordinatorId, machine: w.state().machine });
+  await w.command(['workflow', 'run', 'small-change', '17', '--agent', 'codex', '--origin', 'autopilot', '--decision-id', issue.decisionId, '--outcome', 'code'], { actor: 'coordinator', env: w.context() });
+  assert.equal(w.record(17).number, 17, 'INTAKE_FACTORY_FREE_NOT_STARTED');
+  assert.equal(existsSync(join(w.commonDir, 'pdd/runs/19/status.json')), false);
+  assert.equal(w.github.issues.get(19).comments.length, 0);
+  assert.deepEqual(w.leadActions, []);
+});
+
 test('factory 3139: independent scope checker rejects a dropped trusted request and shares docs exemption',async t=>{
   const {reviewSmallChangeChecklist}=await import('../src/workflow-small-change.mjs');
   const {sourceFingerprint}=await import('../src/workflow-replay.mjs');

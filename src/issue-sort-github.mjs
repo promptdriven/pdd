@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 7b10f3e6725b8945b62f7c7d0a5d766a3717a902eda351238a71df998507bcca).
+// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 5b778c0619d18fa61e12b685e099a3b4d512f6b6c4442ff544edfd8f1019b4ed).
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -46,7 +46,11 @@ export function prepareSortContext(snapshot) {
 }
 export function validateSortBatch({ snapshot, prepared, issues, sorts }) {
   if (!prepared.sortContext) { if (sorts !== undefined) throw Error('invalid-analysis'); return []; }
-  if (!Array.isArray(sorts) || sorts.some(x => !validSort(x)) || new Set(sorts.map(x => x.issue)).size !== sorts.length || sorts.length !== issues.length || sorts.some(x => !issues.includes(x.issue))) throw Error('invalid-analysis');
+  const assigned = key => [prepared, snapshot].some(value => value.issues.find(x => x.key === key)?.assignees?.length);
+  const required = issues.filter(key => !assigned(key));
+  if (!Array.isArray(sorts) || sorts.some(x => !validSort(x)) || new Set(sorts.map(x => x.issue)).size !== sorts.length || sorts.some(x => !issues.includes(x.issue))) throw Error('invalid-analysis');
+  sorts = sorts.filter(x => !assigned(x.issue));
+  if (sorts.length !== required.length || required.some(key => !sorts.some(x => x.issue === key))) throw Error('invalid-analysis');
   const current = new Map([...snapshot.issues, ...snapshot.inputs].map(x => [x.key, x.revision]));
   for (const record of sorts) {
     const issue = snapshot.issues.find(x => x.key === record.issue), old = prepared.issues.find(x => x.key === record.issue);
@@ -73,23 +77,35 @@ export function pacedSortWrites(ports, { cwd = ports.cwd ?? '', repository } = {
     if (ports.admitEffect && !await ports.admitEffect()) throw Error('sort-write-pending');
     if (ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
     attempts++;
-    const result = await action();
-    last = Date.parse((await ports.clock.now({})).iso);
-    return result;
+    try { return await action(); }
+    finally { last = Date.parse((await ports.clock.now({})).iso); }
   };
   Object.defineProperty(write, 'remaining', { get: () => 20 - attempts });
   return write;
 }
 export async function saveSortBatch({ repository, snapshot, sorts }, ports, write = pacedSortWrites(ports, { repository })) {
+  const failed = [], skipped = [];
   for (const record of sorts) {
     const issue = snapshot.issues.find(x => x.key === record.issue);
-    if (JSON.stringify(selectedSort(snapshot, issue)) === JSON.stringify(record)) continue;
-    const body = `Sort: ${record.belongs.kind}; ${record.status.state}; ${record.genuine.kind}.\n${record.status.evidence.join('\n')}\n\n<!-- pdd-issue-sort:v1 -->\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\``;
-    const route = { issue: record.issue, record };
-    const result = parse((await write(async () => { if (!await sortOwnership({ repository, route, areas: snapshot.sortContext.areas }, ports)) throw Error('sort-owner-changed'); return ports.github.appendComment({ repository, issue: Number(record.issue.split('/').pop()), body, checkOwnership: () => sortOwnership({ repository, route, areas: snapshot.sortContext.areas }, ports) }); })).json);
-    if (!result.id) throw Error('sort-write-pending');
-    (issue.sorts ??= []).push({ id: String(result.id), authority: 'trusted', intact: true, record });
+    if (issue?.assignees?.length) { skipped.push({ issue: record.issue, reason: 'assigned to a person' }); continue; }
+    let assigned = false;
+    const onAssigned = raw => { assigned = true; issue.assignees = raw.assignees.map(x => x.login); };
+    try {
+      if (JSON.stringify(selectedSort(snapshot, issue)) === JSON.stringify(record)) continue;
+      const body = `Sort: ${record.belongs.kind}; ${record.status.state}; ${record.genuine.kind}.\n${record.status.evidence.join('\n')}\n\n<!-- pdd-issue-sort:v1 -->\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\``;
+      const route = { issue: record.issue, record };
+      const result = parse((await write(async () => {
+        if (!await sortOwnership({ repository, route, areas: snapshot.sortContext.areas, onAssigned }, ports)) throw Error('sort-owner-changed');
+        return ports.github.appendComment({ repository, issue: Number(record.issue.split('/').pop()), body, checkOwnership: () => sortOwnership({ repository, route, areas: snapshot.sortContext.areas, onAssigned }, ports) });
+      })).json);
+      if (!result.id) throw Error('sort-write-pending');
+      (issue.sorts ??= []).push({ id: String(result.id), authority: 'trusted', intact: true, record });
+    } catch (error) {
+      const reason = assigned ? 'assigned to a person' : error.message || 'sort-write-pending';
+      (reason === 'assigned to a person' ? skipped : failed).push({ issue: record.issue, reason });
+    }
   }
+  return { failed, skipped };
 }
 export async function currentSortIssue({ cwd, repository, snapshot, route }, ports) {
   if (snapshot.issues.find(x => x.key === route.issue)?.sortSplit) return currentSplitParent({ repository, snapshot, route }, ports, route.action === 'close');
@@ -134,11 +150,12 @@ export async function currentSortIssue({ cwd, repository, snapshot, route }, por
   if (await readOwnerChoice({ labels: subject.labels, comments, timeline }, author => ports.authority.read({ repository, author })) !== (snapshot.issues.find(x => x.key === route.issue).sortOwnerChoice ?? '')) return false;
   return sortOwnership({ repository, route, areas: fresh.sortContext.areas }, ports);
 }
-async function sortOwnership({ repository, route, areas }, ports) {
+async function sortOwnership({ repository, route, areas, onAssigned }, ports) {
   // Keep these observations after all potentially long evidence reads. The native
   // update calls this again inside its mutation guard, after any admission wait.
   const owners = parse((await ports.owners.read({ repository, issues: [route.issue] })).json);
   const raw = parse((await ports.github.issue({ repository, issue: Number(route.issue.split('/').pop()) })).json);
+  if (raw.assignees?.length) onAssigned?.(raw);
   const labels = Array.isArray(raw.labels) ? raw.labels.map(x => typeof x === 'string' ? x : x.name) : null;
   return hash(JSON.stringify({ title: raw.title ?? '', body: raw.body ?? '' })) === route.record.inputs.find(x => x.key === route.issue)?.revision
     && labels !== null && hash(JSON.stringify(routingLabels(labels, areas))) === route.record.inputs.find(x => x.key === `${route.issue}#sort-labels`)?.revision
@@ -160,42 +177,45 @@ export async function routeSortIssues({ cwd, repository, snapshot, mode }, ports
     return !(noted && (route.action === 'link' || (route.action === 'question' || route.action === 'close' && mode === 'observe') && subject.labels?.includes(label)));
   });
   let admitted = 0;
+  const failed = [];
   for (const route of unfinished) {
     if (admitted >= 10) break;
-    if (ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
-    const issue = Number(route.issue.split('/').pop());
-    const unowned = () => currentSortIssue({ cwd, repository, snapshot, route }, ports);
-    if (!await unowned()) continue;
-    admitted++;
-    const marker = `<!-- pdd-issue-route:v1 -->\n<!-- ${routeIdentity(route, mode)} -->`;
-    const evidence = [...route.evidence, route.record.status.fix, route.record.genuine.duplicateOf, route.record.genuine.reason].filter(Boolean).join('\n');
-    const partsNote = route.reason === 'mixed-whole' ? `Whole issue, including all parts:\n${route.record.touchedAreas.map(x => `${x.area}: ${x.evidence.join('; ')}`).join('\n')}\n` : '';
-    const note = route.action === 'close' ? `${mode === 'auto' ? 'Closing' : 'Propose closing'}: ${route.reason}.\n${evidence}\nReopen this issue with current release evidence if the problem remains.`
-      : route.action === 'assign' ? `This issue belongs to @${route.owner} (${route.area}).\n${partsNote}${evidence}`
-      : route.action === 'link' ? `Please track this work in https://github.com/${route.owner.slice(5)} (${route.area}).\n${evidence}`
-      : route.record.question || 'Which area and owner should handle this issue?';
-    // The native comment port recovers equal bodies and verifies their readback.
-    const mutate = action => write(async () => {
-      // A pacing wait is not ownership evidence. Admit immediately before effect.
-      if (ports.settings && (await ports.settings.read({ cwd: cwd, repository })).mode !== mode) throw Error('sort-mode-changed');
-      if (!await unowned()) throw Error('sort-owner-changed');
-      return action();
-    });
-    if (route.action === 'question' || route.action === 'close' && mode === 'observe') {
-      if (!ports.github.sortUpdate) throw Error('sort-write-unavailable');
-      if (ports.github.ensureSortLabel) await ports.github.ensureSortLabel({ repository, label: route.action === 'question' ? 'pdd:needs-owner' : 'pdd:close-proposed', write: action => mutate(action) });
-      const updated = await mutate(() => ports.github.sortUpdate({ repository, issue, label: route.action === 'question' ? 'pdd:needs-owner' : 'pdd:close-proposed', checkOwnership: unowned }));
-      if (updated?.ok !== true) throw Error('sort-write-pending');
-    }
-    const noted = parse((await mutate(() => ports.github.appendComment({ repository, issue, body: `${note}\n\n${marker}`, checkOwnership: unowned }))).json);
-    if (!noted.id) throw Error('sort-write-pending');
-    if (route.action === 'assign' || route.action === 'close' && mode === 'auto') {
-      if (!ports.github.sortUpdate) throw Error('sort-write-unavailable');
-      const updated = await mutate(() => ports.github.sortUpdate({ repository, issue, checkOwnership: unowned, ...(route.action === 'assign' ? { assignee: route.owner } : { close: true }) }));
-      if (updated?.ok !== true) throw Error('sort-write-pending');
-    }
+    try {
+      if (ports.sortBudget && !await ports.sortBudget()) throw Error('sort-budget-pending');
+      const issue = Number(route.issue.split('/').pop());
+      const unowned = () => currentSortIssue({ cwd, repository, snapshot, route }, ports);
+      if (!await unowned()) continue;
+      admitted++;
+      const marker = `<!-- pdd-issue-route:v1 -->\n<!-- ${routeIdentity(route, mode)} -->`;
+      const evidence = [...route.evidence, route.record.status.fix, route.record.genuine.duplicateOf, route.record.genuine.reason].filter(Boolean).join('\n');
+      const partsNote = route.reason === 'mixed-whole' ? `Whole issue, including all parts:\n${route.record.touchedAreas.map(x => `${x.area}: ${x.evidence.join('; ')}`).join('\n')}\n` : '';
+      const note = route.action === 'close' ? `${mode === 'auto' ? 'Closing' : 'Propose closing'}: ${route.reason}.\n${evidence}\nReopen this issue with current release evidence if the problem remains.`
+        : route.action === 'assign' ? `This issue belongs to @${route.owner} (${route.area}).\n${partsNote}${evidence}`
+        : route.action === 'link' ? `Please track this work in https://github.com/${route.owner.slice(5)} (${route.area}).\n${evidence}`
+        : route.record.question || 'Which area and owner should handle this issue?';
+      // The native comment port recovers equal bodies and verifies their readback.
+      const mutate = action => write(async () => {
+        // A pacing wait is not ownership evidence. Admit immediately before effect.
+        if (ports.settings && (await ports.settings.read({ cwd: cwd, repository })).mode !== mode) throw Error('sort-mode-changed');
+        if (!await unowned()) throw Error('sort-owner-changed');
+        return action();
+      });
+      if (route.action === 'question' || route.action === 'close' && mode === 'observe') {
+        if (!ports.github.sortUpdate) throw Error('sort-write-unavailable');
+        if (ports.github.ensureSortLabel) await ports.github.ensureSortLabel({ repository, label: route.action === 'question' ? 'pdd:needs-owner' : 'pdd:close-proposed', write: action => mutate(action) });
+        const updated = await mutate(() => ports.github.sortUpdate({ repository, issue, label: route.action === 'question' ? 'pdd:needs-owner' : 'pdd:close-proposed', checkOwnership: unowned }));
+        if (updated?.ok !== true) throw Error('sort-write-pending');
+      }
+      const noted = parse((await mutate(() => ports.github.appendComment({ repository, issue, body: `${note}\n\n${marker}`, checkOwnership: unowned }))).json);
+      if (!noted.id) throw Error('sort-write-pending');
+      if (route.action === 'assign' || route.action === 'close' && mode === 'auto') {
+        if (!ports.github.sortUpdate) throw Error('sort-write-unavailable');
+        const updated = await mutate(() => ports.github.sortUpdate({ repository, issue, checkOwnership: unowned, ...(route.action === 'assign' ? { assignee: route.owner } : { close: true }) }));
+        if (updated?.ok !== true) throw Error('sort-write-pending');
+      }
+    } catch (error) { failed.push({ issue: route.issue, reason: error.message || 'sort-write-pending' }); }
   }
-  return plan;
+  return failed.length ? { ...plan, failed } : plan;
 }
 
 export function sortRequestFingerprint(snapshot, subjects) {
@@ -251,7 +271,7 @@ async function liveSortUmbrellas({ repository, rootCause }, ports) {
     seen.add(cursor);
     const page = parse((await ports.github.page({ repository, kind: 'issues', issue: 0, cursor })).json);
     if (page.error || !Array.isArray(page.items) || typeof page.next !== 'string') throw Error('sort-groups-unavailable');
-    for (const issue of page.items.filter(x => !x.pull_request && x.state === 'open' && x.body?.includes(marker))) {
+    for (const issue of page.items.filter(x => !x.assignees?.length && !x.pull_request && x.state === 'open' && x.body?.includes(marker))) {
       const authority = (await ports.authority.read({ repository, author: issue.user?.login ?? '' })).authority;
       if (authority === 'outsider') continue;
       if (authority !== 'trusted' || !issue.html_url?.startsWith(`https://github.com/${repository.toLowerCase()}/issues/`)
@@ -263,7 +283,7 @@ async function liveSortUmbrellas({ repository, rootCause }, ports) {
   return found;
 }
 const dedicatedGroup = group => group.umbrella && !group.members.includes(group.umbrella);
-export async function syncSortGroups({ cwd = '', repository, snapshot, mode }, ports, write = pacedSortWrites(ports, { cwd, repository })) {
+export async function syncSortGroups({ cwd = '', repository, snapshot, mode, failures = [] }, ports, write = pacedSortWrites(ports, { cwd, repository })) {
   if (!snapshot.sortContext || !['auto','observe'].includes(mode)) return [];
   const saved = snapshot.sortContext.groups ?? [], before = JSON.stringify(saved);
   // An ordinary close is not a merge. The native adapter checks the actual
@@ -290,54 +310,56 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode }, p
   let operations = 0;
   try {
     for (const group of groups.filter(x => !x.merged)) {
-      const needsUmbrella = group.members.length >= 3 || group.area.includes(',');
-      const workRoute = sortPlan({ snapshot }).routes.find(x => x.issue === group.umbrella);
-      const needsCreation = needsUmbrella && !dedicatedGroup(group) && workRoute?.reason !== 'owned' && mode === 'auto';
-      const needsNote = group.umbrella && snapshot.issues.find(x => x.key === group.umbrella)?.execution === 'running'
-        && JSON.stringify(group.notified ?? []) !== JSON.stringify(group.members);
-      if (!needsCreation && !needsNote) continue;
-      if (needsCreation && snapshot.issues.filter(x => x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(`<!-- pdd-issue-group:v1 ${group.rootCause} -->`)).length > 1) continue;
-      if (++operations > 10) break;
-      if (needsCreation) {
-        const marker = `<!-- pdd-issue-group:v1 ${group.rootCause} -->`;
-        // A trusted matching issue in the observed index recovers a lost save.
-        const recovered = snapshot.issues.filter(x => x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(marker));
-        if (recovered.length > 1) continue;
-        if (recovered.length === 1) group.umbrella = recovered[0].key;
-        else {
-          if (!ports.github.createSortUmbrella || !ports.github.withSortGroupAdmission) continue;
-          const umbrella = await ports.github.withSortGroupAdmission({ repository, rootCause: group.rootCause, write }, async () => {
-            // A second machine may have completed after our snapshot. Recover under
-            // shared admission, before any new issue POST.
-            const live = await liveSortUmbrellas({ repository, rootCause: group.rootCause }, ports);
-            if (live.length > 1) return '';
-            if (live.length === 1) return live[0];
-            const plan = sortPlan({ snapshot });
-            const body = `Shared cause: ${group.rootCause}.\nOne fix: correct this shared cause once for all linked member requirements.\n\n${group.members.map(issue => `- ${issue}\n${(plan.routes.find(x => x.issue === issue)?.evidence ?? []).join('\n')}`).join('\n')}\n\n${marker}`;
-            const created = await write(async () => {
-              if (!await current(group)) return null;
-              return ports.github.createSortUmbrella({ repository, title: `Global fix: ${group.rootCause}`, body });
+      try {
+        const needsUmbrella = group.members.length >= 3 || group.area.includes(',');
+        const workRoute = sortPlan({ snapshot }).routes.find(x => x.issue === group.umbrella);
+        const needsCreation = needsUmbrella && !dedicatedGroup(group) && workRoute?.reason !== 'owned' && mode === 'auto';
+        const needsNote = group.umbrella && snapshot.issues.find(x => x.key === group.umbrella)?.execution === 'running'
+          && JSON.stringify(group.notified ?? []) !== JSON.stringify(group.members);
+        if (!needsCreation && !needsNote) continue;
+        if (needsCreation && snapshot.issues.filter(x => !x.assignees?.length && x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(`<!-- pdd-issue-group:v1 ${group.rootCause} -->`)).length > 1) continue;
+        if (++operations > 10) break;
+        if (needsCreation) {
+          const marker = `<!-- pdd-issue-group:v1 ${group.rootCause} -->`;
+          // A trusted matching issue in the observed index recovers a lost save.
+          const recovered = snapshot.issues.filter(x => !x.assignees?.length && x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(marker));
+          if (recovered.length > 1) continue;
+          if (recovered.length === 1) group.umbrella = recovered[0].key;
+          else {
+            if (!ports.github.createSortUmbrella || !ports.github.withSortGroupAdmission) continue;
+            const umbrella = await ports.github.withSortGroupAdmission({ repository, rootCause: group.rootCause, write }, async () => {
+              // A second machine may have completed after our snapshot. Recover under
+              // shared admission, before any new issue POST.
+              const live = await liveSortUmbrellas({ repository, rootCause: group.rootCause }, ports);
+              if (live.length > 1) return '';
+              if (live.length === 1) return live[0];
+              const plan = sortPlan({ snapshot });
+              const body = `Shared cause: ${group.rootCause}.\nOne fix: correct this shared cause once for all linked member requirements.\n\n${group.members.map(issue => `- ${issue}\n${(plan.routes.find(x => x.issue === issue)?.evidence ?? []).join('\n')}`).join('\n')}\n\n${marker}`;
+              const created = await write(async () => {
+                if (!await current(group)) return null;
+                return ports.github.createSortUmbrella({ repository, title: `Global fix: ${group.rootCause}`, body });
+              });
+              if (created === null) return '';
+              const value = parse(created.json);
+              if (!value?.html_url?.startsWith(`https://github.com/${repository.toLowerCase()}/issues/`) || !Number.isSafeInteger(value.number) || value.number < 1
+                || value.html_url !== `https://github.com/${repository.toLowerCase()}/issues/${value.number}`) throw Error('sort-write-pending');
+              return value.html_url;
             });
-            if (created === null) return '';
-            const value = parse(created.json);
-            if (!value?.html_url?.startsWith(`https://github.com/${repository.toLowerCase()}/issues/`) || !Number.isSafeInteger(value.number) || value.number < 1
-              || value.html_url !== `https://github.com/${repository.toLowerCase()}/issues/${value.number}`) throw Error('sort-write-pending');
-            return value.html_url;
-          });
-          if (!umbrella) continue;
-          group.umbrella = umbrella;
+            if (!umbrella) continue;
+            group.umbrella = umbrella;
+          }
+          group.notified = [...group.members];
         }
-        group.notified = [...group.members];
-      }
-      if (needsNote) {
-        const result = await write(async () => {
-          if (!await current(group)) throw Error('sort-owner-changed');
-          return ports.github.appendComment({ repository, issue: Number(group.umbrella.split('/').pop()),
-            body: `Group members (${group.rootCause}):\n${group.members.map(x => `- ${x}`).join('\n')}\n\n<!-- pdd-issue-route:v1 -->\n<!-- group-${hash(JSON.stringify(group.members))} -->` });
-        });
-        if (!parse(result.json).id) throw Error('sort-write-pending');
-        group.notified = [...group.members];
-      }
+        if (needsNote) {
+          const result = await write(async () => {
+            if (!await current(group)) throw Error('sort-owner-changed');
+            return ports.github.appendComment({ repository, issue: Number(group.umbrella.split('/').pop()),
+              body: `Group members (${group.rootCause}):\n${group.members.map(x => `- ${x}`).join('\n')}\n\n<!-- pdd-issue-route:v1 -->\n<!-- group-${hash(JSON.stringify(group.members))} -->` });
+          });
+          if (!parse(result.json).id) throw Error('sort-write-pending');
+          group.notified = [...group.members];
+        }
+      } catch (error) { failures.push({ issue: group.umbrella || group.members[0], reason: error.message || 'sort-write-pending' }); }
     }
   } finally {
     if (JSON.stringify(groups) !== before) {
