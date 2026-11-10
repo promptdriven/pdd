@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 77bb67d1d5916395aa067321ed8d035f2e6eaa46ed57160168ca003935e38119).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 5b6f2a801517a96dc08b0e79576bc3029f519c3a5cd471d6284509e48ac2eccf).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -347,6 +347,14 @@ async function trusted(row, state, config, p) {
 }
 // A trusted claim comment that carries a lastSeen heartbeat.
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
+const sameClaimEra = (claim, origin) => {
+  const expected = origin?.claim ?? origin;
+  return Boolean(expected?.commentId && expected?.labelEventId
+    && String(claim?.commentId) === String(expected.commentId)
+    && String(claim?.labelEventId) === String(expected.labelEventId));
+};
+const completeClaimEra = claim => ['coordinatorId', 'machine', 'commentId', 'labelEventId']
+  .every(key => typeof claim?.[key] === 'string' && claim[key].trim());
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
 function parkingPorts(state, p, {localOnly = false} = {}) {
   const worker = {...workflowCleanupPorts(p,p), autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
@@ -1730,8 +1738,6 @@ async function runTick(stateFile, ports, completion) {
     const allKnownRuns = await (p.listRuns ?? listRuns)({ cwd: state.cwd, cancelled: true }, { ...p, execFile: async (file, args, options) => p.execute(file, args, options) });
     const sameIssue = (a,b) => a?.issue?.url?.toLowerCase() === b?.issue?.url?.toLowerCase()
       && a?.repo?.toLowerCase() === b?.repo?.toLowerCase() && samePath(a?.sourceRoot,b?.sourceRoot);
-    const sameClaimEra = (claim,origin) => Boolean(origin?.claim?.commentId && origin?.claim?.labelEventId
-      && String(claim.commentId) === String(origin.claim.commentId) && String(claim.labelEventId) === String(origin.claim.labelEventId));
     // Adopt only admitted claims backed by this checkout's unfinished local runs.
     // Remote proof permits retry if the process died before the local custody write.
     for (const candidate of allKnownRuns) {
@@ -1793,11 +1799,56 @@ async function runTick(stateFile, ports, completion) {
         recoveredRuns.add(candidate.runDir);
       } catch (error) { p.warn(`Claim recovery deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
     }
+    const self = { coordinatorId: state.coordinatorId, machine: state.machine };
+    const limitedFor = claim => takeoverLimited(claim, self);
+    const sameObservedIssue = (left, right) => String(left ?? '').toLowerCase() === String(right ?? '').toLowerCase();
+    const knownRunFor = claim => allKnownRuns.some(run =>
+      sameObservedIssue(run?.issue?.url, claim.issue) && run.repo?.toLowerCase() === state.repo.toLowerCase()
+      && samePath(run.sourceRoot, state.cwd));
+    const claimPorts = () => ({
+      ...workflowCleanupPorts(p, ports),
+      env: p.env, now: p.now, githubCache: etags, ...(githubFloor ? { githubFloor } : {}),
+      execFile: async (file, args, options = {}) => {
+        const reply = await p.execute(file, args, file === 'gh'
+          ? { ...options, purpose: options.purpose ?? 'claims' } : options);
+        if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
+        return reply;
+      },
+    });
+    for (const candidate of [...observedClaims]) {
+      if (candidate.active !== false || candidate.expired !== true || limitedFor(candidate)
+        || candidate.owner !== state.coordinatorId || candidate.coordinatorId !== state.coordinatorId
+        || candidate.machine !== state.machine || !completeClaimEra(candidate) || knownRunFor(candidate)
+        || githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) continue;
+      try {
+        const released = await p.scanAction(async () => {
+          const ownership = JSON.parse((await createDependencyReadPorts({ cwd: state.cwd }, claimPorts()).owners.read({
+            repository: state.repo, issues: [candidate.issue],
+          })).json);
+          const matches = Array.isArray(ownership?.claims) ? ownership.claims.filter(claim => sameObservedIssue(claim?.issue, candidate.issue)) : [];
+          const runs = Array.isArray(ownership?.runs) ? ownership.runs : null;
+          const current = matches.length === 1 ? matches[0] : null;
+          if (ownership?.runsKnown !== true || !runs || !runs.every(run => run && typeof run.issue === 'string')
+            || runs.some(run => sameObservedIssue(run.issue, candidate.issue))
+            || ownership.localOwner !== state.coordinatorId || ownership.localMachine !== state.machine
+            || current?.active !== false || current?.expired !== true || current.owner !== state.coordinatorId
+            || current.coordinatorId !== state.coordinatorId || current.machine !== state.machine
+            || !completeClaimEra(current) || !sameClaimEra(current, candidate)) return { state: 'skipped' };
+          return releaseParkedClaim({
+            cwd: state.cwd, repository: state.repo, claim: current,
+            coordinatorId: state.coordinatorId, machine: state.machine, reason: 'expired',
+          }, claimPorts());
+        });
+        if (released?.state === 'released') {
+          const index = observedClaims.findIndex(claim => sameClaimEra(claim, candidate));
+          if (index >= 0) observedClaims.splice(index, 1);
+        }
+      } catch (error) { p.warn(`Expired no-run claim cleanup deferred for ${candidate.issue}: ${line(error.message)}`); }
+    }
     etags.save();
     if (config.mode === 'auto' && recoveredRuns.size) await resumeStoppedWorkers(state, p, recoveredRuns);
     // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
     // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
-    const self = { coordinatorId: state.coordinatorId, machine: state.machine }, limitedFor = claim => takeoverLimited(claim, self);
     const limitedClaims = new Map(observedClaims.filter(limitedFor).map(claim => [claim.issue.toLowerCase(), claim]));
     const expiredClaims = new Map(observedClaims.filter(claim => claim.expired === true && claim.active === false && !limitedFor(claim)).map(claim => [claim.issue.toLowerCase(), claim]));
     if (state.githubIntake) state.githubIntake.claims = observedClaims;
@@ -2472,11 +2523,26 @@ export async function runAutopilotLauncher(input, ports = {}) {
       } });
       if (result.exitCode === 0 && previous) {
         const issueUrl = `https://github.com/${state.repo.toLowerCase()}/issues/${result.number}`;
-        if (Array.isArray(state.githubIntake?.claims))
-          state.githubIntake.claims = state.githubIntake.claims.filter(claim => claim?.issue?.toLowerCase() !== issueUrl);
-        if (Array.isArray(state.parkedNumbers))
-          state.parkedNumbers = state.parkedNumbers.filter(n => n !== result.number);
-        save(stateFile, state);
+        const sameIssue = claim => String(claim?.issue ?? '').toLowerCase() === issueUrl;
+        const ownClaim = claim => claim?.owner === state.coordinatorId && claim?.coordinatorId === state.coordinatorId && claim?.machine === state.machine;
+        const releasedClaim = Array.isArray(state.githubIntake?.claims)
+          ? state.githubIntake.claims.find(claim => sameIssue(claim) && ownClaim(claim) && completeClaimEra(claim)) : null;
+        const releaseRevision = previous.controlRevision ?? null;
+        let releaseAdmission;
+        try {
+          releaseAdmission = await claimAdmission(state, p);
+          const latest = releaseAdmission && read(stateFile);
+          if (latest?.repo?.toLowerCase() === result.repo?.toLowerCase() && (latest.controlRevision ?? null) === releaseRevision) {
+            if (releasedClaim && Array.isArray(latest.githubIntake?.claims)) {
+              const claims = latest.githubIntake.claims;
+              const kept = claims.filter(claim => !sameIssue(claim) || !ownClaim(claim) || !sameClaimEra(claim, releasedClaim));
+              if (kept.length !== claims.length) latest.githubIntake = { ...latest.githubIntake, claims: kept };
+            }
+            latest.controlRevision = randomUUID();
+            save(stateFile, latest);
+          }
+        } catch { /* A completed remote release never writes stale local state. */ }
+        finally { releaseAdmission?.(); }
       }
       return { exitCode: result.exitCode, message: result.message };
     }
