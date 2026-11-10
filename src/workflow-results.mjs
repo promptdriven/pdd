@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 12e25ce6aabc3495d93628602f7d5b05cb2f7527c980ef0c7bdbdb65a43e3af8).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: d186397c93ffaa4d13d051abd9af24c4b523895c6a48a361b322e6dbcd74428a).
 import {checkPlanResults,checkPlanResultLines} from './runtime-check-plan.mjs';
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -69,10 +69,21 @@ function identity(rows) {
 // A prove result that is not current is shown, but it is never pdd's proof.
 export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
+function runtimeCost(batch, summary) {
+  const saved = [batch?.cost, summary?.cost].filter(value => value !== undefined && value !== null);
+  if (!saved.length) return null;
+  const valid = saved.map(value => object(value) && Number.isSafeInteger(value.max_calls) && value.max_calls >= 1
+    && Number.isSafeInteger(value.max_live_calls) && value.max_live_calls >= 1
+    ? { max_calls: value.max_calls, max_live_calls: value.max_live_calls } : null);
+  if (valid.some(value => !value) || valid.some(value => value.max_calls !== valid[0].max_calls || value.max_live_calls !== valid[0].max_live_calls)) return null;
+  return valid[0];
+}
+
 function runtimeEvidence(batch, summary) {
   const coverage = batch.coverage ?? summary?.coverage;
+  const cost = runtimeCost(batch, summary);
   const nativeOnly = batch.rows.filter(row => Array.isArray(row?.native_only) && row.native_only.length).map(row => ({test:row.test,state:row.state,prompts:row.native_only.filter(item => item && typeof item.path === 'string' && typeof item.reason === 'string').map(item => ({path:item.path,reason:item.reason}))}));
-  return {...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:checkPlanResults(batch.check_plan,batch.rows)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
+  return {...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:checkPlanResults(batch.check_plan,batch.rows)} : {}), ...(cost ? {cost} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
 }
 
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the

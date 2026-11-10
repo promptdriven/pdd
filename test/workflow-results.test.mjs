@@ -35,6 +35,37 @@ test('2904: reads the newest check and lint of this worktree since the run start
     'pdd result: pdd lint (batch 20261103-113000-eeee, 2026-11-03T11:30:00Z): Lint: 0 of 1 tests pass. 0 AI calls. tests/a.json: partial (no-server-verdict)']);
 });
 
+test('workflow results retain validated saved live cost and do not invent it for simulated checks', t => {
+  const cost = { max_calls: 24, max_live_calls: 6 };
+  const live = folders(t);
+  live.batch('20261103-120000-bbbb', { intent: 'check', created_at: '2026-11-03T12:00:00Z',
+    check_plan: { schema_version: 'pdd.check-plan.v1', stories: [], prerequisites: [], calls: {}, max_live_calls: 6 },
+    max_live_calls: 6, cost, rows: [{ test: 'tests/a.json', state: 'passed', max_calls: 24, max_live_calls: 6 }] },
+  { summary_line: 'Prompt tests: ✓ 1 of 1 criteria', cost });
+  const [liveResult] = readRunResults({ root: live.root, since }, { env: live.env, capture: () => { throw Error('no capture'); } });
+  assert.deepEqual(liveResult.cost, cost);
+  assert.deepEqual(liveResult.checkPlan, { schema_version: 'pdd.check-plan.v1', stories: [], prerequisites: [], calls: {}, max_live_calls: 6 });
+
+  const simulated = folders(t);
+  simulated.batch('20261103-120000-cccc', { intent: 'check', created_at: '2026-11-03T12:00:00Z',
+    rows: [{ test: 'tests/a.json', state: 'passed', max_calls: 24 }] },
+  { summary_line: 'Prompt tests: ✓ 1 of 1 criteria' });
+  const [simulatedResult] = readRunResults({ root: simulated.root, since }, { env: simulated.env, capture: () => { throw Error('no capture'); } });
+  assert.equal(Object.hasOwn(simulatedResult, 'cost'), false);
+
+  const inconsistent = folders(t);
+  inconsistent.batch('20261103-120000-dddd', { intent: 'check', created_at: '2026-11-03T12:00:00Z', cost },
+    { summary_line: 'Prompt tests: ✓ 1 of 1 criteria', cost: { max_calls: 24, max_live_calls: 7 } });
+  const [inconsistentResult] = readRunResults({ root: inconsistent.root, since }, { env: inconsistent.env, capture: () => { throw Error('no capture'); } });
+  assert.equal(Object.hasOwn(inconsistentResult, 'cost'), false, 'conflicting saved copies do not become a claim');
+
+  const malformed = folders(t);
+  malformed.batch('20261103-120000-eeee', { intent: 'check', created_at: '2026-11-03T12:00:00Z', cost: { max_calls: 24.5, max_live_calls: 6 } },
+    { summary_line: 'Prompt tests: ✓ 1 of 1 criteria' });
+  const [malformedResult] = readRunResults({ root: malformed.root, since }, { env: malformed.env, capture: () => { throw Error('no capture'); } });
+  assert.equal(Object.hasOwn(malformedResult, 'cost'), false, 'invalid caps are not normalized or inferred');
+});
+
 const phase = extra => ({ exitCode: null, signal: '', timedOut: false, outputLimited: false, stdoutTail: [], stderrTail: [], expectedFound: false, error: '', setupError: '', observedError: '', ...extra });
 const proof = (runId, headSha, baseSha) => ({ v: 2, origin: 'pdd.workflow-prove.v2', runId, baseSha, headSha, test: 'node --test test/a.test.mjs', expect: 'defect-x',
   paths: ['test/a.test.mjs'], base: phase({ exitCode: 1, expectedFound: true, observedError: 'defect-x' }), head: phase({ exitCode: 0 }), outcome: 'proved', cleanupError: '', setupError: '', interruptSignal: '' });
