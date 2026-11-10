@@ -2,6 +2,10 @@
 
 I can follow a fixed group of issues and see what happened, including missing evidence and later deliveries.
 
+```pdd-boundary
+prompts/cli/metrics-model.prompt.md
+```
+
 ## Acceptance criteria
 
 1. A group containing issues 1 and 2 still contains two issues when issue 1 has two attempts and two pull requests.

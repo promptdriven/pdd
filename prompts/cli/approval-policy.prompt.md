@@ -22,9 +22,11 @@ Choose another quoted delimiter if a complete person-text line equals `PDD_SAID`
 
 ## Actor and evidence
 
-Module function `approvalActor({env})` returns `{kind,id}` describing the invoker, never claiming authenticated identity of the person whose words were supplied. Prefer concrete available session identity: a nonempty `CODEX_THREAD_ID` makes kind `agent` and id `CODEX_THREAD_ID=VALUE` (identifying Codex and its session). Otherwise a nonempty `CLAUDECODE` identifies the Claude invoker as `CLAUDECODE=VALUE`; do not claim it is a session ID. Only then fall back to nonempty `PDD_AGENT_SESSION` as `PDD_AGENT_SESSION=VALUE`. A generic PDD_AGENT_SESSION=1 must never hide a concrete Codex session. Otherwise kind is `terminal`, id is `USER`, falling back to `LOGNAME`, then `unknown`. Preserve the selected value verbatim; presentation safety belongs to the publisher. Reject environment values containing NUL (`\u0000`) with `invalid-actor-env`.
+Module function `approvalActor(env = process.env)` returns `{kind,id}` describing the invoker, never claiming authenticated identity of the person whose words were supplied. Prefer concrete available session identity: a nonempty `CODEX_THREAD_ID` makes kind `agent` and id `CODEX_THREAD_ID=VALUE` (identifying Codex and its session). Otherwise a nonempty `CLAUDECODE` identifies the Claude invoker as `CLAUDECODE=VALUE`; do not claim it is a session ID. Only then fall back to nonempty `PDD_AGENT_SESSION` as `PDD_AGENT_SESSION=VALUE`. A generic PDD_AGENT_SESSION=1 must never hide a concrete Codex session. Otherwise kind is `terminal`, id is `USER`, falling back to `LOGNAME`, then `unknown`. Preserve the selected value verbatim; do not reject or normalize NUL or other environment values. Runtime passes a supplied environment map as canonical JSON text on the `env` field, decodes it, and calls this native function with the map directly; this field is a transport wrapper, not a change to the public API.
 
-An approval evidence record is `{id,route,actor,at,words,prompts}`. `id` is a nonempty string identifying one approval event independently of its evidence content or clock; new events have distinct identities even with identical route/actor/time/words/prompts. Copies of the same event in gate history and the journal retain the same id; retries retain it. Legacy evidence without id remains readable and does not acquire fabricated historical provenance. Identity allocation uses injected native dependencies when it needs external state; no particular encoding or private allocation algorithm is required. `route` is `said`, `terminal`, `chat` (existing native Herdr evidence), `automatic-check-pass`, `card-choice` or `prompt-reentry`. The last three are pdd's own records for a workflow run ([normal-run gates](workflow-runner.prompt.md#normal-run-gates)): `automatic-check-pass` for a prompt PR gate that a verified full check pass opened, and `card-choice` for the code gate that the person's Story-card choice covers. `prompt-reentry` records resuming an existing code scope after a returned automatic prompt repair. Its `basis` names `priorCodeApprovalId` and `storyEvidenceId`; it requires the runner's current scoped operator delegation and passing source checks. The runner also uses `automatic-check-pass` for that returned automatic prompt publication. These records have null `words` and may have a `basis` object that names the earlier evidence id and the check batches. They are never a person's later reply. `actor` is the invoking identity above; `at` is the approval command's epoch-millisecond clock value, not a fabricated chat timestamp. `words` is the exact supplied --said value, the exact native chat message for chat, or null for terminal. Each `prompts` row is `{path,proseSha256}`: repository-relative POSIX path and current lowercase SHA-256. Empty prompt arrays are valid for gates without changed prompts. Native chat session/message-time fields remain in their existing run fields. These are local provenance claims, not cryptographic proof of a speaker.
+An approval evidence record is `{id,route,actor,at,words,prompts}`. `id` is a nonempty string identifying one approval event independently of its evidence content or clock; new events have distinct identities even with identical route/actor/time/words/prompts. Copies of the same event in gate history and the journal retain the same id; retries retain it. Legacy evidence without id remains readable and does not acquire fabricated historical provenance. The caller supplies a new event id when it creates an approval. This journal stores the supplied evidence without allocating or changing its id. `route` is `said`, `terminal`, `chat` (existing native Herdr evidence), `automatic-check-pass`, `card-choice` or `prompt-reentry`. The last three are pdd's own records for a workflow run ([normal-run gates](workflow-runner.prompt.md#normal-run-gates)): `automatic-check-pass` for a prompt PR gate that a verified full check pass opened, and `card-choice` for the code gate that the person's Story-card choice covers. `prompt-reentry` records resuming an existing code scope after a returned automatic prompt repair. Its `basis` names `priorCodeApprovalId` and `storyEvidenceId`; it requires the runner's current scoped operator delegation and passing source checks. The runner also uses `automatic-check-pass` for that returned automatic prompt publication. These records have null `words` and may have a `basis` object that names the earlier evidence id and the check batches. They are never a person's later reply. `actor` is the invoking identity above; `at` is the approval command's epoch-millisecond clock value, not a fabricated chat timestamp. `words` is the exact supplied --said value, the exact native chat message for chat, or null for terminal. Each `prompts` row is `{path,proseSha256}`: repository-relative POSIX path and current lowercase SHA-256. Empty prompt arrays are valid for gates without changed prompts. Native chat session/message-time fields remain in their existing run fields. These are local provenance claims, not cryptographic proof of a speaker.
+
+At the Runtime boundary, optional `basis` evidence is transported as canonical JSON text and decoded before storage; prompts may include optional `kind` and `reason` fields.
 
 Module function `recordPromptApproval({commonDir,evidence}, ports = {})` appends the evidence to `<commonDir>/pdd/approvals.json`; module function `readPromptApprovals({commonDir}, ports = {})` returns its records, missing file as an empty list. The journal is `{v:1,approvals:[...]}`; reject malformed/unreadable existing journals and never silently replace them. Shared Git-common-dir storage lets linked worktrees find standalone approvals. Preserve all previous records and verbatim words, write via temporary file and rename, and serialize concurrent updates so successful approvals are not lost. No credentials or native conversation log is copied. Journal locking recovers an observed empty `approvals.lock` directory or a stale lock whose recorded PID is confirmed dead on this hostname. Empty-directory recovery must not delete a newly published owner; preserve replacement ownership. If a lock disappears during contention inspection or reclamation (ENOENT), retry acquisition rather than fail approval. Preserve alive, foreign-host, malformed, unverifiable and permission-denied owners. Publish ownership atomically; release or reclaim only the observed owner, so a replacement owner's lock is never deleted. Native-only injected ports are `fs`, `now`, `env`, `hostname` (a function or string), `ownerPid`, and `processIdentity(pid)` returning `{alive: true|false|undefined}`, with native defaults matching #2677 owner-liveness semantics. Only `alive === false` confirms death. Exceptions, including EPERM, and undefined liveness are unverifiable and preserve the owner. Share the #2677 owner-liveness semantics without importing the workflow runner or creating a required-context cycle. File operations and clock/identity inputs are injected through native ports (`fs`, `env`, `now`) with real defaults; Git root/commonDir resolution stays with callers.
 
@@ -40,56 +42,82 @@ The journal also accepts route `automatic-check-pass`. Such records have null wo
 
 ## Dependencies
 
-No other business prompt supplies policy. Bind config and journal file access through `files.stat`, `files.read` and `files.write`, stdin marker reads through `stdin.read`, event ID allocation through `ids.randomUUID`, journal lock custody through `lock.acquire` and `lock.release`, and caller commit guards through `guards.afterApprovalLock` and `guards.beforeApprovalCommit`. `readApprovalPolicy({root})` returns `{strictApprovals}` or raises `invalid-approval-policy`; `readSaidWords({said})` returns `{words}` or raises `invalid-said-words`; `approvalActor({env})` returns `{kind, id}` or raises `invalid-actor-env`; `readPromptApprovals({commonDir})` returns `{approvals}` or raises `invalid-approval-journal`; and `recordPromptApproval({commonDir, evidence})` returns `{record, count}` or raises `invalid-approval-evidence`, `approval-lock-busy`, `invalid-approval-journal` or `guard-refused`. Native filesystem concurrency, OS process-liveness probes, atomic rename and Git common-directory resolution remain native obligations (`test/approval-lead-fixes.test.mjs`, `test/approval-round2.test.mjs`, `test/autopilot-pr1-gate.test.mjs`, `test/autopilot.test.mjs`, `test/native-evidence-intake.test.mjs`).
+No other business prompt supplies policy. Bind config and journal file access through `files.stat`, `files.read` and `files.write`, stdin marker reads through `stdin.read`, event ID allocation through `ids.randomUUID`, journal lock custody through `lock.acquire` and `lock.release`, and caller commit guards through `guards.afterApprovalLock` and `guards.beforeApprovalCommit`. `readApprovalPolicy({root})` returns `{strictApprovals}` or raises `invalid-approval-policy`; `readSaidWords(said, ports = {})` returns the exact nonblank string or throws its original plain input/read error; `approvalActor(env = process.env)` returns `{kind, id}` without rejecting environment values; `readPromptApprovals({commonDir})` returns the stored approval array (empty when absent) or raises `invalid-approval-journal`; and `recordPromptApproval({commonDir, evidence})` returns undefined after writing supplied evidence and propagates its original validation, lock, journal or caller-guard error. Native filesystem concurrency, OS process-liveness probes, atomic rename and Git common-directory resolution remain native obligations (`test/approval-lead-fixes.test.mjs`, `test/approval-round2.test.mjs`, `test/autopilot-pr1-gate.test.mjs`, `test/autopilot.test.mjs`, `test/native-evidence-intake.test.mjs`).
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "c35e0d0372a7f2b6fa3e90a36ddb55631879d07549c024c672e8e2923c829837",
+  "kind": "full",
+  "prose_sha256": "96a02e1011875feefdb4d9dd66faef4e2c5606e1d1388972f88914d4a78f48ff",
   "entries": [
     {
       "operation": "readApprovalPolicy",
       "input_schema": {
         "type": "object",
         "properties": {
-          "root": { "type": "string" }
+          "root": {
+            "type": "string"
+          }
         },
-        "required": ["root"],
+        "required": [
+          "root"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "strictApprovals": { "type": "boolean" }
+          "strictApprovals": {
+            "type": "boolean"
+          }
         },
-        "required": ["strictApprovals"],
+        "required": [
+          "strictApprovals"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-approval-policy"],
-      "resource_operations": ["files.stat", "files.read"]
+      "errors": [
+        "invalid-approval-policy"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read"
+      ]
     },
     {
       "operation": "readSaidWords",
       "input_schema": {
         "type": "object",
         "properties": {
-          "said": { "type": "string" }
+          "said": {
+            "type": "string"
+          }
         },
-        "required": ["said"],
+        "required": [
+          "said"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "words": { "type": "string" }
+          "words": {
+            "type": "string"
+          }
         },
-        "required": ["words"],
+        "required": [
+          "words"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-said-words"],
-      "resource_operations": ["stdin.read"]
+      "errors": [
+        "invalid-said-words"
+      ],
+      "resource_operations": [
+        "stdin.read"
+      ]
     },
     {
       "operation": "approvalActor",
@@ -97,31 +125,33 @@ No other business prompt supplies policy. Bind config and journal file access th
         "type": "object",
         "properties": {
           "env": {
-            "type": "object",
-            "properties": {
-              "CODEX_THREAD_ID": { "type": "string" },
-              "CLAUDECODE": { "type": "string" },
-              "PDD_AGENT_SESSION": { "type": "string" },
-              "USER": { "type": "string" },
-              "LOGNAME": { "type": "string" }
-            },
-            "required": [],
-            "additionalProperties": false
+            "type": "string"
           }
         },
-        "required": ["env"],
+        "required": [],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "kind": { "type": "string", "enum": ["agent", "terminal"] },
-          "id": { "type": "string" }
+          "kind": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "terminal"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
         },
-        "required": ["kind", "id"],
+        "required": [
+          "kind",
+          "id"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-actor-env"],
+      "errors": [],
       "resource_operations": []
     },
     {
@@ -129,9 +159,13 @@ No other business prompt supplies policy. Bind config and journal file access th
       "input_schema": {
         "type": "object",
         "properties": {
-          "commonDir": { "type": "string" }
+          "commonDir": {
+            "type": "string"
+          }
         },
-        "required": ["commonDir"],
+        "required": [
+          "commonDir"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
@@ -142,7 +176,9 @@ No other business prompt supplies policy. Bind config and journal file access th
             "items": {
               "type": "object",
               "properties": {
-                "id": { "type": "string" },
+                "id": {
+                  "type": "string"
+                },
                 "route": {
                   "type": "string",
                   "enum": [
@@ -157,17 +193,34 @@ No other business prompt supplies policy. Bind config and journal file access th
                 "actor": {
                   "type": "object",
                   "properties": {
-                    "kind": { "type": "string", "enum": ["agent", "terminal"] },
-                    "id": { "type": "string" }
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "agent",
+                        "terminal"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    }
                   },
-                  "required": ["kind", "id"],
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
                   "additionalProperties": false
                 },
-                "at": { "type": "number" },
+                "at": {
+                  "type": "number"
+                },
                 "words": {
                   "oneOf": [
-                    { "type": "string" },
-                    { "type": "null" }
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "prompts": {
@@ -175,35 +228,68 @@ No other business prompt supplies policy. Bind config and journal file access th
                   "items": {
                     "type": "object",
                     "properties": {
-                      "path": { "type": "string" },
-                      "proseSha256": { "type": "string" }
+                      "path": {
+                        "type": "string"
+                      },
+                      "proseSha256": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
                     },
-                    "required": ["path", "proseSha256"],
+                    "required": [
+                      "path",
+                      "proseSha256"
+                    ],
                     "additionalProperties": false
                   }
+                },
+                "basis": {
+                  "type": "string"
                 }
               },
-              "required": ["id", "route", "actor", "at", "words", "prompts"],
+              "required": [
+                "route",
+                "actor",
+                "at",
+                "words",
+                "prompts"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["approvals"],
+        "required": [
+          "approvals"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-approval-journal"],
-      "resource_operations": ["files.stat", "files.read"]
+      "errors": [
+        "invalid-approval-journal"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read"
+      ]
     },
     {
       "operation": "recordPromptApproval",
       "input_schema": {
         "type": "object",
         "properties": {
-          "commonDir": { "type": "string" },
+          "commonDir": {
+            "type": "string"
+          },
           "evidence": {
             "type": "object",
             "properties": {
-              "id": { "type": "string" },
+              "id": {
+                "type": "string"
+              },
               "route": {
                 "type": "string",
                 "enum": [
@@ -218,17 +304,34 @@ No other business prompt supplies policy. Bind config and journal file access th
               "actor": {
                 "type": "object",
                 "properties": {
-                  "kind": { "type": "string", "enum": ["agent", "terminal"] },
-                  "id": { "type": "string" }
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "agent",
+                      "terminal"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  }
                 },
-                "required": ["kind", "id"],
+                "required": [
+                  "kind",
+                  "id"
+                ],
                 "additionalProperties": false
               },
-              "at": { "type": "number" },
+              "at": {
+                "type": "number"
+              },
               "words": {
                 "oneOf": [
-                  { "type": "string" },
-                  { "type": "null" }
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "prompts": {
@@ -236,64 +339,50 @@ No other business prompt supplies policy. Bind config and journal file access th
                 "items": {
                   "type": "object",
                   "properties": {
-                    "path": { "type": "string" },
-                    "proseSha256": { "type": "string" }
+                    "path": {
+                      "type": "string"
+                    },
+                    "proseSha256": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
                   },
-                  "required": ["path", "proseSha256"],
+                  "required": [
+                    "path",
+                    "proseSha256"
+                  ],
                   "additionalProperties": false
                 }
+              },
+              "basis": {
+                "type": "string"
               }
             },
-            "required": ["route", "actor", "at", "words", "prompts"],
+            "required": [
+              "route",
+              "actor",
+              "at",
+              "words",
+              "prompts"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["commonDir", "evidence"],
+        "required": [
+          "commonDir",
+          "evidence"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
-        "properties": {
-          "record": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string" },
-              "route": { "type": "string" },
-              "actor": {
-                "type": "object",
-                "properties": {
-                  "kind": { "type": "string" },
-                  "id": { "type": "string" }
-                },
-                "required": ["kind", "id"],
-                "additionalProperties": false
-              },
-              "at": { "type": "number" },
-              "words": {
-                "oneOf": [
-                  { "type": "string" },
-                  { "type": "null" }
-                ]
-              },
-              "prompts": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "path": { "type": "string" },
-                    "proseSha256": { "type": "string" }
-                  },
-                  "required": ["path", "proseSha256"],
-                  "additionalProperties": false
-                }
-              }
-            },
-            "required": ["id", "route", "actor", "at", "words", "prompts"],
-            "additionalProperties": false
-          },
-          "count": { "type": "integer" }
-        },
-        "required": ["record", "count"],
+        "properties": {},
+        "required": [],
         "additionalProperties": false
       },
       "errors": [
@@ -307,8 +396,6 @@ No other business prompt supplies policy. Bind config and journal file access th
         "lock.release",
         "guards.afterApprovalLock",
         "guards.beforeApprovalCommit",
-        "ids.randomUUID",
-        "compute.hash_utf8",
         "files.stat",
         "files.read",
         "files.write"
@@ -328,19 +415,34 @@ No other business prompt supplies policy. Bind config and journal file access th
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" }
+              "path": {
+                "type": "string"
+              }
             },
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "exists": { "type": "boolean" },
-              "size": { "type": "integer", "minimum": 0 },
-              "is_symlink": { "type": "boolean" }
+              "exists": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "is_symlink": {
+                "type": "boolean"
+              }
             },
-            "required": ["exists", "size", "is_symlink"],
+            "required": [
+              "exists",
+              "size",
+              "is_symlink"
+            ],
             "additionalProperties": false
           }
         },
@@ -350,17 +452,25 @@ No other business prompt supplies policy. Bind config and journal file access th
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" }
+              "path": {
+                "type": "string"
+              }
             },
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "content": { "type": "string" }
+              "content": {
+                "type": "string"
+              }
             },
-            "required": ["content"],
+            "required": [
+              "content"
+            ],
             "additionalProperties": false
           }
         },
@@ -370,10 +480,17 @@ No other business prompt supplies policy. Bind config and journal file access th
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" },
-              "content": { "type": "string" }
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
             },
-            "required": ["path", "content"],
+            "required": [
+              "path",
+              "content"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
@@ -402,67 +519,24 @@ No other business prompt supplies policy. Bind config and journal file access th
           "result_schema": {
             "type": "object",
             "properties": {
-              "text": { "type": "string" },
+              "text": {
+                "type": "string"
+              },
               "error": {
                 "oneOf": [
-                  { "type": "string" },
-                  { "type": "null" }
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             },
-            "required": ["text", "error"],
-            "additionalProperties": false
-          }
-        }
-      ]
-    },
-    {
-      "name": "compute",
-      "kind": "compute",
-      "access": "read",
-      "operations": [
-        {
-          "name": "hash_utf8",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "text": { "type": "string" }
-            },
-            "required": ["text"],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": { "type": "string" }
-            },
-            "required": ["value"],
-            "additionalProperties": false
-          }
-        }
-      ]
-    },
-    {
-      "name": "ids",
-      "kind": "port",
-      "access": "write",
-      "operations": [
-        {
-          "name": "randomUUID",
-          "access": "write",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string" }
-            },
-            "required": ["id"],
+            "required": [
+              "text",
+              "error"
+            ],
             "additionalProperties": false
           }
         }
@@ -479,17 +553,25 @@ No other business prompt supplies policy. Bind config and journal file access th
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "commonDir": { "type": "string" }
+              "commonDir": {
+                "type": "string"
+              }
             },
-            "required": ["commonDir"],
+            "required": [
+              "commonDir"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "acquired": { "type": "boolean" }
+              "acquired": {
+                "type": "boolean"
+              }
             },
-            "required": ["acquired"],
+            "required": [
+              "acquired"
+            ],
             "additionalProperties": false
           }
         },
@@ -499,17 +581,25 @@ No other business prompt supplies policy. Bind config and journal file access th
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "commonDir": { "type": "string" }
+              "commonDir": {
+                "type": "string"
+              }
             },
-            "required": ["commonDir"],
+            "required": [
+              "commonDir"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "ok": {
+                "type": "boolean"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "ok"
+            ],
             "additionalProperties": false
           }
         }
@@ -526,23 +616,36 @@ No other business prompt supplies policy. Bind config and journal file access th
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "commonDir": { "type": "string" }
+              "commonDir": {
+                "type": "string"
+              }
             },
-            "required": ["commonDir"],
+            "required": [
+              "commonDir"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" },
+              "ok": {
+                "type": "boolean"
+              },
               "error": {
                 "oneOf": [
-                  { "type": "string" },
-                  { "type": "null" }
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             },
-            "required": ["ok", "error"],
+            "required": [
+              "ok",
+              "error"
+            ],
             "additionalProperties": false
           }
         },
@@ -552,23 +655,36 @@ No other business prompt supplies policy. Bind config and journal file access th
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "commonDir": { "type": "string" }
+              "commonDir": {
+                "type": "string"
+              }
             },
-            "required": ["commonDir"],
+            "required": [
+              "commonDir"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" },
+              "ok": {
+                "type": "boolean"
+              },
               "error": {
                 "oneOf": [
-                  { "type": "string" },
-                  { "type": "null" }
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             },
-            "required": ["ok", "error"],
+            "required": [
+              "ok",
+              "error"
+            ],
             "additionalProperties": false
           }
         }
@@ -579,7 +695,20 @@ No other business prompt supplies policy. Bind config and journal file access th
     "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": []
+  "conventions": [
+    {
+      "path": "/entries/2/input_schema/properties/env",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/3/result_schema/properties/approvals/items/properties/basis",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/4/input_schema/properties/evidence/properties/basis",
+      "convention": "json"
+    }
+  ]
 }
 ```
 </details>

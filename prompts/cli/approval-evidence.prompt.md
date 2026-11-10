@@ -107,7 +107,7 @@ and messages come from the same read snapshot.
 - [Public boundary](public-boundary.prompt.md): authoring and verification; use
   Node built-ins only, with no services or private runtime dependencies.
 
-Runtime transport: `readApprovalEvidence({stage, gateAskedAt, decision, ignorePrefixes, codexHome, claudeConfigDir, home})` returns `{ok, decision, agent, sessionId, userMessage, userMessageAt, code, message}` (with unused outcome fields set to `null`) and raises `clock_unavailable` when `clock.now` returns a non-positive timestamp. `findNativeSessions({stage, codexHome, claudeConfigDir, home})` returns `{sessions}` and raises `invalid_request` on invalid stage bounds or `session_unreadable` when discovery encounters a non-`ENOENT` directory/stat error or a malformed matched session file.
+Runtime transport: `readApprovalEvidence({stage, gateAskedAt, decision, ignorePrefixes, codexHome, claudeConfigDir, home}` returns `{ok, decision, agent, sessionId, userMessage, userMessageAt, code, message}` (unused outcome fields are null) and never raises for request/time validation; non-finite or non-positive clock time is returned as `{ok:false, code:"invalid_request"}`. `findNativeSessions(stage, ports = {})` returns `{sessions}` (empty for invalid stage fields) and raises `session_unreadable` when discovery encounters a non-ENOENT directory/stat error or malformed matched session file.
 
 Bind directory listing and file modification times through `fs.readdir` and `fs.stat`, session JSONL reads through `files.read`, and observation time through `clock.now`. Authentic host session provenance, physical inode identity and concurrent append snapshots remain native obligations (`test/approval-evidence-budget.test.mjs`, `test/approval-evidence.test.mjs`).
 
@@ -116,7 +116,7 @@ Bind directory listing and file modification times through `fs.readdir` and `fs.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "9c8d6e967406151d8b8e8c58536aa925458b0c24c6e2906e1cbf1427635ff251",
+  "prose_sha256": "588fb7af7c964c3030a7629f61c6deb37703b3a3f88cfd1cdbee0d2c9e109445",
   "entries": [
     {
       "operation": "readApprovalEvidence",
@@ -216,7 +216,7 @@ Bind directory listing and file modification times through `fs.readdir` and `fs.
         ],
         "additionalProperties": false
       },
-      "errors": ["clock_unavailable"],
+      "errors": [],
       "resource_operations": [
         "fs.readdir",
         "fs.stat",
@@ -267,7 +267,7 @@ Bind directory listing and file modification times through `fs.readdir` and `fs.
         "required": ["sessions"],
         "additionalProperties": false
       },
-      "errors": ["invalid_request", "session_unreadable"],
+      "errors": ["session_unreadable"],
       "resource_operations": [
         "fs.readdir",
         "fs.stat",

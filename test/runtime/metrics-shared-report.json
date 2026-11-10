@@ -42,12 +42,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "snapshotId": "s",
-              "inScope": true,
-              "state": "ready",
-              "reasons": []
-            }
+            "data": "{\"inScope\":true,\"reasons\":[],\"snapshotId\":\"s\",\"state\":\"ready\"}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -58,12 +53,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "snapshotId": "s",
-              "inScope": true,
-              "state": "ready",
-              "reasons": []
-            }
+            "data": "{\"inScope\":true,\"reasons\":[],\"snapshotId\":\"s\",\"state\":\"ready\"}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -74,9 +64,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "origin": "manual"
-            },
+            "data": "{\"origin\":\"manual\"}",
             "attempt": "one"
           },
           {
@@ -88,9 +76,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "origin": "manual"
-            },
+            "data": "{\"origin\":\"manual\"}",
             "attempt": "two"
           },
           {
@@ -102,10 +88,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "origin": "autopilot",
-              "status": "attempted"
-            }
+            "data": "{\"origin\":\"autopilot\",\"status\":\"attempted\"}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -116,11 +99,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "stage": "implementation-ready",
-              "pr": 8,
-              "head": "b"
-            }
+            "data": "{\"head\":\"b\",\"pr\":8,\"stage\":\"implementation-ready\"}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -131,14 +110,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "pr": 8,
-              "head": "a",
-              "verdict": "PASS",
-              "reviewer": "r",
-              "evidence": "https://example.test/check",
-              "acceptance": "accepted"
-            }
+            "data": "{\"acceptance\":\"accepted\",\"evidence\":\"https://example.test/check\",\"head\":\"a\",\"pr\":8,\"reviewer\":\"r\",\"verdict\":\"PASS\"}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -149,12 +121,7 @@
             "at": "2026-01-02T00:00:00Z",
             "observedAt": "2026-01-02T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "pr": 8,
-              "head": "b",
-              "explicit": true,
-              "evidence": "https://example.test/merge"
-            }
+            "data": "{\"evidence\":\"https://example.test/merge\",\"explicit\":true,\"head\":\"b\",\"pr\":8}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -165,11 +132,7 @@
             "at": "2026-01-03T00:00:00Z",
             "observedAt": "2026-01-03T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "classification": "administrative",
-              "humanReported": true,
-              "evidence": "https://example.test/reopen"
-            }
+            "data": "{\"classification\":\"administrative\",\"evidence\":\"https://example.test/reopen\",\"humanReported\":true}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -180,12 +143,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "snapshotId": "s",
-              "inScope": true,
-              "state": "ready",
-              "reasons": []
-            }
+            "data": "{\"inScope\":true,\"reasons\":[],\"snapshotId\":\"s\",\"state\":\"ready\"}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -196,10 +154,7 @@
             "at": "2026-01-01T00:00:00Z",
             "observedAt": "2026-01-01T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "stage": "prompt-pr",
-              "pr": 7
-            }
+            "data": "{\"pr\":7,\"stage\":\"prompt-pr\"}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -210,11 +165,7 @@
             "at": "2026-01-04T00:00:00Z",
             "observedAt": "2026-01-04T00:00:00Z",
             "source": "machine-a",
-            "data": {
-              "classification": "failed-fix",
-              "humanReported": true,
-              "evidence": "https://example.test/complaint"
-            }
+            "data": "{\"classification\":\"failed-fix\",\"evidence\":\"https://example.test/complaint\",\"humanReported\":true}"
           }
         ],
         "repo": "a/b",

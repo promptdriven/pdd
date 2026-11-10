@@ -55,6 +55,20 @@ test('MCP setup previews exact scoped registrations before one explicit consent,
   assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => { throw Error('must not ask twice'); } }), 0);
   assert.deepEqual(f.files.map(path => readFileSync(path, 'utf8')), before);
 });
+test('MCP setup uses an injected running Node executable observation', async t => {
+  const f = fixture(t), observations = [];
+  const executable = '/runtime/node';
+  assert.equal(await setupAgentMcp({ env: f.env }, {
+    ...f.ports,
+    process: { execPath(input) { observations.push(input); return { path: executable }; } },
+    confirm: () => 'y',
+  }), 0);
+  const config = parse(readFileSync(f.files[0], 'utf8')).mcp_servers.pdd;
+  assert.equal(config.command, executable);
+  assert.deepEqual(config.args, [join(packageRoot, 'bin/pdd.mjs'), 'mcp']);
+  assert.deepEqual(observations, [{}]);
+});
+
 test('MCP setup declines empty, n, yes, EOF and noninteractive input without creating configs', async t => {
   const f = fixture(t);
   for (const answer of ['', 'n', 'yes', undefined]) {

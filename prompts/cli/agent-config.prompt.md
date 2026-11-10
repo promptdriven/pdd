@@ -15,7 +15,7 @@ Append defaults unless `include_defaults` is false: `{id:'codex',name:'Codex',ki
 Node built-in filesystem, path and crypto modules provide local bounded reads, path resolution and stable hashes. No project or provider dependency is required.
 - [Secret redaction](secret-redaction.prompt.md) supplies secret-name selection and memory-only credential registration for expanded environment overrides.
 
-Runtime transport: `loadAgentDefinitions({cwd, env})` returns `{definitions}` and raises `invalid-agents-config` on a symlinked, oversized, unreadable or malformed `$HOME/.config/pdd/agents.json`, tilde expansion without `HOME`, unknown `kind`, missing/invalid `command` or `env`, or duplicate/default-colliding names, without falling back to defaults.
+Runtime transport: `loadAgentDefinitions({cwd, env})` returns `{definitions}` and raises `invalid-agents-config` on a symlinked, oversized, unreadable or malformed `$HOME/.config/pdd/agents.json`, tilde expansion without `HOME`, unknown `kind`, missing/invalid `command` or `env`, or duplicate/default-colliding names, without falling back to defaults. At the Runtime boundary, a supplied `env` object uses the `json` convention as canonical JSON text and is decoded before the native call; each returned definition's `env` map uses the same convention on output. Omitting `env` keeps the native `process.env` default.
 
 Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` and `files.read`, custom-agent SHA-256 ID derivation through `compute.hash_utf8`, and secret-named expanded override registration through `secrets.remember({values})` (`values` is the list of nonblank expanded override values whose variable names are secret-named, such as `*_KEY`, `*_TOKEN`, `*_SECRET`; omit the call when no secret-named override is present). Descriptor-level `O_NOFOLLOW` open identity and OS permissions remain native obligations (`test/agent-config.test.mjs`).
 
@@ -24,24 +24,21 @@ Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` a
 ```json
 {
   "status": "draft",
-  "prose_sha256": "3f4db86460f84bcd01d8fdd71ebe0bb259ee065bbb7a8d76705cefd0c0987116",
+  "prose_sha256": "f54c8b4e3dfc236f154f41a9c085586ebf1ce6303a8efa037ed9c5c7f676805a",
   "entries": [
     {
       "operation": "loadAgentDefinitions",
       "input_schema": {
         "type": "object",
         "properties": {
-          "cwd": { "type": "string" },
+          "cwd": {
+            "type": "string"
+          },
           "env": {
-            "type": "object",
-            "properties": {
-              "HOME": { "type": "string" }
-            },
-            "required": [],
-            "additionalProperties": false
+            "type": "string"
           }
         },
-        "required": ["cwd", "env"],
+        "required": [],
         "additionalProperties": false
       },
       "result_schema": {
@@ -52,30 +49,46 @@ Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` a
             "items": {
               "type": "object",
               "properties": {
-                "id": { "type": "string" },
-                "name": { "type": "string" },
-                "kind": { "type": "string", "enum": ["codex", "claude", "gemini"] },
-                "command": { "type": "string" },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "codex",
+                    "claude",
+                    "gemini"
+                  ]
+                },
+                "command": {
+                  "type": "string"
+                },
                 "env": {
-                  "type": "object",
-                  "properties": {
-                    "OPENAI_API_KEY": { "type": "string" },
-                    "CODEX_HOME": { "type": "string" },
-                    "CUSTOM_PATH": { "type": "string" }
-                  },
-                  "required": [],
-                  "additionalProperties": false
+                  "type": "string"
                 }
               },
-              "required": ["id", "name", "kind", "command", "env"],
+              "required": [
+                "id",
+                "name",
+                "kind",
+                "command",
+                "env"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["definitions"],
+        "required": [
+          "definitions"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-agents-config"],
+      "errors": [
+        "invalid-agents-config"
+      ],
       "resource_operations": [
         "files.stat",
         "files.read",
@@ -97,19 +110,34 @@ Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` a
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" }
+              "path": {
+                "type": "string"
+              }
             },
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "exists": { "type": "boolean" },
-              "size": { "type": "integer", "minimum": 0 },
-              "is_symlink": { "type": "boolean" }
+              "exists": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "is_symlink": {
+                "type": "boolean"
+              }
             },
-            "required": ["exists", "size", "is_symlink"],
+            "required": [
+              "exists",
+              "size",
+              "is_symlink"
+            ],
             "additionalProperties": false
           }
         },
@@ -119,17 +147,25 @@ Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` a
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" }
+              "path": {
+                "type": "string"
+              }
             },
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "content": { "type": "string" }
+              "content": {
+                "type": "string"
+              }
             },
-            "required": ["content"],
+            "required": [
+              "content"
+            ],
             "additionalProperties": false
           }
         }
@@ -146,17 +182,25 @@ Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` a
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "text": { "type": "string" }
+              "text": {
+                "type": "string"
+              }
             },
-            "required": ["text"],
+            "required": [
+              "text"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": { "type": "string" }
+              "value": {
+                "type": "string"
+              }
             },
-            "required": ["value"],
+            "required": [
+              "value"
+            ],
             "additionalProperties": false
           }
         }
@@ -175,18 +219,26 @@ Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` a
             "properties": {
               "values": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               }
             },
-            "required": ["values"],
+            "required": [
+              "values"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "ok": {
+                "type": "boolean"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "ok"
+            ],
             "additionalProperties": false
           }
         }
@@ -197,7 +249,16 @@ Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` a
     "max_steps": 16,
     "max_model_calls": 8
   },
-  "conventions": []
+  "conventions": [
+    {
+      "path": "/entries/0/input_schema/properties/env",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/definitions/items/properties/env",
+      "convention": "json"
+    }
+  ]
 }
 ```
 </details>

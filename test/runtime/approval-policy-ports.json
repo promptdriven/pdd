@@ -12,7 +12,7 @@
     },
     {
       "id": "AC3",
-      "text": "`approvalActor` prefers `CODEX_THREAD_ID` over `PDD_AGENT_SESSION`, falls back to terminal `USER` or `LOGNAME`, and raises `invalid-actor-env` when an environment value contains NUL."
+      "text": "`approvalActor` receives the environment object directly, prefers `CODEX_THREAD_ID` over `CLAUDECODE` and `PDD_AGENT_SESSION`, falls back to terminal `USER` or `LOGNAME`, and preserves selected values including NUL."
     },
     {
       "id": "AC4",
@@ -20,7 +20,7 @@
     },
     {
       "id": "AC5",
-      "text": "`recordPromptApproval` acquires lock custody, invokes `guards.afterApprovalLock` and `guards.beforeApprovalCommit`, allocates an event ID when absent, writes the updated `{v: 1, approvals}` journal, releases the lock, and raises `guard-refused` without writing when a guard rejects."
+      "text": "`recordPromptApproval` acquires lock custody, invokes `guards.afterApprovalLock` and `guards.beforeApprovalCommit`, uses the caller-supplied event ID for a new record, writes the updated `{v: 1, approvals}` journal, returns undefined, releases the lock, and propagates a guard rejection without writing."
     }
   ],
   "initial_world": {
@@ -308,11 +308,7 @@
       "entry_path": "prompts/cli/approval-policy.prompt.md",
       "operation": "approvalActor",
       "input": {
-        "env": {
-          "CODEX_THREAD_ID": "thread-42",
-          "PDD_AGENT_SESSION": "1",
-          "USER": "alice"
-        }
+        "env": "{\"CODEX_THREAD_ID\":\"thread-42\",\"PDD_AGENT_SESSION\":\"1\",\"USER\":\"alice\",\"PDD_RUNTIME_FLAVOR\":\"safe\"}"
       },
       "checks": [
         {
@@ -329,22 +325,22 @@
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "actor-reject-nul-env",
+      "step_id": "actor-preserves-nul-env-value",
       "entry_path": "prompts/cli/approval-policy.prompt.md",
       "operation": "approvalActor",
       "input": {
-        "env": {
-          "USER": "alice\u0000evil"
-        }
+        "env": "{\"USER\":\"alice\\u0000evil\",\"PDD_RUNTIME_FLAVOR\":\"safe\"}"
       },
-      "expected_error": "invalid-actor-env",
       "checks": [
         {
           "criterion_id": "AC3",
-          "target": "error",
-          "path": "/code",
+          "target": "result",
+          "path": "",
           "op": "equals",
-          "value": "invalid-actor-env"
+          "value": {
+            "kind": "terminal",
+            "id": "alice\u0000evil"
+          }
         }
       ],
       "model": "gpt-6.1-sol"
@@ -368,24 +364,11 @@
               "path": "prompts/cli/files.prompt.md",
               "proseSha256": "1111111111111111111111111111111111111111111111111111111111111111"
             }
-          ]
+          ],
+          "id": "app-1111-2222"
         }
       },
       "checks": [
-        {
-          "criterion_id": "AC5",
-          "target": "result",
-          "path": "/record/id",
-          "op": "equals",
-          "value": "app-1111-2222"
-        },
-        {
-          "criterion_id": "AC5",
-          "target": "result",
-          "path": "/count",
-          "op": "equals",
-          "value": 1
-        },
         {
           "criterion_id": "AC5",
           "target": "calls",
@@ -406,6 +389,13 @@
           "path": "/resources/approval-policy-lock-release",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {}
         }
       ],
       "model": "gpt-6.1-sol"
@@ -450,6 +440,13 @@
           "path": "/resources/approval-policy-lock-release",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {}
         }
       ],
       "model": "gpt-6.1-sol"

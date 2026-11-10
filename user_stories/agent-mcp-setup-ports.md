@@ -6,9 +6,10 @@ I can preview and register the `pdd mcp` server with detected local agents after
 prompts/cli/agent-mcp-setup.prompt.md
 ```
 
+The registration command comes from the Node process that runs setup; callers do not supply an executable path.
+
 ## Acceptance criteria
 
-1. When `prompt.confirm` returns `y`, `setupAgentMcp` previews the config patches, rechecks target files, writes the pinned `execPath` and `packageRoot/bin/pdd.mjs` `"mcp"` registration for detected agents, and returns `{exitCode: 0}`.
+1. When I accept setup, each registration uses the running Node executable and the selected package's `bin/pdd.mjs` entry with `mcp` arguments, writes the previewed config, and reports success.
 2. When `prompt.confirm` returns any answer other than `y`, `setupAgentMcp` writes no files and returns `{exitCode: 0}`.
 3. When a candidate configuration file is a symbolic link or malformed, `setupAgentMcp` emits a `pdd setup:` diagnostic to `output.stderr`, asks no confirmation question, writes nothing, and returns `{exitCode: 1}`.
-4. `setupAgentMcp` raises `invalid-setup-context` before probing agents when `packageRoot` or `execPath` is not an absolute path.

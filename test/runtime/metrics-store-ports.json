@@ -20,7 +20,7 @@
     },
     {
       "id": "AC5",
-      "text": "`validateSnapshot` returns `{valid: true}` for a canonical selector snapshot and raises `invalid-selector-snapshot` when the snapshot repository does not match or issue numbers repeat."
+      "text": "`validateSnapshot(snapshot, repository)` returns undefined for a canonical snapshot and throws a plain `Error` when its repository or unique issue membership is invalid."
     }
   ],
   "initial_world": {
@@ -51,9 +51,7 @@
                 "at": "2026-11-10T00:00:00.000Z",
                 "observedAt": "2026-11-10T00:00:00.000Z",
                 "source": "inst-a",
-                "data": {
-                  "origin": "manual"
-                }
+                "data": "{\"origin\":\"manual\"}"
               }
             ],
             "sources": [],
@@ -76,9 +74,7 @@
                 "at": "2026-11-10T00:00:00.000Z",
                 "observedAt": "2026-11-10T00:00:00.000Z",
                 "source": "inst-a",
-                "data": {
-                  "origin": "manual"
-                }
+                "data": "{\"origin\":\"manual\"}"
               }
             ],
             "sources": [],
@@ -101,9 +97,7 @@
                 "at": "2026-11-10T00:00:00.000Z",
                 "observedAt": "2026-11-10T00:00:00.000Z",
                 "source": "inst-a",
-                "data": {
-                  "origin": "manual"
-                }
+                "data": "{\"origin\":\"manual\"}"
               }
             ],
             "sources": [],
@@ -220,9 +214,7 @@
             "at": "2026-11-10T00:00:00.000Z",
             "observedAt": "2026-11-10T00:00:00.000Z",
             "source": "inst-a",
-            "data": {
-              "origin": "manual"
-            }
+            "data": "{\"origin\":\"manual\"}"
           },
           {
             "schema": "pdd.metrics.event.v1",
@@ -233,9 +225,7 @@
             "at": "2026-11-10T00:00:00.000Z",
             "observedAt": "2026-11-10T00:00:00.000Z",
             "source": "inst-a",
-            "data": {
-              "origin": "autopilot"
-            }
+            "data": "{\"origin\":\"autopilot\"}"
           }
         ]
       },
@@ -280,10 +270,7 @@
             "at": "2026-11-10T00:00:00.000Z",
             "observedAt": "2026-11-10T00:00:00.000Z",
             "source": "inst-a",
-            "data": {
-              "origin": "manual",
-              "evidence": "https://github.com/promptdriven/pdd/issues/10?token=secret"
-            }
+            "data": "{\"evidence\":\"https://github.com/promptdriven/pdd/issues/10?token=secret\",\"origin\":\"manual\"}"
           }
         ]
       },
@@ -400,9 +387,7 @@
               "at": "2026-11-10T00:30:00.000Z",
               "observedAt": "2026-11-10T00:30:00.000Z",
               "source": "inst-b",
-              "data": {
-                "origin": "manual"
-              }
+              "data": "{\"origin\":\"manual\"}"
             }
           ],
           "sources": [
@@ -488,15 +473,22 @@
       "operation": "validateSnapshot",
       "input": {
         "snapshot": {
-          "schema": "pdd.metrics.snapshot.v1",
-          "id": "snap-1",
+          "snapshotId": "snapshot:11111111-1111-4111-8111-111111111111",
           "repo": "promptdriven/pdd",
-          "at": "2026-11-10T00:00:00.000Z",
           "observedAt": "2026-11-10T00:00:00.000Z",
           "source": "inst-a",
-          "issues": [
-            10,
-            11
+          "events": [
+            {
+              "schema": "pdd.metrics.event.v1",
+              "id": "selection-10",
+              "repo": "promptdriven/pdd",
+              "issue": 10,
+              "type": "selection",
+              "at": "2026-11-10T00:00:00.000Z",
+              "observedAt": "2026-11-10T00:00:00.000Z",
+              "source": "inst-a",
+              "data": "{\"inScope\":true,\"snapshotId\":\"snapshot:11111111-1111-4111-8111-111111111111\",\"state\":\"open\"}"
+            }
           ]
         },
         "repository": "promptdriven/pdd"
@@ -505,39 +497,9 @@
         {
           "criterion_id": "AC5",
           "target": "result",
-          "path": "/valid",
+          "path": "",
           "op": "equals",
-          "value": true
-        }
-      ],
-      "model": "gpt-6.1-sol"
-    },
-    {
-      "step_id": "validate-snapshot-repo-mismatch",
-      "entry_path": "prompts/cli/metrics-store.prompt.md",
-      "operation": "validateSnapshot",
-      "input": {
-        "snapshot": {
-          "schema": "pdd.metrics.snapshot.v1",
-          "id": "snap-1",
-          "repo": "other/repo",
-          "at": "2026-11-10T00:00:00.000Z",
-          "observedAt": "2026-11-10T00:00:00.000Z",
-          "source": "inst-a",
-          "issues": [
-            10
-          ]
-        },
-        "repository": "promptdriven/pdd"
-      },
-      "expected_error": "invalid-selector-snapshot",
-      "checks": [
-        {
-          "criterion_id": "AC5",
-          "target": "error",
-          "path": "/code",
-          "op": "equals",
-          "value": "invalid-selector-snapshot"
+          "value": {}
         }
       ],
       "model": "gpt-6.1-sol"

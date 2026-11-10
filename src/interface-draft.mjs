@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 3b4853e52f47f43f3e1df33fc7112d49afd395baaebedcd272ec87e59491a6f1).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 5ffce67c721825f670772dc240c5094e8af78e28c90effde19618368547b7a99).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,8 +11,9 @@ function promptPaths(root) {
   const found = findTests({root, excludeFixtureProjects:true});
   return [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md')).sort();
 }
+const needsCallableInterface = path => path !== 'prompts/cli/public-boundary.prompt.md';
 export function missingInterfaces(root) {
-  return promptPaths(root).filter(path => !interfaceBlocks(sourceFilePort(root).read({path}).content).length);
+  return promptPaths(root).filter(path => needsCallableInterface(path) && !interfaceBlocks(sourceFilePort(root).read({path}).content).length);
 }
 export function interfaceFindings({root, paths = promptPaths(root)}) {
   const visible = new Set(gitFiles(root));
@@ -27,7 +28,9 @@ export function interfaceFindings({root, paths = promptPaths(root)}) {
 }
 // Presence admission is workspace-wide for CLI owners, without judging unrelated behavior.
 export function cliInterfaceFindings({root}) {
-  const paths = promptPaths(root).filter(path => /^prompts\/cli\/.+\.prompt\.md$/.test(path));
+  // Shared policy context has no callable owner; apply the same exact inventory rule as missingInterfaces and --all.
+  const prefix = 'prompts/cli/', suffix = '.prompt.md';
+  const paths = promptPaths(root).filter(path => path.startsWith(prefix) && path.length > prefix.length + suffix.length && path.endsWith(suffix) && needsCallableInterface(path));
   const codes = new Set(['interface-missing','pdd-two-interfaces','invalid-json','interface-kind-invalid','native-reason-missing']);
   return interfaceFindings({root,paths}).filter(item => codes.has(item.code));
 }
@@ -486,7 +489,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
     if(all && words.length || !all && !words.length) throw Error('Use pdd interface draft PROMPT... or pdd interface draft --all.');
     if ((contract || extend || refresh) && (all || words.length!==1) || extend && (!contract || refresh)) throw Error('Use one prompt; --extend requires --contract and cannot combine with --refresh.');
     const root=rootFor(cwd),workspace=loadRuntimeWorkspace({root}),visible=new Set(gitFiles(root));
-    const paths=all ? promptPaths(root) : [...new Set(words.map(word=>relative(root,resolve(cwd,word)).split('\\').join('/')))];
+    const paths=all ? promptPaths(root).filter(needsCallableInterface) : [...new Set(words.map(word=>relative(root,resolve(cwd,word)).split('\\').join('/')))];
     const files=sourceFilePort(root,visible,workspace);
     const recovery=(path,hasBlock=true)=>`pdd interface draft ${shellWord(relative(cwd,resolve(root,path)).split('\\').join('/'))} ${hasBlock?'--refresh ':''}--contract FILE`;
     // Validate the entire selection before any mutation.

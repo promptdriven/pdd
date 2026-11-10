@@ -62,47 +62,54 @@ a program here: the page owns the funded dispatch after its own guards.
 
 Runtime transport: `parseAgentAuthStatus({agent, result})` returns `{state}` and raises `invalid-auth-probe` when `agent` is blank; `discoverAgents({cwd, env})` returns `{agents}` and raises `invalid-discovery-cwd` when `cwd` is blank; `askAgent({agent, cwd, env, context, entries, supportsApply, supportsRun})` returns `{say, fill, apply, run, error}` and raises `invalid-agent-request` when `agent` is unknown or `cwd` is blank; and `runAgentProcess({command, args, cwd, timeoutMs, maxBytes})` returns `{code, stdout, stderr}` and raises `executable-missing` when `process.run` reports `executableMissing: true` or `command` is blank.
 
-Bind subprocess execution through `process.run({command, args, cwd})`, launcher definition lookup through `launcher.readDefinitions({cwd})`, and scrubbed failure stderr logging (`~/.pdd/runtime/agent-chat.log`) through `log.append({path, content})`. OS process-group termination, temporary mode-`0600` Gemini system-settings overlay files and descriptor-level log permissions remain native obligations (`test/agent-adapters.test.mjs`).
+Bind subprocess execution through `process.run({command, args, cwd})` and scrubbed failure stderr logging (`~/.pdd/runtime/agent-chat.log`) through `log.append({path, content})`. When definitions are omitted, `discoverAgents` calls the shared `agent-config.loadAgentDefinitions` owner for normalized local configuration data; this module derives agent states from process observations. OS process-group termination, temporary mode-`0600` Gemini system-settings overlay files and descriptor-level log permissions remain native obligations (`test/agent-adapters.test.mjs`).
+
+Runtime uses canonical JSON text to transport native environment maps, entry schemas, workspace context and arbitrary fill/check values. It decodes the values before native configuration checks and fill validation. The native API still accepts objects. When definitions are omitted, discovery calls the shared agent-config owner. The module decides states and reply fields from process observations.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "a95d1064bc2b38b4a6772f11347cc94a757448cebb6d086965836106dc72d7cb",
+  "prose_sha256": "5a2cf878ae4c988e2fabeb28c22e132f82bc0f1c0059d9899056b331c0fcbc7c",
   "entries": [
     {
       "operation": "parseAgentAuthStatus",
       "input_schema": {
         "type": "object",
         "properties": {
-          "agent": { "type": "string" },
+          "agent": {
+            "type": "string"
+          },
           "result": {
             "type": "object",
             "properties": {
-              "code": { "type": "integer" },
-              "stdout": { "type": "string" },
-              "stderr": { "type": "string" }
+              "code": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
             },
-            "required": ["code", "stdout", "stderr"],
+            "required": [],
             "additionalProperties": false
           }
         },
-        "required": ["agent", "result"],
+        "required": [],
         "additionalProperties": false
       },
       "result_schema": {
-        "type": "object",
-        "properties": {
-          "state": {
-            "type": "string",
-            "enum": ["ready", "signed_out", "unavailable"]
-          }
-        },
-        "required": ["state"],
-        "additionalProperties": false
+        "type": "string",
+        "enum": [
+          "ready",
+          "signed_out",
+          "unavailable"
+        ]
       },
-      "errors": ["invalid-auth-probe"],
+      "errors": [],
       "resource_operations": []
     },
     {
@@ -110,18 +117,52 @@ Bind subprocess execution through `process.run({command, args, cwd})`, launcher 
       "input_schema": {
         "type": "object",
         "properties": {
-          "cwd": { "type": "string" },
+          "cwd": {
+            "type": "string"
+          },
           "env": {
-            "type": "object",
-            "properties": {
-              "HOME": { "type": "string" },
-              "PATH": { "type": "string" }
-            },
-            "required": ["HOME"],
-            "additionalProperties": false
+            "type": "string"
+          },
+          "definitions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "codex",
+                    "claude",
+                    "gemini"
+                  ]
+                },
+                "command": {
+                  "type": "string"
+                },
+                "env": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "kind",
+                "command"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "workspace": {
+            "type": "string"
           }
         },
-        "required": ["cwd", "env"],
+        "required": [],
         "additionalProperties": false
       },
       "result_schema": {
@@ -132,188 +173,428 @@ Bind subprocess execution through `process.run({command, args, cwd})`, launcher 
             "items": {
               "type": "object",
               "properties": {
-                "id": { "type": "string" },
-                "name": { "type": "string" },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
                 "state": {
                   "type": "string",
-                  "enum": ["ready", "available", "signed_out", "quota", "not_installed", "error"]
+                  "enum": [
+                    "ready",
+                    "available",
+                    "signed_out",
+                    "quota",
+                    "not_installed",
+                    "error"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
                 }
               },
-              "required": ["id", "name", "state"],
+              "required": [
+                "id",
+                "name",
+                "state"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["agents"],
+        "required": [
+          "agents"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-discovery-cwd"],
-      "resource_operations": ["launcher.readDefinitions", "process.run"]
+      "errors": [],
+      "resource_operations": [
+        "process.run"
+      ]
     },
     {
       "operation": "askAgent",
       "input_schema": {
         "type": "object",
         "properties": {
-          "agent": { "type": "string" },
-          "cwd": { "type": "string" },
-          "env": {
+          "agent": {
+            "type": "string"
+          },
+          "definition": {
             "type": "object",
             "properties": {
-              "HOME": { "type": "string" }
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "codex",
+                  "claude",
+                  "gemini"
+                ]
+              },
+              "command": {
+                "type": "string"
+              },
+              "env": {
+                "type": "string"
+              }
             },
-            "required": ["HOME"],
+            "required": [
+              "id",
+              "name",
+              "kind",
+              "command"
+            ],
             "additionalProperties": false
           },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
           "context": {
-            "type": "object",
-            "properties": {
-              "question": { "type": "string" },
-              "requestKind": { "type": "string" }
-            },
-            "required": ["question"],
-            "additionalProperties": false
+            "type": "string"
           },
           "entries": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "entry": { "type": "string" },
-                "prompt_path": { "type": "string" },
-                "operation": { "type": "string" }
+                "entry": {
+                  "type": "string"
+                },
+                "prompt_path": {
+                  "type": "string"
+                },
+                "operation": {
+                  "type": "string"
+                },
+                "input_schema": {
+                  "type": "string"
+                },
+                "result_schema": {
+                  "type": "string"
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
               },
-              "required": ["entry", "prompt_path", "operation"],
+              "required": [
+                "entry",
+                "prompt_path",
+                "operation",
+                "input_schema",
+                "result_schema"
+              ],
               "additionalProperties": false
             }
           },
-          "supportsApply": { "type": "boolean" },
-          "supportsRun": { "type": "boolean" }
+          "supportsApply": {
+            "type": "boolean"
+          },
+          "supportsRun": {
+            "type": "boolean"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
         },
-        "required": ["agent", "cwd", "env", "context", "entries"],
+        "required": [],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "say": { "type": "string" },
+          "say": {
+            "type": "string"
+          },
           "fill": {
             "oneOf": [
               {
                 "type": "object",
                 "properties": {
-                  "entry": { "type": "string" },
+                  "entry": {
+                    "type": "string"
+                  },
                   "input": {
-                    "type": "object",
-                    "properties": {
-                      "cwd": { "type": "string" }
-                    },
-                    "required": ["cwd"],
-                    "additionalProperties": false
+                    "type": "string"
                   }
                 },
-                "required": ["entry", "input"],
+                "required": [
+                  "entry",
+                  "input"
+                ],
                 "additionalProperties": false
               },
-              { "type": "null" }
+              {
+                "type": "null"
+              }
             ]
           },
-          "apply": { "type": "boolean" },
-          "run": { "type": "boolean" },
-          "error": {
+          "apply": {
+            "type": "boolean"
+          },
+          "run": {
+            "type": "boolean"
+          },
+          "criterion": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expect": {
             "oneOf": [
               {
                 "type": "object",
                 "properties": {
-                  "state": { "type": "string" },
-                  "message": { "type": "string" }
+                  "text": {
+                    "type": "string"
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "target": {
+                          "type": "string",
+                          "enum": [
+                            "result",
+                            "world"
+                          ]
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "target",
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
                 },
-                "required": ["state", "message"],
+                "required": [
+                  "text",
+                  "checks"
+                ],
                 "additionalProperties": false
               },
-              { "type": "null" }
+              {
+                "type": "null"
+              }
             ]
+          },
+          "save": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "criterion": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "target": {
+                          "type": "string",
+                          "enum": [
+                            "result",
+                            "world"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "target"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "name",
+                  "criterion",
+                  "checks"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "criterion": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "criterion",
+                  "text"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "signed_out",
+                  "quota",
+                  "not_installed"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "message"
+            ],
+            "additionalProperties": false
           }
         },
-        "required": ["say", "fill", "apply", "run", "error"],
+        "required": [
+          "say",
+          "fill"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-agent-request"],
-      "resource_operations": ["process.run", "log.append"]
+      "errors": [],
+      "resource_operations": [
+        "process.run",
+        "log.append"
+      ]
     },
     {
       "operation": "runAgentProcess",
       "input_schema": {
         "type": "object",
         "properties": {
-          "command": { "type": "string" },
+          "command": {
+            "type": "string"
+          },
           "args": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
-          "cwd": { "type": "string" },
-          "timeoutMs": { "type": "integer" },
-          "maxBytes": { "type": "integer" }
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          },
+          "maxBytes": {
+            "type": "integer"
+          }
         },
-        "required": ["command", "args", "cwd"],
+        "required": [
+          "command",
+          "args",
+          "cwd"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "code": { "type": "integer" },
-          "stdout": { "type": "string" },
-          "stderr": { "type": "string" }
+          "code": {
+            "type": "integer"
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          }
         },
-        "required": ["code", "stdout", "stderr"],
+        "required": [
+          "code",
+          "stdout",
+          "stderr"
+        ],
         "additionalProperties": false
       },
-      "errors": ["executable-missing"],
-      "resource_operations": ["process.run"]
+      "errors": [],
+      "resource_operations": [
+        "process.run"
+      ]
     }
   ],
-  "calls": [],
-  "resources": [
+  "calls": [
     {
-      "name": "launcher",
-      "kind": "port",
-      "access": "write",
-      "operations": [
-        {
-          "name": "readDefinitions",
-          "access": "write",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "cwd": { "type": "string" }
-            },
-            "required": ["cwd"],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "definitions": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "id": { "type": "string" },
-                    "name": { "type": "string" },
-                    "kind": { "type": "string", "enum": ["codex", "claude", "gemini"] },
-                    "command": { "type": "string" }
-                  },
-                  "required": ["id", "name", "kind", "command"],
-                  "additionalProperties": false
-                }
-              }
-            },
-            "required": ["definitions"],
-            "additionalProperties": false
-          }
-        }
-      ]
-    },
+      "operation": "discoverAgents",
+      "target": "prompts/cli/agent-config.prompt.md",
+      "target_operation": "loadAgentDefinitions",
+      "max_calls": 1
+    }
+  ],
+  "resources": [
     {
       "name": "process",
       "kind": "port",
@@ -325,25 +606,60 @@ Bind subprocess execution through `process.run({command, args, cwd})`, launcher 
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "command": { "type": "string" },
+              "command": {
+                "type": "string"
+              },
               "args": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
-              "cwd": { "type": "string" }
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "string"
+              },
+              "input": {
+                "type": "string"
+              },
+              "timeoutMs": {
+                "type": "integer"
+              },
+              "maxBytes": {
+                "type": "integer"
+              }
             },
-            "required": ["command", "args", "cwd"],
+            "required": [
+              "command",
+              "args",
+              "cwd"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "code": { "type": "integer" },
-              "stdout": { "type": "string" },
-              "stderr": { "type": "string" },
-              "executableMissing": { "type": "boolean" }
+              "code": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              },
+              "executableMissing": {
+                "type": "boolean"
+              }
             },
-            "required": ["code", "stdout", "stderr", "executableMissing"],
+            "required": [
+              "code",
+              "stdout",
+              "stderr",
+              "executableMissing"
+            ],
             "additionalProperties": false
           }
         }
@@ -360,18 +676,29 @@ Bind subprocess execution through `process.run({command, args, cwd})`, launcher 
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" },
-              "content": { "type": "string" }
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
             },
-            "required": ["path", "content"],
+            "required": [
+              "path",
+              "content"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "ok": {
+                "type": "boolean"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "ok"
+            ],
             "additionalProperties": false
           }
         }
@@ -382,7 +709,51 @@ Bind subprocess execution through `process.run({command, args, cwd})`, launcher 
     "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": []
-}
-```
+  "conventions": [
+    {
+      "path": "/entries/1/input_schema/properties/definitions/items/properties/env",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/input_schema/properties/env",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/input_schema/properties/context",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/input_schema/properties/entries/items/properties/input_schema",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/input_schema/properties/entries/items/properties/result_schema",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/input_schema/properties/definition/properties/env",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/input_schema/properties/workspace",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/result_schema/properties/fill/oneOf/0/properties/input",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/result_schema/properties/expect/oneOf/0/properties/checks/items/properties/value",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/3/input_schema/properties/env",
+      "convention": "json"
+    },
+    {
+      "path": "/resources/0/operations/0/arguments_schema/properties/env",
+      "convention": "json"
+    }
+  ]
+}```
 </details>

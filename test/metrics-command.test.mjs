@@ -81,3 +81,46 @@ test('remote observations retain actual time and cannot establish a past cutoff'
   assert.equal(await runMetrics({...x,argv:['--json','--snapshot','s','--at',cutoff]}),0); assert.equal(actual,at);
   const report=JSON.parse(x.out); assert.equal(report.issues[0].deliveries.length,0);
 });
+
+
+test('observed Git identity and saved ledger events reach the native calculation and JSON output', async t => {
+  const {mkdtemp, readFile: nativeReadFile, readdir: nativeReaddir, rm} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {execFile: execFileCallback, execFileSync} = await import('node:child_process');
+  const {promisify} = await import('node:util');
+  const root = await mkdtemp(join(tmpdir(),'metrics-observed-output-'));
+  t.after(() => rm(root,{recursive:true,force:true}));
+  execFileSync('git',['init','-q',root]);
+  execFileSync('git',['-C',root,'remote','add','origin','https://github.com/owner/repo.git']);
+  const observedAt = '2026-11-08T12:00:00.000Z';
+  const {appendEvents} = await import('../src/metrics-store.mjs');
+  await appendEvents({root,events:[{
+    schema:'pdd.metrics.event.v1',id:'saved-start',repo:'owner/repo',issue:17,type:'start',
+    at:'2026-11-08T10:00:00.000Z',observedAt:'2026-11-08T10:00:00.000Z',source:'install:fixture',
+    data:{origin:'manual'}
+  }]});
+  const executed = [], listed = [], read = [];
+  const execute = promisify(execFileCallback);
+  let out = '', err = '';
+  const code = await runMetrics({
+    cwd:root,argv:['--json','--date','2026-11-08'],
+    stdout:text=>out+=text,stderr:text=>err+=text,
+    ports:{
+      now:()=>new Date(observedAt),
+      execFile:async(file,args,options)=>{executed.push([file,...args]);return execute(file,args,options);},
+      readdir:async(path)=>{listed.push(path);return nativeReaddir(path);},
+      readFile:async(path,encoding)=>{read.push(path);return nativeReadFile(path,encoding);}
+    }
+  });
+  assert.equal(code,0,err);
+  const report=JSON.parse(out);
+  assert.equal(report.repo,'owner/repo');
+  assert.deepEqual(report.scope,{kind:'activity',date:'2026-11-08'});
+  assert.equal(report.issues[0].issue,17);
+  assert.equal(report.issues[0].started,'yes');
+  assert.equal(report.stages.started.numerator,1);
+  assert.ok(executed.some(args=>args.join(' ').includes('remote get-url origin')));
+  assert.ok(listed.some(path=>path.endsWith('/pdd/metrics-gaps')));
+  assert.ok(read.includes(join(root,'pdd.json')));
+});

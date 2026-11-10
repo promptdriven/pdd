@@ -36,14 +36,14 @@ Read the [Prompting guide](../../docs/prompting-guide.md) for authoring. [CLI](p
 
 NODE is the absolute running Node executable (`execPath`); ABSOLUTE_ENTRY is the absolute package-root `bin/pdd.mjs` path. Default `packageRoot` comes from this module’s own package location when omitted. TOML strings use valid escaped basic-string literals for both paths.
 
-Bind installed-agent detection through `host.detectAgents({env})`, config inspection, recheck and updates through `files.stat`, `files.read` and `files.write`, consent through `prompt.confirm({question})`, and preview/diagnostic output through `output.stdout` and `output.stderr`. `setupAgentMcp({env, packageRoot, execPath})` returns `{exitCode}` (`0` on success or declined consent, `1` on unsafe symlink, malformed config or conflicting `pdd` server) and raises `invalid-setup-context` when `packageRoot` or `execPath` is not an absolute path. Native PATH executable probing, TTY readline and file mode `0600` permissions remain native obligations (`test/agent-mcp-setup.test.mjs`).
+Bind installed-agent detection through `host.detectAgents({env})`, config inspection, recheck and updates through `files.stat`, `files.read` and `files.write`, consent through `prompt.confirm({question})`, the running Node executable observation through `process.execPath({}) -> {path}`, and preview/diagnostic output through `output.stdout` and `output.stderr`. `setupAgentMcp({env = process.env, packageRoot = this module package root}, ports = {})` returns the native exit code `0` or `1`. It has no executable-path argument or added context-validation error; without the observation port, native code uses `process.execPath`. Native PATH executable probing, TTY readline and file mode `0600` permissions remain native obligations (`test/agent-mcp-setup.test.mjs`). At the Runtime boundary, supplied `env` uses the `json` convention as canonical JSON text and decodes before the native call and `host.detectAgents` port. Omitting `env` keeps the native `process.env` default.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "54d4161704ee1dec2b261f14a04f5c5d5cc1077af39cbb668b43c17511ed378f",
+  "prose_sha256": "7c37f1e7be3c907854ad2dcf9cc325b2d183110b79876597a576297ebfa7add1",
   "entries": [
     {
       "operation": "setupAgentMcp",
@@ -51,30 +51,32 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
         "type": "object",
         "properties": {
           "env": {
-            "type": "object",
-            "properties": {
-              "HOME": { "type": "string" },
-              "CODEX_HOME": { "type": "string" },
-              "CLAUDE_CONFIG_DIR": { "type": "string" }
-            },
-            "required": ["HOME"],
-            "additionalProperties": false
+            "type": "string"
           },
-          "packageRoot": { "type": "string" },
-          "execPath": { "type": "string" }
+          "packageRoot": {
+            "type": "string"
+          }
         },
-        "required": ["env", "packageRoot", "execPath"],
+        "required": [],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "exitCode": { "type": "integer", "enum": [0, 1] }
+          "exitCode": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          }
         },
-        "required": ["exitCode"],
+        "required": [
+          "exitCode"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-setup-context"],
+      "errors": [],
       "resource_operations": [
         "host.detectAgents",
         "files.stat",
@@ -82,7 +84,8 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
         "files.write",
         "prompt.confirm",
         "output.stdout",
-        "output.stderr"
+        "output.stderr",
+        "process.execPath"
       ]
     }
   ],
@@ -100,27 +103,32 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
             "type": "object",
             "properties": {
               "env": {
-                "type": "object",
-                "properties": {
-                  "HOME": { "type": "string" },
-                  "CODEX_HOME": { "type": "string" },
-                  "CLAUDE_CONFIG_DIR": { "type": "string" }
-                },
-                "required": ["HOME"],
-                "additionalProperties": false
+                "type": "string"
               }
             },
-            "required": ["env"],
+            "required": [
+              "env"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "codex": { "type": "boolean" },
-              "claude": { "type": "boolean" },
-              "gemini": { "type": "boolean" }
+              "codex": {
+                "type": "boolean"
+              },
+              "claude": {
+                "type": "boolean"
+              },
+              "gemini": {
+                "type": "boolean"
+              }
             },
-            "required": ["codex", "claude", "gemini"],
+            "required": [
+              "codex",
+              "claude",
+              "gemini"
+            ],
             "additionalProperties": false
           }
         }
@@ -137,19 +145,34 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" }
+              "path": {
+                "type": "string"
+              }
             },
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "exists": { "type": "boolean" },
-              "size": { "type": "integer", "minimum": 0 },
-              "is_symlink": { "type": "boolean" }
+              "exists": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "is_symlink": {
+                "type": "boolean"
+              }
             },
-            "required": ["exists", "size", "is_symlink"],
+            "required": [
+              "exists",
+              "size",
+              "is_symlink"
+            ],
             "additionalProperties": false
           }
         },
@@ -159,17 +182,25 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" }
+              "path": {
+                "type": "string"
+              }
             },
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "content": { "type": "string" }
+              "content": {
+                "type": "string"
+              }
             },
-            "required": ["content"],
+            "required": [
+              "content"
+            ],
             "additionalProperties": false
           }
         },
@@ -179,10 +210,17 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" },
-              "content": { "type": "string" }
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
             },
-            "required": ["path", "content"],
+            "required": [
+              "path",
+              "content"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
@@ -205,17 +243,25 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "question": { "type": "string" }
+              "question": {
+                "type": "string"
+              }
             },
-            "required": ["question"],
+            "required": [
+              "question"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "answer": { "type": "string" }
+              "answer": {
+                "type": "string"
+              }
             },
-            "required": ["answer"],
+            "required": [
+              "answer"
+            ],
             "additionalProperties": false
           }
         }
@@ -232,17 +278,25 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "text": { "type": "string" }
+              "text": {
+                "type": "string"
+              }
             },
-            "required": ["text"],
+            "required": [
+              "text"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "ok": {
+                "type": "boolean"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "ok"
+            ],
             "additionalProperties": false
           }
         },
@@ -252,17 +306,54 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "text": { "type": "string" }
+              "text": {
+                "type": "string"
+              }
             },
-            "required": ["text"],
+            "required": [
+              "text"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "ok": {
+                "type": "boolean"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "ok"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "process",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "execPath",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           }
         }
@@ -273,7 +364,16 @@ Bind installed-agent detection through `host.detectAgents({env})`, config inspec
     "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": []
+  "conventions": [
+    {
+      "path": "/entries/0/input_schema/properties/env",
+      "convention": "json"
+    },
+    {
+      "path": "/resources/0/operations/0/arguments_schema/properties/env",
+      "convention": "json"
+    }
+  ]
 }
 ```
 </details>

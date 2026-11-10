@@ -1,14 +1,15 @@
 # Own-agent adapters ports
 
-I can parse agent authentication status, discover installed local agent states through cheap status commands, ask a selected agent for a structured Try reply or log scrubbed failure diagnostics, and run direct agent subprocesses.
+I can parse local agent status, discover installed agents through read-only process probes, and validate a chosen agent's structured Try reply.
 
 ```pdd-boundary
 prompts/cli/agent-adapters.prompt.md
+prompts/cli/agent-config.prompt.md
 ```
 
 ## Acceptance criteria
 
-1. `parseAgentAuthStatus` classifies Codex `Logged in` or `API key configured` on exit 0 as `ready`, Claude `{"loggedIn":false}` on exit 0 or 1 as `signed_out`, and raises `invalid-auth-probe` when `agent` is blank.
-2. `discoverAgents` loads launcher definitions, runs help and status probes via `process.run`, maps missing executables to `not_installed`, and raises `invalid-discovery-cwd` when `cwd` is blank.
-3. `askAgent` parses a strict JSON reply from `process.run`, preserves `run: true` only when `supportsRun`, `supportsApply`, `apply: true`, and a valid `fill` are present, writes scrubbed failure stderr to `log.append` when a CLI invocation fails, and raises `invalid-agent-request` for an unknown agent.
-4. `runAgentProcess` returns `{code, stdout, stderr}` from `process.run` and raises `executable-missing` when `executableMissing` is true.
+1. parseAgentAuthStatus returns ready, signed_out, or unavailable directly from the supplied status observation. An unknown agent or malformed result returns unavailable.
+2. discoverAgents loads default definitions through the shared agent-config owner when none are supplied, then checks help and authentication status. It reports not_installed only when the process observation proves the executable is missing.
+3. askAgent validates a fill against the selected entry's complete input schema. It preserves run=true only when supportsRun, supportsApply, apply=true, and a valid fill are present. Other optional fields survive only when they pass their native rules.
+4. An unknown agent returns a structured failure with fill=null and no subprocess call. runAgentProcess returns {code, stdout, stderr} on success.

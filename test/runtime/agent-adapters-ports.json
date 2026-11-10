@@ -4,65 +4,52 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "`parseAgentAuthStatus` classifies Codex `Logged in` or `API key configured` on exit 0 as `ready`, Claude `{\"loggedIn\":false}` on exit 0 or 1 as `signed_out`, and raises `invalid-auth-probe` when `agent` is blank."
+      "text": "parseAgentAuthStatus returns ready, signed_out, or unavailable directly from the supplied status observation. An unknown agent or malformed result returns unavailable."
     },
     {
       "id": "AC2",
-      "text": "`discoverAgents` loads launcher definitions, runs help and status probes via `process.run`, maps missing executables to `not_installed`, and raises `invalid-discovery-cwd` when `cwd` is blank."
+      "text": "discoverAgents loads default definitions through the shared agent-config owner when none are supplied, then checks help and authentication status. It reports not_installed only when the process observation proves the executable is missing."
     },
     {
       "id": "AC3",
-      "text": "`askAgent` parses a strict JSON reply from `process.run`, preserves `run: true` only when `supportsRun`, `supportsApply`, `apply: true`, and a valid `fill` are present, writes scrubbed failure stderr to `log.append` when a CLI invocation fails, and raises `invalid-agent-request` for an unknown agent."
+      "text": "askAgent validates a fill against the selected entry's complete input schema. It preserves run=true only when supportsRun, supportsApply, apply=true, and a valid fill are present. Other optional fields survive only when they pass their native rules."
     },
     {
       "id": "AC4",
-      "text": "`runAgentProcess` returns `{code, stdout, stderr}` from `process.run` and raises `executable-missing` when `executableMissing` is true."
+      "text": "An unknown agent returns a structured failure with fill=null and no subprocess call. runAgentProcess returns {code, stdout, stderr} on success."
     }
   ],
   "initial_world": {
     "calls": {
-      "loadDefs": 0,
       "processRun": 0
     },
-    "logs": []
+    "logs": [],
+    "files": {},
+    "rememberedSecrets": []
   },
   "simulation": {
-    "launcher.readDefinitions": {
-      "action": "fixture.lookup",
-      "world_pointer": "/calls/loadDefs",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "cwd": "/repo"
-          },
-          "result": {
-            "definitions": [
-              {
-                "id": "codex",
-                "name": "Codex",
-                "kind": "codex",
-                "command": "codex"
-              },
-              {
-                "id": "claude",
-                "name": "Claude",
-                "kind": "claude",
-                "command": "claude"
-              }
-            ]
-          }
-        }
-      ],
-      "result_template": null,
-      "result_value_pointer": ""
-    },
     "process.run": {
       "action": "fixture.lookup",
       "world_pointer": "/calls/processRun",
       "cases": [
         {
           "call_index": 1,
+          "args": {
+            "command": "codex",
+            "args": [
+              "--help"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "Codex help includes --sandbox.\n",
+            "stderr": "",
+            "executableMissing": false
+          }
+        },
+        {
+          "call_index": 2,
           "args": {
             "command": "codex",
             "args": [
@@ -73,18 +60,35 @@
           },
           "result": {
             "code": 0,
-            "stdout": "Logged in using ChatGPT\n",
+            "stdout": "Logged in\n",
             "stderr": "",
             "executableMissing": false
           }
         },
         {
-          "call_index": 2,
+          "call_index": 3,
+          "args": {
+            "command": "claude",
+            "args": [
+              "--help"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "--safe-mode --tools --permission-prompts\n",
+            "stderr": "",
+            "executableMissing": false
+          }
+        },
+        {
+          "call_index": 4,
           "args": {
             "command": "claude",
             "args": [
               "auth",
-              "status"
+              "status",
+              "--json"
             ],
             "cwd": "/repo"
           },
@@ -96,27 +100,133 @@
           }
         },
         {
-          "call_index": 3,
+          "call_index": 5,
+          "args": {
+            "command": "gemini",
+            "args": [
+              "--help"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "--approval-mode --admin-policy --extensions --allowed-mcp-server-names --output-format\n",
+            "stderr": "",
+            "executableMissing": false
+          }
+        },
+        {
+          "call_index": 6,
           "args": {
             "command": "codex",
             "args": [
               "exec",
               "--sandbox",
               "read-only",
+              "--ephemeral",
+              "--color",
+              "never",
+              "--ignore-rules",
               "-c",
-              "mcp_servers={}"
+              "approval_policy=\"never\"",
+              "-c",
+              "web_search=\"disabled\"",
+              "-c",
+              "mcp_servers={}",
+              "-c",
+              "features.hooks=false",
+              "-c",
+              "features.plugins=false",
+              "-c",
+              "features.apps=false",
+              "-c",
+              "features.browser_use=false",
+              "-c",
+              "features.browser_use_external=false",
+              "-c",
+              "features.browser_use_full_cdp_access=false",
+              "-c",
+              "features.computer_use=false",
+              "-c",
+              "features.multi_agent=false",
+              "-c",
+              "features.multi_agent_v2=false",
+              "-c",
+              "features.shell_tool=false",
+              "-c",
+              "features.unified_exec=false",
+              "-c",
+              "features.code_mode=false",
+              "-c",
+              "features.code_mode_host=false",
+              "-"
             ],
             "cwd": "/repo"
           },
           "result": {
             "code": 0,
-            "stdout": "{\"say\":\"Try listing the project files.\",\"fill\":{\"entry\":\"files#listProjectFiles\",\"input\":{\"cwd\":\"/repo\"}},\"apply\":true,\"run\":true}\n",
+            "stdout": "{\"say\":\"Try listing the project files.\",\"fill\":{\"entry\":\"files#listProjectFiles\",\"input\":{\"cwd\":\"/repo\",\"includeHidden\":false}},\"apply\":true,\"run\":true,\"criterion\":\"AC1\",\"expect\":{\"text\":\"The activity count is one.\",\"checks\":[{\"path\":\"/activity/starts/count\",\"target\":\"result\",\"value\":1}]},\"save\":{\"name\":\"activity-observation\",\"criterion\":\"AC1\",\"checks\":[{\"path\":\"/repo\",\"target\":\"result\"}]},\"next\":{\"criterion\":\"AC2\",\"text\":\"Check the next workflow stage.\"}}\n",
             "stderr": "",
             "executableMissing": false
           }
         },
         {
-          "call_index": 4,
+          "call_index": 7,
+          "args": {
+            "command": "codex",
+            "args": [
+              "exec",
+              "--sandbox",
+              "read-only",
+              "--ephemeral",
+              "--color",
+              "never",
+              "--ignore-rules",
+              "-c",
+              "approval_policy=\"never\"",
+              "-c",
+              "web_search=\"disabled\"",
+              "-c",
+              "mcp_servers={}",
+              "-c",
+              "features.hooks=false",
+              "-c",
+              "features.plugins=false",
+              "-c",
+              "features.apps=false",
+              "-c",
+              "features.browser_use=false",
+              "-c",
+              "features.browser_use_external=false",
+              "-c",
+              "features.browser_use_full_cdp_access=false",
+              "-c",
+              "features.computer_use=false",
+              "-c",
+              "features.multi_agent=false",
+              "-c",
+              "features.multi_agent_v2=false",
+              "-c",
+              "features.shell_tool=false",
+              "-c",
+              "features.unified_exec=false",
+              "-c",
+              "features.code_mode=false",
+              "-c",
+              "features.code_mode_host=false",
+              "-"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "{\"say\":\"Try listing the project files.\",\"fill\":{\"entry\":\"files#listProjectFiles\",\"input\":{\"cwd\":\"/repo\",\"includeHidden\":false}},\"apply\":true,\"run\":true,\"criterion\":\"AC1\",\"expect\":{\"text\":\"The activity count is one.\",\"checks\":[{\"path\":\"/activity/starts/count\",\"target\":\"result\",\"value\":1}]},\"save\":{\"name\":\"activity-observation\",\"criterion\":\"AC1\",\"checks\":[{\"path\":\"/repo\",\"target\":\"result\"}]},\"next\":{\"criterion\":\"AC2\",\"text\":\"Check the next workflow stage.\"}}\n",
+            "stderr": "",
+            "executableMissing": false
+          }
+        },
+        {
+          "call_index": 8,
           "args": {
             "command": "codex",
             "args": [
@@ -130,22 +240,6 @@
             "stderr": "",
             "executableMissing": false
           }
-        },
-        {
-          "call_index": 5,
-          "args": {
-            "command": "missing-cli",
-            "args": [
-              "--version"
-            ],
-            "cwd": "/repo"
-          },
-          "result": {
-            "code": 127,
-            "stdout": "",
-            "stderr": "not found",
-            "executableMissing": true
-          }
         }
       ],
       "result_template": null,
@@ -154,6 +248,13 @@
     "log.append": {
       "action": "port.write",
       "world_pointer": "/logs",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "secrets.remember": {
+      "action": "port.write",
+      "world_pointer": "/rememberedSecrets",
       "result_template": {
         "ok": true
       }
@@ -177,15 +278,14 @@
         {
           "criterion_id": "AC1",
           "target": "result",
-          "path": "/state",
+          "path": "",
           "op": "equals",
           "value": "ready"
         }
-      ],
-      "model": "gpt-6.1-sol"
+      ]
     },
     {
-      "step_id": "parse-auth-invalid-agent",
+      "step_id": "parse-auth-unavailable",
       "entry_path": "prompts/cli/agent-adapters.prompt.md",
       "operation": "parseAgentAuthStatus",
       "input": {
@@ -196,113 +296,71 @@
           "stderr": ""
         }
       },
-      "expected_error": "invalid-auth-probe",
       "checks": [
         {
           "criterion_id": "AC1",
-          "target": "error",
-          "path": "/code",
+          "target": "result",
+          "path": "",
           "op": "equals",
-          "value": "invalid-auth-probe"
+          "value": "unavailable"
         }
-      ],
-      "model": "gpt-6.1-sol"
+      ]
     },
     {
-      "step_id": "discover-agents-ok",
+      "step_id": "discover-native-probes",
       "entry_path": "prompts/cli/agent-adapters.prompt.md",
       "operation": "discoverAgents",
       "input": {
         "cwd": "/repo",
-        "env": {
-          "HOME": "/home/alice",
-          "PATH": "/usr/bin"
-        }
+        "env": "{}"
       },
       "checks": [
         {
           "criterion_id": "AC2",
           "target": "result",
           "path": "/agents",
-          "op": "equals",
-          "value": [
-            {
-              "id": "codex",
-              "name": "Codex",
-              "state": "ready"
-            },
-            {
-              "id": "claude",
-              "name": "Claude",
-              "state": "signed_out"
-            }
-          ]
+          "op": "count",
+          "value": 3
         },
         {
           "criterion_id": "AC2",
-          "target": "calls",
-          "path": "/resources/agent-adapters-launcher-readDefinitions",
+          "target": "result",
+          "path": "/agents/0/state",
           "op": "equals",
-          "value": 1
+          "value": "ready"
         },
         {
           "criterion_id": "AC2",
-          "target": "calls",
-          "path": "/resources/agent-adapters-process-run",
+          "target": "result",
+          "path": "/agents/1/state",
           "op": "equals",
-          "value": 2
+          "value": "signed_out"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/agents/2/state",
+          "op": "equals",
+          "value": "available"
         }
-      ],
-      "model": "gpt-6.1-sol"
+      ]
     },
     {
-      "step_id": "discover-agents-blank-cwd",
-      "entry_path": "prompts/cli/agent-adapters.prompt.md",
-      "operation": "discoverAgents",
-      "input": {
-        "cwd": "",
-        "env": {
-          "HOME": "/home/alice"
-        }
-      },
-      "expected_error": "invalid-discovery-cwd",
-      "checks": [
-        {
-          "criterion_id": "AC2",
-          "target": "error",
-          "path": "/code",
-          "op": "equals",
-          "value": "invalid-discovery-cwd"
-        },
-        {
-          "criterion_id": "AC2",
-          "target": "calls",
-          "path": "/resources/agent-adapters-process-run",
-          "op": "equals",
-          "value": 0
-        }
-      ],
-      "model": "gpt-6.1-sol"
-    },
-    {
-      "step_id": "ask-agent-structured-reply",
+      "step_id": "ask-valid-fill-and-optional-fields",
       "entry_path": "prompts/cli/agent-adapters.prompt.md",
       "operation": "askAgent",
       "input": {
         "agent": "codex",
         "cwd": "/repo",
-        "env": {
-          "HOME": "/home/alice"
-        },
-        "context": {
-          "question": "Run the file list.",
-          "requestKind": "chat"
-        },
+        "env": "{\"HOME\":\"/home/alice\"}",
+        "context": "{\"question\":\"Run the file list.\",\"requestKind\":\"chat\"}",
         "entries": [
           {
             "entry": "files#listProjectFiles",
             "prompt_path": "prompts/cli/files.prompt.md",
-            "operation": "listProjectFiles"
+            "operation": "listProjectFiles",
+            "input_schema": "{\"type\":\"object\",\"properties\":{\"cwd\":{\"type\":\"string\"},\"includeHidden\":{\"type\":\"boolean\"}},\"required\":[\"cwd\"],\"additionalProperties\":false}",
+            "result_schema": "{\"type\":\"object\"}"
           }
         ],
         "supportsApply": true,
@@ -319,56 +377,100 @@
         {
           "criterion_id": "AC3",
           "target": "result",
+          "path": "/fill/input",
+          "op": "equals",
+          "value": "{\"cwd\":\"/repo\",\"includeHidden\":false}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
           "path": "/run",
           "op": "equals",
           "value": true
         },
         {
           "criterion_id": "AC3",
-          "target": "calls",
-          "path": "/resources/agent-adapters-process-run",
+          "target": "result",
+          "path": "/criterion",
           "op": "equals",
-          "value": 1
+          "value": "AC1"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/next/text",
+          "op": "equals",
+          "value": "Check the next workflow stage."
         }
-      ],
-      "model": "gpt-6.1-sol"
+      ]
     },
     {
-      "step_id": "ask-agent-unknown-error",
+      "step_id": "ask-run-gate-refuses-unsupported-run",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "askAgent",
+      "input": {
+        "agent": "codex",
+        "cwd": "/repo",
+        "env": "{\"HOME\":\"/home/alice\"}",
+        "context": "{\"question\":\"Run the file list.\",\"requestKind\":\"chat\"}",
+        "entries": [
+          {
+            "entry": "files#listProjectFiles",
+            "prompt_path": "prompts/cli/files.prompt.md",
+            "operation": "listProjectFiles",
+            "input_schema": "{\"type\":\"object\",\"properties\":{\"cwd\":{\"type\":\"string\"},\"includeHidden\":{\"type\":\"boolean\"}},\"required\":[\"cwd\"],\"additionalProperties\":false}",
+            "result_schema": "{\"type\":\"object\"}"
+          }
+        ],
+        "supportsApply": true,
+        "supportsRun": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/apply",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/run",
+          "op": "not_equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "ask-unknown-agent-is-structured-failure",
       "entry_path": "prompts/cli/agent-adapters.prompt.md",
       "operation": "askAgent",
       "input": {
         "agent": "unknown-agent",
         "cwd": "/repo",
-        "env": {
-          "HOME": "/home/alice"
-        },
-        "context": {
-          "question": "Hello"
-        },
+        "env": "{\"HOME\":\"/home/alice\"}",
+        "context": "{\"question\":\"Hello\"}",
         "entries": []
       },
-      "expected_error": "invalid-agent-request",
       "checks": [
         {
-          "criterion_id": "AC3",
-          "target": "error",
-          "path": "/code",
-          "op": "equals",
-          "value": "invalid-agent-request"
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/fill",
+          "op": "equals"
         },
         {
-          "criterion_id": "AC3",
-          "target": "calls",
-          "path": "/resources/agent-adapters-process-run",
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/error/state",
           "op": "equals",
-          "value": 0
+          "value": "error"
         }
-      ],
-      "model": "gpt-6.1-sol"
+      ]
     },
     {
-      "step_id": "run-agent-process-ok",
+      "step_id": "run-agent-process-result",
       "entry_path": "prompts/cli/agent-adapters.prompt.md",
       "operation": "runAgentProcess",
       "input": {
@@ -376,7 +478,8 @@
         "args": [
           "--version"
         ],
-        "cwd": "/repo"
+        "cwd": "/repo",
+        "env": "{\"HOME\":\"/home/alice\"}"
       },
       "checks": [
         {
@@ -393,31 +496,7 @@
           "op": "equals",
           "value": "codex 0.160.0\n"
         }
-      ],
-      "model": "gpt-6.1-sol"
-    },
-    {
-      "step_id": "run-agent-process-missing-error",
-      "entry_path": "prompts/cli/agent-adapters.prompt.md",
-      "operation": "runAgentProcess",
-      "input": {
-        "command": "missing-cli",
-        "args": [
-          "--version"
-        ],
-        "cwd": "/repo"
-      },
-      "expected_error": "executable-missing",
-      "checks": [
-        {
-          "criterion_id": "AC4",
-          "target": "error",
-          "path": "/code",
-          "op": "equals",
-          "value": "executable-missing"
-        }
-      ],
-      "model": "gpt-6.1-sol"
+      ]
     }
   ]
 }

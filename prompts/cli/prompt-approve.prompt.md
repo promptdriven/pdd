@@ -22,7 +22,7 @@ by any unavailable coverage and runs no native tests or Runtime checks.
 7. With valid said in easy mode, use the resolved words as the decision without another stdin read or a native conversation-log lookup. Otherwise ask `Approve <path>? y/n ` and read one line. On the terminal route only `y` or `yes` (any case) approves. Anything else, or no answer: `Not approved. Nothing changed.`, exit 1.
 8. On terminal yes or accepted said: set the top-level `"status"` to `"approved"` and the top-level `"prose_sha256"` to the current prose hash, and keep every other byte (a nested `status` field is never touched). Check that the new text parses to the same interface with only those two values changed and that its prose hash is unchanged. Append durable evidence through the shared owner, with the current path/hash, invoking actor, route, clock time and verbatim words (null for terminal). Print `Approved <path>.`, the approved path/hash and a short evidence line; exit 0 only after evidence is saved. Already-approved/current files keep their existing no-op output and do not invent another approval. If the block has no `prose_sha256` key, exit 4: `Add "prose_sha256": "" to the Runtime interface, then run pdd approve again.`
 
-Ports (tests inject them): `stdout`, `stderr`, `stdin`, `interactive` (default: stdin and stdout are TTYs), `env`, `now`, filesystem and Git execution ports for policy/journal/root resolution. Bind Git repository and file checks through `git.execFile`, policy and durable journal operations through `policy.readPolicy` and `policy.appendApproval`, prompt file reads and writes through `files.stat`, `files.read` and `files.write`, prose hashing through `compute.hash_utf8({text})` on the trimmed prose text preceding `<details><summary>Runtime interface</summary>`, terminal confirmation through `terminal.ask`, clock observation through `clock.now`, and output through `output.stdout` and `output.stderr`. `approvePromptText({text})` returns `{text}` with top-level `"status": "approved"` and `"prose_sha256"` set to the `compute.hash_utf8` digest, or raises `missing-prose-sha256` when the interface block has no `prose_sha256` key. `runApprove({words, cwd, said, interactive})` returns `{exitCode}` and raises `invalid-approve-cwd` when `cwd` is blank. Native TTY streams, atomic file replacement and Git subprocess execution remain native obligations (`test/prompt-approve.test.mjs`).
+Runtime transport wraps `approvePromptText(text)` as `{text}` with text null when the owner declines the update; `runApprove` wraps its numeric exit code as `{exitCode}` and catches errors into exit codes. It calls the shared `approval-policy` owner for `readApprovalPolicy`, `approvalActor`, `readSaidWords`, `readPromptApprovals` and `recordPromptApproval`. The journal receives the caller-created id and complete evidence. Bind process context and random event identity through `process.environment` and `ids.randomUUID`, Git through `git.execFile`, prompt file operations through `files.stat/read/write`, terminal words through `stdin.read`, time through `clock.now` and output through `output.stdout/stderr`. The approval-policy owner owns repository policy and durable journal decisions; do not replace those calls with policy result ports.
 
 ## Native-only and automatic approval
 
@@ -51,28 +51,43 @@ Use “Runtime interface” when naming the declaration and its global approval 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "edeefc85fb7be6c76fc14e0d4c7ee10205799d4501d6e2efc1dc928e4af7d42a",
+  "prose_sha256": "8e807397ce37b4af0227dd6197db4415edb4a71d51b8b9b3397cc551f8729cc0",
   "entries": [
     {
       "operation": "approvePromptText",
       "input_schema": {
         "type": "object",
         "properties": {
-          "text": { "type": "string" }
+          "text": {
+            "type": "string"
+          }
         },
-        "required": ["text"],
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "text": { "type": "string" }
+          "text": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
         },
-        "required": ["text"],
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       },
-      "errors": ["missing-prose-sha256"],
-      "resource_operations": ["compute.hash_utf8"]
+      "errors": [],
+      "resource_operations": []
     },
     {
       "operation": "runApprove",
@@ -81,45 +96,86 @@ Use “Runtime interface” when naming the declaration and its global approval 
         "properties": {
           "words": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
-          "cwd": { "type": "string" },
+          "cwd": {
+            "type": "string"
+          },
           "said": {
-            "oneOf": [
-              { "type": "string" },
-              { "type": "null" }
-            ]
+            "type": "string"
           },
-          "interactive": { "type": "boolean" }
+          "automatic": {
+            "type": "boolean"
+          },
+          "tests": {
+            "type": "string"
+          }
         },
-        "required": ["words", "cwd"],
+        "required": [],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "exitCode": { "type": "integer" }
+          "exitCode": {
+            "type": "integer"
+          }
         },
-        "required": ["exitCode"],
+        "required": [
+          "exitCode"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-approve-cwd"],
+      "errors": [],
       "resource_operations": [
         "git.execFile",
-        "policy.readPolicy",
-        "policy.appendApproval",
         "files.stat",
         "files.read",
         "files.write",
-        "compute.hash_utf8",
-        "terminal.ask",
         "clock.now",
         "output.stdout",
-        "output.stderr"
+        "output.stderr",
+        "ids.randomUUID",
+        "process.environment",
+        "stdin.read",
+        "git.spawnSync"
       ]
     }
   ],
-  "calls": [],
+  "calls": [
+    {
+      "operation": "runApprove",
+      "target": "prompts/cli/approval-policy.prompt.md",
+      "target_operation": "readApprovalPolicy",
+      "max_calls": 1
+    },
+    {
+      "operation": "runApprove",
+      "target": "prompts/cli/approval-policy.prompt.md",
+      "target_operation": "approvalActor",
+      "max_calls": 2
+    },
+    {
+      "operation": "runApprove",
+      "target": "prompts/cli/approval-policy.prompt.md",
+      "target_operation": "readSaidWords",
+      "max_calls": 1
+    },
+    {
+      "operation": "runApprove",
+      "target": "prompts/cli/approval-policy.prompt.md",
+      "target_operation": "readPromptApprovals",
+      "max_calls": 1
+    },
+    {
+      "operation": "runApprove",
+      "target": "prompts/cli/approval-policy.prompt.md",
+      "target_operation": "recordPromptApproval",
+      "max_calls": 1
+    }
+  ],
   "resources": [
     {
       "name": "git",
@@ -134,78 +190,85 @@ Use “Runtime interface” when naming the declaration and its global approval 
             "properties": {
               "args": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
-              "cwd": { "type": "string" }
+              "cwd": {
+                "type": "string"
+              }
             },
-            "required": ["args", "cwd"],
+            "required": [
+              "args",
+              "cwd"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "code": { "type": "integer" },
-              "stdout": { "type": "string" },
-              "stderr": { "type": "string" }
+              "code": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
             },
-            "required": ["code", "stdout", "stderr"],
-            "additionalProperties": false
-          }
-        }
-      ]
-    },
-    {
-      "name": "policy",
-      "kind": "port",
-      "access": "write",
-      "operations": [
-        {
-          "name": "readPolicy",
-          "access": "write",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "root": { "type": "string" }
-            },
-            "required": ["root"],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "strictApprovals": { "type": "boolean" }
-            },
-            "required": ["strictApprovals"],
+            "required": [
+              "code",
+              "stdout",
+              "stderr"
+            ],
             "additionalProperties": false
           }
         },
         {
-          "name": "appendApproval",
+          "name": "spawnSync",
           "access": "write",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "commonDir": { "type": "string" },
-              "route": { "type": "string" },
-              "words": {
-                "oneOf": [
-                  { "type": "string" },
-                  { "type": "null" }
-                ]
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
-              "path": { "type": "string" },
-              "proseSha256": { "type": "string" },
-              "at": { "type": "number" }
+              "cwd": {
+                "type": "string"
+              },
+              "maxBuffer": {
+                "type": "integer",
+                "minimum": 0
+              }
             },
-            "required": ["commonDir", "route", "words", "path", "proseSha256", "at"],
+            "required": [
+              "args",
+              "cwd"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "status": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "status",
+              "stdout",
+              "stderr"
+            ],
             "additionalProperties": false
           }
         }
@@ -222,19 +285,34 @@ Use “Runtime interface” when naming the declaration and its global approval 
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" }
+              "path": {
+                "type": "string"
+              }
             },
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "exists": { "type": "boolean" },
-              "size": { "type": "integer", "minimum": 0 },
-              "is_symlink": { "type": "boolean" }
+              "exists": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "is_symlink": {
+                "type": "boolean"
+              }
             },
-            "required": ["exists", "size", "is_symlink"],
+            "required": [
+              "exists",
+              "size",
+              "is_symlink"
+            ],
             "additionalProperties": false
           }
         },
@@ -244,17 +322,25 @@ Use “Runtime interface” when naming the declaration and its global approval 
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" }
+              "path": {
+                "type": "string"
+              }
             },
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "content": { "type": "string" }
+              "content": {
+                "type": "string"
+              }
             },
-            "required": ["content"],
+            "required": [
+              "content"
+            ],
             "additionalProperties": false
           }
         },
@@ -264,70 +350,23 @@ Use “Runtime interface” when naming the declaration and its global approval 
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "path": { "type": "string" },
-              "content": { "type": "string" }
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
             },
-            "required": ["path", "content"],
+            "required": [
+              "path",
+              "content"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {},
             "required": [],
-            "additionalProperties": false
-          }
-        }
-      ]
-    },
-    {
-      "name": "compute",
-      "kind": "compute",
-      "access": "read",
-      "operations": [
-        {
-          "name": "hash_utf8",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "text": { "type": "string" }
-            },
-            "required": ["text"],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": { "type": "string" }
-            },
-            "required": ["value"],
-            "additionalProperties": false
-          }
-        }
-      ]
-    },
-    {
-      "name": "terminal",
-      "kind": "port",
-      "access": "write",
-      "operations": [
-        {
-          "name": "ask",
-          "access": "write",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "question": { "type": "string" }
-            },
-            "required": ["question"],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "answer": { "type": "string" }
-            },
-            "required": ["answer"],
             "additionalProperties": false
           }
         }
@@ -350,9 +389,13 @@ Use “Runtime interface” when naming the declaration and its global approval 
           "result_schema": {
             "type": "object",
             "properties": {
-              "now": { "type": "number" }
+              "now": {
+                "type": "number"
+              }
             },
-            "required": ["now"],
+            "required": [
+              "now"
+            ],
             "additionalProperties": false
           }
         }
@@ -369,17 +412,25 @@ Use “Runtime interface” when naming the declaration and its global approval 
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "text": { "type": "string" }
+              "text": {
+                "type": "string"
+              }
             },
-            "required": ["text"],
+            "required": [
+              "text"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "ok": {
+                "type": "boolean"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "ok"
+            ],
             "additionalProperties": false
           }
         },
@@ -389,17 +440,123 @@ Use “Runtime interface” when naming the declaration and its global approval 
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "text": { "type": "string" }
+              "text": {
+                "type": "string"
+              }
             },
-            "required": ["text"],
+            "required": [
+              "text"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "ok": {
+                "type": "boolean"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "ok"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "ids",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "randomUUID",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "process",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "environment",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "env": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "env"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "stdin",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "text",
+              "error"
+            ],
             "additionalProperties": false
           }
         }
@@ -410,7 +567,11 @@ Use “Runtime interface” when naming the declaration and its global approval 
     "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": []
-}
-```
+  "conventions": [
+    {
+      "path": "/resources/5/operations/0/result_schema/properties/env",
+      "convention": "json"
+    }
+  ]
+}```
 </details>

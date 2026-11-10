@@ -4,67 +4,142 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "`runMetrics` with `export FILE` resolves the repository and observation time, calls `store.createBundle`, writes the serialized bundle to `FILE`, and returns `{exitCode: 0}`."
+      "text": "runMetrics with a daily JSON report reads the saved start event, calls the shared metrics model to calculate activity, and writes the resulting report to stdout."
     },
     {
       "id": "AC2",
-      "text": "`runMetrics` with `--json` collects repository, ledger, selector, and GitHub observations, records live observations through `store.saveEvents`, delegates calculation to `calculate.buildReport`, and writes the JSON report to `output.stdout`."
-    },
-    {
-      "id": "AC3",
-      "text": "`runMetrics` with a historical `--at` cutoff and neither `--snapshot` nor `--date` returns `{exitCode: 1}` and writes an explanatory diagnostic to `output.stderr` without querying live selector or GitHub ports."
-    },
-    {
-      "id": "AC4",
-      "text": "`runMetrics` raises `storage-unavailable` when `cwd` is blank."
+      "text": "runMetrics rejects --at without --date or --snapshot with exit code 1 and a diagnostic before it reads Git, the ledger, or live sources."
     }
   ],
   "initial_world": {
-    "files": {},
-    "calls": {
-      "identify": 0,
-      "now": 0,
-      "selectorObserve": 0,
-      "githubObserve": 0,
-      "readEvents": 0,
-      "exportMetrics": 0,
-      "importMetrics": 0,
-      "calculateMetrics": 0
-    },
-    "appendedEvents": [],
+    "gitCalls": 0,
+    "dirReads": 0,
+    "ledgerReads": 0,
     "stdout": [],
-    "stderr": []
+    "stderr": [],
+    "ledgerWrites": [],
+    "installationReads": 0
   },
   "simulation": {
-    "repository.identify": {
+    "process.execFile": {
       "action": "fixture.lookup",
-      "world_pointer": "/calls/identify",
+      "world_pointer": "/gitCalls",
       "cases": [
         {
           "call_index": 1,
           "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
             "cwd": "/repo"
           },
           "result": {
-            "repo": "promptdriven/pdd"
+            "stdout": "/repo\n",
+            "stderr": "",
+            "error": null
           }
         },
         {
           "call_index": 2,
           "args": {
+            "file": "git",
+            "args": [
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir"
+            ],
             "cwd": "/repo"
           },
           "result": {
-            "repo": "promptdriven/pdd"
+            "stdout": "/repo/.git\n",
+            "stderr": "",
+            "error": null
           }
         },
         {
           "call_index": 3,
           "args": {
+            "file": "git",
+            "args": [
+              "remote",
+              "get-url",
+              "origin"
+            ],
             "cwd": "/repo"
           },
           "result": {
-            "repo": "promptdriven/pdd"
+            "stdout": "https://github.com/promptdriven/pdd.git\n",
+            "stderr": "",
+            "error": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "fs.readdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/dirReads",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/repo/.git/pdd/metrics-gaps"
+          },
+          "result": {
+            "entries": [],
+            "error": null
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "path": "/repo/.git/pdd/metrics/snapshots"
+          },
+          "result": {
+            "entries": [],
+            "error": null
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "path": "/repo/.git/pdd/metrics/decisions"
+          },
+          "result": {
+            "entries": [],
+            "error": null
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "path": "/repo/.git/pdd/runs"
+          },
+          "result": {
+            "entries": [],
+            "error": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "fs.readFile": {
+      "action": "fixture.lookup",
+      "world_pointer": "/configReads",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/repo/pdd.json",
+            "encoding": "utf8"
+          },
+          "result": {
+            "content": "",
+            "error": "missing"
           }
         }
       ],
@@ -73,87 +148,22 @@
     },
     "clock.now": {
       "action": "fixture.lookup",
-      "world_pointer": "/calls/now",
+      "world_pointer": "/clockReads",
       "cases": [
         {
           "call_index": 1,
           "args": {},
           "result": {
-            "now": "2026-11-10T01:00:00.000Z"
-          }
-        },
-        {
-          "call_index": 2,
-          "args": {},
-          "result": {
-            "now": "2026-11-10T01:00:00.000Z"
-          }
-        },
-        {
-          "call_index": 3,
-          "args": {},
-          "result": {
-            "now": "2026-11-10T01:00:00.000Z"
+            "milliseconds": 1794182400000
           }
         }
       ],
       "result_template": null,
       "result_value_pointer": ""
     },
-    "selector.observe": {
+    "ledger.read": {
       "action": "fixture.lookup",
-      "world_pointer": "/calls/selectorObserve",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "cwd": "/repo",
-            "repo": "promptdriven/pdd"
-          },
-          "result": {
-            "available": true,
-            "issues": [
-              {
-                "number": 10,
-                "state": "ready",
-                "reasons": []
-              }
-            ]
-          }
-        }
-      ],
-      "result_template": null,
-      "result_value_pointer": ""
-    },
-    "github.observe": {
-      "action": "fixture.lookup",
-      "world_pointer": "/calls/githubObserve",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "cwd": "/repo",
-            "repo": "promptdriven/pdd"
-          },
-          "result": {
-            "available": true,
-            "prs": [
-              {
-                "number": 21,
-                "issue": 10,
-                "head": "1111111111111111111111111111111111111111",
-                "merged": true
-              }
-            ]
-          }
-        }
-      ],
-      "result_template": null,
-      "result_value_pointer": ""
-    },
-    "store.loadLedger": {
-      "action": "fixture.lookup",
-      "world_pointer": "/calls/readEvents",
+      "world_pointer": "/ledgerReads",
       "cases": [
         {
           "call_index": 1,
@@ -164,314 +174,137 @@
             "events": [
               {
                 "schema": "pdd.metrics.event.v1",
-                "id": "evt-1",
+                "id": "evt-start-17",
                 "repo": "promptdriven/pdd",
-                "issue": 10,
+                "issue": 17,
                 "type": "start",
-                "at": "2026-11-10T00:00:00.000Z",
-                "observedAt": "2026-11-10T00:00:00.000Z",
-                "source": "inst-a"
+                "at": "2026-11-08T12:00:00.000Z",
+                "observedAt": "2026-11-08T12:01:00.000Z",
+                "source": "inst-a",
+                "data": "{\"origin\":\"autopilot\"}"
               }
             ],
-            "sources": [
-              "inst-a"
-            ]
+            "sources": [],
+            "snapshots": []
           }
         }
       ],
       "result_template": null,
       "result_value_pointer": ""
-    },
-    "store.saveEvents": {
-      "action": "port.write",
-      "world_pointer": "/appendedEvents",
-      "result_template": {
-        "ok": true
-      }
-    },
-    "store.createBundle": {
-      "action": "fixture.lookup",
-      "world_pointer": "/calls/exportMetrics",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "root": "/repo",
-            "metadata": {
-              "repo": "promptdriven/pdd",
-              "timezone": "UTC",
-              "exportedAt": "2026-11-10T01:00:00.000Z"
-            }
-          },
-          "result": {
-            "bundle": {
-              "schema": "pdd.metrics.export.v1",
-              "scope": "all-retained-repo-events",
-              "repo": "promptdriven/pdd",
-              "timezone": "UTC",
-              "exportedAt": "2026-11-10T01:00:00.000Z"
-            }
-          }
-        }
-      ],
-      "result_template": null,
-      "result_value_pointer": ""
-    },
-    "store.applyBundle": {
-      "action": "fixture.lookup",
-      "world_pointer": "/calls/importMetrics",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "root": "/repo",
-            "bundle": {
-              "schema": "pdd.metrics.export.v1",
-              "repo": "promptdriven/pdd"
-            }
-          },
-          "result": {
-            "ok": true
-          }
-        }
-      ],
-      "result_template": null,
-      "result_value_pointer": ""
-    },
-    "calculate.buildReport": {
-      "action": "fixture.lookup",
-      "world_pointer": "/calls/calculateMetrics",
-      "cases": [
-        {
-          "call_index": 1,
-          "args": {
-            "repo": "promptdriven/pdd",
-            "timezone": "UTC",
-            "observedAt": "2026-11-10T01:00:00.000Z"
-          },
-          "result": {
-            "report": {
-              "repo": "promptdriven/pdd",
-              "timezone": "UTC",
-              "observedAt": "2026-11-10T01:00:00.000Z",
-              "issueCount": 1,
-              "readyCount": 1
-            }
-          }
-        }
-      ],
-      "result_template": null,
-      "result_value_pointer": ""
-    },
-    "files.read": {
-      "action": "blob.read",
-      "world_pointer": "/files",
-      "path_argument_pointer": "/path",
-      "content_argument_pointer": null,
-      "result_template": {
-        "content": ""
-      },
-      "result_value_pointer": "/content"
-    },
-    "files.write": {
-      "action": "blob.write",
-      "world_pointer": "/files",
-      "path_argument_pointer": "/path",
-      "content_argument_pointer": "/content",
-      "result_template": {},
-      "result_value_pointer": null
     },
     "output.stdout": {
       "action": "port.write",
       "world_pointer": "/stdout",
-      "result_template": {
-        "ok": true
-      }
+      "result_template": {}
     },
     "output.stderr": {
       "action": "port.write",
       "world_pointer": "/stderr",
+      "result_template": {}
+    },
+    "ledger.write": {
+      "action": "port.write",
+      "world_pointer": "/ledgerWrites",
       "result_template": {
         "ok": true
       }
+    },
+    "installation.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/installationReads",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo"
+          },
+          "result": {
+            "source": "inst-a",
+            "captureStartedAt": "2026-11-01T00:00:00.000Z"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
     }
   },
   "context": [],
   "steps": [
     {
-      "step_id": "export-metrics-bundle",
-      "entry_path": "prompts/cli/metrics-command.prompt.md",
-      "operation": "runMetrics",
-      "input": {
-        "argv": [
-          "export",
-          "/out/metrics.json",
-          "--timezone",
-          "UTC"
-        ],
-        "cwd": "/repo"
-      },
-      "checks": [
-        {
-          "criterion_id": "AC1",
-          "target": "result",
-          "path": "/exitCode",
-          "op": "equals",
-          "value": 0
-        },
-        {
-          "criterion_id": "AC1",
-          "target": "world",
-          "path": "/files/~1out~1metrics.json/content",
-          "op": "contains",
-          "value": "\"all-retained-repo-events\""
-        },
-        {
-          "criterion_id": "AC1",
-          "target": "calls",
-          "path": "/resources/metrics-command-store-createBundle",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC1",
-          "target": "calls",
-          "path": "/resources/metrics-command-files-write",
-          "op": "equals",
-          "value": 1
-        }
-      ],
-      "model": "gpt-6.1-sol"
-    },
-    {
-      "step_id": "queue-json-report",
+      "step_id": "daily-json-calculates-saved-observation",
       "entry_path": "prompts/cli/metrics-command.prompt.md",
       "operation": "runMetrics",
       "input": {
         "argv": [
           "--json",
-          "--timezone",
-          "UTC"
+          "--date",
+          "2026-11-08"
         ],
         "cwd": "/repo"
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "AC1",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "AC1",
           "target": "world",
           "path": "/stdout/0/text",
-          "op": "contains",
-          "value": "\"promptdriven/pdd\""
+          "op": "equals",
+          "value": 1,
+          "json_path": "/activity/starts/count"
         },
         {
-          "criterion_id": "AC2",
-          "target": "calls",
-          "path": "/resources/metrics-command-selector-observe",
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/stdout/0/text",
           "op": "equals",
-          "value": 1
+          "value": [
+            17
+          ],
+          "json_path": "/activity/starts/issues"
         },
         {
-          "criterion_id": "AC2",
-          "target": "calls",
-          "path": "/resources/metrics-command-github-observe",
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/stdout/0/text",
           "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC2",
-          "target": "calls",
-          "path": "/resources/metrics-command-store-saveEvents",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC2",
-          "target": "calls",
-          "path": "/resources/metrics-command-calculate-buildReport",
-          "op": "equals",
-          "value": 1
+          "value": "promptdriven/pdd",
+          "json_path": "/repo"
         }
-      ],
-      "model": "gpt-6.1-sol"
+      ]
     },
     {
-      "step_id": "reject-historical-cutoff-without-cohort-or-date",
+      "step_id": "invalid-historical-cutoff-refuses-before-observation",
       "entry_path": "prompts/cli/metrics-command.prompt.md",
       "operation": "runMetrics",
       "input": {
         "argv": [
           "--at",
-          "2026-11-01T00:00:00Z",
-          "--timezone",
-          "UTC"
+          "2026-11-01T00:00:00Z"
         ],
         "cwd": "/repo"
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "AC2",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
-          "target": "calls",
-          "path": "/resources/metrics-command-output-stderr",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC3",
-          "target": "calls",
-          "path": "/resources/metrics-command-selector-observe",
-          "op": "equals",
-          "value": 0
-        },
-        {
-          "criterion_id": "AC3",
-          "target": "calls",
-          "path": "/resources/metrics-command-github-observe",
-          "op": "equals",
-          "value": 0
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/stderr/0/text",
+          "op": "contains",
+          "value": "--at requires --date or --snapshot"
         }
-      ],
-      "model": "gpt-6.1-sol"
-    },
-    {
-      "step_id": "raise-storage-unavailable-on-blank-cwd",
-      "entry_path": "prompts/cli/metrics-command.prompt.md",
-      "operation": "runMetrics",
-      "input": {
-        "argv": [],
-        "cwd": ""
-      },
-      "expected_error": "storage-unavailable",
-      "checks": [
-        {
-          "criterion_id": "AC4",
-          "target": "error",
-          "path": "/code",
-          "op": "equals",
-          "value": "storage-unavailable"
-        },
-        {
-          "criterion_id": "AC4",
-          "target": "calls",
-          "path": "/resources/metrics-command-repository-identify",
-          "op": "equals",
-          "value": 0
-        }
-      ],
-      "model": "gpt-6.1-sol"
+      ]
     }
   ]
 }

@@ -39,10 +39,10 @@ function options(argv) {
   try { new Intl.DateTimeFormat('en', {timeZone:out.timezone}); } catch { throw Error('Invalid timezone'); }
   return out;
 }
-async function repository(cwd) {
-  const ctx = await gitContext(cwd);
+async function repository(cwd, execute = execFile) {
+  const ctx = await gitContext(cwd, {execFile:execute});
   if (!ctx) throw Error('Current directory is not in a Git repository');
-  let stdout; try { ({stdout} = await execFile('git',['remote','get-url','origin'],{cwd})); } catch {
+  let stdout; try { ({stdout} = await execute('git',['remote','get-url','origin'],{cwd})); } catch {
     const local = await ledger.readEvents({root:ctx.toplevel ?? cwd});
     const repos = [...new Set(local.events.map(e => e.repo))];
     if (repos.length !== 1) throw Error('Repository identity unavailable or ambiguous in local metrics');
@@ -54,31 +54,32 @@ async function repository(cwd) {
   if (!match) throw Error('Origin must identify a GitHub repository');
   return {...ctx, repo:`${match[1]}/${match[2]}`.toLowerCase()};
 }
-async function historical({commonDir,repo}, observedAt) {
+async function historical({commonDir,repo}, observedAt, io = {}) {
+  const list = io.readdir ?? readdir, read = io.readFile ?? readFile, getRun = io.readRun ?? readRun;
   const events = [];
   const gapDir=join(commonDir,'pdd','metrics-gaps');
-  let gapNames; try {gapNames=await readdir(gapDir);} catch(e) {if(e.code!=='ENOENT') throw e;gapNames=[];}
-  for (const name of gapNames.filter(n=>/^[0-9a-f-]{36}\.json$/i.test(n))) { try {const event=JSON.parse(await readFile(join(gapDir,name),'utf8')); if(event.repo===repo && event.type==='coverage' && event.data?.complete===false) events.push(event);} catch {} }
+  let gapNames; try {gapNames=await list(gapDir);} catch(e) {if(e.code!=='ENOENT') throw e;gapNames=[];}
+  for (const name of gapNames.filter(n=>/^[0-9a-f-]{36}\.json$/i.test(n))) { try {const event=JSON.parse(await read(join(gapDir,name),'utf8')); if(event.repo===repo && event.type==='coverage' && event.data?.complete===false) events.push(event);} catch {} }
   const snapshotsDir=join(commonDir,'pdd','metrics','snapshots'), committedSnapshots=new Set();
-  let snapshotNames; try {snapshotNames=await readdir(snapshotsDir);} catch(e) {if(e.code!=='ENOENT') throw e;snapshotNames=[];}
+  let snapshotNames; try {snapshotNames=await list(snapshotsDir);} catch(e) {if(e.code!=='ENOENT') throw e;snapshotNames=[];}
   for (const name of snapshotNames.filter(n=>/^[0-9a-f-]{36}\.json$/i.test(n))) {
-    try {const snapshot=JSON.parse(await readFile(join(snapshotsDir,name),'utf8'));
+    try {const snapshot=JSON.parse(await read(join(snapshotsDir,name),'utf8'));
       if(snapshot.repo!==repo || snapshot.snapshotId!==`snapshot:${name.slice(0,-5)}` || !Array.isArray(snapshot.events) || snapshot.events.some(e=>e.repo!==repo || e.type!=='selection' || e.data?.snapshotId!==snapshot.snapshotId)) continue;
       committedSnapshots.add(snapshot.snapshotId); events.push(...snapshot.events);
     } catch {}
   }
   const decisionsDir = join(commonDir,'pdd','metrics','decisions');
-  let decisionNames; try { decisionNames = await readdir(decisionsDir); } catch (e) { if (!['ENOENT','ENOTDIR'].includes(e.code)) throw e; decisionNames = []; }
+  let decisionNames; try { decisionNames = await list(decisionsDir); } catch (e) { if (!['ENOENT','ENOTDIR'].includes(e.code)) throw e; decisionNames = []; }
   for (const name of decisionNames.filter(n => /^[0-9a-f-]{36}\.json$/i.test(n))) {
-    let decision; try { decision = JSON.parse(await readFile(join(decisionsDir,name),'utf8')); } catch { continue; }
+    let decision; try { decision = JSON.parse(await read(join(decisionsDir,name),'utf8')); } catch { continue; }
     if (decision.pendingSnapshot && !committedSnapshots.has(decision.snapshotId)) continue;
     if (`${decision.id}.json` !== name || decision.repo !== repo || !Number.isSafeInteger(decision.issue) || decision.issue < 1 || !Array.isArray(decision.events)) continue;
     if (decision.events.some(e => e.schema !== 'pdd.metrics.event.v1' || e.repo !== repo || e.issue !== decision.issue || !['selection','launch'].includes(e.type))) continue;
     events.push(...decision.events);
   }
-  let names; try { names = await readdir(join(commonDir,'pdd','runs')); } catch (e) {if (e.code === 'ENOENT') return events; throw e;}
+  let names; try { names = await list(join(commonDir,'pdd','runs')); } catch (e) {if (e.code === 'ENOENT') return events; throw e;}
   for (const name of names.filter(n => /^[1-9]\d*(?:-cancelled-[0-9a-f]+)?$/.test(n))) {
-    const run = readRun(join(commonDir,'pdd','runs',name));
+    const run = getRun(join(commonDir,'pdd','runs',name));
     if (!run || run.repo?.toLowerCase() !== repo || !run.runId) continue;
     if (Array.isArray(run.metrics?.events)) events.push(...run.metrics.events);
     for (const pr of run.pr ?? []) {
@@ -101,25 +102,27 @@ async function historical({commonDir,repo}, observedAt) {
   }
   return events;
 }
-async function selectorSnapshots({repo, commonDir, snapshots = []}) {
+async function selectorSnapshots({repo, commonDir, snapshots = []}, io = {}) {
+  const list = io.readdir ?? readdir, read = io.readFile ?? readFile;
   const result = snapshots.filter(s => s.repo === repo);
   try {
     const dir = join(commonDir,'pdd','metrics','snapshots');
-    for (const name of await readdir(dir)) {
+    for (const name of await list(dir)) {
       if (!/^[0-9a-f-]{36}\.json$/i.test(name)) continue;
       try {
-        const value = JSON.parse(await readFile(join(dir,name),'utf8'));
+        const value = JSON.parse(await read(join(dir,name),'utf8'));
         if (value.repo === repo && value.snapshotId === `snapshot:${name.slice(0,-5)}` && Array.isArray(value.events) && Number.isFinite(Date.parse(value.observedAt)) && value.events.every(e => e.repo === repo && e.type === 'selection' && e.data?.snapshotId === value.snapshotId)) result.push(value);
       } catch { /* Ignore incomplete snapshots. */ }
     }
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
   return result.sort((a,b) => Date.parse(b.observedAt)-Date.parse(a.observedAt));
 }
-async function githubQueue({repo, observedAt, commonDir, snapshots = []}) {
-  const {stdout} = await execFile('gh',['api','--paginate',`repos/${repo}/issues?state=open&per_page=100`,'--jq','.[] | select(.pull_request == null) | {number}'],{maxBuffer:16*1024*1024});
+async function githubQueue({repo, observedAt, commonDir, snapshots = []}, io = {}) {
+  const execute = io.execFile ?? execFile;
+  const {stdout} = await execute('gh',['api','--paginate',`repos/${repo}/issues?state=open&per_page=100`,'--jq','.[] | select(.pull_request == null) | {number}'],{maxBuffer:16*1024*1024});
   const rows = stdout.trim() ? stdout.trim().split('\n').map(line=>JSON.parse(line)) : [];
   const snapshotId = `queue:${observedAt}`;
-  const latest = (await selectorSnapshots({repo,commonDir,snapshots}))[0];
+  const latest = (await selectorSnapshots({repo,commonDir,snapshots},io))[0];
   return {snapshotId,selectorSnapshot:latest,events:rows.map(({number})=>({schema:'pdd.metrics.event.v1',id:`${snapshotId}:${number}`,repo,issue:number,type:'selection',at:observedAt,observedAt,source:`github:${repo}`,data:{snapshotId,inScope:true,state:'unknown',reasons:['Selector observation unavailable']}}))};
 }
 // Public checker comments carry evidence in prose, lists, or named fields.
@@ -135,9 +138,10 @@ function checkerSession(value) {
 function reviewer(check) {
   return `${check.family}:session-${Buffer.from(check.session).toString('base64url')}`;
 }
-async function githubFacts({repo, observedAt, events, cwd}) {
+async function githubFacts({repo, observedAt, events, cwd}, io = {}) {
+  const execute = io.execFile ?? execFile, read = io.readFile ?? readFile;
   let trusted = [];
-  try { const config = JSON.parse(await readFile(join(cwd,'pdd.json'),'utf8')); trusted = Array.isArray(config.autopilot?.trust) ? config.autopilot.trust.filter(x => typeof x === 'string').map(x => x.toLowerCase()) : []; } catch { /* No explicit trusted people. */ }
+  try { const config = JSON.parse(await read(join(cwd,'pdd.json'),'utf8')); trusted = Array.isArray(config.autopilot?.trust) ? config.autopilot.trust.filter(x => typeof x === 'string').map(x => x.toLowerCase()) : []; } catch { /* No explicit trusted people. */ }
   const mappings = new Map(), codeMappings = new Set();
   for (const e of events) if (e.type === 'milestone' && e.data?.pr) {
     if (e.data.stage === 'code-pr' || e.data.stage === 'implementation-ready') codeMappings.add(`${e.data.pr}:${e.issue}`);
@@ -146,11 +150,11 @@ async function githubFacts({repo, observedAt, events, cwd}) {
   const facts = [];
   for (const [pr,issues] of mappings) {
     try {
-    const read = async path => (await execFile('gh',['api','--paginate',path],{maxBuffer:16*1024*1024})).stdout;
+    const read = async path => (await execute('gh',['api','--paginate',path],{maxBuffer:16*1024*1024})).stdout;
     const pull = JSON.parse(await read(`repos/${repo}/pulls/${pr}`));
     if (pull.merged_at && pull.html_url && pull.head?.sha) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`merge:${pr}:${issue}`,repo,issue,type:'delivery',at:iso(pull.merged_at),observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,explicit:true,evidence:pull.html_url}});
     if (pull.head?.sha && /^[a-f0-9]{40}$/i.test(pull.head.sha)) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`head:${pr}:${pull.head.sha}:${observedAt}:${issue}`,repo,issue,type:'milestone',at:observedAt,observedAt,source:`github:${repo}`,data:{stage:'candidate-head',pr,head:pull.head.sha}});
-    const {stdout: text} = await execFile('gh',['api','--paginate',`repos/${repo}/issues/${pr}/comments?per_page=100`,'--jq','.[] | {id,body,html_url,created_at,author_association,user}'],{maxBuffer:16*1024*1024});
+    const {stdout: text} = await execute('gh',['api','--paginate',`repos/${repo}/issues/${pr}/comments?per_page=100`,'--jq','.[] | {id,body,html_url,created_at,author_association,user}'],{maxBuffer:16*1024*1024});
     const comments = text.trim() ? text.trim().split('\n').map(line => JSON.parse(line)) : [];
     const checks = [], allowed = new Set();
     for (const comment of comments) {
@@ -166,7 +170,7 @@ async function githubFacts({repo, observedAt, events, cwd}) {
     }
     let sensitive = null;
     if (checks.length) try {
-      const {stdout: files} = await execFile('gh',['api','--paginate',`repos/${repo}/pulls/${pr}/files?per_page=100`,'--jq','.[] | .filename'],{maxBuffer:16*1024*1024});
+      const {stdout: files} = await execute('gh',['api','--paginate',`repos/${repo}/pulls/${pr}/files?per_page=100`,'--jq','.[] | .filename'],{maxBuffer:16*1024*1024});
       sensitive = files.split('\n').some(name => /(?:^|\/)(?:pdd-check|pdd-merge|approval)(?:\/|[.-])/.test(name));
     } catch { /* Unknown changed files cannot prove whether a second check is needed. */ }
     const current = checks.filter(x => x.isTrusted && x.check.head === pull.head?.sha);
@@ -224,18 +228,21 @@ function render(report) {
 }
 export async function runMetrics({argv = [], cwd = process.cwd(), stdout = process.stdout, stderr = process.stderr, ports = {}} = {}) {
   try {
-    const opt = options(argv), context = await (ports.repository ?? repository)(cwd);
+    const opt = options(argv);
+    const io = {execFile:ports.execFile ?? execFile,readFile:ports.readFile ?? readFile,readdir:ports.readdir ?? readdir,readRun:ports.readRun ?? readRun};
+    const context = await (ports.repository ?? (value => repository(value,io.execFile)))(cwd);
     const root = context.toplevel ?? context.root ?? cwd, repo = context.repo.toLowerCase();
     const now = iso((ports.now ?? (()=>new Date()))()), cutoff = opt.at ? iso(opt.at) : now;
-    const store = ports.store ?? ledger;
+    const store = ports.store ?? ledger, storeCall = (name,args) => store[name](args,ports.store ? undefined : ports.ledger ? {ledger:ports.ledger} : undefined);
+    const history = ports.historical ?? ((ctx,at) => historical(ctx,at,io));
     if (opt.action === 'export') {
-      const historic = await (ports.historical ?? historical)(context,now);
-      if (historic.length) await store.appendEvents({root,events:historic});
-      const saved = await store.readEvents({root});
+      const historic = await history(context,now);
+      if (historic.length) await storeCall('appendEvents',{root,events:historic});
+      const saved = await storeCall('readEvents',{root});
       const known = [...(saved.events ?? saved), ...historic];
-      let facts; try { facts = await (ports.github ?? githubFacts)({repo,observedAt:now,cwd,events:known}); } catch { facts = githubGaps(repo,now,known); }
-      if (facts.length) await store.appendEvents({root,events:facts});
-      const bundle = await store.exportMetrics({root,metadata:{repo,timezone:opt.timezone,exportedAt:now,cliVersion:packageVersion}});
+      let facts; try { facts = await (ports.github ? ports.github({repo,observedAt:now,cwd,events:known}) : githubFacts({repo,observedAt:now,cwd,events:known},io)); } catch { facts = githubGaps(repo,now,known); }
+      if (facts.length) await storeCall('appendEvents',{root,events:facts});
+      const bundle = await storeCall('exportMetrics',{root,metadata:{repo,timezone:opt.timezone,exportedAt:now,cliVersion:packageVersion}});
       await (ports.writeFile ?? writeFile)(resolve(cwd,opt.file),JSON.stringify(bundle,null,2)+'\n',{mode:0o600});
       output(stdout,`Exported metrics to ${opt.file}\n`); return 0;
     }
@@ -243,28 +250,28 @@ export async function runMetrics({argv = [], cwd = process.cwd(), stdout = proce
       const value = JSON.parse(await (ports.readFile ?? readFile)(resolve(cwd,opt.file),'utf8'));
       if (opt.action === 'import') {
         if (value.repo?.toLowerCase() !== repo) throw Error('Bundle belongs to another repository');
-        await store.importMetrics({root,bundle:value});
+        await storeCall('importMetrics',{root,bundle:value});
       } else {
         const events = Array.isArray(value) ? value : [value];
         if (events.some(e=>e.repo?.toLowerCase() !== repo)) throw Error('Event belongs to another repository');
-        await store.appendEvents({root,events});
+        await storeCall('appendEvents',{root,events});
       }
       output(stdout,`${opt.action === 'import' ? 'Imported' : 'Recorded'} metrics from ${opt.file}\n`); return 0;
     }
-    const historic = await (ports.historical ?? historical)(context,now);
-    if (historic.length) await store.appendEvents({root,events:historic});
-    const saved = await store.readEvents({root});
+    const historic = await history(context,now);
+    if (historic.length) await storeCall('appendEvents',{root,events:historic});
+    const saved = await storeCall('readEvents',{root});
     let events = [...(saved.events ?? saved), ...historic], scope;
     let githubUnavailable = false, selectorSnapshot;
     if (opt.date) scope = {kind:'activity',date:opt.date};
     else if (opt.snapshot) scope = {kind:'cohort',snapshotId:opt.snapshot};
     else {
-      let queue; try { queue = await (ports.selector ?? githubQueue)({repo,observedAt:now,cwd,events,commonDir:context.commonDir,snapshots:saved.snapshots ?? []}); } catch { githubUnavailable = true; queue = {snapshotId:`queue:${now}`,events:[],selectorSnapshot:(await selectorSnapshots({repo,commonDir:context.commonDir,snapshots:saved.snapshots ?? []}))[0]}; }
+      let queue; try { queue = await (ports.selector ? ports.selector({repo,observedAt:now,cwd,events,commonDir:context.commonDir,snapshots:saved.snapshots ?? []}) : githubQueue({repo,observedAt:now,cwd,events,commonDir:context.commonDir,snapshots:saved.snapshots ?? []},io)); } catch { githubUnavailable = true; queue = {snapshotId:`queue:${now}`,events:[],selectorSnapshot:(await selectorSnapshots({repo,commonDir:context.commonDir,snapshots:saved.snapshots ?? []},io))[0]}; }
       selectorSnapshot = queue.selectorSnapshot;
-      events.push(...queue.events); await store.appendEvents({root,events:queue.events}); scope = {kind:'queue',snapshotId:queue.snapshotId};
+      events.push(...queue.events); await storeCall('appendEvents',{root,events:queue.events}); scope = {kind:'queue',snapshotId:queue.snapshotId};
     }
-    let facts; try { facts = await (ports.github ?? githubFacts)({repo,observedAt:now,cwd,events}); } catch { githubUnavailable = true; facts = githubGaps(repo,now,events); }
-    events.push(...facts); if (facts.length) await store.appendEvents({root,events:facts});
+    let facts; try { facts = await (ports.github ? ports.github({repo,observedAt:now,cwd,events}) : githubFacts({repo,observedAt:now,cwd,events},io)); } catch { githubUnavailable = true; facts = githubGaps(repo,now,events); }
+    events.push(...facts); if (facts.length) await storeCall('appendEvents',{root,events:facts});
     const report = await (ports.calculate ?? calculateMetrics)({events,repo,scope,timezone:opt.timezone,observedAt:cutoff,sources:[...(saved.sources ?? []), ...[...new Set(events.map(e=>e.source))].filter(source => !(saved.sources ?? []).some(s => (typeof s === 'string' ? s : s.source) === source)), ...(githubUnavailable && !events.some(e => e.source === `github:${repo}`) ? [`github:${repo}`] : []), ...(opt.expectedSources ?? []).filter(source => !events.some(e => e.source === source) && !(saved.sources ?? []).some(s => (typeof s === 'string' ? s : s.source) === source))]});
     if (selectorSnapshot) {
       const observed = await (ports.calculate ?? calculateMetrics)({events:[...events,...selectorSnapshot.events],repo,scope:{kind:'cohort',snapshotId:selectorSnapshot.snapshotId},timezone:opt.timezone,observedAt:now,sources:[]});

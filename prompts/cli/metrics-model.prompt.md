@@ -25,12 +25,14 @@ A FAIL is negative only with accepted evidence. A split across sources remains u
 
 None. Timezone conversion is deterministic and uses the supplied timezone and cutoff; no implicit system clock or repository lookup.
 
+Runtime transports event data maps as canonical JSON text. It decodes them before native calculation; the native API uses event data objects.
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "dc3450fa3967e8594af884a44e1bb80ec465594ff8d58cfa5a45612b21ab06c2",
+  "prose_sha256": "033120cd8f13fa433fd4e6a97a59df4de0665155d16535ecdc7d42948bca34b2",
   "entries": [
     {
       "operation": "calculateMetrics",
@@ -70,102 +72,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                   "type": "string"
                 },
                 "data": {
-                  "type": "object",
-                  "properties": {
-                    "snapshotId": {
-                      "type": "string"
-                    },
-                    "inScope": {
-                      "type": "boolean"
-                    },
-                    "state": {
-                      "type": "string"
-                    },
-                    "reasons": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    "origin": {
-                      "type": "string"
-                    },
-                    "decisionId": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "string"
-                    },
-                    "cliVersion": {
-                      "type": "string"
-                    },
-                    "skillVersion": {
-                      "type": "string"
-                    },
-                    "requiredOutcome": {
-                      "type": "string"
-                    },
-                    "stage": {
-                      "type": "string"
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "pr": {
-                      "type": "integer"
-                    },
-                    "head": {
-                      "type": "string"
-                    },
-                    "verdict": {
-                      "type": "string"
-                    },
-                    "reviewer": {
-                      "type": "string"
-                    },                    "checkerFamily": {
-                      "type": "string"
-                    },                    "checkerMode": {
-                      "type": "string"
-                    },
-                    "evidence": {
-                      "type": "string"
-                    },
-                    "acceptance": {
-                      "type": "string"
-                    },
-                    "classification": {
-                      "type": "string"
-                    },
-                    "humanReported": {
-                      "type": "boolean"
-                    },
-                    "explicit": {
-                      "type": "boolean"
-                    },
-                    "complete": {
-                      "type": "boolean"
-                    },
-                    "since": {
-                      "type": "string"
-                    },
-                    "until": {
-                      "type": "string"
-                    },
-                    "step": {
-                      "type": "string"
-                    },
-                    "area": {
-                      "type": "string"
-                    },
-                    "candidateVersion": {
-                      "type": "string"
-                    },
-                    "waitStage": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [],
-                  "additionalProperties": false
+                  "type": "string"
                 }
               },
               "required": [
@@ -437,102 +344,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                       "type": "string"
                     },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "snapshotId": {
-                          "type": "string"
-                        },
-                        "inScope": {
-                          "type": "boolean"
-                        },
-                        "state": {
-                          "type": "string"
-                        },
-                        "reasons": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        "origin": {
-                          "type": "string"
-                        },
-                        "decisionId": {
-                          "type": "string"
-                        },
-                        "status": {
-                          "type": "string"
-                        },
-                        "cliVersion": {
-                          "type": "string"
-                        },
-                        "skillVersion": {
-                          "type": "string"
-                        },
-                        "requiredOutcome": {
-                          "type": "string"
-                        },
-                        "stage": {
-                          "type": "string"
-                        },
-                        "reason": {
-                          "type": "string"
-                        },
-                        "pr": {
-                          "type": "integer"
-                        },
-                        "head": {
-                          "type": "string"
-                        },
-                        "verdict": {
-                          "type": "string"
-                        },
-                        "reviewer": {
-                          "type": "string"
-                        },                        "checkerFamily": {
-                          "type": "string"
-                        },                        "checkerMode": {
-                          "type": "string"
-                        },
-                        "evidence": {
-                          "type": "string"
-                        },
-                        "acceptance": {
-                          "type": "string"
-                        },
-                        "classification": {
-                          "type": "string"
-                        },
-                        "humanReported": {
-                          "type": "boolean"
-                        },
-                        "explicit": {
-                          "type": "boolean"
-                        },
-                        "complete": {
-                          "type": "boolean"
-                        },
-                        "since": {
-                          "type": "string"
-                        },
-                        "until": {
-                          "type": "string"
-                        },
-                        "step": {
-                          "type": "string"
-                        },
-                        "area": {
-                          "type": "string"
-                        },
-                        "candidateVersion": {
-                          "type": "string"
-                        },
-                        "waitStage": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [],
-                      "additionalProperties": false
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -610,102 +422,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -832,102 +549,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -977,102 +599,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                           "type": "string"
                         },
                         "data": {
-                          "type": "object",
-                          "properties": {
-                            "snapshotId": {
-                              "type": "string"
-                            },
-                            "inScope": {
-                              "type": "boolean"
-                            },
-                            "state": {
-                              "type": "string"
-                            },
-                            "reasons": {
-                              "type": "array",
-                              "items": {
-                                "type": "string"
-                              }
-                            },
-                            "origin": {
-                              "type": "string"
-                            },
-                            "decisionId": {
-                              "type": "string"
-                            },
-                            "status": {
-                              "type": "string"
-                            },
-                            "cliVersion": {
-                              "type": "string"
-                            },
-                            "skillVersion": {
-                              "type": "string"
-                            },
-                            "requiredOutcome": {
-                              "type": "string"
-                            },
-                            "stage": {
-                              "type": "string"
-                            },
-                            "reason": {
-                              "type": "string"
-                            },
-                            "pr": {
-                              "type": "integer"
-                            },
-                            "head": {
-                              "type": "string"
-                            },
-                            "verdict": {
-                              "type": "string"
-                            },
-                            "reviewer": {
-                              "type": "string"
-                            },                            "checkerFamily": {
-                              "type": "string"
-                            },                            "checkerMode": {
-                              "type": "string"
-                            },
-                            "evidence": {
-                              "type": "string"
-                            },
-                            "acceptance": {
-                              "type": "string"
-                            },
-                            "classification": {
-                              "type": "string"
-                            },
-                            "humanReported": {
-                              "type": "boolean"
-                            },
-                            "explicit": {
-                              "type": "boolean"
-                            },
-                            "complete": {
-                              "type": "boolean"
-                            },
-                            "since": {
-                              "type": "string"
-                            },
-                            "until": {
-                              "type": "string"
-                            },
-                            "step": {
-                              "type": "string"
-                            },
-                            "area": {
-                              "type": "string"
-                            },
-                            "candidateVersion": {
-                              "type": "string"
-                            },
-                            "waitStage": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [],
-                          "additionalProperties": false
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -1126,102 +653,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -1271,102 +703,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -1416,102 +753,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -1561,102 +803,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -1706,102 +853,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -1851,102 +903,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -2007,102 +964,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                                     "type": "string"
                                   },
                                   "data": {
-                                    "type": "object",
-                                    "properties": {
-                                      "snapshotId": {
-                                        "type": "string"
-                                      },
-                                      "inScope": {
-                                        "type": "boolean"
-                                      },
-                                      "state": {
-                                        "type": "string"
-                                      },
-                                      "reasons": {
-                                        "type": "array",
-                                        "items": {
-                                          "type": "string"
-                                        }
-                                      },
-                                      "origin": {
-                                        "type": "string"
-                                      },
-                                      "decisionId": {
-                                        "type": "string"
-                                      },
-                                      "status": {
-                                        "type": "string"
-                                      },
-                                      "cliVersion": {
-                                        "type": "string"
-                                      },
-                                      "skillVersion": {
-                                        "type": "string"
-                                      },
-                                      "requiredOutcome": {
-                                        "type": "string"
-                                      },
-                                      "stage": {
-                                        "type": "string"
-                                      },
-                                      "reason": {
-                                        "type": "string"
-                                      },
-                                      "pr": {
-                                        "type": "integer"
-                                      },
-                                      "head": {
-                                        "type": "string"
-                                      },
-                                      "verdict": {
-                                        "type": "string"
-                                      },
-                                      "reviewer": {
-                                        "type": "string"
-                                      },                                      "checkerFamily": {
-                                        "type": "string"
-                                      },                                      "checkerMode": {
-                                        "type": "string"
-                                      },
-                                      "evidence": {
-                                        "type": "string"
-                                      },
-                                      "acceptance": {
-                                        "type": "string"
-                                      },
-                                      "classification": {
-                                        "type": "string"
-                                      },
-                                      "humanReported": {
-                                        "type": "boolean"
-                                      },
-                                      "explicit": {
-                                        "type": "boolean"
-                                      },
-                                      "complete": {
-                                        "type": "boolean"
-                                      },
-                                      "since": {
-                                        "type": "string"
-                                      },
-                                      "until": {
-                                        "type": "string"
-                                      },
-                                      "step": {
-                                        "type": "string"
-                                      },
-                                      "area": {
-                                        "type": "string"
-                                      },
-                                      "candidateVersion": {
-                                        "type": "string"
-                                      },
-                                      "waitStage": {
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [],
-                                    "additionalProperties": false
+                                    "type": "string"
                                   }
                                 },
                                 "required": [
@@ -2169,102 +1031,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                                     "type": "string"
                                   },
                                   "data": {
-                                    "type": "object",
-                                    "properties": {
-                                      "snapshotId": {
-                                        "type": "string"
-                                      },
-                                      "inScope": {
-                                        "type": "boolean"
-                                      },
-                                      "state": {
-                                        "type": "string"
-                                      },
-                                      "reasons": {
-                                        "type": "array",
-                                        "items": {
-                                          "type": "string"
-                                        }
-                                      },
-                                      "origin": {
-                                        "type": "string"
-                                      },
-                                      "decisionId": {
-                                        "type": "string"
-                                      },
-                                      "status": {
-                                        "type": "string"
-                                      },
-                                      "cliVersion": {
-                                        "type": "string"
-                                      },
-                                      "skillVersion": {
-                                        "type": "string"
-                                      },
-                                      "requiredOutcome": {
-                                        "type": "string"
-                                      },
-                                      "stage": {
-                                        "type": "string"
-                                      },
-                                      "reason": {
-                                        "type": "string"
-                                      },
-                                      "pr": {
-                                        "type": "integer"
-                                      },
-                                      "head": {
-                                        "type": "string"
-                                      },
-                                      "verdict": {
-                                        "type": "string"
-                                      },
-                                      "reviewer": {
-                                        "type": "string"
-                                      },                                      "checkerFamily": {
-                                        "type": "string"
-                                      },                                      "checkerMode": {
-                                        "type": "string"
-                                      },
-                                      "evidence": {
-                                        "type": "string"
-                                      },
-                                      "acceptance": {
-                                        "type": "string"
-                                      },
-                                      "classification": {
-                                        "type": "string"
-                                      },
-                                      "humanReported": {
-                                        "type": "boolean"
-                                      },
-                                      "explicit": {
-                                        "type": "boolean"
-                                      },
-                                      "complete": {
-                                        "type": "boolean"
-                                      },
-                                      "since": {
-                                        "type": "string"
-                                      },
-                                      "until": {
-                                        "type": "string"
-                                      },
-                                      "step": {
-                                        "type": "string"
-                                      },
-                                      "area": {
-                                        "type": "string"
-                                      },
-                                      "candidateVersion": {
-                                        "type": "string"
-                                      },
-                                      "waitStage": {
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [],
-                                    "additionalProperties": false
+                                    "type": "string"
                                   }
                                 },
                                 "required": [
@@ -2393,102 +1160,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                             "type": "string"
                           },
                           "data": {
-                            "type": "object",
-                            "properties": {
-                              "snapshotId": {
-                                "type": "string"
-                              },
-                              "inScope": {
-                                "type": "boolean"
-                              },
-                              "state": {
-                                "type": "string"
-                              },
-                              "reasons": {
-                                "type": "array",
-                                "items": {
-                                  "type": "string"
-                                }
-                              },
-                              "origin": {
-                                "type": "string"
-                              },
-                              "decisionId": {
-                                "type": "string"
-                              },
-                              "status": {
-                                "type": "string"
-                              },
-                              "cliVersion": {
-                                "type": "string"
-                              },
-                              "skillVersion": {
-                                "type": "string"
-                              },
-                              "requiredOutcome": {
-                                "type": "string"
-                              },
-                              "stage": {
-                                "type": "string"
-                              },
-                              "reason": {
-                                "type": "string"
-                              },
-                              "pr": {
-                                "type": "integer"
-                              },
-                              "head": {
-                                "type": "string"
-                              },
-                              "verdict": {
-                                "type": "string"
-                              },
-                              "reviewer": {
-                                "type": "string"
-                              },                              "checkerFamily": {
-                                "type": "string"
-                              },                              "checkerMode": {
-                                "type": "string"
-                              },
-                              "evidence": {
-                                "type": "string"
-                              },
-                              "acceptance": {
-                                "type": "string"
-                              },
-                              "classification": {
-                                "type": "string"
-                              },
-                              "humanReported": {
-                                "type": "boolean"
-                              },
-                              "explicit": {
-                                "type": "boolean"
-                              },
-                              "complete": {
-                                "type": "boolean"
-                              },
-                              "since": {
-                                "type": "string"
-                              },
-                              "until": {
-                                "type": "string"
-                              },
-                              "step": {
-                                "type": "string"
-                              },
-                              "area": {
-                                "type": "string"
-                              },
-                              "candidateVersion": {
-                                "type": "string"
-                              },
-                              "waitStage": {
-                                "type": "string"
-                              }
-                            },
-                            "required": [],
-                            "additionalProperties": false
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -2545,102 +1217,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -2721,102 +1298,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                             "type": "string"
                           },
                           "data": {
-                            "type": "object",
-                            "properties": {
-                              "snapshotId": {
-                                "type": "string"
-                              },
-                              "inScope": {
-                                "type": "boolean"
-                              },
-                              "state": {
-                                "type": "string"
-                              },
-                              "reasons": {
-                                "type": "array",
-                                "items": {
-                                  "type": "string"
-                                }
-                              },
-                              "origin": {
-                                "type": "string"
-                              },
-                              "decisionId": {
-                                "type": "string"
-                              },
-                              "status": {
-                                "type": "string"
-                              },
-                              "cliVersion": {
-                                "type": "string"
-                              },
-                              "skillVersion": {
-                                "type": "string"
-                              },
-                              "requiredOutcome": {
-                                "type": "string"
-                              },
-                              "stage": {
-                                "type": "string"
-                              },
-                              "reason": {
-                                "type": "string"
-                              },
-                              "pr": {
-                                "type": "integer"
-                              },
-                              "head": {
-                                "type": "string"
-                              },
-                              "verdict": {
-                                "type": "string"
-                              },
-                              "reviewer": {
-                                "type": "string"
-                              },                              "checkerFamily": {
-                                "type": "string"
-                              },                              "checkerMode": {
-                                "type": "string"
-                              },
-                              "evidence": {
-                                "type": "string"
-                              },
-                              "acceptance": {
-                                "type": "string"
-                              },
-                              "classification": {
-                                "type": "string"
-                              },
-                              "humanReported": {
-                                "type": "boolean"
-                              },
-                              "explicit": {
-                                "type": "boolean"
-                              },
-                              "complete": {
-                                "type": "boolean"
-                              },
-                              "since": {
-                                "type": "string"
-                              },
-                              "until": {
-                                "type": "string"
-                              },
-                              "step": {
-                                "type": "string"
-                              },
-                              "area": {
-                                "type": "string"
-                              },
-                              "candidateVersion": {
-                                "type": "string"
-                              },
-                              "waitStage": {
-                                "type": "string"
-                              }
-                            },
-                            "required": [],
-                            "additionalProperties": false
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -2865,102 +1347,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                               "type": "string"
                             },
                             "data": {
-                              "type": "object",
-                              "properties": {
-                                "snapshotId": {
-                                  "type": "string"
-                                },
-                                "inScope": {
-                                  "type": "boolean"
-                                },
-                                "state": {
-                                  "type": "string"
-                                },
-                                "reasons": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "string"
-                                  }
-                                },
-                                "origin": {
-                                  "type": "string"
-                                },
-                                "decisionId": {
-                                  "type": "string"
-                                },
-                                "status": {
-                                  "type": "string"
-                                },
-                                "cliVersion": {
-                                  "type": "string"
-                                },
-                                "skillVersion": {
-                                  "type": "string"
-                                },
-                                "requiredOutcome": {
-                                  "type": "string"
-                                },
-                                "stage": {
-                                  "type": "string"
-                                },
-                                "reason": {
-                                  "type": "string"
-                                },
-                                "pr": {
-                                  "type": "integer"
-                                },
-                                "head": {
-                                  "type": "string"
-                                },
-                                "verdict": {
-                                  "type": "string"
-                                },
-                                "reviewer": {
-                                  "type": "string"
-                                },                                "checkerFamily": {
-                                  "type": "string"
-                                },                                "checkerMode": {
-                                  "type": "string"
-                                },
-                                "evidence": {
-                                  "type": "string"
-                                },
-                                "acceptance": {
-                                  "type": "string"
-                                },
-                                "classification": {
-                                  "type": "string"
-                                },
-                                "humanReported": {
-                                  "type": "boolean"
-                                },
-                                "explicit": {
-                                  "type": "boolean"
-                                },
-                                "complete": {
-                                  "type": "boolean"
-                                },
-                                "since": {
-                                  "type": "string"
-                                },
-                                "until": {
-                                  "type": "string"
-                                },
-                                "step": {
-                                  "type": "string"
-                                },
-                                "area": {
-                                  "type": "string"
-                                },
-                                "candidateVersion": {
-                                  "type": "string"
-                                },
-                                "waitStage": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [],
-                              "additionalProperties": false
+                              "type": "string"
                             }
                           },
                           "required": [
@@ -3019,102 +1406,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                                       "type": "string"
                                     },
                                     "data": {
-                                      "type": "object",
-                                      "properties": {
-                                        "snapshotId": {
-                                          "type": "string"
-                                        },
-                                        "inScope": {
-                                          "type": "boolean"
-                                        },
-                                        "state": {
-                                          "type": "string"
-                                        },
-                                        "reasons": {
-                                          "type": "array",
-                                          "items": {
-                                            "type": "string"
-                                          }
-                                        },
-                                        "origin": {
-                                          "type": "string"
-                                        },
-                                        "decisionId": {
-                                          "type": "string"
-                                        },
-                                        "status": {
-                                          "type": "string"
-                                        },
-                                        "cliVersion": {
-                                          "type": "string"
-                                        },
-                                        "skillVersion": {
-                                          "type": "string"
-                                        },
-                                        "requiredOutcome": {
-                                          "type": "string"
-                                        },
-                                        "stage": {
-                                          "type": "string"
-                                        },
-                                        "reason": {
-                                          "type": "string"
-                                        },
-                                        "pr": {
-                                          "type": "integer"
-                                        },
-                                        "head": {
-                                          "type": "string"
-                                        },
-                                        "verdict": {
-                                          "type": "string"
-                                        },
-                                        "reviewer": {
-                                          "type": "string"
-                                        },                                        "checkerFamily": {
-                                          "type": "string"
-                                        },                                        "checkerMode": {
-                                          "type": "string"
-                                        },
-                                        "evidence": {
-                                          "type": "string"
-                                        },
-                                        "acceptance": {
-                                          "type": "string"
-                                        },
-                                        "classification": {
-                                          "type": "string"
-                                        },
-                                        "humanReported": {
-                                          "type": "boolean"
-                                        },
-                                        "explicit": {
-                                          "type": "boolean"
-                                        },
-                                        "complete": {
-                                          "type": "boolean"
-                                        },
-                                        "since": {
-                                          "type": "string"
-                                        },
-                                        "until": {
-                                          "type": "string"
-                                        },
-                                        "step": {
-                                          "type": "string"
-                                        },
-                                        "area": {
-                                          "type": "string"
-                                        },
-                                        "candidateVersion": {
-                                          "type": "string"
-                                        },
-                                        "waitStage": {
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": [],
-                                      "additionalProperties": false
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
@@ -3181,102 +1473,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                                       "type": "string"
                                     },
                                     "data": {
-                                      "type": "object",
-                                      "properties": {
-                                        "snapshotId": {
-                                          "type": "string"
-                                        },
-                                        "inScope": {
-                                          "type": "boolean"
-                                        },
-                                        "state": {
-                                          "type": "string"
-                                        },
-                                        "reasons": {
-                                          "type": "array",
-                                          "items": {
-                                            "type": "string"
-                                          }
-                                        },
-                                        "origin": {
-                                          "type": "string"
-                                        },
-                                        "decisionId": {
-                                          "type": "string"
-                                        },
-                                        "status": {
-                                          "type": "string"
-                                        },
-                                        "cliVersion": {
-                                          "type": "string"
-                                        },
-                                        "skillVersion": {
-                                          "type": "string"
-                                        },
-                                        "requiredOutcome": {
-                                          "type": "string"
-                                        },
-                                        "stage": {
-                                          "type": "string"
-                                        },
-                                        "reason": {
-                                          "type": "string"
-                                        },
-                                        "pr": {
-                                          "type": "integer"
-                                        },
-                                        "head": {
-                                          "type": "string"
-                                        },
-                                        "verdict": {
-                                          "type": "string"
-                                        },
-                                        "reviewer": {
-                                          "type": "string"
-                                        },                                        "checkerFamily": {
-                                          "type": "string"
-                                        },                                        "checkerMode": {
-                                          "type": "string"
-                                        },
-                                        "evidence": {
-                                          "type": "string"
-                                        },
-                                        "acceptance": {
-                                          "type": "string"
-                                        },
-                                        "classification": {
-                                          "type": "string"
-                                        },
-                                        "humanReported": {
-                                          "type": "boolean"
-                                        },
-                                        "explicit": {
-                                          "type": "boolean"
-                                        },
-                                        "complete": {
-                                          "type": "boolean"
-                                        },
-                                        "since": {
-                                          "type": "string"
-                                        },
-                                        "until": {
-                                          "type": "string"
-                                        },
-                                        "step": {
-                                          "type": "string"
-                                        },
-                                        "area": {
-                                          "type": "string"
-                                        },
-                                        "candidateVersion": {
-                                          "type": "string"
-                                        },
-                                        "waitStage": {
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": [],
-                                      "additionalProperties": false
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
@@ -3353,102 +1550,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -3498,102 +1600,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                         "type": "string"
                       },
                       "data": {
-                        "type": "object",
-                        "properties": {
-                          "snapshotId": {
-                            "type": "string"
-                          },
-                          "inScope": {
-                            "type": "boolean"
-                          },
-                          "state": {
-                            "type": "string"
-                          },
-                          "reasons": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          },
-                          "origin": {
-                            "type": "string"
-                          },
-                          "decisionId": {
-                            "type": "string"
-                          },
-                          "status": {
-                            "type": "string"
-                          },
-                          "cliVersion": {
-                            "type": "string"
-                          },
-                          "skillVersion": {
-                            "type": "string"
-                          },
-                          "requiredOutcome": {
-                            "type": "string"
-                          },
-                          "stage": {
-                            "type": "string"
-                          },
-                          "reason": {
-                            "type": "string"
-                          },
-                          "pr": {
-                            "type": "integer"
-                          },
-                          "head": {
-                            "type": "string"
-                          },
-                          "verdict": {
-                            "type": "string"
-                          },
-                          "reviewer": {
-                            "type": "string"
-                          },                          "checkerFamily": {
-                            "type": "string"
-                          },                          "checkerMode": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "type": "string"
-                          },
-                          "acceptance": {
-                            "type": "string"
-                          },
-                          "classification": {
-                            "type": "string"
-                          },
-                          "humanReported": {
-                            "type": "boolean"
-                          },
-                          "explicit": {
-                            "type": "boolean"
-                          },
-                          "complete": {
-                            "type": "boolean"
-                          },
-                          "since": {
-                            "type": "string"
-                          },
-                          "until": {
-                            "type": "string"
-                          },
-                          "step": {
-                            "type": "string"
-                          },
-                          "area": {
-                            "type": "string"
-                          },
-                          "candidateVersion": {
-                            "type": "string"
-                          },
-                          "waitStage": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [],
-                        "additionalProperties": false
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -3797,678 +1804,305 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
             ],
             "additionalProperties": false
           },
-          "activity": {"oneOf": [{
-            "type": "object",
-            "properties": {
-              "starts": {
+          "activity": {
+            "oneOf": [
+              {
                 "type": "object",
                 "properties": {
-                  "count": {
-                    "type": "integer"
-                  },
-                  "issues": {
-                    "type": "array",
-                    "items": {
-                      "type": "integer"
-                    }
-                  },
-                  "events": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "schema": {
-                          "type": "string"
-                        },
-                        "id": {
-                          "type": "string"
-                        },
-                        "repo": {
-                          "type": "string"
-                        },
-                        "issue": {
+                  "starts": {
+                    "type": "object",
+                    "properties": {
+                      "count": {
+                        "type": "integer"
+                      },
+                      "issues": {
+                        "type": "array",
+                        "items": {
                           "type": "integer"
-                        },
-                        "type": {
-                          "type": "string"
-                        },
-                        "at": {
-                          "type": "string"
-                        },
-                        "observedAt": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "type": "string"
-                        },
-                        "attempt": {
-                          "type": "string"
-                        },
-                        "data": {
+                        }
+                      },
+                      "events": {
+                        "type": "array",
+                        "items": {
                           "type": "object",
                           "properties": {
-                            "snapshotId": {
+                            "schema": {
                               "type": "string"
                             },
-                            "inScope": {
-                              "type": "boolean"
-                            },
-                            "state": {
+                            "id": {
                               "type": "string"
                             },
-                            "reasons": {
-                              "type": "array",
-                              "items": {
-                                "type": "string"
-                              }
-                            },
-                            "origin": {
+                            "repo": {
                               "type": "string"
                             },
-                            "decisionId": {
-                              "type": "string"
-                            },
-                            "status": {
-                              "type": "string"
-                            },
-                            "cliVersion": {
-                              "type": "string"
-                            },
-                            "skillVersion": {
-                              "type": "string"
-                            },
-                            "requiredOutcome": {
-                              "type": "string"
-                            },
-                            "stage": {
-                              "type": "string"
-                            },
-                            "reason": {
-                              "type": "string"
-                            },
-                            "pr": {
+                            "issue": {
                               "type": "integer"
                             },
-                            "head": {
+                            "type": {
                               "type": "string"
                             },
-                            "verdict": {
+                            "at": {
                               "type": "string"
                             },
-                            "reviewer": {
-                              "type": "string"
-                            },                            "checkerFamily": {
-                              "type": "string"
-                            },                            "checkerMode": {
+                            "observedAt": {
                               "type": "string"
                             },
-                            "evidence": {
+                            "source": {
                               "type": "string"
                             },
-                            "acceptance": {
+                            "attempt": {
                               "type": "string"
                             },
-                            "classification": {
-                              "type": "string"
-                            },
-                            "humanReported": {
-                              "type": "boolean"
-                            },
-                            "explicit": {
-                              "type": "boolean"
-                            },
-                            "complete": {
-                              "type": "boolean"
-                            },
-                            "since": {
-                              "type": "string"
-                            },
-                            "until": {
-                              "type": "string"
-                            },
-                            "step": {
-                              "type": "string"
-                            },
-                            "area": {
-                              "type": "string"
-                            },
-                            "candidateVersion": {
-                              "type": "string"
-                            },
-                            "waitStage": {
+                            "data": {
                               "type": "string"
                             }
                           },
-                          "required": [],
+                          "required": [
+                            "schema",
+                            "id",
+                            "repo",
+                            "issue",
+                            "type",
+                            "at",
+                            "observedAt",
+                            "source",
+                            "data"
+                          ],
                           "additionalProperties": false
                         }
+                      }
+                    },
+                    "required": [
+                      "count",
+                      "issues",
+                      "events"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "candidateCompletions": {
+                    "type": "object",
+                    "properties": {
+                      "count": {
+                        "type": "integer"
                       },
-                      "required": [
-                        "schema",
-                        "id",
-                        "repo",
-                        "issue",
-                        "type",
-                        "at",
-                        "observedAt",
-                        "source",
-                        "data"
-                      ],
-                      "additionalProperties": false
-                    }
+                      "issues": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        }
+                      },
+                      "events": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "schema": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "repo": {
+                              "type": "string"
+                            },
+                            "issue": {
+                              "type": "integer"
+                            },
+                            "type": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "string"
+                            },
+                            "observedAt": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "string"
+                            },
+                            "attempt": {
+                              "type": "string"
+                            },
+                            "data": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schema",
+                            "id",
+                            "repo",
+                            "issue",
+                            "type",
+                            "at",
+                            "observedAt",
+                            "source",
+                            "data"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "count",
+                      "issues",
+                      "events"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "validationResults": {
+                    "type": "object",
+                    "properties": {
+                      "count": {
+                        "type": "integer"
+                      },
+                      "issues": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        }
+                      },
+                      "events": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "schema": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "repo": {
+                              "type": "string"
+                            },
+                            "issue": {
+                              "type": "integer"
+                            },
+                            "type": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "string"
+                            },
+                            "observedAt": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "string"
+                            },
+                            "attempt": {
+                              "type": "string"
+                            },
+                            "data": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schema",
+                            "id",
+                            "repo",
+                            "issue",
+                            "type",
+                            "at",
+                            "observedAt",
+                            "source",
+                            "data"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "count",
+                      "issues",
+                      "events"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "deliveries": {
+                    "type": "object",
+                    "properties": {
+                      "count": {
+                        "type": "integer"
+                      },
+                      "issues": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        }
+                      },
+                      "events": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "schema": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "repo": {
+                              "type": "string"
+                            },
+                            "issue": {
+                              "type": "integer"
+                            },
+                            "type": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "string"
+                            },
+                            "observedAt": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "string"
+                            },
+                            "attempt": {
+                              "type": "string"
+                            },
+                            "data": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schema",
+                            "id",
+                            "repo",
+                            "issue",
+                            "type",
+                            "at",
+                            "observedAt",
+                            "source",
+                            "data"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "count",
+                      "issues",
+                      "events"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
-                  "count",
-                  "issues",
-                  "events"
+                  "starts",
+                  "candidateCompletions",
+                  "validationResults",
+                  "deliveries"
                 ],
                 "additionalProperties": false
               },
-              "candidateCompletions": {
-                "type": "object",
-                "properties": {
-                  "count": {
-                    "type": "integer"
-                  },
-                  "issues": {
-                    "type": "array",
-                    "items": {
-                      "type": "integer"
-                    }
-                  },
-                  "events": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "schema": {
-                          "type": "string"
-                        },
-                        "id": {
-                          "type": "string"
-                        },
-                        "repo": {
-                          "type": "string"
-                        },
-                        "issue": {
-                          "type": "integer"
-                        },
-                        "type": {
-                          "type": "string"
-                        },
-                        "at": {
-                          "type": "string"
-                        },
-                        "observedAt": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "type": "string"
-                        },
-                        "attempt": {
-                          "type": "string"
-                        },
-                        "data": {
-                          "type": "object",
-                          "properties": {
-                            "snapshotId": {
-                              "type": "string"
-                            },
-                            "inScope": {
-                              "type": "boolean"
-                            },
-                            "state": {
-                              "type": "string"
-                            },
-                            "reasons": {
-                              "type": "array",
-                              "items": {
-                                "type": "string"
-                              }
-                            },
-                            "origin": {
-                              "type": "string"
-                            },
-                            "decisionId": {
-                              "type": "string"
-                            },
-                            "status": {
-                              "type": "string"
-                            },
-                            "cliVersion": {
-                              "type": "string"
-                            },
-                            "skillVersion": {
-                              "type": "string"
-                            },
-                            "requiredOutcome": {
-                              "type": "string"
-                            },
-                            "stage": {
-                              "type": "string"
-                            },
-                            "reason": {
-                              "type": "string"
-                            },
-                            "pr": {
-                              "type": "integer"
-                            },
-                            "head": {
-                              "type": "string"
-                            },
-                            "verdict": {
-                              "type": "string"
-                            },
-                            "reviewer": {
-                              "type": "string"
-                            },                            "checkerFamily": {
-                              "type": "string"
-                            },                            "checkerMode": {
-                              "type": "string"
-                            },
-                            "evidence": {
-                              "type": "string"
-                            },
-                            "acceptance": {
-                              "type": "string"
-                            },
-                            "classification": {
-                              "type": "string"
-                            },
-                            "humanReported": {
-                              "type": "boolean"
-                            },
-                            "explicit": {
-                              "type": "boolean"
-                            },
-                            "complete": {
-                              "type": "boolean"
-                            },
-                            "since": {
-                              "type": "string"
-                            },
-                            "until": {
-                              "type": "string"
-                            },
-                            "step": {
-                              "type": "string"
-                            },
-                            "area": {
-                              "type": "string"
-                            },
-                            "candidateVersion": {
-                              "type": "string"
-                            },
-                            "waitStage": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "schema",
-                        "id",
-                        "repo",
-                        "issue",
-                        "type",
-                        "at",
-                        "observedAt",
-                        "source",
-                        "data"
-                      ],
-                      "additionalProperties": false
-                    }
-                  }
-                },
-                "required": [
-                  "count",
-                  "issues",
-                  "events"
-                ],
-                "additionalProperties": false
-              },
-              "validationResults": {
-                "type": "object",
-                "properties": {
-                  "count": {
-                    "type": "integer"
-                  },
-                  "issues": {
-                    "type": "array",
-                    "items": {
-                      "type": "integer"
-                    }
-                  },
-                  "events": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "schema": {
-                          "type": "string"
-                        },
-                        "id": {
-                          "type": "string"
-                        },
-                        "repo": {
-                          "type": "string"
-                        },
-                        "issue": {
-                          "type": "integer"
-                        },
-                        "type": {
-                          "type": "string"
-                        },
-                        "at": {
-                          "type": "string"
-                        },
-                        "observedAt": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "type": "string"
-                        },
-                        "attempt": {
-                          "type": "string"
-                        },
-                        "data": {
-                          "type": "object",
-                          "properties": {
-                            "snapshotId": {
-                              "type": "string"
-                            },
-                            "inScope": {
-                              "type": "boolean"
-                            },
-                            "state": {
-                              "type": "string"
-                            },
-                            "reasons": {
-                              "type": "array",
-                              "items": {
-                                "type": "string"
-                              }
-                            },
-                            "origin": {
-                              "type": "string"
-                            },
-                            "decisionId": {
-                              "type": "string"
-                            },
-                            "status": {
-                              "type": "string"
-                            },
-                            "cliVersion": {
-                              "type": "string"
-                            },
-                            "skillVersion": {
-                              "type": "string"
-                            },
-                            "requiredOutcome": {
-                              "type": "string"
-                            },
-                            "stage": {
-                              "type": "string"
-                            },
-                            "reason": {
-                              "type": "string"
-                            },
-                            "pr": {
-                              "type": "integer"
-                            },
-                            "head": {
-                              "type": "string"
-                            },
-                            "verdict": {
-                              "type": "string"
-                            },
-                            "reviewer": {
-                              "type": "string"
-                            },                            "checkerFamily": {
-                              "type": "string"
-                            },                            "checkerMode": {
-                              "type": "string"
-                            },
-                            "evidence": {
-                              "type": "string"
-                            },
-                            "acceptance": {
-                              "type": "string"
-                            },
-                            "classification": {
-                              "type": "string"
-                            },
-                            "humanReported": {
-                              "type": "boolean"
-                            },
-                            "explicit": {
-                              "type": "boolean"
-                            },
-                            "complete": {
-                              "type": "boolean"
-                            },
-                            "since": {
-                              "type": "string"
-                            },
-                            "until": {
-                              "type": "string"
-                            },
-                            "step": {
-                              "type": "string"
-                            },
-                            "area": {
-                              "type": "string"
-                            },
-                            "candidateVersion": {
-                              "type": "string"
-                            },
-                            "waitStage": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "schema",
-                        "id",
-                        "repo",
-                        "issue",
-                        "type",
-                        "at",
-                        "observedAt",
-                        "source",
-                        "data"
-                      ],
-                      "additionalProperties": false
-                    }
-                  }
-                },
-                "required": [
-                  "count",
-                  "issues",
-                  "events"
-                ],
-                "additionalProperties": false
-              },
-              "deliveries": {
-                "type": "object",
-                "properties": {
-                  "count": {
-                    "type": "integer"
-                  },
-                  "issues": {
-                    "type": "array",
-                    "items": {
-                      "type": "integer"
-                    }
-                  },
-                  "events": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "schema": {
-                          "type": "string"
-                        },
-                        "id": {
-                          "type": "string"
-                        },
-                        "repo": {
-                          "type": "string"
-                        },
-                        "issue": {
-                          "type": "integer"
-                        },
-                        "type": {
-                          "type": "string"
-                        },
-                        "at": {
-                          "type": "string"
-                        },
-                        "observedAt": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "type": "string"
-                        },
-                        "attempt": {
-                          "type": "string"
-                        },
-                        "data": {
-                          "type": "object",
-                          "properties": {
-                            "snapshotId": {
-                              "type": "string"
-                            },
-                            "inScope": {
-                              "type": "boolean"
-                            },
-                            "state": {
-                              "type": "string"
-                            },
-                            "reasons": {
-                              "type": "array",
-                              "items": {
-                                "type": "string"
-                              }
-                            },
-                            "origin": {
-                              "type": "string"
-                            },
-                            "decisionId": {
-                              "type": "string"
-                            },
-                            "status": {
-                              "type": "string"
-                            },
-                            "cliVersion": {
-                              "type": "string"
-                            },
-                            "skillVersion": {
-                              "type": "string"
-                            },
-                            "requiredOutcome": {
-                              "type": "string"
-                            },
-                            "stage": {
-                              "type": "string"
-                            },
-                            "reason": {
-                              "type": "string"
-                            },
-                            "pr": {
-                              "type": "integer"
-                            },
-                            "head": {
-                              "type": "string"
-                            },
-                            "verdict": {
-                              "type": "string"
-                            },
-                            "reviewer": {
-                              "type": "string"
-                            },                            "checkerFamily": {
-                              "type": "string"
-                            },                            "checkerMode": {
-                              "type": "string"
-                            },
-                            "evidence": {
-                              "type": "string"
-                            },
-                            "acceptance": {
-                              "type": "string"
-                            },
-                            "classification": {
-                              "type": "string"
-                            },
-                            "humanReported": {
-                              "type": "boolean"
-                            },
-                            "explicit": {
-                              "type": "boolean"
-                            },
-                            "complete": {
-                              "type": "boolean"
-                            },
-                            "since": {
-                              "type": "string"
-                            },
-                            "until": {
-                              "type": "string"
-                            },
-                            "step": {
-                              "type": "string"
-                            },
-                            "area": {
-                              "type": "string"
-                            },
-                            "candidateVersion": {
-                              "type": "string"
-                            },
-                            "waitStage": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "schema",
-                        "id",
-                        "repo",
-                        "issue",
-                        "type",
-                        "at",
-                        "observedAt",
-                        "source",
-                        "data"
-                      ],
-                      "additionalProperties": false
-                    }
-                  }
-                },
-                "required": [
-                  "count",
-                  "issues",
-                  "events"
-                ],
-                "additionalProperties": false
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "starts",
-              "candidateCompletions",
-              "validationResults",
-              "deliveries"
-            ],
-            "additionalProperties": false
-          }, {"type": "null"}]},
+            ]
+          },
           "stages": {
             "type": "object",
             "properties": {
@@ -5260,7 +2894,107 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
     "max_steps": 12,
     "max_model_calls": 6
   },
-  "conventions": []
-}
-```
+  "conventions": [
+    {
+      "path": "/entries/0/input_schema/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/coverage/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/conflicts/items/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/starts/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/candidate/oneOf/0/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/checks/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/ci/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/steps/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/deliveries/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/reports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/failedFixReports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/followUp/oneOf/0/properties/7/properties/failedFixReports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/followUp/oneOf/0/properties/30/properties/failedFixReports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/assistance/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/coverage/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/deliveryFollowUps/items/properties/delivery/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/deliveryFollowUps/items/properties/failedFixReports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/deliveryFollowUps/items/properties/followUp/properties/7/properties/failedFixReports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/deliveryFollowUps/items/properties/followUp/properties/30/properties/failedFixReports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/unassociatedFailedFixReports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/issues/items/properties/unclassifiedReports/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/activity/oneOf/0/properties/starts/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/activity/oneOf/0/properties/candidateCompletions/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/activity/oneOf/0/properties/validationResults/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/0/result_schema/properties/activity/oneOf/0/properties/deliveries/properties/events/items/properties/data",
+      "convention": "json"
+    }
+  ]
+}```
 </details>

@@ -1,14 +1,15 @@
-# Prompt approve command ports
+# Prompt approval ports
 
-I can update a prompt's Runtime interface status and prose SHA-256 hash, approve a Git-visible prompt via `--said` in easy mode while recording durable evidence, refuse `--said` in strict mode, and reject missing `prose_sha256` keys or invalid working directories.
+The approval command displays the current prompt, accepts a person decision, and records durable evidence through the shared approval-policy owner.
 
 ```pdd-boundary
 prompts/cli/prompt-approve.prompt.md
+prompts/cli/approval-policy.prompt.md
 ```
 
 ## Acceptance criteria
 
-1. `approvePromptText` sets the top-level `"status"` to `"approved"` and `"prose_sha256"` to the `compute.hash_utf8` digest of the trimmed prose while leaving nested `"status"` fields untouched, and raises `missing-prose-sha256` when `"prose_sha256"` is absent.
-2. `runApprove` in easy mode with valid `said` words verifies that the target is a Git-visible `*.prompt.md` file, writes the approved prompt text, records durable approval evidence via `policy.appendApproval`, prints `Approved prompts/cli/sample.prompt.md.`, and returns `{exitCode: 0}`.
-3. `runApprove` in strict mode (`strictApprovals: true`) refuses `--said` with `{exitCode: 2}` and `pdd approve is for a person at a terminal.` on `output.stderr` without writing the prompt or recording an approval.
-4. `runApprove` raises `invalid-approve-cwd` before invoking Git when `cwd` is blank.
+1. approvePromptText sets only the top-level approval fields using the native prose hash, leaves nested status fields untouched, and returns null when the interface cannot be safely updated.
+2. runApprove with accepted said words writes the approved prompt and records complete durable evidence through the shared approval-policy owner.
+3. runApprove in strict mode refuses said words with exit code 2 before it writes the prompt or records approval evidence.
+4. runApprove with blank cwd returns exit code 2 with the Git repository diagnostic before file or policy reads.

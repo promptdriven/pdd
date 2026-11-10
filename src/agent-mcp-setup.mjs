@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-mcp-setup.prompt.md (sha256: d500ed09a2bd77ffa58681b233bf1ab062df7a3e5e071899389712a1798b6dfb).
+// Generated from prompts/cli/agent-mcp-setup.prompt.md (sha256: c0bc36946e9b4dbdb170b6bf5e5234170ba37caec18b959b24db63d03d7e44b0).
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, delimiter, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -53,11 +53,13 @@ function planConfig({ name, file, wanted, toml }) {
   }
   return { name, file, before, after, preview };
 }
-export async function setupAgentMcp({ env = process.env, packageRoot = fileURLToPath(new URL('..', import.meta.url)) } = {}, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, confirm } = {}) {
+export async function setupAgentMcp({ env = process.env, packageRoot = fileURLToPath(new URL('..', import.meta.url)) } = {}, ports = {}) {
+  const { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, confirm } = ports;
   const say = value => stdout.write(`${value}\n`);
   try {
     const home = env.HOME || homedir();
-    const command = process.execPath, args = [resolve(packageRoot, 'bin/pdd.mjs'), 'mcp'];
+    const nodeContext = ports.process?.execPath ? await ports.process.execPath({}) : { path: process.execPath };
+    const command = nodeContext.path, args = [resolve(packageRoot, 'bin/pdd.mjs'), 'mcp'];
     const codex = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(home, '.codex');
     const claude = env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : join(home, '.claude');
     const candidates = [

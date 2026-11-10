@@ -4,7 +4,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "When `prompt.confirm` returns `y`, `setupAgentMcp` previews the config patches, rechecks target files, writes the pinned `execPath` and `packageRoot/bin/pdd.mjs` `\"mcp\"` registration for detected agents, and returns `{exitCode: 0}`."
+      "text": "When I accept setup, each registration uses the running Node executable and the selected package's `bin/pdd.mjs` entry with `mcp` arguments, writes the previewed config, and reports success."
     },
     {
       "id": "AC2",
@@ -13,10 +13,6 @@
     {
       "id": "AC3",
       "text": "When a candidate configuration file is a symbolic link or malformed, `setupAgentMcp` emits a `pdd setup:` diagnostic to `output.stderr`, asks no confirmation question, writes nothing, and returns `{exitCode: 1}`."
-    },
-    {
-      "id": "AC4",
-      "text": "`setupAgentMcp` raises `invalid-setup-context` before probing agents when `packageRoot` or `execPath` is not an absolute path."
     }
   ],
   "initial_world": {
@@ -28,7 +24,8 @@
     },
     "calls": {
       "detectAgents": 0,
-      "confirm": 0
+      "confirm": 0,
+      "execPath": 0
     },
     "stdout": [],
     "stderr": []
@@ -150,6 +147,35 @@
       "result_template": {
         "ok": true
       }
+    },
+    "process.execPath": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/execPath",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "path": "/runtime/node"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "path": "/runtime/node"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "path": "/runtime/node"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
     }
   },
   "context": [],
@@ -159,11 +185,8 @@
       "entry_path": "prompts/cli/agent-mcp-setup.prompt.md",
       "operation": "setupAgentMcp",
       "input": {
-        "env": {
-          "HOME": "/home/alice"
-        },
-        "packageRoot": "/opt/pdd",
-        "execPath": "/usr/bin/node"
+        "env": "{\"HOME\":\"/home/alice\"}",
+        "packageRoot": "/opt/pdd"
       },
       "checks": [
         {
@@ -200,6 +223,27 @@
           "path": "/resources/agent-mcp-setup-files-write",
           "op": "equals",
           "value": 2
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1home~1alice~1.codex~1config.toml/content",
+          "op": "contains",
+          "value": "command = \"/runtime/node\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1home~1alice~1.codex~1config.toml/content",
+          "op": "contains",
+          "value": "args = [\"/opt/pdd/bin/pdd.mjs\", \"mcp\"]"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/agent-mcp-setup-process-execPath",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
@@ -209,11 +253,8 @@
       "entry_path": "prompts/cli/agent-mcp-setup.prompt.md",
       "operation": "setupAgentMcp",
       "input": {
-        "env": {
-          "HOME": "/home/bob"
-        },
-        "packageRoot": "/opt/pdd",
-        "execPath": "/usr/bin/node"
+        "env": "{\"HOME\":\"/home/bob\"}",
+        "packageRoot": "/opt/pdd"
       },
       "checks": [
         {
@@ -245,11 +286,8 @@
       "entry_path": "prompts/cli/agent-mcp-setup.prompt.md",
       "operation": "setupAgentMcp",
       "input": {
-        "env": {
-          "HOME": "/home/symlink"
-        },
-        "packageRoot": "/opt/pdd",
-        "execPath": "/usr/bin/node"
+        "env": "{\"HOME\":\"/home/symlink\"}",
+        "packageRoot": "/opt/pdd"
       },
       "checks": [
         {
@@ -277,36 +315,6 @@
           "criterion_id": "AC3",
           "target": "calls",
           "path": "/resources/agent-mcp-setup-files-write",
-          "op": "equals",
-          "value": 0
-        }
-      ],
-      "model": "gpt-6.1-sol"
-    },
-    {
-      "step_id": "raise-invalid-setup-context",
-      "entry_path": "prompts/cli/agent-mcp-setup.prompt.md",
-      "operation": "setupAgentMcp",
-      "input": {
-        "env": {
-          "HOME": "/home/alice"
-        },
-        "packageRoot": "relative/pdd",
-        "execPath": "/usr/bin/node"
-      },
-      "expected_error": "invalid-setup-context",
-      "checks": [
-        {
-          "criterion_id": "AC4",
-          "target": "error",
-          "path": "/code",
-          "op": "equals",
-          "value": "invalid-setup-context"
-        },
-        {
-          "criterion_id": "AC4",
-          "target": "calls",
-          "path": "/resources/agent-mcp-setup-host-detectAgents",
           "op": "equals",
           "value": 0
         }

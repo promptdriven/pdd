@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -120,4 +121,51 @@ test('APPROVE5: pdd approve is a CLI route with help, and refuses in a pipe', t 
   const piped = pdd('approve', PLACE);
   assert.equal(piped.status, 2); assert.match(piped.stderr, /pdd approve is for a person at a terminal/);
   assert.equal(pdd('approve').status, 2);
+});
+
+test('APPROVE8: injected Git and file observations reach shared approval evidence and output', async t => {
+  const setup = harbor(t, repo => {
+    const file = join(repo, PLACE);
+    writeFileSync(file, asDraft(readFileSync(file, 'utf8')));
+  });
+  const git = [], reads = [], writes = [], stdout = sink(), stderr = sink();
+  const fsPort = new Proxy(fs, {
+    get(target, key) {
+      const value = Reflect.get(target, key);
+      if (typeof value !== 'function') return value;
+      return (...args) => {
+        if (key === 'readFileSync') reads.push(String(args[0]));
+        if (key === 'writeFileSync') writes.push(String(args[0]));
+        return Reflect.apply(value, target, args);
+      };
+    }
+  });
+  const files = {
+    stat({path}) {
+      const stat = fs.lstatSync(join(setup.repo, path));
+      return {exists:true, size:stat.size, is_symlink:false};
+    },
+    read({path}) {
+      reads.push(join(setup.repo, path));
+      return {content:fs.readFileSync(join(setup.repo, path), 'utf8')};
+    }
+  };
+  const code = await runApprove({words:[PLACE], cwd:setup.repo, said:'I approve this prompt.'}, {
+    stdout, stderr, stdin:Readable.from([]), interactive:true, env:{USER:'native-test'},
+    spawnSync(file,args,options) { git.push([file,...args]); return spawnSync(file,args,options); },
+    fs:fsPort, files, now:()=>1700000000000, randomUUID:()=>'approval-test-event'
+  });
+  assert.equal(code, 0, stderr.text);
+  assert.ok(git.some(args=>args[1]==='ls-files'));
+  assert.ok(git.some(args=>args[1]==='log'));
+  assert.ok(git.some(args=>args[1]==='show'));
+  assert.ok(reads.some(path=>path.endsWith(PLACE)));
+  assert.ok(writes.some(path=>path.endsWith(PLACE)));
+  assert.match(stdout.text, /Approved prompts\/place_order\.prompt\.md\./);
+  const journal = JSON.parse(readFileSync(join(setup.repo,'.git','pdd','approvals.json'),'utf8'));
+  const evidence = journal.approvals.at(-1);
+  assert.equal(evidence.id, 'approval-test-event');
+  assert.equal(evidence.route, 'said');
+  assert.equal(evidence.words, 'I approve this prompt.');
+  assert.equal(evidence.actor.id, 'native-test');
 });

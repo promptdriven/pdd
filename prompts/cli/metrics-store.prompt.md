@@ -4,7 +4,7 @@
 
 The [calculator event contract](metrics-model.prompt.md) owns event identity and facts. Identical events imported repeatedly do not inflate the ledger. Conflicting payloads with the same source/id remain visible, rather than choosing a successful result. Validate an entire import and its definition/schema compatibility before writing; reject malformed or incompatible bundles without a partial import. Concurrent append/import must not lose events. An export carries schema and metric-definition versions, repository, export time, timezone, pseudonymous installation/source identity and coverage bounds. A missing machine is a coverage gap, not an empty contributor. Explicit export contains no credentials, prompts, raw chats, raw issue bodies or local paths.
 
-The optional second `ports` argument can supply `ledger.read({root})` and `ledger.write({root, events, sources, snapshots})`; the first returns `{events, sources, snapshots}`, and the second atomically persists the supplied records. `readEvents`, `appendEvents`, and `importMetrics` return `{events, sources, snapshots}`. `exportMetrics` returns `{bundle}`. Metadata supplies `repo` and `timezone`, and may supply `exportedAt`, `cliVersion`, and coverage bounds; `installation.read({root})` supplies `{source, captureStartedAt}`. Failures propagate without claiming success: `readEvents` raises `invalid-ledger`, `appendEvents` raises `invalid-metrics-event`, `exportMetrics` raises `invalid-export-metadata`, `importMetrics` raises `invalid-metrics-bundle`, and `validateSnapshot({snapshot, repository})` returns `{valid: true}` or raises `invalid-selector-snapshot`. Native filesystem locking, permissions and crash behavior remain native obligations (`test/metrics-store.test.mjs`).
+The optional second `ports` argument can supply `ledger.read({root})` and `ledger.write({root, events, sources, snapshots})`; the first returns `{events, sources, snapshots}`, and the second atomically persists the supplied records. `readEvents`, `appendEvents`, and `importMetrics` return `{events, sources, snapshots}`. `exportMetrics` returns its bundle directly. Metadata supplies `repo` and `timezone`, and may supply `exportedAt`, `cliVersion`, and coverage bounds; `installation.read({root})` supplies `{source, captureStartedAt}`. Failures propagate without claiming success: `readEvents` raises `invalid-ledger`, `appendEvents` raises `invalid-metrics-event`, `exportMetrics` raises `invalid-export-metadata`, `importMetrics` raises `invalid-metrics-bundle`, and `validateSnapshot(snapshot, repository)` returns undefined on success and throws an ordinary `Error` on invalid input. Native filesystem locking, permissions and crash behavior remain native obligations (`test/metrics-store.test.mjs`).
 
 ## Dependencies
 
@@ -22,22 +22,29 @@ Bundles retain complete selector snapshot headers and member selection events, i
 Every new export declares `scope: "all-retained-repo-events"`: its events and snapshots are the retained records for the exported repository, without a report date or snapshot filter. Preserve the scope of each imported source through later exports. A v1 bundle or nested source without scope remains readable and its scope remains unknown; do not infer it from a later export. When present, scope must be this supported value. Validate top-level and nested scope before any import write.
 
 Module function `validateSnapshot(snapshot, repository)` is the existing canonical selector-snapshot validator exposed for read-only consumers. With a canonical repository name it validates the complete header, permitted event envelope/data fields and values, timestamp/source bindings, selection type/snapshot/repository consistency and unique issue membership using the same validation as bundle import/export. It returns undefined on success and throws on invalid data, without I/O, mutation, storage, process or network effects. Consumers must not substitute a partial second classifier.
+Runtime wraps this native undefined result as an empty object `{}`; no coded error is declared because the owner throws a plain `Error`.
+
+Runtime transports each event data map as canonical JSON text and decodes it before the native owner validates its fields. Native calls and returned events keep object values.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "bea433a73cda538191de18f220fd38d1a53695438d1939b42d4fa448bb7319d2",
+  "prose_sha256": "4688bb34b5dde4392daae4fc25d2f0b08d22af6bcd2a2e0c037f0596127f5de3",
   "entries": [
     {
       "operation": "readEvents",
       "input_schema": {
         "type": "object",
         "properties": {
-          "root": { "type": "string" }
+          "root": {
+            "type": "string"
+          }
         },
-        "required": ["root"],
+        "required": [
+          "root"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
@@ -48,25 +55,45 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "schema": { "type": "string" },
-                "id": { "type": "string" },
-                "repo": { "type": "string" },
-                "issue": { "type": "integer" },
-                "type": { "type": "string" },
-                "at": { "type": "string" },
-                "observedAt": { "type": "string" },
-                "source": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "issue": {
+                  "type": "integer"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "observedAt": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
                 "data": {
-                  "type": "object",
-                  "properties": {
-                    "origin": { "type": "string" },
-                    "complete": { "type": "boolean" }
-                  },
-                  "required": [],
-                  "additionalProperties": false
+                  "type": "string"
                 }
               },
-              "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source", "data"],
+              "required": [
+                "schema",
+                "id",
+                "repo",
+                "issue",
+                "type",
+                "at",
+                "observedAt",
+                "source",
+                "data"
+              ],
               "additionalProperties": false
             }
           },
@@ -75,15 +102,36 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "source": { "type": "string" },
-                "scope": { "type": "string" },
-                "captureStartedAt": { "type": "string" },
-                "exportedAt": { "type": "string" },
-                "timezone": { "type": "string" },
-                "cliVersion": { "type": "string" },
-                "metricDefinitionVersion": { "type": "string" }
+                "source": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "captureStartedAt": {
+                  "type": "string"
+                },
+                "exportedAt": {
+                  "type": "string"
+                },
+                "timezone": {
+                  "type": "string"
+                },
+                "cliVersion": {
+                  "type": "string"
+                },
+                "metricDefinitionVersion": {
+                  "type": "string"
+                }
               },
-              "required": ["source", "captureStartedAt", "exportedAt", "timezone", "cliVersion", "metricDefinitionVersion"],
+              "required": [
+                "source",
+                "captureStartedAt",
+                "exportedAt",
+                "timezone",
+                "cliVersion",
+                "metricDefinitionVersion"
+              ],
               "additionalProperties": false
             }
           },
@@ -92,64 +140,118 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "schema": { "type": "string" },
-                "id": { "type": "string" },
-                "repo": { "type": "string" },
-                "at": { "type": "string" },
-                "observedAt": { "type": "string" },
-                "source": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "observedAt": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
                 "issues": {
                   "type": "array",
-                  "items": { "type": "integer" }
+                  "items": {
+                    "type": "integer"
+                  }
                 }
               },
-              "required": ["schema", "id", "repo", "at", "observedAt", "source", "issues"],
+              "required": [
+                "schema",
+                "id",
+                "repo",
+                "at",
+                "observedAt",
+                "source",
+                "issues"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["events", "sources", "snapshots"],
+        "required": [
+          "events",
+          "sources",
+          "snapshots"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-ledger"],
-      "resource_operations": ["ledger.read"]
+      "errors": [
+        "invalid-ledger"
+      ],
+      "resource_operations": [
+        "ledger.read"
+      ]
     },
     {
       "operation": "appendEvents",
       "input_schema": {
         "type": "object",
         "properties": {
-          "root": { "type": "string" },
+          "root": {
+            "type": "string"
+          },
           "events": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "schema": { "type": "string" },
-                "id": { "type": "string" },
-                "repo": { "type": "string" },
-                "issue": { "type": "integer" },
-                "type": { "type": "string" },
-                "at": { "type": "string" },
-                "observedAt": { "type": "string" },
-                "source": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "issue": {
+                  "type": "integer"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "observedAt": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
                 "data": {
-                  "type": "object",
-                  "properties": {
-                    "origin": { "type": "string" },
-                    "complete": { "type": "boolean" },
-                    "evidence": { "type": "string" }
-                  },
-                  "required": [],
-                  "additionalProperties": false
+                  "type": "string"
                 }
               },
-              "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source", "data"],
+              "required": [
+                "schema",
+                "id",
+                "repo",
+                "issue",
+                "type",
+                "at",
+                "observedAt",
+                "source",
+                "data"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["root", "events"],
+        "required": [
+          "root",
+          "events"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
@@ -160,26 +262,45 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "schema": { "type": "string" },
-                "id": { "type": "string" },
-                "repo": { "type": "string" },
-                "issue": { "type": "integer" },
-                "type": { "type": "string" },
-                "at": { "type": "string" },
-                "observedAt": { "type": "string" },
-                "source": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "issue": {
+                  "type": "integer"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "observedAt": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
                 "data": {
-                  "type": "object",
-                  "properties": {
-                    "origin": { "type": "string" },
-                    "complete": { "type": "boolean" },
-                    "evidence": { "type": "string" }
-                  },
-                  "required": [],
-                  "additionalProperties": false
+                  "type": "string"
                 }
               },
-              "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source", "data"],
+              "required": [
+                "schema",
+                "id",
+                "repo",
+                "issue",
+                "type",
+                "at",
+                "observedAt",
+                "source",
+                "data"
+              ],
               "additionalProperties": false
             }
           },
@@ -188,15 +309,36 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "source": { "type": "string" },
-                "scope": { "type": "string" },
-                "captureStartedAt": { "type": "string" },
-                "exportedAt": { "type": "string" },
-                "timezone": { "type": "string" },
-                "cliVersion": { "type": "string" },
-                "metricDefinitionVersion": { "type": "string" }
+                "source": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "captureStartedAt": {
+                  "type": "string"
+                },
+                "exportedAt": {
+                  "type": "string"
+                },
+                "timezone": {
+                  "type": "string"
+                },
+                "cliVersion": {
+                  "type": "string"
+                },
+                "metricDefinitionVersion": {
+                  "type": "string"
+                }
               },
-              "required": ["source", "captureStartedAt", "exportedAt", "timezone", "cliVersion", "metricDefinitionVersion"],
+              "required": [
+                "source",
+                "captureStartedAt",
+                "exportedAt",
+                "timezone",
+                "cliVersion",
+                "metricDefinitionVersion"
+              ],
               "additionalProperties": false
             }
           },
@@ -205,47 +347,94 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "schema": { "type": "string" },
-                "id": { "type": "string" },
-                "repo": { "type": "string" },
-                "at": { "type": "string" },
-                "observedAt": { "type": "string" },
-                "source": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "observedAt": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
                 "issues": {
                   "type": "array",
-                  "items": { "type": "integer" }
+                  "items": {
+                    "type": "integer"
+                  }
                 }
               },
-              "required": ["schema", "id", "repo", "at", "observedAt", "source", "issues"],
+              "required": [
+                "schema",
+                "id",
+                "repo",
+                "at",
+                "observedAt",
+                "source",
+                "issues"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["events", "sources", "snapshots"],
+        "required": [
+          "events",
+          "sources",
+          "snapshots"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-metrics-event"],
-      "resource_operations": ["ledger.read", "ledger.write"]
+      "errors": [
+        "invalid-metrics-event"
+      ],
+      "resource_operations": [
+        "ledger.read",
+        "ledger.write"
+      ]
     },
     {
       "operation": "exportMetrics",
       "input_schema": {
         "type": "object",
         "properties": {
-          "root": { "type": "string" },
+          "root": {
+            "type": "string"
+          },
           "metadata": {
             "type": "object",
             "properties": {
-              "repo": { "type": "string" },
-              "timezone": { "type": "string" },
-              "exportedAt": { "type": "string" },
-              "cliVersion": { "type": "string" }
+              "repo": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "exportedAt": {
+                "type": "string"
+              },
+              "cliVersion": {
+                "type": "string"
+              }
             },
-            "required": ["repo", "timezone"],
+            "required": [
+              "repo",
+              "timezone"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["root", "metadata"],
+        "required": [
+          "root",
+          "metadata"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
@@ -254,39 +443,77 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
           "bundle": {
             "type": "object",
             "properties": {
-              "schema": { "type": "string" },
-              "metricDefinitionVersion": { "type": "string" },
-              "scope": { "type": "string" },
-              "repo": { "type": "string" },
-              "exportedAt": { "type": "string" },
-              "timezone": { "type": "string" },
-              "source": { "type": "string" },
-              "captureStartedAt": { "type": "string" },
-              "cliVersion": { "type": "string" },
+              "schema": {
+                "type": "string"
+              },
+              "metricDefinitionVersion": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "exportedAt": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "captureStartedAt": {
+                "type": "string"
+              },
+              "cliVersion": {
+                "type": "string"
+              },
               "events": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "schema": { "type": "string" },
-                    "id": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "issue": { "type": "integer" },
-                    "type": { "type": "string" },
-                    "at": { "type": "string" },
-                    "observedAt": { "type": "string" },
-                    "source": { "type": "string" },
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "issue": {
+                      "type": "integer"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "origin": { "type": "string" },
-                        "complete": { "type": "boolean" }
-                      },
-                      "required": [],
-                      "additionalProperties": false
+                      "type": "string"
                     }
                   },
-                  "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source", "data"],
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "issue",
+                    "type",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               },
@@ -295,15 +522,36 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "source": { "type": "string" },
-                    "scope": { "type": "string" },
-                    "captureStartedAt": { "type": "string" },
-                    "exportedAt": { "type": "string" },
-                    "timezone": { "type": "string" },
-                    "cliVersion": { "type": "string" },
-                    "metricDefinitionVersion": { "type": "string" }
+                    "source": {
+                      "type": "string"
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "captureStartedAt": {
+                      "type": "string"
+                    },
+                    "exportedAt": {
+                      "type": "string"
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "cliVersion": {
+                      "type": "string"
+                    },
+                    "metricDefinitionVersion": {
+                      "type": "string"
+                    }
                   },
-                  "required": ["source", "captureStartedAt", "exportedAt", "timezone", "cliVersion", "metricDefinitionVersion"],
+                  "required": [
+                    "source",
+                    "captureStartedAt",
+                    "exportedAt",
+                    "timezone",
+                    "cliVersion",
+                    "metricDefinitionVersion"
+                  ],
                   "additionalProperties": false
                 }
               },
@@ -312,18 +560,40 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "schema": { "type": "string" },
-                    "id": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "at": { "type": "string" },
-                    "observedAt": { "type": "string" },
-                    "source": { "type": "string" },
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
                     "issues": {
                       "type": "array",
-                      "items": { "type": "integer" }
+                      "items": {
+                        "type": "integer"
+                      }
                     }
                   },
-                  "required": ["schema", "id", "repo", "at", "observedAt", "source", "issues"],
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "issues"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -345,54 +615,101 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "additionalProperties": false
           }
         },
-        "required": ["bundle"],
+        "required": [
+          "bundle"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-export-metadata"],
-      "resource_operations": ["ledger.read", "installation.read"]
+      "errors": [
+        "invalid-export-metadata"
+      ],
+      "resource_operations": [
+        "ledger.read",
+        "installation.read"
+      ]
     },
     {
       "operation": "importMetrics",
       "input_schema": {
         "type": "object",
         "properties": {
-          "root": { "type": "string" },
+          "root": {
+            "type": "string"
+          },
           "bundle": {
             "type": "object",
             "properties": {
-              "schema": { "type": "string" },
-              "metricDefinitionVersion": { "type": "string" },
-              "scope": { "type": "string" },
-              "repo": { "type": "string" },
-              "exportedAt": { "type": "string" },
-              "timezone": { "type": "string" },
-              "source": { "type": "string" },
-              "captureStartedAt": { "type": "string" },
-              "cliVersion": { "type": "string" },
+              "schema": {
+                "type": "string"
+              },
+              "metricDefinitionVersion": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "exportedAt": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "captureStartedAt": {
+                "type": "string"
+              },
+              "cliVersion": {
+                "type": "string"
+              },
               "events": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "schema": { "type": "string" },
-                    "id": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "issue": { "type": "integer" },
-                    "type": { "type": "string" },
-                    "at": { "type": "string" },
-                    "observedAt": { "type": "string" },
-                    "source": { "type": "string" },
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "issue": {
+                      "type": "integer"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "origin": { "type": "string" },
-                        "complete": { "type": "boolean" }
-                      },
-                      "required": [],
-                      "additionalProperties": false
+                      "type": "string"
                     }
                   },
-                  "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source", "data"],
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "issue",
+                    "type",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               },
@@ -401,15 +718,36 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "source": { "type": "string" },
-                    "scope": { "type": "string" },
-                    "captureStartedAt": { "type": "string" },
-                    "exportedAt": { "type": "string" },
-                    "timezone": { "type": "string" },
-                    "cliVersion": { "type": "string" },
-                    "metricDefinitionVersion": { "type": "string" }
+                    "source": {
+                      "type": "string"
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "captureStartedAt": {
+                      "type": "string"
+                    },
+                    "exportedAt": {
+                      "type": "string"
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "cliVersion": {
+                      "type": "string"
+                    },
+                    "metricDefinitionVersion": {
+                      "type": "string"
+                    }
                   },
-                  "required": ["source", "captureStartedAt", "exportedAt", "timezone", "cliVersion", "metricDefinitionVersion"],
+                  "required": [
+                    "source",
+                    "captureStartedAt",
+                    "exportedAt",
+                    "timezone",
+                    "cliVersion",
+                    "metricDefinitionVersion"
+                  ],
                   "additionalProperties": false
                 }
               },
@@ -418,18 +756,40 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "schema": { "type": "string" },
-                    "id": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "at": { "type": "string" },
-                    "observedAt": { "type": "string" },
-                    "source": { "type": "string" },
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
                     "issues": {
                       "type": "array",
-                      "items": { "type": "integer" }
+                      "items": {
+                        "type": "integer"
+                      }
                     }
                   },
-                  "required": ["schema", "id", "repo", "at", "observedAt", "source", "issues"],
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "issues"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -448,7 +808,10 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "additionalProperties": false
           }
         },
-        "required": ["root", "bundle"],
+        "required": [
+          "root",
+          "bundle"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
@@ -459,25 +822,45 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "schema": { "type": "string" },
-                "id": { "type": "string" },
-                "repo": { "type": "string" },
-                "issue": { "type": "integer" },
-                "type": { "type": "string" },
-                "at": { "type": "string" },
-                "observedAt": { "type": "string" },
-                "source": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "issue": {
+                  "type": "integer"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "observedAt": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
                 "data": {
-                  "type": "object",
-                  "properties": {
-                    "origin": { "type": "string" },
-                    "complete": { "type": "boolean" }
-                  },
-                  "required": [],
-                  "additionalProperties": false
+                  "type": "string"
                 }
               },
-              "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source", "data"],
+              "required": [
+                "schema",
+                "id",
+                "repo",
+                "issue",
+                "type",
+                "at",
+                "observedAt",
+                "source",
+                "data"
+              ],
               "additionalProperties": false
             }
           },
@@ -486,15 +869,36 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "source": { "type": "string" },
-                "scope": { "type": "string" },
-                "captureStartedAt": { "type": "string" },
-                "exportedAt": { "type": "string" },
-                "timezone": { "type": "string" },
-                "cliVersion": { "type": "string" },
-                "metricDefinitionVersion": { "type": "string" }
+                "source": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "captureStartedAt": {
+                  "type": "string"
+                },
+                "exportedAt": {
+                  "type": "string"
+                },
+                "timezone": {
+                  "type": "string"
+                },
+                "cliVersion": {
+                  "type": "string"
+                },
+                "metricDefinitionVersion": {
+                  "type": "string"
+                }
               },
-              "required": ["source", "captureStartedAt", "exportedAt", "timezone", "cliVersion", "metricDefinitionVersion"],
+              "required": [
+                "source",
+                "captureStartedAt",
+                "exportedAt",
+                "timezone",
+                "cliVersion",
+                "metricDefinitionVersion"
+              ],
               "additionalProperties": false
             }
           },
@@ -503,27 +907,58 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
             "items": {
               "type": "object",
               "properties": {
-                "schema": { "type": "string" },
-                "id": { "type": "string" },
-                "repo": { "type": "string" },
-                "at": { "type": "string" },
-                "observedAt": { "type": "string" },
-                "source": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "observedAt": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
                 "issues": {
                   "type": "array",
-                  "items": { "type": "integer" }
+                  "items": {
+                    "type": "integer"
+                  }
                 }
               },
-              "required": ["schema", "id", "repo", "at", "observedAt", "source", "issues"],
+              "required": [
+                "schema",
+                "id",
+                "repo",
+                "at",
+                "observedAt",
+                "source",
+                "issues"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["events", "sources", "snapshots"],
+        "required": [
+          "events",
+          "sources",
+          "snapshots"
+        ],
         "additionalProperties": false
       },
-      "errors": ["invalid-metrics-bundle"],
-      "resource_operations": ["ledger.read", "ledger.write"]
+      "errors": [
+        "invalid-metrics-bundle"
+      ],
+      "resource_operations": [
+        "ledger.read",
+        "ledger.write"
+      ]
     },
     {
       "operation": "validateSnapshot",
@@ -533,34 +968,92 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
           "snapshot": {
             "type": "object",
             "properties": {
-              "schema": { "type": "string" },
-              "id": { "type": "string" },
-              "repo": { "type": "string" },
-              "at": { "type": "string" },
-              "observedAt": { "type": "string" },
-              "source": { "type": "string" },
-              "issues": {
+              "snapshotId": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "observedAt": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "events": {
                 "type": "array",
-                "items": { "type": "integer" }
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "issue": {
+                      "type": "integer"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "issue",
+                    "type",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
-            "required": ["schema", "id", "repo", "at", "observedAt", "source", "issues"],
+            "required": [
+              "snapshotId",
+              "repo",
+              "observedAt",
+              "source",
+              "events"
+            ],
             "additionalProperties": false
           },
-          "repository": { "type": "string" }
+          "repository": {
+            "type": "string"
+          }
         },
-        "required": ["snapshot", "repository"],
+        "required": [
+          "snapshot",
+          "repository"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
-        "properties": {
-          "valid": { "type": "boolean" }
-        },
-        "required": ["valid"],
+        "properties": {},
+        "required": [],
         "additionalProperties": false
       },
-      "errors": ["invalid-selector-snapshot"],
+      "errors": [],
       "resource_operations": []
     }
   ],
@@ -577,9 +1070,13 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "root": { "type": "string" }
+              "root": {
+                "type": "string"
+              }
             },
-            "required": ["root"],
+            "required": [
+              "root"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
@@ -590,25 +1087,45 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "schema": { "type": "string" },
-                    "id": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "issue": { "type": "integer" },
-                    "type": { "type": "string" },
-                    "at": { "type": "string" },
-                    "observedAt": { "type": "string" },
-                    "source": { "type": "string" },
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "issue": {
+                      "type": "integer"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "origin": { "type": "string" },
-                        "complete": { "type": "boolean" }
-                      },
-                      "required": [],
-                      "additionalProperties": false
+                      "type": "string"
                     }
                   },
-                  "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source", "data"],
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "issue",
+                    "type",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               },
@@ -617,15 +1134,36 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "source": { "type": "string" },
-                    "scope": { "type": "string" },
-                    "captureStartedAt": { "type": "string" },
-                    "exportedAt": { "type": "string" },
-                    "timezone": { "type": "string" },
-                    "cliVersion": { "type": "string" },
-                    "metricDefinitionVersion": { "type": "string" }
+                    "source": {
+                      "type": "string"
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "captureStartedAt": {
+                      "type": "string"
+                    },
+                    "exportedAt": {
+                      "type": "string"
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "cliVersion": {
+                      "type": "string"
+                    },
+                    "metricDefinitionVersion": {
+                      "type": "string"
+                    }
                   },
-                  "required": ["source", "captureStartedAt", "exportedAt", "timezone", "cliVersion", "metricDefinitionVersion"],
+                  "required": [
+                    "source",
+                    "captureStartedAt",
+                    "exportedAt",
+                    "timezone",
+                    "cliVersion",
+                    "metricDefinitionVersion"
+                  ],
                   "additionalProperties": false
                 }
               },
@@ -634,23 +1172,49 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "schema": { "type": "string" },
-                    "id": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "at": { "type": "string" },
-                    "observedAt": { "type": "string" },
-                    "source": { "type": "string" },
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
                     "issues": {
                       "type": "array",
-                      "items": { "type": "integer" }
+                      "items": {
+                        "type": "integer"
+                      }
                     }
                   },
-                  "required": ["schema", "id", "repo", "at", "observedAt", "source", "issues"],
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "issues"
+                  ],
                   "additionalProperties": false
                 }
               }
             },
-            "required": ["events", "sources", "snapshots"],
+            "required": [
+              "events",
+              "sources",
+              "snapshots"
+            ],
             "additionalProperties": false
           }
         },
@@ -660,31 +1224,53 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "root": { "type": "string" },
+              "root": {
+                "type": "string"
+              },
               "events": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "schema": { "type": "string" },
-                    "id": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "issue": { "type": "integer" },
-                    "type": { "type": "string" },
-                    "at": { "type": "string" },
-                    "observedAt": { "type": "string" },
-                    "source": { "type": "string" },
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "issue": {
+                      "type": "integer"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "origin": { "type": "string" },
-                        "complete": { "type": "boolean" }
-                      },
-                      "required": [],
-                      "additionalProperties": false
+                      "type": "string"
                     }
                   },
-                  "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source", "data"],
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "issue",
+                    "type",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "data"
+                  ],
                   "additionalProperties": false
                 }
               },
@@ -693,15 +1279,36 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "source": { "type": "string" },
-                    "scope": { "type": "string" },
-                    "captureStartedAt": { "type": "string" },
-                    "exportedAt": { "type": "string" },
-                    "timezone": { "type": "string" },
-                    "cliVersion": { "type": "string" },
-                    "metricDefinitionVersion": { "type": "string" }
+                    "source": {
+                      "type": "string"
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "captureStartedAt": {
+                      "type": "string"
+                    },
+                    "exportedAt": {
+                      "type": "string"
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "cliVersion": {
+                      "type": "string"
+                    },
+                    "metricDefinitionVersion": {
+                      "type": "string"
+                    }
                   },
-                  "required": ["source", "captureStartedAt", "exportedAt", "timezone", "cliVersion", "metricDefinitionVersion"],
+                  "required": [
+                    "source",
+                    "captureStartedAt",
+                    "exportedAt",
+                    "timezone",
+                    "cliVersion",
+                    "metricDefinitionVersion"
+                  ],
                   "additionalProperties": false
                 }
               },
@@ -710,31 +1317,62 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
                 "items": {
                   "type": "object",
                   "properties": {
-                    "schema": { "type": "string" },
-                    "id": { "type": "string" },
-                    "repo": { "type": "string" },
-                    "at": { "type": "string" },
-                    "observedAt": { "type": "string" },
-                    "source": { "type": "string" },
+                    "schema": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "repo": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
                     "issues": {
                       "type": "array",
-                      "items": { "type": "integer" }
+                      "items": {
+                        "type": "integer"
+                      }
                     }
                   },
-                  "required": ["schema", "id", "repo", "at", "observedAt", "source", "issues"],
+                  "required": [
+                    "schema",
+                    "id",
+                    "repo",
+                    "at",
+                    "observedAt",
+                    "source",
+                    "issues"
+                  ],
                   "additionalProperties": false
                 }
               }
             },
-            "required": ["root", "events", "sources", "snapshots"],
+            "required": [
+              "root",
+              "events",
+              "sources",
+              "snapshots"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "ok": { "type": "boolean" }
+              "ok": {
+                "type": "boolean"
+              }
             },
-            "required": ["ok"],
+            "required": [
+              "ok"
+            ],
             "additionalProperties": false
           }
         }
@@ -751,18 +1389,29 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "root": { "type": "string" }
+              "root": {
+                "type": "string"
+              }
             },
-            "required": ["root"],
+            "required": [
+              "root"
+            ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "source": { "type": "string" },
-              "captureStartedAt": { "type": "string" }
+              "source": {
+                "type": "string"
+              },
+              "captureStartedAt": {
+                "type": "string"
+              }
             },
-            "required": ["source", "captureStartedAt"],
+            "required": [
+              "source",
+              "captureStartedAt"
+            ],
             "additionalProperties": false
           }
         }
@@ -773,7 +1422,43 @@ Module function `validateSnapshot(snapshot, repository)` is the existing canonic
     "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": []
-}
-```
+  "conventions": [
+    {
+      "path": "/entries/0/result_schema/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/1/input_schema/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/1/result_schema/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/2/result_schema/properties/bundle/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/3/input_schema/properties/bundle/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/3/result_schema/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/entries/4/input_schema/properties/snapshot/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/resources/0/operations/0/result_schema/properties/events/items/properties/data",
+      "convention": "json"
+    },
+    {
+      "path": "/resources/0/operations/1/arguments_schema/properties/events/items/properties/data",
+      "convention": "json"
+    }
+  ]
+}```
 </details>

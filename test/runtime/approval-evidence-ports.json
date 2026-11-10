@@ -16,7 +16,11 @@
     },
     {
       "id": "AC4",
-      "text": "`readApprovalEvidence` raises `clock_unavailable` without reading session directories when `clock.now` returns a non-positive observation timestamp."
+      "text": "`readApprovalEvidence` returns `invalid_request` when `clock.now` is non-finite or non-positive, without reading session directories."
+    },
+    {
+      "id": "AC5",
+      "text": "`findNativeSessions` returns an empty list for invalid stage fields without reading session directories."
     }
   ],
   "initial_world": {
@@ -461,7 +465,38 @@
       "model": "gpt-6.1-sol"
     },
     {
-      "step_id": "read-evidence-clock-unavailable-error",
+      "step_id": "find-sessions-invalid-agent-empty",
+      "entry_path": "prompts/cli/approval-evidence.prompt.md",
+      "operation": "findNativeSessions",
+      "input": {
+        "stage": {
+          "agent": "unknown",
+          "root": "/work/repo",
+          "startedAt": 1000,
+          "endedAt": 2000
+        },
+        "codexHome": "/home/dev/.codex"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/sessions",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/approval-evidence-fs-readdir",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-evidence-clock-invalid-request",
       "entry_path": "prompts/cli/approval-evidence.prompt.md",
       "operation": "readApprovalEvidence",
       "input": {
@@ -475,14 +510,20 @@
         "decision": "approve",
         "codexHome": "/home/dev/.codex"
       },
-      "expected_error": "clock_unavailable",
       "checks": [
         {
           "criterion_id": "AC4",
-          "target": "error",
+          "target": "result",
+          "path": "/ok",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
           "path": "/code",
           "op": "equals",
-          "value": "clock_unavailable"
+          "value": "invalid_request"
         },
         {
           "criterion_id": "AC4",

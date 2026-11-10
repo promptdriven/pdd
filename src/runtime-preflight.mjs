@@ -83,8 +83,8 @@ export function storyCriteria(source) {
   return result;
 }
 
-export function gitFiles(root) {
-  const listed = spawnSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+export function gitFiles(root, run = spawnSync) {
+  const listed = run('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   if (listed.status !== 0) throw new PreflightError(5, 'pdd could not list the Git files of this repository.');
   return [...new Set(listed.stdout.toString('utf8').split('\0').filter(Boolean))].sort();
 }
@@ -561,11 +561,11 @@ export function interfaceSchemaProblems(iface) {
 }
 
 // The prompt file of an entry: {path, text, blocks, interface, error}.
-export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({root})) {
+export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({root}),io={}) {
   workspace=boundedWorkspace(root,workspace);
   if(typeof path==='string')requireRuntimePath(workspace,{path,from:'Prompt'});
   if (typeof path !== 'string' || !path.endsWith('.prompt.md') || !visible.has(path)) return { path, error: 'entry-missing' };
-  const rawText = sourceFilePort(root,visible,workspace).read({path}).content, prepared = preparedText(root,visible,path,rawText,'prompt',workspace), text = prepared.text, blocks = interfaceBlocks(text);
+  const rawText = (io.files ?? sourceFilePort(root,visible,workspace)).read({path}).content, prepared = preparedText(root,visible,path,rawText,'prompt',workspace), text = prepared.text, blocks = interfaceBlocks(text);
   const source = { path, rawText, text, blocks, references: prepared.references };
   if (!blocks.length) return { ...source, error: 'interface-missing' };
   if (blocks.length > 1) return { ...source, error: 'pdd-two-interfaces' };
@@ -787,7 +787,7 @@ function capturedCriterionPlan(doc, story, path) {
 }
 
 // The schema rules of a prompt and of the prompts it calls, all at once (cached per prompt).
-export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
+export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(),io={}) {
   if (!prompt || seen.has(prompt.path)) return [];
   seen.add(prompt.path);
   if (prompt.error) return [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
@@ -797,8 +797,8 @@ export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Se
   const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
   const statusProblems = ['draft', 'approved'].includes(prompt.interface.status) ? [] : [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
   return [...statusProblems, ...prompt.schemaIssues, ...called.flatMap(target => {
-    if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace));
-    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen);
+    if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace,io));
+    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen,io);
   })];
 }
 

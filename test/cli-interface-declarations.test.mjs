@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, portsFor } from './runtime-fake.mjs';
-import { cliInterfaceFindings } from '../src/interface-draft.mjs';
+import { cliInterfaceFindings, interfaceFindings, missingInterfaces, runInterfaceDraft } from '../src/interface-draft.mjs';
 
 const declaration = kind => '<details><summary>Runtime interface</summary>\n\n```json\n'
   + JSON.stringify({ kind, status: 'draft', prose_sha256: '', ...(kind === 'native-only'
@@ -50,8 +50,33 @@ test('CLI declaration gate rejects malformed and unsupported declarations', t =>
   assert.deepEqual(cliInterfaceFindings({ root: f.repo }).map(p => p.code).sort(), ['interface-kind-invalid', 'invalid-json']);
 });
 
-test('the package declares every CLI prompt, including newly added files', () => {
+test('the package declares every callable CLI prompt, including newly added files', () => {
   assert.deepEqual(cliInterfaceFindings({ root: new URL('..', import.meta.url).pathname }), []);
+});
+
+test('only the non-callable policy context is omitted from missing-interface inventories and --all', async t => {
+  const f = harbor(t, repo => {
+    mkdirSync(join(repo, 'prompts/cli'), { recursive: true });
+    writeFileSync(join(repo, 'prompts/cli/public-boundary.prompt.md'), '# Shared public policy context\nNo callable operation exists.\n');
+    writeFileSync(join(repo, 'prompts/cli/module.prompt.md'), '# Callable module\n');
+  });
+  assert.deepEqual(missingInterfaces(f.repo), ['prompts/cli/module.prompt.md']);
+  assert.deepEqual(cliInterfaceFindings({ root: f.repo }).map(({ path, code }) => ({ path, code })), [
+    { path: 'prompts/cli/module.prompt.md', code: 'interface-missing' },
+  ]);
+  assert.equal(interfaceFindings({ root: f.repo, paths: ['prompts/cli/public-boundary.prompt.md'] })[0]?.code, 'interface-missing');
+
+  const policy = harbor(t, repo => {
+    mkdirSync(join(repo, 'prompts/cli'), { recursive: true });
+    writeFileSync(join(repo, 'prompts/cli/public-boundary.prompt.md'), '# Shared public policy context\nNo callable operation exists.\n');
+  });
+  let stdout = '', stderr = '';
+  assert.equal(await runInterfaceDraft({ all: true, json: true, cwd: policy.repo }, {
+    stdout: { write: text => { stdout += text; } },
+    stderr: { write: text => { stderr += text; } },
+  }), 0, stderr);
+  assert.equal(JSON.parse(stdout).rows.some(row => row.path === 'prompts/cli/public-boundary.prompt.md'), false);
+  assert.equal(interfaceFindings({ root: policy.repo, paths: ['prompts/cli/public-boundary.prompt.md'] })[0]?.code, 'interface-missing');
 });
 
 for (const local of [false, true]) test(`default lint refuses malformed CLI JSON before auth (local=${local})`, async t => {
