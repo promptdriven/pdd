@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 3b4853e52f47f43f3e1df33fc7112d49afd395baaebedcd272ec87e59491a6f1).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: f0b467370a40aee6827ede07bbba496c071a047f1bf8430350c886fa7ae2b347).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -346,29 +346,40 @@ const schemaMeaning=value=>{
 };
 // Type requirements qualify retained prose. Ambiguous bindings remain review work.
 const hasType=(schema,type)=>schema?.type===type || type==='number' && schema?.type==='integer' || schema?.oneOf?.some(item=>hasType(item,type));
+const shorthandTransport = text => /^(?:In the Runtime interface,\s*|The Runtime interface uses JSON transport:\s*)?operation\s+`([\w$]+)`\s+takes\s+`\{\s*([\w$]+)\s*\}`\s+and\s+returns\s+`\{\s*([\w$]+)\s*\}`(?:,\s*where\s+`([\w$]+)`\s+is\s+(?:that|the(?:\s+returned)?)\s+(Number|String|Boolean|numeric|number|string|boolean|integer))?\.$/i.exec(text);
+const behaviorRule = /\b(?:decimal digits|lowercase suffix|leading|trailing|grouping|separators?|clamp|powers of|largest unit|round down|last (?:two )?digits?|formats as|disk|audit|telemetry|persists?|remote\s+service|database)\b/i;
 function sentenceTypes(sentence,entry) {
   let conflicting=false,unresolved=false;
+  const keys=new Set(),errorNames=new Set(['Error','RangeError','TypeError','SyntaxError','code',...(entry?.errors ?? [])]);
   for(const token of sentence.matchAll(/\b(Number|String|Boolean|numeric|number|string|boolean|integer)\b/g)) {
     const before=sentence.slice(0,token.index),after=sentence.slice(token.index+token[0].length);
-    if(/non-$/.test(before)) continue;
+    if(/non-$/i.test(before)) continue;
     // Quantities such as "a whole number" are not transport type declarations.
-    if(token[0]==='number' && /\bwhole\s+$/i.test(before) || token[0]==='integer' && /\bsafe\s+$/i.test(before)) continue;
+    if(token[0]==='number' && (/\bwhole\s+$/i.test(before) || /\bthe\s+$/i.test(before) && /^\s+of\b/i.test(after)) || token[0]==='integer' && /\bsafe\s+$/i.test(before)) continue;
     const left=before.split(/;|\band\b/i).at(-1),right=after.split(/;|\band\b/i)[0];
     const clause=left+token[0]+right;
-    const input=/\b(?:input|takes?|accepts?)\b/i.test(clause),result=/\b(?:result|output|returns?|returned)\b/i.test(clause);
+    const input=/\b(?:input|takes?|accepts?)\b/i.test(clause) || /\bnot\s+a\s*$/i.test(before) && /\b(?:refuse[ds]?|reject(?:s|ed)?)\b/i.test(clause);
+    const result=/\b(?:result|output|returns?|returned)\b/i.test(clause);
     const schemas=input===result ? ['input_schema','result_schema'] : [input?'input_schema':'result_schema'];
-    const names=[...clause.matchAll(/`([\w$]+)`/g)].map(match=>match[1]);
-    const named=schemas.flatMap(key=>names.flatMap(name=>entry?.[key]?.properties?.[name] ? [entry[key].properties[name]] : []));
+    const names=[...new Set([...clause.matchAll(/`\{?([\w$]+)\}?`/g)].map(match=>match[1]).filter(name=>!errorNames.has(name)))];
+    const named=schemas.flatMap(key=>names.flatMap(name=>entry?.[key]?.properties?.[name] ? [{key,schema:entry[key].properties[name]}] : []));
     let target=named.length===1 ? named[0] : null;
     if(!names.length && input!==result) {
       const fields=Object.values(entry?.[schemas[0]]?.properties ?? {});
-      if(fields.length===1) target=fields[0];
+      if(fields.length===1) target={key:schemas[0],schema:fields[0]};
     }
     if(!target) {unresolved=true;continue;}
     const type=token[0].toLowerCase()==='numeric'?'number':token[0].toLowerCase();
-    if(!hasType(target,type)) conflicting=true;
+    if(!hasType(target.schema,type)) conflicting=true;
+    else keys.add(target.key);
   }
-  return {conflicting,unresolved};
+  if(!keys.size && !conflicting && !unresolved && /\b(?:input|takes?|accepts?)\b/i.test(sentence) && /\bsafe\s+integer\b/i.test(sentence)) {
+    const fields=Object.values(entry?.input_schema?.properties ?? {});
+    if(fields.length!==1) unresolved=true;
+    else if(!hasType(fields[0],'number')) conflicting=true;
+    else keys.add('input_schema');
+  }
+  return {conflicting,unresolved,keys:[...keys]};
 }
 // This is review evidence, not a proof that arbitrary prose has been compiled.
 function sentenceCoverage(sources,expanded) {
@@ -385,29 +396,87 @@ function sentenceCoverage(sources,expanded) {
   visit(expanded,'');
   return sources.flatMap((source,index)=>{
     const prose=proseText(source.text),expected=proseInterface(prose,true)?.iface;
-    const declaration=transportDeclaration(prose);
-    const entryIndex=expected ? expanded.entries?.findIndex(entry=>entry.operation===expected.entries[0].operation) : -1;
-    const actual=expanded.entries?.[entryIndex] ?? (expanded.entries?.length===1 ? expanded.entries[0] : undefined);
+    const declaration=transportDeclaration(prose),shortDeclaration=shorthandTransport(prose);
+    const namedOp=expected?.entries[0]?.operation ?? shortDeclaration?.[1] ?? /\bPublic binding:\s*(?:module\s+)?function\s+`([\w$]+)/i.exec(prose)?.[1];
+    const entryIndex=namedOp ? (expanded.entries?.findIndex(entry=>entry.operation===namedOp) ?? -1) : -1;
+    const actualIndex=entryIndex>=0 ? entryIndex : expanded.entries?.length===1 ? 0 : -1;
+    const actual=expanded.entries?.[actualIndex];
     // None is dependency syntax, not a claim about effects.
     const content=prose.replace(/^(## Dependencies\s*\n)\s*None\.\s*$/m,'');
     const rows=proseCoverage(content,declaration?.[0],actual?.errors ?? []);
-    const multipleTransports=rows.filter(row=>transportDeclaration(row.sentence)).length>1;
+    const multipleTransports=rows.filter(row=>transportDeclaration(row.sentence) || shorthandTransport(row.sentence)).length>1;
     return rows.map(row=>{
       const sentence=row.sentence;
       let mappings=[];
-      let {conflicting,unresolved}=sentenceTypes(sentence,multipleTransports?undefined:actual);
+      const entry=multipleTransports ? undefined : actual;
+      const targetIndex=multipleTransports ? -1 : actualIndex;
+      let {conflicting,unresolved,keys}=sentenceTypes(sentence,entry);
       const ownDeclaration=transportDeclaration(sentence);
       const ownExpected=ownDeclaration && (ownDeclaration[0]===declaration?.[0] ? expected : proseInterface(sentence,true)?.iface);
-      const ownIndex=ownDeclaration ? expanded.entries?.findIndex(entry=>entry.operation===ownDeclaration[1]) : -1;
+      const ownIndex=ownDeclaration ? (expanded.entries?.findIndex(item=>item.operation===ownDeclaration[1]) ?? -1) : -1;
       const ownActual=expanded.entries?.[ownIndex];
-      const binding=/^Public binding: module function `([\w$]+)(?:\([^`]*\))?`/.exec(sentence);
-      if(binding && !expanded.entries?.some(entry=>entry.operation===binding[1])) conflicting=true;
+      const ownShort=shorthandTransport(sentence);
+      const binding=/^(?:Public binding:\s*(?:module\s+)?function\s+`([\w$]+)(?:\([^`]*\))?`(?:\s+in\s+`[^`]+`(?:,\s*exported\s+(?:from|at)\s+`[^`]+`)?)?|Export\s+`([\w$]+)\([^`]*\)`|`[^`]+`\s+exports\s+(?:module\s+)?function\s+`?([\w$]+)\([^`]*\)`?)\.$/i.exec(sentence);
+      const opPurpose=/^Operation\s+`([\w$]+)`\s+(?:turns|formats|displays|shows|counts|computes|calculates|parses|validates|converts)\b[^;]*\.$/i.exec(sentence);
+      const modulePurpose=/^(?:This module\s+(?:formats|displays|shows|counts|computes|calculates|parses|validates|converts|renders|builds|creates|manages|provides|implements|checks|turns|owns|handles)\b[^;]*|It owns\b[^;]*|Own\s+`[^`]+`|(?:This is new behavior authorized by issue #\d+;\s*)?existing\b[^.]*(?:remain unchanged|must not change))\.$/i.test(sentence);
+      const errorCodes=[
+        ...[...sentence.matchAll(/\bcode`?(?:\s+property)?\s+(?:equal to|is)\s+`"?([^"`]+)"?`/gi)].map(m=>m[1]),
+        ...[...sentence.matchAll(/\berror(?:\s+code)?\s+`"?([^"`]+)"?`/gi)].map(m=>m[1]),
+      ];
+      const refusalClause=/^(?:Reject\s+(?:negative\b|fractions\b|non-numbers?\b|invalid\b)[^.]*|[^.]*\b(?:fractions|non-numbers?(?:\s+values)?|NaN|infinities|unsafe\s+integers)\b[^.]*\bare\s+(?:refused|rejected)|Do not (?:coerce|round)\s+inputs?(?:\s+or\s+\w+)?|No input is (?:rounded|coerced)|Nothing is (?:rounded|coerced))\.$/i.test(sentence);
+      if(binding) {
+        const opName=binding[1] ?? binding[2] ?? binding[3];
+        const bindIndex=expanded.entries?.findIndex(item=>item.operation===opName) ?? -1;
+        if(bindIndex>=0 && !conflicting && !unresolved) mappings=[{pointer:`/entries/${bindIndex}/operation`,meaning:expanded.entries[bindIndex].operation}];
+        else if(bindIndex<0 && expanded.entries?.length) conflicting=true;
+      }
+      if(opPurpose) {
+        const opIndex=expanded.entries?.findIndex(item=>item.operation===opPurpose[1]) ?? -1;
+        if(opIndex>=0 && !conflicting && !unresolved && !behaviorRule.test(sentence)) mappings=[{pointer:`/entries/${opIndex}/operation`,meaning:expanded.entries[opIndex].operation}];
+        else if(opIndex<0 && expanded.entries?.length) conflicting=true;
+      }
       if(ownDeclaration && ownExpected) {
         unresolved=false;
         conflicting=!ownActual || ['input_schema','result_schema'].some(key=>!isDeepStrictEqual(schemaMeaning(ownActual[key]),schemaMeaning(ownExpected.entries[0][key])));
         if(!conflicting) mappings=['operation','input_schema','result_schema'].map(key=>({pointer:`/entries/${ownIndex}/${key}`,meaning:ownActual[key]}));
       }
-      if(/^(?:There are |This is pure behavior: )?no external resources, operating-system commands(?:,| or) (?:or )?(?:saved data|persistent state)\.$/i.test(sentence)) {
+      if(ownShort) {
+        const [,opName,inField,outField,whereField,rawType]=ownShort;
+        const shortIndex=expanded.entries?.findIndex(item=>item.operation===opName) ?? -1;
+        const shortActual=expanded.entries?.[shortIndex];
+        const hasOnlyField=(schema,field)=>schema?.type==='object' && schema.additionalProperties===false
+          && isDeepStrictEqual(schema.required,[field]) && isDeepStrictEqual(Object.keys(schema.properties ?? {}),[field]);
+        const whereType=rawType?.toLowerCase()==='numeric' ? 'number' : rawType?.toLowerCase();
+        const whereSchema=whereField===outField ? shortActual?.result_schema?.properties?.[outField]
+          : whereField===inField ? shortActual?.input_schema?.properties?.[inField] : null;
+        unresolved=!expanded.entries?.length;
+        if(!unresolved) {
+          conflicting=!shortActual || !hasOnlyField(shortActual.input_schema,inField) || !hasOnlyField(shortActual.result_schema,outField)
+            || Boolean(whereField && (!whereSchema || !hasType(whereSchema,whereType)));
+          if(!conflicting) mappings=['operation','input_schema','result_schema'].map(key=>({pointer:`/entries/${shortIndex}/${key}`,meaning:shortActual[key]}));
+        }
+      }
+      if(errorCodes.length) {
+        if(targetIndex>=0 && Array.isArray(entry?.errors) && errorCodes.every(code=>entry.errors.includes(code))) {
+          if(!conflicting && !unresolved) mappings=[...keys.map(key=>({pointer:`/entries/${targetIndex}/${key}`,meaning:entry[key]})),{pointer:`/entries/${targetIndex}/errors`,meaning:entry.errors}];
+        } else if(expanded.entries?.length) conflicting=true;
+      } else if(refusalClause && !behaviorRule.test(sentence)) {
+        if(targetIndex>=0 && Array.isArray(entry?.errors) && entry.errors.length>0) {
+          if(!conflicting && !unresolved) mappings=[{pointer:`/entries/${targetIndex}/errors`,meaning:entry.errors}];
+        } else if(targetIndex>=0 && Array.isArray(entry?.errors) && entry.errors.length===0 && /\b(?:reject|refused|rejected)\b/i.test(sentence)) conflicting=true;
+      }
+      if(!mappings.length && modulePurpose && !behaviorRule.test(sentence) && !conflicting && !unresolved && targetIndex>=0 && typeof entry?.operation==='string' && entry.operation.trim()) {
+        mappings=[{pointer:`/entries/${targetIndex}/operation`,meaning:entry.operation}];
+      }
+      if(!mappings.length && !conflicting && !unresolved && targetIndex>=0 && !behaviorRule.test(sentence)) {
+        if(keys.length) mappings=keys.map(key=>({pointer:`/entries/${targetIndex}/${key}`,meaning:entry[key]}));
+        else if(/^Its input schema admits representative JSON shapes for rejection\b/i.test(sentence)) {
+          const admits=Object.values(entry?.input_schema?.properties ?? {}).some(prop=>Array.isArray(prop?.oneOf) && prop.oneOf.length>1);
+          if(admits) mappings=[{pointer:`/entries/${targetIndex}/input_schema`,meaning:entry.input_schema}];
+          else conflicting=true;
+        }
+      }
+      if(/^(?:(?:There are |This is pure behavior: )?no external resources, operating-system commands(?:,| or) (?:or )?(?:saved data|persistent state)|Preserve existing helpers and add no dependencies)\.$/i.test(sentence)) {
         conflicting=!!(expanded.calls?.length || expanded.resources?.length);
         if(!conflicting && Array.isArray(expanded.calls) && Array.isArray(expanded.resources)) mappings=['calls','resources'].map(key=>({pointer:'/'+key,meaning:expanded[key]}));
       }

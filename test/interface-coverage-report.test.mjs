@@ -187,3 +187,144 @@ for (const context of ['fragment', 'cycle']) test('integration 013: person appro
   assert.deepEqual(after.entries,value.entries);
   assert.equal(JSON.parse(readFileSync(join(f.repo,'.git/pdd/approvals.json'),'utf8')).approvals.length,1);
 });
+
+const ordinalMapped=[
+  ['This module formats an English ordinal for a nonnegative safe integer.',['/entries/0/operation']],
+  ['It owns ordinal suffix selection for the library.',['/entries/0/operation']],
+  ['Existing money, duration and word modules must not change.',['/entries/0/operation']],
+  ['Public binding: module function `formatOrdinal(value)` in `src/ordinal.js`, exported at `tiny-format/ordinal`.',['/entries/0/operation']],
+  ['It returns a string.',['/entries/0/result_schema']],
+  ['In the Runtime interface, operation `formatOrdinal` takes `{value}` and returns `{text}`, where `text` is that string.',['/entries/0/operation','/entries/0/input_schema','/entries/0/result_schema']],
+  ['Accept only a JavaScript Number that is a nonnegative safe integer.',['/entries/0/input_schema']],
+  ['Reject negative numbers, fractions, non-numbers, NaN, infinities and unsafe integers without coercion or rounding.',['/entries/0/errors']],
+  ['Throw a `RangeError` with `code` equal to `invalid-ordinal`.',['/entries/0/errors']],
+  ['There are no external resources, operating-system commands or saved data.',['/calls','/resources']],
+];
+const ordinalBehavior=[
+  'Write the value as decimal digits without grouping or spaces, followed immediately by a lowercase suffix.',
+  'If the last two digits are 11, 12 or 13, use `th`.',
+  'Otherwise, use `st`, `nd` or `rd` when the last digit is 1, 2 or 3 respectively; use `th` for all other last digits.',
+  'Negative zero formats as `0th`.',
+];
+const ordinalContract={
+  entries:[{
+    operation:'formatOrdinal',
+    input_schema:{
+      type:'object',
+      properties:{value:{oneOf:[{type:'number'},{type:'string'},{type:'boolean'},{type:'null'}]}},
+      required:['value'],
+      additionalProperties:false,
+    },
+    result_schema:{
+      type:'object',
+      properties:{text:{type:'string'}},
+      required:['text'],
+      additionalProperties:false,
+    },
+    errors:['invalid-ordinal'],
+  }],
+  calls:[],
+  resources:[],
+  limits:{max_steps:4,max_model_calls:2},
+  conventions:[],
+};
+const ordinalProse=[
+  '# ordinal',
+  '',
+  ordinalMapped.slice(0,3).map(([s])=>s).join(' '),
+  '',
+  ordinalMapped.slice(3,6).map(([s])=>s).join(' '),
+  '',
+  '## Ordinal format',
+  '',
+  ordinalBehavior.join(' '),
+  '',
+  '## Refused values',
+  '',
+  ordinalMapped.slice(6,9).map(([s])=>s).join(' '),
+  '',
+  ordinalMapped[9][0],
+  '',
+  '## Dependencies',
+  '',
+  'None.',
+  '',
+].join('\n');
+
+test('3130 #39 ordinal purpose, public binding, input/result type and declared error sentences map without questions',t=>{
+  const describedContract=structuredClone(ordinalContract);
+  describedContract.entries[0].result_schema.description=ordinalBehavior.join(' ');
+  const r=draft(setup(t,ordinalProse,{'contracts/ordinal.json':describedContract}),['--contract','contracts/ordinal.json']);
+  assert.equal(r.code,0);assert.equal(r.row.lint_clean,true);
+  assert.equal(r.iface.status,'draft');assert.equal(r.row.questions,undefined);
+  for(const [sentence,expectedPointers] of ordinalMapped) {
+    const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+    assert.ok(row,sentence);retained(r,row);
+    assert.deepEqual(row.pointers,expectedPointers,sentence);
+  }
+  for(const sentence of ordinalBehavior) {
+    const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+    assert.ok(row,sentence);retained(r,row);
+  }
+});
+
+test('3130 #39 real behavior rules with no entry stay unmapped and ask one grouped question while covered sentences map',async t=>{
+  const f=setup(t,ordinalProse,{'contracts/ordinal.json':ordinalContract,'tests/coverage.test.mjs':'export {};\n'});
+  const r=draft(f,['--contract','contracts/ordinal.json']);
+  assert.equal(r.code,0);assert.equal(r.row.lint_clean,true);
+  for(const [sentence,expectedPointers] of ordinalMapped) {
+    const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+    assert.ok(row,sentence);retained(r,row);
+    assert.deepEqual(row.pointers,expectedPointers,sentence);
+    assert.equal(r.row.questions.some(q=>q.sentence===sentence),false,sentence);
+  }
+  for(const sentence of ordinalBehavior) {
+    const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+    assert.ok(row,sentence);
+    assert.equal(row.status,'unmapped',sentence);
+    assert.deepEqual(row.pointers,[]);assert.deepEqual(row.mappings,[]);
+    assert.equal(r.row.questions.filter(q=>q.sentence===sentence).length,1,sentence);
+  }
+  const stdout=sink(),stderr=sink();
+  let nativeCalls=0;
+  const code=await runApprove({cwd:f.repo,words:[PLACE],automatic:true,tests:'node --test tests/coverage.test.mjs'},
+    {stdout,stderr,interactive:false,runNativeTests(){nativeCalls++;return {code:0,stdout:'# tests 1\n# pass 1\n# fail 0\n'};}});
+  assert.equal(code,4);assert.equal(nativeCalls,0);
+  for(const sentence of ordinalBehavior) assert.ok(stderr.text.includes(JSON.stringify(sentence)));
+  for(const [sentence] of ordinalMapped) assert.equal(stderr.text.includes(JSON.stringify(sentence)),false,sentence);
+});
+
+for(const [label,mutate,expectedConflicts] of [
+  ['result type conflict',c=>{c.entries[0].result_schema.properties.text.type='number';},[
+    'It returns a string.',
+    'In the Runtime interface, operation `formatOrdinal` takes `{value}` and returns `{text}`, where `text` is that string.',
+  ]],
+  ['undeclared error conflict',c=>{c.entries[0].errors=[];},[
+    'Reject negative numbers, fractions, non-numbers, NaN, infinities and unsafe integers without coercion or rounding.',
+    'Throw a `RangeError` with `code` equal to `invalid-ordinal`.',
+  ]],
+  ['public binding conflict',c=>{c.entries[0].operation='otherOrdinal';},[
+    'Public binding: module function `formatOrdinal(value)` in `src/ordinal.js`, exported at `tiny-format/ordinal`.',
+    'In the Runtime interface, operation `formatOrdinal` takes `{value}` and returns `{text}`, where `text` is that string.',
+  ]],
+]) test('3130 #39 conflict stays a question: '+label,async t=>{
+  const bad=structuredClone(ordinalContract);
+  bad.entries[0].result_schema.description=ordinalBehavior.join(' ');
+  mutate(bad);
+  const f=setup(t,ordinalProse,{'contracts/ordinal.json':bad,'tests/coverage.test.mjs':'export {};\n'});
+  const r=draft(f,['--contract','contracts/ordinal.json']);
+  assert.equal(r.code,0);
+  assert.equal(r.row.prose_coverage.find(item=>item.sentence===ordinalMapped[0][0])?.status,'mapped');
+  for(const sentence of expectedConflicts) {
+    const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+    assert.ok(row,sentence);
+    assert.equal(row.status,'conflicting',sentence);
+    assert.deepEqual(row.pointers,[]);assert.deepEqual(row.mappings,[]);
+    assert.equal(r.row.questions.filter(q=>q.sentence===sentence).length,1,sentence);
+  }
+  const stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE],automatic:true,tests:'node --test tests/coverage.test.mjs'},
+    {stdout,stderr,interactive:false,runNativeTests(){return {code:0,stdout:'# tests 1\n# pass 1\n# fail 0\n'};}});
+  assert.equal(code,4);
+  for(const sentence of expectedConflicts) assert.ok(stderr.text.includes(JSON.stringify(sentence)),sentence);
+});
