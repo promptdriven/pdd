@@ -7,4 +7,4 @@
 - Run nearby/required checks. Report commands, exits, real output and gaps.
 - verify.md shows commands and results only: no local absolute paths (like /Users/… or /home/…) and no raw logs.
 - Screens: RUNBOOK §13 local headless comparison. A Screen vs drawing table is mandatory in verify.md and the code PR; missing parts fail verify; rebuild.
-- Independently repeat real behavior in a fresh checkout using `verification-setup.md` (pdd-prompting). Report setup, native behavior, dependency scope and prompt-interpreter results separately; retain evidence outside the checkout.
+- Repeat real behavior in a fresh checkout via `verification-setup.md` and save `real-validation.json` in the run folder (`head`, fresh `verifier`, `recipe`, `oldCode`, `newCode`, `evidencePaths`). Run `pdd workflow suite --command CMD`.

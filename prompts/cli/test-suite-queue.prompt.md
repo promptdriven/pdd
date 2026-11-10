@@ -31,9 +31,9 @@ output inherits the caller streams. `startGate` blocks command execution until
 `onChild(pid)` succeeds, then supplies EOF on command stdin.
 
 Export `runTestSuite({cwd, command, timeout = 30, env}, ports = {})`, returning
-`{exitCode, message}`, and synchronous `readSuiteProgress({cwd, since = 0, env},
-ports = {})`. The latter returns null without records, else `{ticket, state, position,
-queuedAt, startedAt, finishedAt, reason, pausedMs}`. `ticket` is the positive submission sequence number. Times are epoch milliseconds;
+`{exitCode, message}`, synchronous `readSuiteProgress({cwd, since = 0, env},
+ports = {})`, and synchronous `readSuiteReceipt({cwd, headSha, env}, ports = {})`. The progress reader returns null without records, else `{ticket, state, position,
+queuedAt, startedAt, finishedAt, reason, pausedMs}`. `readSuiteReceipt` returns `{state: "unavailable", reason}` when the saved queue cannot be read, `null` when no finished receipt matches `headSha` (or `cwd` when `headSha` is omitted), or the newest finished receipt `{ticket, state, outcome, exitCode, signal, counts, command, commandFingerprint, source, startedAt, finishedAt, receiptPath, logPath, reason}` whose `source.head` matches `headSha` (and `cwd` when provided). `sourceIdentity(cwd, p)` also records `clean: true` when `git diff --binary HEAD --` and `git ls-files --others --exclude-standard -z` are both empty, and `clean: false` when the checkout has uncommitted or untracked changes. `ticket` is the positive submission sequence number. Times are epoch milliseconds;
 absent start/end times are null, position is a positive integer only while
 waiting (otherwise null), reason is null unless a failed or interrupted suite.
 `pausedMs` is the union of suite intervals after `since` and before now.

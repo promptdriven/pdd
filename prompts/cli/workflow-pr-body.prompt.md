@@ -65,6 +65,8 @@ requirements add no person gate.
 
 `readableNextLines(facts)` returns the lines of step 8 or 9 alone, so the runner can replace PR 1's Next line when PR 2 opens.
 
+When `records.realValidation` is supplied for a `bug` or `feature` code PR, show `Real validation (fresh verifier)` in `## Proof` (`✓ passed (<recipe>)` and in the old-code column `✗ reproduced` / `✗ failed (as expected)` or baseline summary, else its missing/stale/failed reason), and hold `prStatus` (`⏳ Waiting for fresh-verifier real validation` when missing or stale; `⛔ Blocked: <reason>` when failed or invalid). When `records.suiteReceipt` is supplied on a code PR, show `Full-suite receipt (pdd)` in `## Proof` and hold `prStatus` when the exact-head receipt is missing, stale or failed. When `records.verificationRecipePr` is supplied and open while the repository has no committed verification recipe, `prStatus` waits for the verification recipe PR (`⏳ Waiting for the verification recipe PR (#N)`).
+
 Links appear once in the readable part: one report link, `#N` references for PRs and issues. No internal words (no run IDs, batches, "agent note", handoff or overlay words).
 
 ## Inert agent words
@@ -106,8 +108,8 @@ add a record, verdict, filesystem read or model call.
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "5c850384b34128e63e0ca9f4964832334521d254da6700010f3c013396f0bfea",
+  "status": "draft",
+  "prose_sha256": "337412485a290d9ec3d904cf15f0ef19f61c3e63266150e2283ddb74c6624ff0",
   "entries": [
     {
       "operation": "readablePrTitle",

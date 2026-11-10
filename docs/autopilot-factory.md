@@ -59,6 +59,9 @@ the same merge.
 | Base integration | A clean base merge uses the separate bounded integration counter, retains failed evidence and needs fresh validation before merge. |
 | PR 1 re-entry | The corrected prompt survives code entry and merge; expected values stay fixed. |
 | Run serialization compatibility | Without Story coverage or its recorded contract and path inventory, publication waits for a supported gate; prior decisions survive and the run reaches merge. |
+| Fresh-verifier real validation | Bug and feature code PRs require `real-validation.json` from a fresh verifier for the exact PR head (`recipe`, `oldCode`, `newCode`, `evidencePaths`); missing or failed records hold the merge with a clear reason, while small changes stay as today. |
+| Missing verification recipe PR | A repository without a verification recipe has the first Autopilot run draft one as its own `small-change` PR once; `bug` and `feature` merges wait for it with one grouped question across runs until it merges. |
+| Exact-head full-suite receipt | `pdd workflow suite` records the exact-head full-suite receipt (`head` SHA, `commandFingerprint`, `counts`, `exitCode`), and `pdd autopilot check-base` requires it to match the PR head before merge. |
 
 Synthetic operator and person actions apply only to disposable fixtures. The test
 never approves a prompt in the source checkout. The command transcript records

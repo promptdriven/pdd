@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 0ba96c7d10243edbf12dfcb73d66fe1451a27c38b9a167d48655f25167f718e1).
+// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: eaa7434b35e61c4022b3e14c8ea25c792be12cd286d9223cac15d6e3cef3f374).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -99,6 +99,139 @@ export function judgeOldCodeProof({ content = '', error = '', savedAt } = {}, { 
   const head = { headSha, baseSha };
   if (record.headSha !== head.headSha || record.baseSha !== head.baseSha) return { line: 'Old-code proof: stale (base or head changed; rerun pdd workflow prove).', status: 'stale' };
   return { line: formatProof(record), status: record.outcome, record };
+}
+
+export function judgeRealValidation(saved, { runId, workflow, headSha, builderSessions = [] } = {}) {
+  if (!['bug', 'feature'].includes(workflow)) return { applicable: false, status: 'not-applicable', line: null, reason: null };
+  if (saved === null || saved === undefined || (typeof saved === 'object' && saved.error === 'missing')) {
+    return { applicable: true, status: 'missing', line: 'Real validation: missing (no real-validation.json recorded for this head).', reason: 'missing fresh-verifier real-validation record (real-validation.json)' };
+  }
+  let record = saved;
+  if (typeof saved === 'object' && typeof saved.content === 'string') {
+    if (saved.error) return { applicable: true, status: 'invalid', line: 'Real validation: invalid (real-validation.json could not be read).', reason: 'invalid fresh-verifier real-validation record (real-validation.json could not be read)' };
+    try { record = JSON.parse(saved.content); }
+    catch { return { applicable: true, status: 'invalid', line: 'Real validation: invalid (real-validation.json is malformed).', reason: 'invalid fresh-verifier real-validation record (real-validation.json is malformed)' }; }
+  }
+  if (!record || typeof record !== 'object' || Array.isArray(record) || record.unreadable === true) {
+    return { applicable: true, status: 'invalid', line: 'Real validation: invalid (real-validation.json is malformed).', reason: 'invalid fresh-verifier real-validation record (real-validation.json is malformed)' };
+  }
+  const recRunId = record.runId ?? record.run_id;
+  if (recRunId !== undefined && runId && recRunId !== runId) {
+    return { applicable: true, status: 'invalid', line: 'Real validation: invalid (real-validation.json belongs to another workflow run).', reason: 'real-validation.json belongs to a different workflow run' };
+  }
+  const head = String(record.head ?? record.headSha ?? '').trim().toLowerCase();
+  if (!sha(head)) {
+    return { applicable: true, status: 'invalid', line: 'Real validation: invalid (missing 40-character head SHA).', reason: 'real-validation.json is missing a 40-character head SHA' };
+  }
+  if (typeof headSha === 'string' && sha(headSha.toLowerCase()) && head !== headSha.toLowerCase()) {
+    return { applicable: true, status: 'stale', head, headSha: headSha.toLowerCase(), line: `Real validation: stale (recorded for ${head.slice(0, 7)}, current head is ${headSha.slice(0, 7)}).`, reason: `fresh-verifier real-validation record is stale (recorded for ${head.slice(0, 7)}, PR head is ${headSha.slice(0, 7)})` };
+  }
+  const rawVerifier = typeof record.verifier === 'string' ? record.verifier : typeof record.verifier?.id === 'string' ? record.verifier.id : typeof record.verifier?.session === 'string' ? record.verifier.session : typeof record.session === 'string' ? record.session : '';
+  const verifier = rawVerifier.trim();
+  if (!verifier) {
+    return { applicable: true, status: 'failed', line: 'Real validation: failed (missing fresh verifier identity).', reason: 'real-validation.json is missing a fresh verifier identity' };
+  }
+  const builders = new Set((builderSessions ?? []).map(item => String(item ?? '').trim()).filter(Boolean));
+  if (record.fresh === false || record.verifier?.fresh === false || builders.has(verifier)) {
+    return { applicable: true, status: 'failed', line: 'Real validation: failed (verifier reused a builder session instead of a fresh verifier).', reason: 'real-validation.json was recorded by a builder session instead of a fresh verifier' };
+  }
+  const recipe = (typeof record.recipe === 'string' ? record.recipe : typeof record.recipe?.path === 'string' && record.recipe.path.trim() ? record.recipe.path : typeof record.recipe?.command === 'string' ? record.recipe.command : '').trim();
+  if (!recipe) {
+    return { applicable: true, status: 'failed', line: 'Real validation: failed (missing verification recipe).', reason: 'real-validation.json is missing the verification recipe used' };
+  }
+  const oldCode = typeof record.oldCode === 'string' ? { outcome: record.oldCode.trim() } : record.oldCode;
+  const oldOutcome = typeof oldCode?.outcome === 'string' ? oldCode.outcome.trim().toLowerCase() : oldCode?.reproduced === true ? 'reproduced' : '';
+  const validOld = workflow === 'bug' ? ['reproduced', 'failed', 'fail'].includes(oldOutcome) : ['reproduced', 'failed', 'fail', 'absent', 'baseline'].includes(oldOutcome);
+  if (!oldOutcome || oldOutcome === 'setup-error' || !validOld) {
+    const target = workflow === 'bug' ? 'bug' : 'missing feature baseline';
+    return { applicable: true, status: 'failed', line: `Real validation: failed (old-code run did not reproduce the ${target}).`, reason: `fresh-verifier real-validation old-code run did not reproduce the ${target} (${oldOutcome || 'missing'})` };
+  }
+  const newCode = typeof record.newCode === 'string' ? { outcome: record.newCode.trim() } : record.newCode;
+  const newOutcome = typeof newCode?.outcome === 'string' ? newCode.outcome.trim().toLowerCase() : newCode?.passed === true ? 'passed' : '';
+  const newExitOk = newCode?.exitCode === undefined || newCode?.exitCode === 0;
+  if (!['passed', 'pass'].includes(newOutcome) || !newExitOk) {
+    return { applicable: true, status: 'failed', line: 'Real validation: failed (new-code validation did not pass).', reason: `fresh-verifier real-validation failed on the new code (${newOutcome || 'missing'}${newCode?.exitCode !== undefined ? `, exit ${newCode.exitCode}` : ''})` };
+  }
+  const evidencePaths = Array.isArray(record.evidencePaths)
+    ? record.evidencePaths.filter(item => typeof item === 'string' && item.trim() && !/[\u0000-\u001f]/.test(item) && !item.trim().startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(item.trim()) && !item.split(/[\\/]/).includes('..')).map(item => item.trim())
+    : [];
+  if (!evidencePaths.length) {
+    return { applicable: true, status: 'failed', line: 'Real validation: failed (evidence paths are missing).', reason: 'fresh-verifier real-validation record is missing relative evidence paths' };
+  }
+  return {
+    applicable: true, status: 'passed', head, verifier, recipe,
+    oldCode: { ...(typeof oldCode === 'object' ? oldCode : {}), outcome: oldOutcome },
+    newCode: { ...(typeof newCode === 'object' ? newCode : {}), outcome: 'passed' },
+    evidencePaths,
+    line: `Real validation: PASS (head ${head.slice(0, 7)}, recipe ${recipe}, old-code ${oldOutcome}, new-code passed, evidence ${evidencePaths.join(', ')}).`,
+    reason: null,
+  };
+}
+
+export function judgeSuiteReceipt(receipt, { headSha } = {}) {
+  if (!receipt) {
+    return { status: 'missing', line: `Full-suite receipt: missing${headSha ? ` (no pdd suite receipt for head ${headSha.slice(0, 7)})` : ''}.`, reason: `missing pdd full-suite receipt${headSha ? ` for head ${headSha}` : ''}` };
+  }
+  if (receipt.state === 'unavailable') {
+    return { status: 'unavailable', line: `Full-suite receipt: unavailable (${receipt.reason ?? 'queue unreadable'}).`, reason: `pdd full-suite receipt custody is unavailable (${receipt.reason ?? 'queue unreadable'})` };
+  }
+  const recHead = typeof receipt.source?.head === 'string' ? receipt.source.head.trim().toLowerCase() : '';
+  if (!sha(recHead)) {
+    return { status: 'invalid', line: 'Full-suite receipt: invalid (missing 40-character source head SHA).', reason: 'pdd full-suite receipt is missing a 40-character source head SHA' };
+  }
+  if (typeof headSha === 'string' && sha(headSha.toLowerCase()) && recHead !== headSha.toLowerCase()) {
+    return { status: 'stale', head: recHead, headSha: headSha.toLowerCase(), line: `Full-suite receipt: stale (recorded for ${recHead.slice(0, 7)}, current head is ${headSha.slice(0, 7)}).`, reason: `pdd full-suite receipt (ticket ${receipt.ticket ?? 'unknown'}) was recorded for ${recHead.slice(0, 7)}, not PR head ${headSha.slice(0, 7)}` };
+  }
+  if (receipt.source?.clean === false) {
+    return { status: 'dirty', head: recHead, line: `Full-suite receipt: dirty (ticket ${receipt.ticket} for ${recHead.slice(0, 7)} ran on an uncommitted checkout).`, reason: `pdd full-suite receipt (ticket ${receipt.ticket}) for head ${recHead} was recorded on a dirty checkout` };
+  }
+  if (receipt.state !== 'finished' || receipt.outcome !== 'completed') {
+    return { status: 'incomplete', head: recHead, line: `Full-suite receipt: incomplete (ticket ${receipt.ticket}, outcome ${receipt.outcome ?? receipt.state}).`, reason: `pdd full-suite receipt (ticket ${receipt.ticket}) for head ${recHead} is not completed (outcome ${receipt.outcome ?? receipt.state})` };
+  }
+  const counts = receipt.counts;
+  const countsOk = counts && typeof counts === 'object' && Number.isSafeInteger(counts.pass) && counts.pass > 0 && counts.fail === 0 && (counts.cancelled ?? 0) === 0;
+  if (receipt.exitCode !== 0 || receipt.signal || !countsOk || typeof receipt.commandFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.commandFingerprint)) {
+    return { status: 'failed', head: recHead, exitCode: receipt.exitCode ?? null, counts: counts ?? null, line: `Full-suite receipt: FAIL (ticket ${receipt.ticket}, head ${recHead.slice(0, 7)}, exit ${receipt.exitCode ?? 'null'}, pass ${counts?.pass ?? 0}, fail ${counts?.fail ?? 0}).`, reason: `pdd full-suite receipt (ticket ${receipt.ticket}) for head ${recHead} did not pass (exit ${receipt.exitCode ?? 'null'}, pass ${counts?.pass ?? 0}, fail ${counts?.fail ?? 0})` };
+  }
+  return {
+    status: 'passed', ticket: receipt.ticket, head: recHead,
+    command: receipt.command ?? '[redacted]', commandFingerprint: receipt.commandFingerprint,
+    exitCode: 0, counts, receiptPath: receipt.receiptPath ?? null, logPath: receipt.logPath ?? null,
+    line: `Full-suite receipt: PASS (ticket ${receipt.ticket}, head ${recHead.slice(0, 7)}, command sha256:${receipt.commandFingerprint.slice(0, 12)}, pass ${counts.pass}/${counts.tests ?? counts.pass}, fail 0, exit 0).`,
+    reason: null,
+  };
+}
+
+export function findVerificationRecipe(root, fsPort = { lstatSync, readFileSync }) {
+  if (!root || typeof root !== 'string') return { present: false, path: null, recipe: null };
+  const readText = rel => {
+    try {
+      const full = join(root, rel);
+      if (!fsPort.lstatSync(full).isFile()) return null;
+      return fsPort.readFileSync(full, 'utf8');
+    } catch { return null; }
+  };
+  for (const rel of ['docs/verification-recipe.md', 'verification-recipe.md']) {
+    const text = readText(rel);
+    if (text && text.trim()) return { present: true, path: rel, recipe: rel, content: text };
+  }
+  for (const rel of ['AGENTS.md', 'CLAUDE.md', 'CONTRIBUTING.md']) {
+    const text = readText(rel);
+    if (text && /^#{1,3}\s+Verification(?:\s+recipe)?\b[\s\S]*?\S/im.test(text)) {
+      return { present: true, path: rel, recipe: `${rel}#Verification`, content: text };
+    }
+  }
+  const pddText = readText('pdd.json');
+  if (pddText) {
+    try {
+      const parsed = JSON.parse(pddText);
+      const configured = parsed?.verification?.recipe ?? parsed?.autopilot?.verificationRecipe;
+      if (typeof configured === 'string' && configured.trim()) {
+        return { present: true, path: 'pdd.json', recipe: configured.trim(), content: configured.trim() };
+      }
+    } catch {}
+  }
+  return { present: false, path: null, recipe: null };
 }
 
 export async function preparePrEvidence({ run, isCode }, ports = {}) {

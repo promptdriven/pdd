@@ -694,3 +694,133 @@ test('factory 3125: a full workflow session admits healthy coordinator reuse in 
   assert.ok(w.herdr.panes.some(p=>p.pane_id===personal.result.root_pane.pane_id));
   assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });
+
+test('factory 3087a: bug and feature merges require fresh-verifier real-validation on the exact PR head while small-change stays as today',async t=>{
+  const w=await factoryWorld(t,{workflow:'bug'});await w.begin();
+  const a=scriptedAgent(w);await a.finish();
+  const run=w.record(),codePr=w.github.prs.find(pr=>run.pr.some(p=>p.number===pr.number&&p.stage==='code'));
+  assert.ok(codePr);
+  // Retarget codePr to main for pre-merge check-base verification.
+  await w.github.gh(['pr','edit',String(codePr.number),'--base',run.baseBranch]);
+  const realPath=join(run.runDir,'real-validation.json');
+  const savedReal=readFileSync(realPath,'utf8');
+
+  // 1. Missing real-validation.json holds merge with a clear reason.
+  rmSync(realPath);
+  const missingHold=await w.command(['autopilot','check-base','17',String(codePr.number)],{allowFailure:true});
+  assert.equal(missingHold.code,1,'3087_FACTORY_MISSING_REAL_VALIDATION_MUST_HOLD');
+  assert.match(missingHold.stderr+missingHold.stdout,/fresh-verifier real validation held: missing fresh-verifier real-validation record/);
+
+  // 2. Old-code result that did not reproduce the bug holds merge.
+  a.realValidation({oldCode:{outcome:'passed',command:'node --test test/value.test.mjs',exitCode:0,summary:'Old code unexpectedly passed.'}});
+  const oldCodeHold=await w.command(['autopilot','check-base','17',String(codePr.number)],{allowFailure:true});
+  assert.equal(oldCodeHold.code,1,'3087_FACTORY_UNREPRODUCED_OLD_CODE_MUST_HOLD');
+  assert.match(oldCodeHold.stderr+oldCodeHold.stdout,/old-code run did not reproduce the bug/);
+
+  // 3. Reused builder session instead of a fresh verifier holds merge.
+  const builderSession=run.chats.find(c=>c.area==='code')?.session?.id;
+  assert.ok(builderSession);
+  a.realValidation({verifier:{session:builderSession,fresh:true}});
+  const builderHold=await w.command(['autopilot','check-base','17',String(codePr.number)],{allowFailure:true});
+  assert.equal(builderHold.code,1,'3087_FACTORY_BUILDER_VERIFIER_MUST_HOLD');
+  assert.match(builderHold.stderr+builderHold.stdout,/builder session instead of a fresh verifier/);
+
+  // 4. Restore valid fresh-verifier real-validation.json and complete merge.
+  writeFileSync(realPath,savedReal);
+  await a.merge();
+  assert.equal(w.record().state,'completed');
+  assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3087b: repository without a verification recipe drafts one small-change PR once and groups waiting runs under one question',async t=>{
+  const baseMod=await import('../src/autopilot-base.mjs');
+  const w=await factoryWorld(t,{workflow:'bug',withoutVerificationRecipe:true});
+  w.github.add(18,{title:'Add value feature',body:'The value must be 2.',created:w.time-500,updated:w.time-500});
+  await w.begin({number:17});
+  const a17=scriptedAgent(w);await a17.finish();
+
+  const recipePr=w.github.prs.find(pr=>pr.headRefName==='pdd/verification-recipe');
+  assert.ok(recipePr,'3087_FACTORY_MISSING_RECIPE_MUST_DRAFT_SMALL_CHANGE_PR');
+  const stateAfter17=baseMod.readVerificationRecipeState(w.record(17));
+  assert.equal(stateAfter17.present,false,'3087_FACTORY_RECIPE_MUST_BE_MISSING');
+  assert.equal(stateAfter17.waiting,true);
+  const recipePrNumber=stateAfter17.prRecord?.pr;
+  assert.equal(recipePrNumber,recipePr.number);
+  assert.equal(stateAfter17.prRecord.workflow,'small-change');
+  assert.deepEqual(stateAfter17.prRecord.waitingRuns,[17]);
+  assert.equal(stateAfter17.prRecord.groupedQuestion.questionCount,1);
+
+  // Start a second run (#18, feature) in the same repository without a verification recipe.
+  w.workflow='feature';
+  const readRecord=w.record;
+  await w.begin({number:18});
+  w.record=()=>readRecord(18);
+  const a18=scriptedAgent(w);await a18.finish();
+  w.record=readRecord;
+
+  const stateAfter18=baseMod.readVerificationRecipeState(w.record(18));
+  assert.equal(stateAfter18.prRecord.pr,recipePrNumber,'second run must reuse the same verification-recipe small-change PR');
+  assert.deepEqual(stateAfter18.prRecord.waitingRuns,[17,18]);
+  assert.equal(stateAfter18.prRecord.groupedQuestion.questionCount,1,'waiting runs must share one grouped question, not one per run');
+  assert.match(stateAfter18.prRecord.groupedQuestion.text,/#17, #18/);
+  assert.equal(w.github.prs.filter(pr=>pr.headRefName==='pdd/verification-recipe').length,1,'only one verification-recipe PR may be opened');
+
+  // Both bug (#17) and feature (#18) code PRs are held while the verification-recipe PR is open.
+  const codePr17=w.github.prs.find(pr=>w.record(17).pr.some(p=>p.number===pr.number&&p.stage==='code'));
+  await w.github.gh(['pr','edit',String(codePr17.number),'--base','main']);
+  const held17=await w.command(['autopilot','check-base','17',String(codePr17.number)],{allowFailure:true});
+  assert.equal(held17.code,1);
+  assert.match(held17.stderr+held17.stdout,new RegExp(`waiting for the repository verification recipe \\(small-change PR #${recipePrNumber}\\)`));
+  assert.match(held17.stderr+held17.stdout,/#17, #18/);
+
+  // Once a person reviews and merges the verification-recipe small-change PR, waiting runs can merge.
+  recipePr.statusCheckRollup=[{name:'factory-docs',status:'COMPLETED',conclusion:'SUCCESS',headSha:recipePr.headRefOid}];
+  await w.github.gh(['pr','comment',String(recipePr.number),'--body-file','-'],{input:JSON.stringify({verdict:'PASS',head:recipePr.headRefOid,risk:1,family:'script',session:'fresh-recipe',checker_mode:'scripted'})});
+  await w.github.gh(['pr','merge',String(recipePr.number),'--merge','--match-head-commit',recipePr.headRefOid]);
+
+  w.workflow='bug';
+  await a17.merge();
+  assert.equal(w.record(17).state,'completed');
+  assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3087c: pdd records an exact-head full-suite receipt and holds merge when the PR head has no matching passing receipt (#3087)',async t=>{
+  const w=await factoryWorld(t,{workflow:'feature'});await w.begin();
+  const a=scriptedAgent(w);await a.finish();
+  const run=w.record(),codePr=w.github.prs.find(pr=>run.pr.some(p=>p.number===pr.number&&p.stage==='code'));
+  assert.ok(codePr);
+  const originalHead=codePr.headRefOid;
+
+  // Advance the code PR branch to a new commit without running `pdd workflow suite`.
+  put(run.root,'README.md','Updated notes on the feature branch.\n');
+  w.git(run.root,'add','README.md');
+  w.git(run.root,'commit','-qm','Advance feature branch head without pdd suite receipt');
+  w.git(run.root,'push','-q',w.remote,`HEAD:refs/heads/${codePr.headRefName}`);
+  w.github.syncHeads();
+  const newHead=w.git(run.root,'rev-parse','HEAD');
+  assert.equal(codePr.headRefOid,newHead);
+  assert.notEqual(newHead,originalHead);
+
+  // Refresh real-validation.json for newHead so only the #3087 pdd full-suite receipt is missing.
+  a.realValidation();
+  await w.github.gh(['pr','edit',String(codePr.number),'--base',run.baseBranch]);
+  const heldWithoutReceipt=await w.command(['autopilot','check-base','17',String(codePr.number)],{allowFailure:true});
+  assert.equal(heldWithoutReceipt.code,1,'3087_FACTORY_STALE_SUITE_RECEIPT_MUST_HOLD');
+  assert.match(heldWithoutReceipt.stderr+heldWithoutReceipt.stdout,new RegExp(`full-suite receipt check failed: missing pdd full-suite receipt for head ${newHead}`));
+
+  // Run `pdd workflow suite` on the exact new head -> receipt now matches PR head and merge succeeds.
+  const suiteOnNewHead=await w.command(['workflow','suite','--command','node --test test/value.test.mjs'],{cwd:run.root});
+  assert.equal(suiteOnNewHead.code,0);
+  const tickets=queueRows(w.env.PDD_SUITE_QUEUE);
+  const receipt=tickets.find(r=>r.source?.head===newHead&&r.state==='finished'&&r.outcome==='completed');
+  assert.ok(receipt,'3087_FACTORY_EXACT_HEAD_RECEIPT_MISSING');
+  assert.equal(receipt.source.clean,true,'3087_FACTORY_CLEAN_SOURCE_RECEIPT_MISSING');
+  assert.equal(receipt.commandFingerprint,createHash('sha256').update('node --test test/value.test.mjs').digest('hex'));
+  assert.equal(receipt.exitCode,0);
+  assert.ok(receipt.counts.pass>0 && receipt.counts.fail===0);
+  const checkAfterSuite=await w.command(['autopilot','check-base','17',String(codePr.number)]);
+  assert.equal(checkAfterSuite.code,0);
+  await a.merge();
+  assert.equal(w.record().state,'completed');
+  assert.deepEqual(w.leadActions,[]);
+});

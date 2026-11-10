@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: b1e53593c12693d9f4394249e176c5e5aa93c22d6adda8960d7b35a30c4ff516).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 32b85f88ecf3b55223ecc4755b88a396e17b55b47a2938bbe5c7d708777c8a93).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -119,7 +119,7 @@ function processIdentity(pid) {
   catch { return null; }
 }
 function sourceIdentity(cwd, p) {
-  const source = {head:null, fingerprint:null, runId:null, issue:null, error:null};
+  const source = {head:null, fingerprint:null, runId:null, issue:null, error:null, clean:null};
   let gitCwd = cwd;
   const git = args => {
     const result = p.git(args, gitCwd);
@@ -129,8 +129,11 @@ function sourceIdentity(cwd, p) {
   try {
     source.head = git(['rev-parse','HEAD']).trim();
     gitCwd = git(['rev-parse','--show-toplevel']).trim();
-    const hash = createHash('sha256').update(git(['diff','--binary','HEAD','--']));
-    for (const path of git(['ls-files','--others','--exclude-standard','-z']).split('\0').filter(Boolean).sort()) {
+    const diff = git(['diff','--binary','HEAD','--']);
+    const untracked = git(['ls-files','--others','--exclude-standard','-z']).split('\0').filter(Boolean).sort();
+    source.clean = diff.length === 0 && untracked.length === 0;
+    const hash = createHash('sha256').update(diff);
+    for (const path of untracked) {
       hash.update(path).update('\0');
       const full = join(gitCwd,path);
       hash.update(p.fs.lstatSync(full).isSymbolicLink() ? p.fs.readlinkSync(full) : p.fs.readFileSync(full));
@@ -210,6 +213,19 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
   return { ticket: row.ticket, state: row.state, position: row.state === 'waiting' ? positionOf(all, row) : null,
     queuedAt: row.queuedAt, startedAt: row.startedAt, finishedAt: row.finishedAt, reason: row.reason,
     pausedMs: pausedTime(own, since, p.now()),
+    ...Object.fromEntries(['command','commandFingerprint','evidence','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','counts','outcome'].map(key=>[key,row[key] ?? null])) };
+}
+export function readSuiteReceipt({ cwd, headSha, env = process.env } = {}, ports = {}) {
+  let p, all;
+  try { p = portsFor(env, ports); all = records(p); }
+  catch (error) { return { state: 'unavailable', reason: safeEvidenceText(error.message) }; }
+  const targetCwd = cwd ? resolve(cwd) : null;
+  const targetHead = typeof headSha === 'string' && /^[0-9a-f]{40}$/i.test(headSha) ? headSha.toLowerCase() : null;
+  const byHead = all.filter(row => row.state === 'finished'
+    && (targetHead ? typeof row.source?.head === 'string' && row.source.head.toLowerCase() === targetHead : (!targetCwd || row.cwd === targetCwd)));
+  if (!byHead.length) return null;
+  const row = (targetCwd ? byHead.filter(item => item.cwd === targetCwd).at(-1) : null) ?? byHead.at(-1);
+  return { ticket: row.ticket, state: row.state, queuedAt: row.queuedAt, startedAt: row.startedAt, finishedAt: row.finishedAt, reason: row.reason,
     ...Object.fromEntries(['command','commandFingerprint','evidence','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','counts','outcome'].map(key=>[key,row[key] ?? null])) };
 }
 export function suiteStatusWords(suite) {

@@ -36,6 +36,24 @@ export function scriptedAgent(w) {
       counts:{total:1,pass:1,fail:0,blocked:0,not_replayed:0},mutation:{kind:'semantic',description:'Add one to the public value',command:'FACTORY_MUTANT=1 '+nativeCommand,exit_code:control.code,outcome:'assertion_failure',failed_checks:[{vector:path,step_id:step.step_id,check_index:0}]},
       formal:{result:'not_applicable',scope:'Constant value',reason:'No separate Rules to check in this synthetic Story',control_outcome:'not_run'}});
   };
+  a.realValidation=(override={})=>{
+    const run=w.record();
+    if(!['bug','feature'].includes(run.workflow)||w.skipRealValidation)return;
+    const head=w.git(run.root,'rev-parse','HEAD');
+    put(run.runDir,'real-validation.json',{
+      schema_version:'pdd.real-validation.v1',
+      run_id:run.runId,
+      head,
+      source:{kind:'git-content-v1',sha256:sourceFingerprint(run.root)},
+      verifier:{session:`fresh-verifier-${run.runId}`,fresh:true},
+      recipe:{path:'AGENTS.md#Verification',command:nativeCommand},
+      oldCode:{outcome:'reproduced',command:nativeCommand,exitCode:1,summary:'Old code value is 1; expected 2 (FACTORY_VALUE).'},
+      newCode:{outcome:'passed',command:nativeCommand,exitCode:0,summary:'New code value is 2; test passes.'},
+      evidencePaths:['old-code-proof.json','replay-evidence.json'],
+      ...(w.realValidationOverride??{}),
+      ...override,
+    });
+  };
   a.gate=async()=>{
     const run=w.record();assert.ok(run.gate);
     // Synthetic operator setup/start is the authorization. No real prompt is approved.
@@ -61,9 +79,10 @@ export function scriptedAgent(w) {
       await w.command(['workflow','prove',String(w.record().number),'--test',nativeCommand,'--expect','FACTORY_VALUE'],{cwd:run.root});
       const proof=readJson(join(run.runDir,'old-code-proof.json'));assert.equal(proof.outcome,'proved');assert.equal(proof.base.exitCode,1);assert.equal(proof.head.exitCode,0);
       if(area.replay_evidence)a.evidence();
+      a.realValidation();
     }
     // Recompute after formal/review in case a step committed source.
-    if(['formal','review'].includes(step) && area.replay_evidence)a.evidence();
+    if(['formal','review'].includes(step) && area.replay_evidence){a.evidence();a.realValidation();}
     const verdict=w.codeOnly?'Verdict: the prompt is right; the bug is only in the CODE.':'Verdict: the bug is in the PROMPT (its check fails on the issue case).';
     const details=w.codeOnly?'Prompt unchanged; passing on old and new snapshots. Native old code fails the value assertion; corrected code passes.':'Prompt correction: old fails; new passes.';
     const argv=['workflow','done',step,'--summary',`${step==='reproduce'?verdict+'\n':''}${w.codeOnly?'This PR: '+details+'\nFix: Keep the prompt unchanged; correct the native value.\n':''}Factory ${step}; ${step==='check'?'Prompt tests: 1 of 1 pass':'native evidence retained'}\nResult: ${details}`];
@@ -80,7 +99,7 @@ export function scriptedAgent(w) {
   a.merge=async()=>{
     // There is no production merge function: these are the pdd-check/pdd-merge actor duties.
     for(const skill of ['pdd-check','pdd-merge'])assert.ok(readFileSync(join(packageRoot,'skills',skill,'SKILL.md'),'utf8').length);
-    const config=readJson(join(w.cwd,'pdd.json')),state=w.state(),owned=w.github.issues.get(17);
+    const num=w.record().number,config=readJson(join(w.cwd,'pdd.json')),state=w.state(),owned=w.github.issues.get(num);
     assert.equal(config.autopilot.mode,'auto');assert.ok(!config.strict_approvals);
     assert.equal(state.startAction?.command,'pdd autopilot start','merge needs the actual operator action');
     assert.ok([w.github.owner,...(config.autopilot.trust??[])].includes(owned.user),'issue author must be trusted');
@@ -142,16 +161,16 @@ export function scriptedAgent(w) {
       await w.github.gh(['pr','comment',String(pr.number),'--body-file','-'],{input:JSON.stringify({verdict:'PASS',head:pr.headRefOid,risk:1,family:'script',session:'fresh-'+pr.number,checker_mode:'scripted',evidence:{nativeExit:r.status,promptVerdict:promptResult?.code??null,oldPromptExit:oldPromptResult?.code??null,pairedNativeExit:pairedNative?.status??null,
         codeOnly,oldNativeExit:oldNative?.status??null,oldNativeOutput:oldNative?oldNative.stdout+oldNative.stderr:null,nativeCommand,
         base:w.record().baseSha,pairedHead:codePr?.headRefOid??null,oldPromptSha256:oldPrompt===null?null:sha(oldPrompt),newPromptSha256:newPrompt===null?null:sha(newPrompt)}})});
-      await w.command(['workflow','status',String(w.record().number)]);
-      await w.command(['autopilot','check-base','17',String(pr.number)]);
+      await w.command(['workflow','status',String(num)]);
+      await w.command(['autopilot','check-base',String(num),String(pr.number)]);
       const head=JSON.parse((await w.github.gh(['pr','view',String(pr.number),'--json','headRefOid'])).stdout).headRefOid;
       await w.github.gh(['pr','comment',String(pr.number),'--body-file','-'],{input:'Merge authorized by the synthetic factory operator auto setup and start; checked head '+head});
       await w.github.gh(['pr','merge',String(pr.number),'--merge','--match-head-commit',head]);
-      await w.command(['autopilot','check-base','17',String(pr.number)]);
+      await w.command(['autopilot','check-base',String(num),String(pr.number)]);
       assert.equal(JSON.parse((await w.github.gh(['pr','view',String(pr.number),'--json','state'])).stdout).state,'MERGED');
     }
-    await w.github.gh(['issue','close','17']);await w.github.gh(['issue','edit','17','--remove-label','pdd:working']);await w.command(['workflow','status',String(w.record().number)]);
-    assert.ok(w.github.prs.every(pr=>pr.state==='MERGED'));assert.equal(w.github.issues.get(17).state,'closed');assert.deepEqual(w.leadActions,[]);
+    await w.github.gh(['issue','close',String(num)]);await w.github.gh(['issue','edit',String(num),'--remove-label','pdd:working']);await w.command(['workflow','status',String(num)]);
+    assert.ok(w.record().pr.every(saved=>w.github.prs.find(pr=>pr.number===saved.number)?.state==='MERGED'));assert.equal(w.github.issues.get(num).state,'closed');assert.deepEqual(w.leadActions,[]);
   };
   return a;
 }

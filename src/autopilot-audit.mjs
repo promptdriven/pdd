@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 3102ad6c7c0b32016538fd8787c44cec433150254018ad6c7368db8fb8d979b7).
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 1794744ff56dc4daa4008f83b3f75ef5f40ae0f6a3ad778491a51e683d0e75d6).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -12,6 +12,7 @@ import {allRuns, readRun, stateDirFor, updateRunCosts} from './workflow-runs.mjs
 import {launchProfile} from './workflow-launch-profile.mjs';
 import {expandHome} from './workflow-chat.mjs';
 import {acquireRunLock} from './workflow-runner.mjs';
+import {readSuiteReceipt} from './test-suite-queue.mjs';
 
 const sha = v => typeof v === 'string' && /^[0-9a-f]{40,64}$/i.test(v);
 const named = v => typeof v === 'string' && v.trim().length > 0;
@@ -327,7 +328,9 @@ async function auditMergeOwned({run, pr}, ports = {}) {
       await command('git',['checkout','--detach',merge],{cwd:checkout});
       audit.chat.root=checkout;persist();
       const brief = fs.readFileSync(fileURLToPath(new URL('../docs/autopilot-audit.md',import.meta.url)),'utf8');
-      const input = brief+'\n\nTask input:\n'+JSON.stringify({repository:run.repo,issue:run.number,prs:run.pr,merge,parent,runDir:run.runDir,scratch,checkout});
+      const realValidation = read(fs,join(run.runDir,'real-validation.json'),null);
+      const suiteReceipt = readSuiteReceipt({cwd:run.root,env},ports.suitePorts ?? {});
+      const input = brief+'\n\nTask input:\n'+JSON.stringify({repository:run.repo,issue:run.number,prs:run.pr,merge,parent,runDir:run.runDir,scratch,checkout,realValidation,suiteReceipt});
       let args;
       if(definition.kind === 'codex') args=['exec','--json','--dangerously-bypass-approvals-and-sandbox','-c','features.multi_agent=false',...(profile.model?['--model',profile.model]:[]),'-'];
       else {const id=randomUUID();audit.chat.session={id};persist();args=['-p','--session-id',id,'--output-format','json','--permission-mode','bypassPermissions',...(profile.model?['--model',profile.model]:[])];}

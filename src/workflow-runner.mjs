@@ -1,6 +1,6 @@
 import {routeQuestionFor, idleParkingBlocker, idleSince, interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
-import { selectAutopilotBase } from './autopilot-base.mjs';
-import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
+import { selectAutopilotBase, ensureVerificationRecipe, readVerificationRecipeState } from './autopilot-base.mjs';
+import { runTestSuite, readSuiteProgress, readSuiteReceipt, suiteStatusWords } from './test-suite-queue.mjs';
 
 import { classifyStuckCause, environmentRecovery, environmentStatus, environmentWakeTag, environmentHealthy, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, interpreterStatusWords } from './interpreter-queue.mjs';
@@ -36,7 +36,7 @@ import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaPro
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
-import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
+import { approvalRecords, preparePrEvidence, judgeRealValidation, judgeSuiteReceipt } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
@@ -1383,6 +1383,20 @@ async function publicationEvidence(run, area, p) {
           evidence.nativeLine = `Native tests (current old-code proof, new-code output): ${passed}/${total} passed; ${failed} failed.`;
       }
     } catch { /* Missing, stale or unparseable machine output supplies no counts. */ }
+    const headSha = observedHead?.headSha ?? '';
+    const realPath = join(run.runDir, 'real-validation.json');
+    try {
+      if (proofFiles.lstatSync(realPath).isFile()) {
+        const builderSessions = (run.chats ?? []).filter(chat => ['spec', 'code', 'build', 'change'].includes(chat.area)).map(chat => chat.session?.id).filter(Boolean);
+        evidence.realValidation = judgeRealValidation({ content: proofFiles.readFileSync(realPath, 'utf8'), error: '' }, { runId: run.runId, workflow: run.workflow, headSha, builderSessions });
+      }
+    } catch { /* Optional on manual runs without real-validation.json. */ }
+    if (headSha) {
+      const rawReceipt = (p.readSuiteReceipt ?? readSuiteReceipt)({ cwd: run.root, headSha, env: p.env }, p.suitePorts ?? {});
+      if (rawReceipt && rawReceipt.state !== 'unavailable') {
+        evidence.suiteReceipt = judgeSuiteReceipt(rawReceipt, { headSha });
+      }
+    }
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
   // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
@@ -1706,6 +1720,12 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
       ...(run.workflow === 'small-change' && label === 'the PR' ? { checklist: readSmallChangeChecklist(run) } : {}),
       formal, ...(formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}),
       proof: layout === 'code' ? { kind: proofKind, status: pending ? 'pending' : evidence.proofStatus, ...(native ? { passed: Number(native[1]), total: Number(native[2]) } : {}) } : null,
+      ...(layout === 'code' && evidence.realValidation ? { realValidation: evidence.realValidation } : {}),
+      ...(layout === 'code' && evidence.suiteReceipt ? { suiteReceipt: evidence.suiteReceipt } : {}),
+      ...(layout === 'code' && ['bug', 'feature'].includes(run.workflow) ? (() => {
+        const recipeState = readVerificationRecipeState(run, p.fs ?? nativeDeliveryFiles);
+        return recipeState.waiting && recipeState.prRecord?.pr ? { verificationRecipePr: { waiting: true, pr: recipeState.prRecord.pr, url: recipeState.prRecord.url, groupedQuestion: recipeState.prRecord.groupedQuestion } } : {};
+      })() : {}),
       review: layout === 'code' ? reviewVerdict(run, area) : null, formalStep: area.steps.includes('formal'), formalDone: Boolean(run.done.formal && !run.done.formal.skipped),
       rulesToCheck: storyRulesToCheck(run, files),
       ci: published?.ci ?? null, checker: published?.checker ?? null, drafts: layout === 'spec' ? drafts : [] },
@@ -1780,10 +1800,11 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${closingInert(verdict)}`] : []), ...(change ? [`${AGENT_NOTE}: ${closingInert(change)}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const inventory = run.testInventory && label !== 'PR 1' ? [run.testInventory.text.trimEnd(), ...(run.testInventory.saved ? [] : ['warning: The full test inventory report was not saved.']), inventoryCommits(run.testInventory)] : [];
+  const extraMachine = label !== 'PR 1' ? [evidence.realValidation?.line, evidence.suiteReceipt?.line].filter(Boolean) : [];
   const slot = evidence.lines.findIndex(line => line.startsWith(`${AGENT_NOTE}:`));
   const machineEnd = slot < 0 ? evidence.lines.length : slot;
   const native = evidence.nativeLine ? [run.publicationPending ? 'Native tests: publication-pending.' : evidence.nativeLine] : [];
-  const preparedLines = [...evidence.lines.slice(0, machineEnd), ...native, ...inventory, ...evidence.lines.slice(machineEnd)].map(line => hideLocalPaths(redactTry(line), run));
+  const preparedLines = [...evidence.lines.slice(0, machineEnd), ...native, ...inventory, ...extraMachine, ...evidence.lines.slice(machineEnd)].map(line => hideLocalPaths(redactTry(line), run));
   const body = (text, lifted, approvals = [], section = []) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(approvals.length ? ['', ...approvals] : []), ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(section.length ? ['', ...section] : []),
     ...(!noted && hasReportLink([...lines, ...Object.values(full), ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
@@ -2817,6 +2838,38 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary)}));}
   if (run.workflow === 'small-change' && !askArea(run) && ['scope','change','verify','formal'].includes(step))
     record.smallChange = {checklist: readSmallChangeChecklist(run), formal: readFormalEvidence(run)};
+  if (step === 'verify' && reason === null && ['bug', 'feature'].includes(run.workflow)) {
+    let headSha = '';
+    try { headSha = (await git(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}')).trim(); } catch {}
+    if (validSavedAutomaticOrigin(run)) {
+      const recipeState = readVerificationRecipeState(run, p.fs ?? nativeDeliveryFiles);
+      if (!recipeState.present) {
+        try {
+          const drafted = await ensureVerificationRecipe(run, { ...p, execFile: p.execFile, fs: p.fs ?? nativeDeliveryFiles });
+          if (drafted.prRecord?.pr) lines.push(`Verification recipe: drafted small-change PR #${drafted.prRecord.pr} (${drafted.prRecord.groupedQuestion?.text ?? 'waiting for review'}).`);
+        } catch {}
+      }
+    }
+    const realPath = join(run.runDir, 'real-validation.json');
+    let rawReal = { content: '', error: 'missing' };
+    try {
+      const fsPort = p.fs ?? nativeDeliveryFiles;
+      if (fsPort.lstatSync(realPath).isFile()) rawReal = { content: fsPort.readFileSync(realPath, 'utf8'), error: '' };
+    } catch (error) { rawReal = { content: '', error: error.code === 'ENOENT' ? 'missing' : 'unreadable' }; }
+    const builderSessions = (run.chats ?? []).filter(chat => ['spec', 'code', 'build', 'change'].includes(chat.area)).map(chat => chat.session?.id).filter(Boolean);
+    const rv = judgeRealValidation(rawReal, { runId: run.runId, workflow: run.workflow, headSha, builderSessions });
+    record.realValidation = rv;
+    if (rv.status === 'passed') lines.push(rv.line);
+    else if (rawReal.error !== 'missing' || validSavedAutomaticOrigin(run)) {
+      lines.push(`warning: fresh-verifier real-validation record is ${rv.status} (${rv.reason}). Autopilot merge is held until real-validation.json passes for the PR head.`);
+    }
+    if (headSha) {
+      const rawReceipt = (p.readSuiteReceipt ?? readSuiteReceipt)({ cwd: run.root, headSha, env: p.env }, p.suitePorts ?? {});
+      if (rawReceipt && rawReceipt.state !== 'unavailable') {
+        record.suiteReceipt = judgeSuiteReceipt(rawReceipt, { headSha });
+      }
+    }
+  }
   const applyDone=latest=>{
     if (integration || accounted) {
       if (gitFingerprint(run.root) !== worktree || accountedIntegration(latest, area, source) !== accounted

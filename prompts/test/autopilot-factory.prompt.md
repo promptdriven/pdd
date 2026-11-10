@@ -154,6 +154,13 @@ Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr
 
 The parent alert adapter gives the real alert owner the same injected GitHub execution transport as native factory commands. Keep private state and fake HTTP delivery, including failed and uncertain replies.
 
+## Merge evidence and exact-head receipts (#3087)
+
+Include three factory scenarios:
+1. Fresh-verifier real-validation record required for `bug` and `feature` exact PR head (`<runDir>/real-validation.json` with recipe used, old-code bug reproduced, new-code passed, fresh verifier session, and evidence paths); missing, stale, reused-builder, un-reproduced old-code, or failed new-code records hold the merge in `pdd autopilot check-base` and PR status with a clear reason, while `small-change` stays as today.
+2. Repository without a verification recipe: the first Autopilot run drafts one (`docs/verification-recipe.md`) as its own `small-change` PR for a person to review once; multiple `bug`/`feature` runs wait for it with one grouped question (not one PR or question per run) until the recipe PR is merged.
+3. Exact-head full-suite receipt (`#3087`): pdd records an exact-head full-suite receipt (`head` SHA, `command` / `commandFingerprint`, `counts`, `exitCode`) written by pdd itself through the `#3117` suite queue custody, and the merge step (`pdd autopilot check-base`) checks that the receipt matches the PR head and passed before permitting a merge.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

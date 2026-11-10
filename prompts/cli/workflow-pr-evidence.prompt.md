@@ -35,6 +35,11 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
 
 Also export `approvalRecords(run)`: the same approval rows that `approvalLines` renders, each once and oldest first (gate decisions with their evidence, legacy decisions as `{route, at, words}`, then the matching prompt approvals), as plain objects. The runner's [readable PR part](workflow-pr-body.prompt.md) reads their route, time and words for its one approval line; `preparePrEvidence` keeps its exact return shape.
 
+Also export `judgeRealValidation(saved, {runId, workflow, headSha, baseSha, builderSessions = []})`, `judgeSuiteReceipt(receipt, {headSha})`, and `findVerificationRecipe(root, fs)`:
+- `judgeRealValidation` checks a saved `<runDir>/real-validation.json` record for `bug` and `feature` code PRs against the current run, exact PR `headSha`, and builder sessions. A passing record requires a 40-hex `head` matching `headSha`, a nonblank `verifier` distinct from `builderSessions` (`fresh !== false`), a nonblank `recipe`, an `oldCode` result (`reproduced` / `failed` for `bug`; baseline / `reproduced` / `failed` / `absent` for `feature`, never `setup-error`), a passing `newCode` result (`outcome: "passed"` with `exitCode` 0 or omitted), and a non-empty `evidencePaths` array of safe relative paths. Small changes return `{applicable: false, status: "not-applicable", line: null, reason: null}`.
+- `judgeSuiteReceipt` checks a saved pdd full-suite receipt (`ticket-N.json`) against the exact 40-hex PR `headSha`. A passing receipt requires `state === "finished"`, `outcome === "completed"`, `source.head` matching `headSha`, `source.clean !== false`, `exitCode === 0`, no signal, `commandFingerprint` (64-hex), and `counts` with `pass > 0`, `fail === 0`, and `cancelled === 0`.
+- `findVerificationRecipe` checks whether the repository at `root` defines a verification recipe (`docs/verification-recipe.md`, `verification-recipe.md`, a `# Verification` / `## Verification` section in `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md`, or `verification.recipe` / `autopilot.verificationRecipe` in `pdd.json`).
+
 ## Dependencies
 
 - [Run records](workflow-runs.prompt.md): required authoring/generation/native-production/verification/testing context for saved approval decisions, including optional legacy-compatible gateAt and gateId; this renderer accepts supplied facts and never duplicates run storage policy.
@@ -49,8 +54,8 @@ Also export `approvalRecords(run)`: the same approval rows that `approvalLines` 
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "9fcbb417378d37f73db33ea48acb055bb48adb44fd99c6a99ec1c2523e544d33",
+  "status": "draft",
+  "prose_sha256": "86959f046416694d329eb454c72f2ed36d4963a431e95d9e1fae4833d16dcf18",
   "entries": [
     {
       "operation": "preparePrEvidence",

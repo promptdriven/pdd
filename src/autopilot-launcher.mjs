@@ -2305,7 +2305,13 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const found = await resolveRun(issues[0], { cwd: input.cwd }, { ...ports, env: p.env, execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
       if (found.error) return bad(found.error);
       state.repo = found.run.repo;
-      return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
+      return checkAutopilotBase({ run: found.run, pr: issues[1] }, {
+        env: p.env,
+        ...(ports.fs ? { fs: ports.fs } : {}),
+        ...(ports.readSuiteReceipt ? { readSuiteReceipt: ports.readSuiteReceipt } : {}),
+        ...(ports.checkCapacityPorts ? { suitePorts: ports.checkCapacityPorts } : {}),
+        execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }),
+      });
     }
     if (command === 'status' && input.json) {
       const folder = stateFolder(ports, p.env), routeQuestions = [], auditHolds = [];

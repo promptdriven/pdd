@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 80831c2b53efc046ac3d7f9d8506a0bea464073023e72c6455f276ab880d8876).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: fc10bd412fa2568f1acaabe82be72edfb2bedb4f8e1834924706b04b58af2032).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -256,6 +256,37 @@ function proofRows(facts) {
       else if (proof.status === 'no-changed-tests' && pair) blocked.push('the old-code proof found no changed tests');
       else if (!['proved', 'pending', 'not-run', 'no-changed-tests'].includes(proof.status)) blocked.push(`the old-code proof says ${inertText(proof.status, 40)}`);
     } else if (pair) waiting.push('the old-code proof');
+    if (r.realValidation && r.realValidation.applicable !== false) {
+      const rv = r.realValidation;
+      if (rv.status === 'passed') {
+        const oldText = `✗ ${inertText(rv.oldCode?.outcome ?? 'reproduced', 40)} (as expected)`;
+        rows.push(['Real validation (fresh verifier)', `✓ passed (${inertText(rv.recipe, 80)})`, facts.workflow === 'feature' ? `old code: ${oldText}` : oldText]);
+      } else if (rv.status === 'missing') {
+        rows.push(['Real validation (fresh verifier)', 'missing (`real-validation.json`)', '—']);
+        waiting.push('fresh-verifier real validation');
+      } else if (rv.status === 'stale') {
+        rows.push(['Real validation (fresh verifier)', '⏳ stale (record for new head)', '—']);
+        waiting.push('a fresh real-validation record');
+      } else {
+        rows.push(['Real validation (fresh verifier)', `✗ ${inertText(rv.reason ?? rv.status, 120)}`, '—']);
+        blocked.push(inertText(rv.reason ?? 'real validation failed', 120));
+      }
+    }
+    if (r.suiteReceipt) {
+      const sr = r.suiteReceipt;
+      if (sr.status === 'passed') {
+        rows.push(['Full-suite receipt (pdd)', `✓ pass (${sr.counts?.pass ?? 0} of ${sr.counts?.tests ?? sr.counts?.pass ?? 0} tests, head ${(sr.head ?? '').slice(0, 7)})`, '—']);
+      } else if (['missing', 'stale', 'incomplete'].includes(sr.status)) {
+        rows.push(['Full-suite receipt (pdd)', `⏳ ${inertText(sr.status, 40)}`, '—']);
+        waiting.push('a pdd full-suite receipt for this head');
+      } else {
+        rows.push(['Full-suite receipt (pdd)', `✗ ${inertText(sr.reason ?? sr.status, 120)}`, '—']);
+        blocked.push(inertText(sr.reason ?? 'pdd full-suite receipt failed', 120));
+      }
+    }
+    if (r.verificationRecipePr?.waiting === true && Number.isSafeInteger(r.verificationRecipePr.pr)) {
+      waiting.push(`the verification recipe PR (#${r.verificationRecipePr.pr})`);
+    }
   }
   const ci = r.ci === 'passing' ? '✓ green' : r.ci === 'failing' ? '✗ failing' : r.ci === 'none' ? 'no CI checks configured' : '⏳ pending';
   rows.push([code ? 'Full test suite (CI) on this commit' : 'Full test suite (CI)', ci, ...(code ? ['—'] : [])]);

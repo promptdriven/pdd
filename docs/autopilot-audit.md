@@ -23,7 +23,7 @@ Answer each question with evidence:
 5. Are replay vectors and formal checks real and relevant? Do their controls
    fail on old code? State unavailable evidence without inventing a pass.
 6. Were tests or assertions removed, skipped or weakened without a sound reason?
-7. Was CI green on the exact merged contents? Did a fresh checker PASS that
+7. Was CI green on the exact merged contents, with pdd's own exact-head full-suite receipt and (for `bug`/`feature` code PRs) a fresh-verifier `real-validation.json` record? Did a fresh checker PASS that
    head? Were required human reviews complete and person questions resolved?
 
 Run focused tests only. Never run the full suite. Use GitHub reads sparingly.
