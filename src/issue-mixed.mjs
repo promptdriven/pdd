@@ -85,12 +85,13 @@ export async function currentSplitParent({ repository, snapshot, route }, ports,
   // this reread inside the guard that native admission calls before transport.
   return !!await currentParent();
 }
-export async function syncMixedParts({ cwd = '', repository, snapshot, mode }, ports, write) {
+export async function syncMixedParts({ cwd = '', repository, snapshot, mode, failures = [] }, ports, write) {
   if (mode !== 'auto' || !snapshot.complete) return;
   // Import through the existing owner avoids a second decision implementation.
   const { sortPlan } = await import('./issue-sort.mjs');
   let count = 0;
-  for (const route of sortPlan({ snapshot }).routes.filter(x => x.action === 'split')) {
+  // One failed split holds only its parent; independent routes must continue.
+  for (const route of sortPlan({ snapshot }).routes.filter(x => x.action === 'split')) try {
     if (++count > 10) break;
     const parent = Number(route.issue.split('/').pop());
     const guard = async () => (await ports.settings.read({ cwd, repository })).mode === mode && await currentSortIssue({ cwd, repository, snapshot, route }, ports);
@@ -173,5 +174,7 @@ export async function syncMixedParts({ cwd = '', repository, snapshot, mode }, p
     const saved = parse((await effect(() => ports.github.appendComment({ repository, issue: parent, body, checkOwnership: guard }))).json);
     if (!saved.id) throw Error('sort-write-pending');
     snapshot.issues.find(x => x.key === route.issue).sortSplit = split;
+  } catch (error) {
+    failures.push({ issue: route.issue, reason: error.message || 'sort-write-pending' });
   }
 }

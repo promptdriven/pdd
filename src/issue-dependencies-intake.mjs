@@ -365,7 +365,7 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
       sortFailures = [...saved.failed];
       const settings = await ports.settings.read({ cwd, repository: request.repository });
       await syncSortGroups({ cwd, repository: request.repository, snapshot, mode: settings.mode, failures: sortFailures }, ports, write);
-      await syncMixedParts({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
+      await syncMixedParts({ cwd, repository: request.repository, snapshot, mode: settings.mode, failures: sortFailures }, ports, write);
       const routed = await routeSortIssues({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
       sortFailures.push(...(routed.failed ?? []));
     } catch {
@@ -404,7 +404,7 @@ export async function reconcileDependencyIntake({ cwd = '', repository, trigger,
       const write = pacedSortWrites(ports, { cwd, repository });
       const sortFailures = [];
       await syncSortGroups({ cwd, repository, snapshot, mode, failures: sortFailures }, ports, write);
-      await syncMixedParts({ cwd, repository, snapshot, mode }, ports, write);
+      await syncMixedParts({ cwd, repository, snapshot, mode, failures: sortFailures }, ports, write);
       const routed = await routeSortIssues({ cwd, repository, snapshot, mode }, ports, write);
       sortFailures.push(...(routed.failed ?? []));
       if (sortFailures.length) {

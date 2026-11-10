@@ -13,6 +13,41 @@ const read = async w => (await readDependencySnapshot({ repository }, w.ports)).
 const sortComments = (w, n) => w.comments.get(n).filter(c => c.body.includes('<!-- pdd-issue-sort:v1 -->'));
 const independent = (w, n) => w.record(n, { rootCause: `defect-${n}` });
 
+function splitAndFixedFixture() {
+  const w = fixture([1, 2], { context: { areas: [
+    { name: 'cli', owner: 'autopilot', match: { paths: ['src/**'] } },
+    { name: 'runtime', owner: 'runtime-owner', mixed: 'split', match: { keywords: ['hosted interpreter'] } },
+  ] } });
+  w.issues[0].body = 'The hosted interpreter error also requires src/cli.mjs to send context.';
+  const page = w.ports.github.page;
+  w.ports.github.page = async args => {
+    if (args.kind === 'splitCandidates') return { json: JSON.stringify({ items: w.issues, next: '' }) };
+    if (args.kind === 'timeline' && args.issue === 1) return { json: JSON.stringify({ items: [], next: '' }) };
+    return page(args);
+  };
+  w.ports.github.createSortPart = async () => { throw Error('synthetic-split-failure'); };
+  w.append(1, 'mixed: split');
+  return w;
+}
+
+async function splitAndFixedRecords(w) {
+  const { request } = await prepareDependencyIntake({ repository }, w.ports);
+  const snapshot = JSON.parse(request.snapshotJson);
+  const split = w.record(1, {
+    touchedAreas: [
+      { area: 'cli', evidence: ['src/cli.mjs:12'] },
+      { area: 'runtime', evidence: ['hosted interpreter: missing context'] },
+    ],
+    splitOrder: { first: 'runtime', evidence: ['The context contract must exist before its caller.'] },
+  });
+  for (const input of snapshot.inputs.filter(x => x.key.startsWith(`${key(1)}#issuecomment-`))) split.inputs.push(input);
+  const fixed = w.record(2, {
+    rootCause: 'independent',
+    status: { ...w.record(2).status, state: 'fixed', fix: 'https://github.com/example/project/pull/90' },
+  });
+  return { request, sorts: [split, fixed] };
+}
+
 test('assigned subjects are skipped while free subjects complete and become eligible', async () => {
   const w = fixture([1, 2, 3]);
   w.issues[2].assignees = [{ login: 'person' }];
@@ -94,6 +129,35 @@ test('one failed route does not stop a later route or a work issue', async () =>
   assert.equal(result.sortFailures[0].issue, key(2));
   const next = await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
   assert.ok(next.eligible.includes(key(1)));
+});
+
+test('a split creation failure leaves a completion pending while an independent fixed issue routes', async () => {
+  const w = splitAndFixedFixture();
+  let note;
+  w.ports.results = { save: async ({ json }) => { note = JSON.parse(json); return { ok: true }; } };
+  const { request, sorts } = await splitAndFixedRecords(w);
+  const result = await completeDependencyIntake({ request, analysis: { ...analysisFor(request), sorts } }, w.ports);
+  assert.equal(w.issues[1].state, 'closed', 'INTAKE_SPLIT_ABORTED_INDEPENDENT_ROUTE');
+  assert.equal(sortComments(w, 1).length, 1, 'INTAKE_SPLIT_LOST_SAVED_SORT');
+  assert.equal(sortComments(w, 2).length, 1, 'INTAKE_SPLIT_LOST_INDEPENDENT_SORT');
+  assert.equal(result.state, 'pending');
+  assert.equal(result.pendingIssue, key(1));
+  assert.equal(result.sortFailures[0].issue, key(1));
+  assert.equal(note.pendingIssue, key(1));
+  assert.equal(note.sortFailures[0].issue, key(1));
+});
+
+test('a split creation failure records reconciliation details while an independent fixed issue routes', async () => {
+  const w = splitAndFixedFixture();
+  let note;
+  w.ports.results = { save: async ({ json }) => { note = JSON.parse(json); return { ok: true }; } };
+  const { sorts } = await splitAndFixedRecords(w);
+  for (const sort of sorts) w.save(sort);
+  w.review(1); w.review(2);
+  await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
+  assert.equal(w.issues[1].state, 'closed', 'INTAKE_RECONCILE_SPLIT_ABORTED_INDEPENDENT_ROUTE');
+  assert.equal(note.pendingIssue, key(1));
+  assert.equal(note.sortFailures[0].issue, key(1));
 });
 
 test('kept completion retries sort after reviews were saved without duplicate comments', async () => {
