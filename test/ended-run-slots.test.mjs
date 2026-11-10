@@ -2,6 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,11 +40,11 @@ function world(t) {
   const w = {
     cwd, commonDir,
     // The saved run record of an ended run (no chat custody is left).
-    run(number, runId, state) {
+    run(number, runId, state, fields = {}) {
       const runDir = join(runsDir, String(number));
       mkdirSync(runDir, { recursive: true });
       writeFileSync(join(runDir, 'status.json'), JSON.stringify({ v: 1, number, repo, runId, runDir, root: cwd, sourceRoot: cwd, commonDir,
-        state, area: 0, agent: 'codex', areas: [{ name: 'code', steps: [], optional: [] }], chats: [] }));
+        state, area: 0, agent: 'codex', areas: [{ name: 'code', steps: [], optional: [] }], chats: [], ...fields }));
     },
     // The allocator's hard-linked pair: runs/<runId>.json and issues/<N>.json.
     link(number, runId) {
@@ -113,4 +114,29 @@ test('a new run of the same issue with a different runId still blocks that issue
   const local = await w.local();
   assert.deepEqual(local.runs, [{ issue: issueUrl(52), runId: 'run-52-new', state: 'starting' }]);
   assert.deepEqual(await w.start(52, 2), { allowed: false, reason: 'dependency' });
+});
+
+test('the kept link of a completed run takes no slot and still lets cleanup find its worktree', async t => {
+  const { allocateIssueWorktree } = await import('../src/workflow-worktree.mjs');
+  const { cleanupWorktrees } = await import('../src/autopilot-cleanup.mjs');
+  const w = world(t), git = (at, ...args) => execFileSync('git', args, { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(w.cwd, 'config', 'user.name', 'Synthetic test'); git(w.cwd, 'config', 'user.email', 'test@example.invalid');
+  writeFileSync(join(w.cwd, 'source'), 'base\n'); git(w.cwd, 'add', '.'); git(w.cwd, 'commit', '-qm', 'base');
+  const runId = randomUUID();
+  const allocation = await allocateIssueWorktree({ cwd: w.cwd, repository: repo, runId, issueNumber: 52, workflowName: 'bug', baseRef: 'HEAD' });
+  assert.equal(allocation.state, 'ready', allocation.message);
+  const a = allocation.assignment;
+  w.run(52, runId, 'completed', { root: a.worktreePath, branch: a.branch });
+  assert.deepEqual((await w.local()).runs, []);
+  assert.deepEqual(await w.start(52, 1), { allowed: true, reason: 'ok' });
+  assert.equal(existsSync(w.issueLink(52)), true);
+  // The pushed branch of a merged PR: cleanup needs the kept link to prove the allocation.
+  git(w.cwd, 'update-ref', `refs/remotes/origin/${a.branch}`, 'HEAD');
+  git(a.worktreePath, 'branch', `--set-upstream-to=origin/${a.branch}`);
+  const execute = async (command, args, options) => {
+    if (command === 'gh') return { code: 0, stdout: JSON.stringify([{ state: 'MERGED', headRefName: a.branch }]) };
+    try { return { code: 0, stdout: git(options.cwd, ...args) }; } catch (error) { return { code: error.status || 1, stdout: '' }; }
+  };
+  assert.deepEqual(await cleanupWorktrees({ cwd: w.cwd, repository: repo }, { execute }), { removed: [runId], kept: [] });
+  assert.equal(existsSync(a.worktreePath), false);
 });
