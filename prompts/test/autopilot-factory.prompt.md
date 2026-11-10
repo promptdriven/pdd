@@ -20,6 +20,11 @@ park, open, resend, evidence and base-check commands. They must not write native
 approval fields or invent a runtime receipt. Scripted checker/merge behavior
 follows the bundled skills; it is a deterministic policy actor, not an AI check.
 
+Exercise a mixed intake batch with a trusted assigned issue and a free issue.
+The free issue must receive a saved dependency review and sort, and start in the
+same intake cycle. The assigned issue receives no sort, route, group or workflow.
+Expose synthetic assignees through both REST and GraphQL fake observations.
+
 Exercise these independently, with an asserted final merge or a real decision
 question and no lead repair commands:
 

@@ -29,7 +29,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   };
   const row = issue => ({ id: Number(issue.id), node_id: `I_${issue.id}`, number: issue.number, html_url: issue.movedTo ? `https://github.com/${issue.movedTo}/issues/${issue.number}` : url(issue.number),
     title: issue.title, body: issue.body, state: issue.state, state_reason: issue.state_reason, user: { login: issue.user }, labels: issue.labels.map(name => ({ name })),
-    assignees: [], assignee: null, comments: issue.comments.length, created_at: iso(issue.created), updated_at: iso(issue.updated), closed_at: null,
+    assignees: (issue.assignees ?? []).map(login => ({ login })), assignee: null, comments: issue.comments.length, created_at: iso(issue.created), updated_at: iso(issue.updated), closed_at: null,
     author_association: 'OWNER', issue_dependencies_summary: summary(issue) });
   const comment = (issue, c) => ({ id: Number(c.id), html_url: `${url(issue.number)}#issuecomment-${c.id}`, body: c.body, user: { login: c.user }, created_at: iso(c.created), updated_at: iso(c.updated), author_association: 'OWNER' });
   const events = issue => [...issue.timeline.map(e => ({ id: Number(e.id), event: e.event, actor: { login: e.actor }, created_at: iso(e.created), ...(e.label ? { label: { name: e.label } } : {}) })),
@@ -120,7 +120,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
       if (!issue || issue.deleted || issue.movedTo) { data[`i${m[1]}`] = null; continue; }
       const done = nodes => ({ nodes, pageInfo: { hasNextPage: false } });
       data[`i${m[1]}`] = { url: url(issue.number), number: issue.number, fullDatabaseId: issue.id, title: issue.title, body: issue.body, state: issue.state === 'open' ? 'OPEN' : 'CLOSED', stateReason: null,
-        author: { login: issue.user }, labels: done(issue.labels.map(name => ({ name }))), assignees: done([]),
+        author: { login: issue.user }, labels: done(issue.labels.map(name => ({ name }))), assignees: done((issue.assignees ?? []).map(login => ({ login }))),
         comments: done(issue.comments.map(c => ({ fullDatabaseId: c.id, body: c.body, createdAt: iso(c.created), updatedAt: iso(c.updated), author: { login: c.user } }))),
         blockedBy: done(issue.blockedBy.map(n => ({ url: url(n) }))), blocking: done(live().filter(other => other.blockedBy.includes(issue.number)).map(other => ({ url: url(other.number) }))),
         timelineItems: done([]) };

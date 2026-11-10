@@ -5,7 +5,7 @@ import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-
 import { routeSortIssues, pacedSortWrites } from '../src/issue-sort-github.mjs';
 import { reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 import { interfaceBlocks, proseSha256, promptRefusal, checkInput } from '../src/runtime-preflight.mjs';
-import { fixture, complete, repository } from './helpers/issue-sort-fixture.mjs';
+import { fixture, complete, repository, key } from './helpers/issue-sort-fixture.mjs';
 const fixed = w => ({ ...w.record(1).status, state: 'fixed', fix: 'https://github.com/example/project/pull/90' });
 const snapshot = async w => (await readDependencySnapshot({ repository }, w.ports)).snapshot;
 const http = value => ({ code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(value)}` });
@@ -34,7 +34,10 @@ test('stop during the final source read prevents the native close PATCH', async 
   const s = await snapshot(w), contextRead = w.ports.context.read;
   w.ports.context.read = async args => { if (++reads === 3) enabled = false; return contextRead(args); };
   w.ports.github.sortUpdate = native.github.sortUpdate;
-  await assert.rejects(routeSortIssues({ repository, snapshot: s, mode: 'auto' }, w.ports));
+  const result = await routeSortIssues({ repository, snapshot: s, mode: 'auto' }, w.ports);
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0].issue, key(1));
+  assert.ok(result.failed[0].reason.length);
   assert.equal(enabled, false); assert.equal(mutations, 0); assert.equal(guarded, 1);
   assert.equal(w.issues[0].state, 'open');
 });
