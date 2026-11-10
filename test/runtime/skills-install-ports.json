@@ -1,0 +1,320 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/skills-install-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`setupSkills` updates an older `.pdd-skill.json`-marked skill in `.agents/skills` under `home`, recognizes `.agents/skills` under `cwd` when all ten skills exist there (reporting `stale: \"older\"` for an un-marked copy with an older `pdd-skills` version), installs a missing skill into `skills` under `claudeConfigDir` when `claudeConfigDir` is an absolute path, and fails with `missing_skills_package` when `package.json` under `packageRoot` is missing."
+    },
+    {
+      "id": "AC2",
+      "text": "`findSkills` performs read-only discovery and stale classification without calling `fs.copySkill`, and fails with `missing_skills_package` when `package.json` under `packageRoot` is missing."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/pkg/package.json": {
+        "content": "{\"name\":\"@promptdriven/pdd\",\"version\":\"0.2.0\"}\n",
+        "is_symlink": false
+      }
+    },
+    "skill_roots": [
+      {
+        "dir": "/pkg/skills",
+        "reply": {
+          "skills": [
+            {"name": "pdd-prompting", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-prompting\ndescription: Prompting rules\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-prompting"},
+            {"name": "pdd-setup", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-setup\ndescription: Setup\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-setup"},
+            {"name": "pdd-small-change", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-small-change\ndescription: Small change\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-small-change"},
+            {"name": "pdd-bug", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-bug\ndescription: Bug\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-bug"},
+            {"name": "pdd-feature", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-feature\ndescription: Feature\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-feature"},
+            {"name": "pdd-product", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-product\ndescription: Product\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-product"},
+            {"name": "pdd-autopilot", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-autopilot\ndescription: Autopilot\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-autopilot"},
+            {"name": "pdd-check", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-check\ndescription: Check\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-check"},
+            {"name": "pdd-merge", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-merge\ndescription: Merge\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-merge"},
+            {"name": "pdd-graph", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-graph\ndescription: Graph\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-graph"}
+          ]
+        }
+      },
+      {
+        "dir": "/repo/.agents/skills",
+        "reply": {
+          "skills": [
+            {"name": "pdd-prompting", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-prompting\ndescription: Prompting rules\nmetadata:\n  pdd-skills: 0.1.8\n---\n", "markerJson": null, "digest": "old-prompting"},
+            {"name": "pdd-setup", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-setup\ndescription: Setup\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-setup"},
+            {"name": "pdd-small-change", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-small-change\ndescription: Small change\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-small-change"},
+            {"name": "pdd-bug", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-bug\ndescription: Bug\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-bug"},
+            {"name": "pdd-feature", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-feature\ndescription: Feature\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-feature"},
+            {"name": "pdd-product", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-product\ndescription: Product\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-product"},
+            {"name": "pdd-autopilot", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-autopilot\ndescription: Autopilot\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-autopilot"},
+            {"name": "pdd-check", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-check\ndescription: Check\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-check"},
+            {"name": "pdd-merge", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-merge\ndescription: Merge\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-merge"},
+            {"name": "pdd-graph", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-graph\ndescription: Graph\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": null, "digest": "dig-graph"}
+          ]
+        }
+      },
+      {
+        "dir": "/home/.agents/skills",
+        "reply": {
+          "skills": [
+            {"name": "pdd-bug", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-bug\ndescription: Bug\nmetadata:\n  pdd-skills: 0.1.8\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.1.8\",\"digest\":\"old-bug\"}\n", "digest": "old-bug"}
+          ]
+        }
+      },
+      {
+        "dir": "/repo/.claude/skills",
+        "reply": {
+          "skills": []
+        }
+      },
+      {
+        "dir": "/custom/claude/skills",
+        "reply": {
+          "skills": [
+            {"name": "pdd-prompting", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-prompting\ndescription: Prompting rules\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-prompting\"}\n", "digest": "dig-prompting"},
+            {"name": "pdd-setup", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-setup\ndescription: Setup\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-setup\"}\n", "digest": "dig-setup"},
+            {"name": "pdd-small-change", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-small-change\ndescription: Small change\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-small-change\"}\n", "digest": "dig-small-change"},
+            {"name": "pdd-bug", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-bug\ndescription: Bug\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-bug\"}\n", "digest": "dig-bug"},
+            {"name": "pdd-feature", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-feature\ndescription: Feature\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-feature\"}\n", "digest": "dig-feature"},
+            {"name": "pdd-product", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-product\ndescription: Product\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-product\"}\n", "digest": "dig-product"},
+            {"name": "pdd-autopilot", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-autopilot\ndescription: Autopilot\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-autopilot\"}\n", "digest": "dig-autopilot"},
+            {"name": "pdd-check", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-check\ndescription: Check\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-check\"}\n", "digest": "dig-check"},
+            {"name": "pdd-merge", "isDirectory": true, "isSymlink": false, "skillMd": "---\nname: pdd-merge\ndescription: Merge\nmetadata:\n  pdd-skills: 0.2.0\n---\n", "markerJson": "{\"package\":\"pdd\",\"version\":\"0.2.0\",\"digest\":\"dig-merge\"}\n", "digest": "dig-merge"}
+          ]
+        }
+      }
+    ],
+    "copied": []
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "fs.readSkillRoot": {
+      "action": "collection.get",
+      "world_pointer": "/skill_roots",
+      "key_argument_pointer": "/dir",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/dir",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "skills": []
+      },
+      "result_value_pointer": ""
+    },
+    "fs.copySkill": {
+      "action": "port.write",
+      "world_pointer": "/copied",
+      "result_template": {}
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "setup-skills-updates-and-installs",
+      "entry_path": "prompts/cli/skills-install.prompt.md",
+      "operation": "setupSkills",
+      "input": {
+        "packageRoot": "/pkg",
+        "cwd": "/repo",
+        "home": "/home",
+        "claudeConfigDir": "/custom/claude"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/results/0/agent",
+          "op": "equals",
+          "value": "Codex"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/results/0/found",
+          "op": "equals",
+          "value": "/repo/.agents/skills"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/results/0/stale",
+          "op": "equals",
+          "value": "older"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/results/0/staleSkills",
+          "op": "equals",
+          "value": [
+            {
+              "name": "pdd-prompting",
+              "version": "0.1.8",
+              "state": "older"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/results/0/updated",
+          "op": "equals",
+          "value": [
+            "/home/.agents/skills/pdd-bug"
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/results/1/agent",
+          "op": "equals",
+          "value": "Claude"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/results/1/root",
+          "op": "equals",
+          "value": "/custom/claude/skills"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/results/1/installed",
+          "op": "equals",
+          "value": [
+            "/custom/claude/skills/pdd-graph"
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/copied/0/dst",
+          "op": "equals",
+          "value": "/home/.agents/skills/pdd-bug"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/copied/1/dst",
+          "op": "equals",
+          "value": "/custom/claude/skills/pdd-graph"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "setup-skills-missing-package",
+      "entry_path": "prompts/cli/skills-install.prompt.md",
+      "operation": "setupSkills",
+      "input": {
+        "packageRoot": "/missing-pkg",
+        "cwd": "/repo",
+        "home": "/home",
+        "claudeConfigDir": null
+      },
+      "expected_error": "missing_skills_package",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "missing_skills_package"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "find-skills-readonly",
+      "entry_path": "prompts/cli/skills-install.prompt.md",
+      "operation": "findSkills",
+      "input": {
+        "packageRoot": "/pkg",
+        "cwd": "/repo",
+        "home": "/home",
+        "claudeConfigDir": "/custom/claude"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/results/0/found",
+          "op": "equals",
+          "value": "/repo/.agents/skills"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/results/0/stale",
+          "op": "equals",
+          "value": "older"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/results/1/found",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/skills-install-fs-copySkill",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "find-skills-missing-package",
+      "entry_path": "prompts/cli/skills-install.prompt.md",
+      "operation": "findSkills",
+      "input": {
+        "packageRoot": "/missing-pkg",
+        "cwd": "/repo",
+        "home": "/home",
+        "claudeConfigDir": null
+      },
+      "expected_error": "missing_skills_package",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "missing_skills_package"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

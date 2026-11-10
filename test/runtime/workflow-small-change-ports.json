@@ -1,0 +1,307 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-small-change-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Reading a valid `small-change-checklist.json` under `runDir` whose `run_id` and `source.sha256` match the run and current `replay.sourceFingerprint` returns `status: \"recorded\"`, preserves item order, and reports `missing-evidence` for a `done` row with blank evidence."
+    },
+    {
+      "id": "AC2",
+      "text": "Reading a checklist whose `source.sha256` differs from `replay.sourceFingerprint` returns `status: \"stale\"` with `stale-checklist`, and passing an empty `runDir` fails with `invalid_checklist_run`."
+    },
+    {
+      "id": "AC3",
+      "text": "Reviewing a checklist against an independent request inventory matches rows by `source`, `request` and `quote`, reports `missing-request` for an omitted request and `unsupported-exclusion` when an excluded item's quote differs from the independent `exclusion_quote`, and rejects an empty `requests` array with `invalid_request_inventory`."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/runs/42/small-change-checklist.json": {
+        "content": "{\"schema_version\":\"pdd.small-change-checklist.v1\",\"run_id\":\"run-42\",\"source\":{\"kind\":\"git-content-v1\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},\"items\":[{\"id\":\"b1\",\"request\":\"Rename flag --old to --new\",\"source\":\"https://github.com/org/repo/issues/42\",\"quote\":\"Rename --old to --new in cli.mjs\",\"state\":\"done\",\"evidence\":\"Updated src/cli.mjs and test/cli.test.mjs\"},{\"id\":\"b2\",\"request\":\"Add help example\",\"source\":\"https://github.com/org/repo/issues/42#issuecomment-1\",\"quote\":\"Include one example in --help\",\"state\":\"done\",\"evidence\":\"\"}]}\n",
+        "is_symlink": false
+      },
+      "/runs/43/small-change-checklist.json": {
+        "content": "{\"schema_version\":\"pdd.small-change-checklist.v1\",\"run_id\":\"run-43\",\"source\":{\"kind\":\"git-content-v1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"items\":[{\"id\":\"b1\",\"request\":\"Fix typo\",\"source\":\"https://github.com/org/repo/issues/43\",\"quote\":\"Fix README typo\",\"state\":\"done\",\"evidence\":\"Updated README.md\"}]}\n",
+        "is_symlink": false
+      }
+    },
+    "calls": {
+      "sourceFingerprint": 0
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "replay.sourceFingerprint": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/sourceFingerprint",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo/42"
+          },
+          "result": {
+            "kind": "git-content-v1",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "root": "/repo/43"
+          },
+          "result": {
+            "kind": "git-content-v1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "read-recorded-checklist",
+      "entry_path": "prompts/cli/workflow-small-change.prompt.md",
+      "operation": "readSmallChangeChecklist",
+      "input": {
+        "run": {
+          "runId": "run-42",
+          "runDir": "/runs/42",
+          "root": "/repo/42"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/status",
+          "op": "equals",
+          "value": "recorded"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/items/0/id",
+          "op": "equals",
+          "value": "b1"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/items/1/id",
+          "op": "equals",
+          "value": "b2"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/mustFix",
+          "op": "equals",
+          "value": [
+            {
+              "id": "b2",
+              "code": "missing-evidence"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-small-change-replay-sourceFingerprint",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-stale-checklist",
+      "entry_path": "prompts/cli/workflow-small-change.prompt.md",
+      "operation": "readSmallChangeChecklist",
+      "input": {
+        "run": {
+          "runId": "run-43",
+          "runDir": "/runs/43",
+          "root": "/repo/43"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/status",
+          "op": "equals",
+          "value": "stale"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/items",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/mustFix/0/code",
+          "op": "equals",
+          "value": "stale-checklist"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-invalid-run-error",
+      "entry_path": "prompts/cli/workflow-small-change.prompt.md",
+      "operation": "readSmallChangeChecklist",
+      "input": {
+        "run": {
+          "runId": "run-42",
+          "runDir": "",
+          "root": "/repo/42"
+        }
+      },
+      "expected_error": "invalid_checklist_run",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_checklist_run"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "review-checklist-findings",
+      "entry_path": "prompts/cli/workflow-small-change.prompt.md",
+      "operation": "reviewSmallChangeChecklist",
+      "input": {
+        "checklist": {
+          "status": "recorded",
+          "items": [
+            {
+              "id": "b1",
+              "request": "Rename flag --old to --new",
+              "source": "https://github.com/org/repo/issues/42",
+              "quote": "Rename --old to --new in cli.mjs",
+              "state": "done",
+              "evidence": "Updated src/cli.mjs"
+            },
+            {
+              "id": "b2",
+              "request": "Drop legacy alias",
+              "source": "https://github.com/org/repo/issues/42#issuecomment-2",
+              "quote": "Wait on dropping legacy alias",
+              "state": "excluded",
+              "exclusion": {
+                "reason": "Deferred by author",
+                "quote": "Plan says defer alias"
+              }
+            }
+          ],
+          "mustFix": []
+        },
+        "requests": [
+          {
+            "id": "r1",
+            "request": "Rename flag --old to --new",
+            "source": "https://github.com/org/repo/issues/42",
+            "quote": "Rename --old to --new in cli.mjs"
+          },
+          {
+            "id": "r2",
+            "request": "Drop legacy alias",
+            "source": "https://github.com/org/repo/issues/42#issuecomment-2",
+            "quote": "Wait on dropping legacy alias",
+            "exclusion_quote": "Leave the legacy alias for a separate issue."
+          },
+          {
+            "id": "r3",
+            "request": "Update man page",
+            "source": "https://github.com/org/repo/issues/42",
+            "quote": "Also update docs/cli.md"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/findings",
+          "op": "equals",
+          "value": [
+            {
+              "id": "r3",
+              "code": "missing-request"
+            },
+            {
+              "id": "b2",
+              "code": "unsupported-exclusion"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "review-empty-requests-error",
+      "entry_path": "prompts/cli/workflow-small-change.prompt.md",
+      "operation": "reviewSmallChangeChecklist",
+      "input": {
+        "checklist": {
+          "status": "recorded",
+          "items": [
+            {
+              "id": "b1",
+              "request": "Rename flag --old to --new",
+              "source": "https://github.com/org/repo/issues/42",
+              "quote": "Rename --old to --new in cli.mjs",
+              "state": "done",
+              "evidence": "Updated src/cli.mjs"
+            }
+          ],
+          "mustFix": []
+        },
+        "requests": []
+      },
+      "expected_error": "invalid_request_inventory",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_request_inventory"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

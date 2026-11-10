@@ -67,30 +67,449 @@ Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for 
 - [Runtime preflight](runtime-preflight.prompt.md): `captureSource`, `findTests` and `interfaceBlocks`.
 - [Workflow results](workflow-results.prompt.md): the batch folder and name rule for pdd's own results.
 - RUNBOOK §2 (Story, test and prompt files), §4 (expected values) and §11 (what an agent may fix).
-
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-Only fingerprintChanges is declared. storyCard file reads, storyFingerprint native SHA-256/capture and fullCheckPass saved-evidence/current-source association remain native; no supplied fingerprint proves host evidence. Native evidence owners: test/workflow-story-card.test.mjs.
+- In Runtime checks, `files.stat({path})` and `files.read({path})` read Story files, test JSON files and batch records (`batch.json`, `summary.json`), `fs.realpath({path})` resolves canonical paths to verify root containment and batch repository identity, `fs.readdir({path})` lists `<stateDir>/batches`, `compute.hash_utf8({text})` computes Story and test fingerprint SHA-256 digests, and `preflight.findTests({root, excludeFixtureProjects})` and `preflight.captureSource({root, tests})` supply project test discovery and current contract snapshots. `storyCard` fails with `invalid_story_card_input` when `root` is empty; `storyFingerprint` fails with `invalid_story_fingerprint_input` when `root` is empty; `fingerprintChanges` fails with `invalid_fingerprint_input` when a row path is empty; `fullCheckPass` fails with `invalid_full_check_input` when `root` or `stateDir` is empty. Native symlink escapes and large-batch filesystem traversal stay in `test/workflow-story-card.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "49edd9535a306d74b67d1a937f089465718b5747aea611e7d082f4e4c1f0655e",
+  "prose_sha256": "f6a35e22ad2ecee15aa3a8747084afc0eb8c44f2c1e11e54727a921e2376a23d",
   "entries": [
+    {
+      "operation": "storyCard",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "repository": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "issue": {
+                "type": "object",
+                "properties": {
+                  "asked": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "summary"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "areas": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "gate": {
+                      "type": "string"
+                    },
+                    "then": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "gate"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "repository",
+              "number",
+              "title",
+              "url"
+            ],
+            "additionalProperties": false
+          },
+          "root": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prompts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "added": {
+                  "type": "integer"
+                },
+                "removed": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "path",
+                "added",
+                "removed"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "through": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "root",
+          "changed",
+          "prompts"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_story_card_input"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "fs.realpath"
+      ]
+    },
+    {
+      "operation": "storyFingerprint",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "root",
+          "changed"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "criteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "criteria"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string"
+                },
+                "cases": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "case": {
+                        "type": "string"
+                      },
+                      "expected": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "case",
+                      "expected"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "cases"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "stories",
+          "tests"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_story_fingerprint_input"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "fs.realpath",
+        "compute.hash_utf8"
+      ]
+    },
     {
       "operation": "fingerprintChanges",
       "input_schema": {
         "type": "object",
         "properties": {
           "saved": {
-            "type": "string",
-            "description": "JSON text encoding of the approved fingerprint. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "stories": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "criteria": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "sha256",
+                    "criteria"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "case": {
+                            "type": "string"
+                          },
+                          "expected": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "case",
+                          "expected"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "sha256",
+                    "cases"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "stories",
+              "tests"
+            ],
+            "additionalProperties": false
           },
           "current": {
-            "type": "string",
-            "description": "JSON text encoding of the current fingerprint. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "stories": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "criteria": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "sha256",
+                    "criteria"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "case": {
+                            "type": "string"
+                          },
+                          "expected": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "case",
+                          "expected"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "sha256",
+                    "cases"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "stories",
+              "tests"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -114,18 +533,458 @@ Only fingerprintChanges is declared. storyCard file reads, storyFingerprint nati
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid_fingerprint_input"
+      ],
       "resource_operations": []
+    },
+    {
+      "operation": "fullCheckPass",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prompts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stateDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "since",
+          "tests",
+          "prompts",
+          "stories",
+          "stateDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "type": "boolean"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "batch": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "state": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "batch",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "failed",
+                    "no-verdict",
+                    "changed",
+                    "missing",
+                    "prompt-not-checked",
+                    "unavailable"
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "path",
+                "detail"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "pass",
+          "tests",
+          "problems"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_full_check_input"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "fs.realpath",
+        "fs.readdir",
+        "preflight.findTests",
+        "preflight.captureSource"
+      ]
     }
   ],
   "calls": [],
-  "resources": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "realpath",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "realpath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "realpath"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "preflight",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "findTests",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "excludeFixtureProjects": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "root",
+              "excludeFixtureProjects"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "untestedStories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tests",
+              "untestedStories",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "captureSource",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "root",
+              "tests"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "source_sha256": {
+                "type": "string"
+              },
+              "contract_snapshots": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "story_path": {
+                      "type": "string"
+                    },
+                    "tests": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "sha256"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "story_path",
+                    "tests",
+                    "files"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_sha256",
+              "contract_snapshots",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
   "limits": {
-    "max_steps": 64,
-    "max_model_calls": 16
+    "max_steps": 32,
+    "max_model_calls": 14
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

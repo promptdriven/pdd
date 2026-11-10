@@ -38,65 +38,173 @@ threads represent omitted options. A profile contains no login values.
 
 ## Dependencies
 
-- Node crypto supplies deterministic SHA256 names; filesystem reads use the
-  injected profileFs port. The bundled `src/vendor/smol-toml/parse.js` supplies
-  TOML parsing; no external service or model is required.
-
-Native module only. Prompt interpretation is not configured for these effects.
-
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-Only saved-profile validation/selection and deterministic names are bound. selectLaunchProfile account config/TOML reads and native launch settings remain native. The earlier native-only statement applies to those effects. Native evidence owners: test/workflow-launch-profile.test.mjs.
+- In Runtime checks, `compute.hash_utf8({text})` computes deterministic SHA-256 digests (`<repository>\n<runId>` for the 12-hex default prefix and `<repository>\n<runId>\n<area>` for the 6-hex area suffix), and `profileFs.stat({path})` and `profileFs.read({path})` inspect `<configDir>/config.toml` when selecting a Codex thread limit. `launchProfile({run, chat})` fails with `invalid_launch_profile` when the resolved `agent` is not `claude` or `codex`; `chatAgentName({profile, area, run})` fails with `invalid_launch_profile` when `area` is blank; `selectLaunchProfile({run, configDir, model, herdrAgentName, codexThreads, env})` fails with `invalid_launch_profile` on malformed options, a Codex thread limit on `claude`, or malformed `config.toml`; `validLaunchProfile({value, requireValid})` returns `{value: boolean}` and fails with `invalid_launch_profile` when `requireValid` is `true` and the profile is invalid. Native account directories and home path expansion stay in `test/workflow-launch-profile.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "374e8ee6d4bb65754b7d89a42b50a4d4220ff344da01b9929eae3ceb9f676460",
+  "prose_sha256": "4108a7d04c0fda1e087415c31a4e163b146f39d36e9ded00bee4400b9c3546b5",
   "entries": [
-    {
-      "operation": "validLaunchProfile",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the candidate saved profile. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-          }
-        },
-        "required": [
-          "value"
-        ],
-        "additionalProperties": false
-      },
-      "result_schema": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "value"
-        ],
-        "additionalProperties": false
-      },
-      "errors": [],
-      "resource_operations": []
-    },
     {
       "operation": "launchProfile",
       "input_schema": {
         "type": "object",
         "properties": {
           "run": {
-            "type": "string",
-            "description": "JSON text encoding of the saved run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "configDir": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "launchProfile": {
+                "type": "object",
+                "properties": {
+                  "agent": {
+                    "type": "string"
+                  },
+                  "configDir": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "model": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "herdrAgentName": {
+                    "type": "string"
+                  },
+                  "codexThreads": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "agent",
+                  "configDir",
+                  "model",
+                  "herdrAgentName",
+                  "codexThreads"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "runId",
+              "repository",
+              "agent"
+            ],
+            "additionalProperties": false
           },
           "chat": {
-            "type": "string",
-            "description": "JSON text encoding of the saved chat. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "agent": {
+                "type": "string"
+              },
+              "configDir": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "launchProfile": {
+                "type": "object",
+                "properties": {
+                  "agent": {
+                    "type": "string"
+                  },
+                  "configDir": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "model": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "herdrAgentName": {
+                    "type": "string"
+                  },
+                  "codexThreads": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "agent",
+                  "configDir",
+                  "model",
+                  "herdrAgentName",
+                  "codexThreads"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -153,7 +261,9 @@ Only saved-profile validation/selection and deterministic names are bound. selec
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid_launch_profile"
+      ],
       "resource_operations": [
         "compute.hash_utf8"
       ]
@@ -164,15 +274,35 @@ Only saved-profile validation/selection and deterministic names are bound. selec
         "type": "object",
         "properties": {
           "profile": {
-            "type": "string",
-            "description": "JSON text encoding of the selected profile. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "herdrAgentName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "herdrAgentName"
+            ],
+            "additionalProperties": false
           },
           "area": {
             "type": "string"
           },
           "run": {
-            "type": "string",
-            "description": "JSON text encoding of the saved run. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runId",
+              "repository"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -194,10 +324,234 @@ Only saved-profile validation/selection and deterministic names are bound. selec
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid_launch_profile"
+      ],
       "resource_operations": [
         "compute.hash_utf8"
       ]
+    },
+    {
+      "operation": "selectLaunchProfile",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "configDir": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "repository",
+              "agent"
+            ],
+            "additionalProperties": false
+          },
+          "configDir": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "herdrAgentName": {
+            "type": "string"
+          },
+          "codexThreads": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "HOME": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "configDir": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "herdrAgentName": {
+            "type": "string"
+          },
+          "codexThreads": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agent",
+          "configDir",
+          "model",
+          "herdrAgentName",
+          "codexThreads"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_launch_profile"
+      ],
+      "resource_operations": [
+        "compute.hash_utf8",
+        "profileFs.stat",
+        "profileFs.read"
+      ]
+    },
+    {
+      "operation": "validLaunchProfile",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "object",
+            "properties": {
+              "agent": {
+                "type": "string"
+              },
+              "configDir": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "model": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "herdrAgentName": {
+                "type": "string"
+              },
+              "codexThreads": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "agent",
+              "configDir",
+              "model",
+              "herdrAgentName",
+              "codexThreads"
+            ],
+            "additionalProperties": false
+          },
+          "requireValid": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_launch_profile"
+      ],
+      "resource_operations": []
     }
   ],
   "calls": [],
@@ -225,12 +579,84 @@ Only saved-profile validation/selection and deterministic names are bound. selec
           "result_schema": {
             "type": "object",
             "properties": {
-              "sha256": {
+              "value": {
                 "type": "string"
               }
             },
             "required": [
-              "sha256"
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "profileFs",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
             ],
             "additionalProperties": false
           }
@@ -239,11 +665,10 @@ Only saved-profile validation/selection and deterministic names are bound. selec
     }
   ],
   "limits": {
-    "max_steps": 64,
-    "max_model_calls": 16
+    "max_steps": 32,
+    "max_model_calls": 12
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

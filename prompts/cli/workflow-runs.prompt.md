@@ -41,7 +41,6 @@ ownership is absent, otherwise a snapshot `{path, pid, hostname, token, warning}
 `null`. A complete readable owner has `warning: null`; unreadable or malformed
 ownership has a finite diagnostic string in `warning`, retaining available facts.
 This public read performs no acquisition, recovery, release or durable write.
-Its native filesystem binding remains unbound to the Interpreter.
 
 The callback may mutate its supplied record, but must preserve its run identity
 and perform only local state changes. A missing or unreadable existing record,
@@ -62,9 +61,7 @@ publication participates in the same ownership boundary; it cannot interrupt an
 `updateRun` uses the same C3 derivation, sequence, timestamp and best-effort index
 semantics as `writeRun`, applied to the record being committed. An index failure
 does not undo or misreport that commit.
-Neither function reads or writes the delivery journal. The callback binding and
-native filesystem concurrency are unbound to the Interpreter; no JSON callback
-adapter is part of this API.
+Neither function reads or writes the delivery journal.
 
 Preserve optional `productMarker` when the runner supplies it. Its capture and
 PR propagation belong to [the workflow runner](workflow-runner.prompt.md#product-run-association).
@@ -126,14 +123,1152 @@ Capture journal construction consumes pending observations only on success; pres
 
 Retain the ordinary injected pathname-write and atomic-rename publication behavior. Capture, delivery, coverage-gap and warning callbacks are best effort; even a throwing warning must not stop ordinary progress or turn a committed rename into failure. Asynchronous drain rejection must be contained. Native status write and rename failures retain their ordinary errors. Optional identity and gap storage use injected filesystem ports for controlled failure verification.
 
+- In Runtime checks, `files.stat({path})`, `files.read({path})` and `files.write({path, content})` read and write `<runDir>/status.json`, `<runDir>/.ordinary-owner` and `<stateDir>/runs.json`; `fs.readdir({path})` lists `<commonDir>/pdd/runs`; `fs.realpath({path})` resolves canonical paths; `fs.mtime({path})` reads the prior status file modification timestamp (`mtimeMs`) for `updateRunCosts`; `ownership.acquire({runDir})` and `ownership.release({runDir, token})` bind `.ordinary-owner` acquisition and token release; `clock.now({})` supplies `{iso}`; `git.revParse({cwd})` returns `{status, toplevel, commonDir}`; `cost.captureCosts({runDir})` and `metrics.journalRunMutation({runDir})` bind cost and metrics hooks. `writeRun` fails with `invalid_run_record` when `record.runDir` or `record.runId` is empty; `readRun` and `readRunOwnership` fail with `invalid_run_dir` when `runDir` is empty; `updateRun` and `updateRunCosts` fail with `run_ownership_busy` when ownership is held or `run_missing` when `status.json` is absent; `gitContext`, `runForWorktree`, `resolveRun` and `listRuns` fail with `invalid_cwd` when `cwd` is empty; `allRuns` fails with `invalid_state_dir` when `stateDir` is empty. Native cross-process rename atomicity and PID liveness probes stay in `test/approval-merge-races.test.mjs` and `test/autopilot-claim-expiry.test.mjs`.
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "8c030281ca05dd9449eeb3c2f4efc58b67ac9dabb62b77faf456c9b260f8bfc9",
-  "reason": "Durable callback updates, cross-process locking and atomic publication need native evidence. Native evidence owners: test/approval-chat.test.mjs, test/approval-hash-only.test.mjs, test/approval-lead-fixes.test.mjs, test/approval-merge-races.test.mjs, test/approval-round2.test.mjs, test/autopilot-audit.test.mjs, test/autopilot-claim-expiry.test.mjs, test/autopilot-environment-retry.test.mjs."
+  "prose_sha256": "dca8bcb6a33bcb01d66edde4448d3fcd6b092c6519d5ac9e54f1e2217909a9b3",
+  "entries": [
+    {
+      "operation": "writeRun",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "record": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "runDir": {
+                "type": "string"
+              },
+              "commonDir": {
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "workflow": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "journalSeq": {
+                "type": "integer"
+              },
+              "draft": {
+                "type": "boolean"
+              },
+              "chatFailure": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "area": {
+                        "type": "string"
+                      },
+                      "phase": {
+                        "type": "string"
+                      },
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "at": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "area",
+                      "phase",
+                      "code",
+                      "message",
+                      "at"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "runDir",
+              "commonDir",
+              "root",
+              "repo",
+              "number",
+              "workflow",
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "stateDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "record",
+          "stateDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "runDir": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "journalSeq": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "draft": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "runId",
+              "runDir",
+              "state",
+              "journalSeq",
+              "updatedAt",
+              "draft"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_run_record",
+        "run_ownership_busy"
+      ],
+      "resource_operations": [
+        "ownership.acquire",
+        "ownership.release",
+        "clock.now",
+        "cost.captureCosts",
+        "metrics.journalRunMutation",
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "readRun",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "runDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "runId": {
+                    "type": "string"
+                  },
+                  "runDir": {
+                    "type": "string"
+                  },
+                  "repo": {
+                    "type": "string"
+                  },
+                  "number": {
+                    "type": "integer"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "journalSeq": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "runId",
+                  "runDir",
+                  "repo",
+                  "number",
+                  "state",
+                  "journalSeq"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_run_dir"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "updateRun",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "runDir": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "preserveProgress": {
+            "type": "boolean"
+          },
+          "stateDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir",
+          "state",
+          "stateDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "runDir": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "journalSeq": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "progressAt": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "runId",
+              "runDir",
+              "state",
+              "journalSeq",
+              "updatedAt",
+              "progressAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "run_ownership_busy",
+        "run_missing"
+      ],
+      "resource_operations": [
+        "ownership.acquire",
+        "ownership.release",
+        "clock.now",
+        "cost.captureCosts",
+        "metrics.journalRunMutation",
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "readRunOwnership",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "runDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "snapshot": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "pid": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "hostname": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "token": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "warning": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "pid",
+                  "hostname",
+                  "token",
+                  "warning"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "snapshot"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_run_dir"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "updateRunCosts",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "runDir": {
+            "type": "string"
+          },
+          "suiteMinutes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "runDir",
+          "suiteMinutes"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "journalSeq": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "progressAt": {
+                "type": "integer"
+              },
+              "suiteMinutes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "runId",
+              "journalSeq",
+              "updatedAt",
+              "progressAt",
+              "suiteMinutes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "run_missing",
+        "run_ownership_busy"
+      ],
+      "resource_operations": [
+        "ownership.acquire",
+        "ownership.release",
+        "fs.mtime",
+        "cost.captureCosts",
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "gitContext",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "toplevel": {
+                    "type": "string"
+                  },
+                  "commonDir": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "toplevel",
+                  "commonDir"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_cwd"
+      ],
+      "resource_operations": [
+        "git.revParse",
+        "fs.realpath"
+      ]
+    },
+    {
+      "operation": "runForWorktree",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "runId": {
+                    "type": "string"
+                  },
+                  "runDir": {
+                    "type": "string"
+                  },
+                  "root": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "runId",
+                  "runDir",
+                  "root",
+                  "state"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_cwd"
+      ],
+      "resource_operations": [
+        "git.revParse",
+        "fs.realpath",
+        "fs.readdir",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "resolveRun",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "stateDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "cwd",
+          "stateDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_cwd"
+      ],
+      "resource_operations": [
+        "git.revParse",
+        "fs.realpath",
+        "fs.readdir",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "listRuns",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "stateDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "stateDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "runIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "runIds"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_cwd"
+      ],
+      "resource_operations": [
+        "git.revParse",
+        "fs.realpath",
+        "fs.readdir",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "allRuns",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "stateDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cancelled",
+          "stateDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "runIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "runIds"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_state_dir"
+      ],
+      "resource_operations": [
+        "fs.readdir",
+        "files.stat",
+        "files.read"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "realpath",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "realpath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "realpath"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "mtime",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "mtimeMs": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "mtimeMs"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "ownership",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "acquire",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runDir"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "acquired": {
+                "type": "boolean"
+              },
+              "token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "acquired",
+              "token"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "release",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              },
+              "token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runDir",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "now",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "iso": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "iso"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "git",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "revParse",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "toplevel": {
+                "type": "string"
+              },
+              "commonDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "toplevel",
+              "commonDir"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "cost",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "captureCosts",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runDir"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "metrics",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "journalRunMutation",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runDir"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 48,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

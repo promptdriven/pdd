@@ -1,0 +1,306 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-launch-profile-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`launchProfile` computes the deterministic `pdd-` plus 12-hex prefix from `repository` and `runId` and fails with `invalid_launch_profile` when the agent is unsupported."
+    },
+    {
+      "id": "AC2",
+      "text": "`chatAgentName` appends `-` plus 6-hex from `repository`, `runId` and `area` to the profile prefix and fails with `invalid_launch_profile` when `area` is empty."
+    },
+    {
+      "id": "AC3",
+      "text": "`selectLaunchProfile` reads `config.toml` under `configDir` when a Codex thread limit is requested, preserves a higher `features.multi_agent_v2.max_concurrent_threads_per_session` limit, and fails with `invalid_launch_profile` on a leading-dash model or invalid option."
+    },
+    {
+      "id": "AC4",
+      "text": "`validLaunchProfile` accepts a saved profile whose effective Codex thread limit exceeds 8, and fails with `invalid_launch_profile` when `requireValid` is `true` on an invalid profile."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/home/dev/.codex-work/config.toml": {
+        "content": "[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 12\n",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    },
+    "profileFs.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "profileFs.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "launch-profile-default",
+      "entry_path": "prompts/cli/workflow-launch-profile.prompt.md",
+      "operation": "launchProfile",
+      "input": {
+        "run": {
+          "runId": "run-42",
+          "repository": "org/repo",
+          "agent": "codex",
+          "configDir": "/home/dev/.codex-work"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/agent",
+          "op": "equals",
+          "value": "codex"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/configDir",
+          "op": "equals",
+          "value": "/home/dev/.codex-work"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/herdrAgentName",
+          "op": "equals",
+          "value": "pdd-bce69abba313"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/model",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/codexThreads",
+          "op": "equals",
+          "value": null
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "launch-profile-invalid-agent",
+      "entry_path": "prompts/cli/workflow-launch-profile.prompt.md",
+      "operation": "launchProfile",
+      "input": {
+        "run": {
+          "runId": "run-42",
+          "repository": "org/repo",
+          "agent": "unknown"
+        }
+      },
+      "expected_error": "invalid_launch_profile",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_launch_profile"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "chat-agent-name-deterministic",
+      "entry_path": "prompts/cli/workflow-launch-profile.prompt.md",
+      "operation": "chatAgentName",
+      "input": {
+        "profile": {
+          "herdrAgentName": "pdd-bce69abba313"
+        },
+        "area": "story",
+        "run": {
+          "runId": "run-42",
+          "repository": "org/repo"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/name",
+          "op": "equals",
+          "value": "pdd-bce69abba313-69b3f9"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "chat-agent-name-empty-area",
+      "entry_path": "prompts/cli/workflow-launch-profile.prompt.md",
+      "operation": "chatAgentName",
+      "input": {
+        "profile": {
+          "herdrAgentName": "pdd-bce69abba313"
+        },
+        "area": "",
+        "run": {
+          "runId": "run-42",
+          "repository": "org/repo"
+        }
+      },
+      "expected_error": "invalid_launch_profile",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_launch_profile"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "select-launch-profile-preserves-higher-threads",
+      "entry_path": "prompts/cli/workflow-launch-profile.prompt.md",
+      "operation": "selectLaunchProfile",
+      "input": {
+        "run": {
+          "runId": "run-42",
+          "repository": "org/repo",
+          "agent": "codex",
+          "configDir": "/home/dev/.codex-work"
+        },
+        "model": "gpt-5",
+        "codexThreads": 6,
+        "env": {
+          "HOME": "/home/dev"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/model",
+          "op": "equals",
+          "value": "gpt-5"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/codexThreads",
+          "op": "equals",
+          "value": 12
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-launch-profile-profileFs-read",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "select-launch-profile-invalid-model",
+      "entry_path": "prompts/cli/workflow-launch-profile.prompt.md",
+      "operation": "selectLaunchProfile",
+      "input": {
+        "run": {
+          "runId": "run-42",
+          "repository": "org/repo",
+          "agent": "codex",
+          "configDir": "/home/dev/.codex-work"
+        },
+        "model": "-bad-flag"
+      },
+      "expected_error": "invalid_launch_profile",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_launch_profile"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "valid-launch-profile-higher-threads",
+      "entry_path": "prompts/cli/workflow-launch-profile.prompt.md",
+      "operation": "validLaunchProfile",
+      "input": {
+        "value": {
+          "agent": "codex",
+          "configDir": "/home/dev/.codex-work",
+          "model": "gpt-5",
+          "herdrAgentName": "pdd-bce69abba313",
+          "codexThreads": 12
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/value",
+          "op": "equals",
+          "value": true
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "valid-launch-profile-rejects-bad-prefix",
+      "entry_path": "prompts/cli/workflow-launch-profile.prompt.md",
+      "operation": "validLaunchProfile",
+      "input": {
+        "value": {
+          "agent": "codex",
+          "configDir": null,
+          "model": null,
+          "herdrAgentName": "123-bad",
+          "codexThreads": null
+        },
+        "requireValid": true
+      },
+      "expected_error": "invalid_launch_profile",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_launch_profile"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

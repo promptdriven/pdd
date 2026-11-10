@@ -1,0 +1,847 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-herdr-layout-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`samePath` resolves canonical paths via `fs.realpath` so symlink aliases compare equal, and fails with `invalid_path_input` when either path is empty."
+    },
+    {
+      "id": "AC2",
+      "text": "`validateHerdrInventory` accepts valid scoped `workspace_list`, `tab_list` and `pane_list` replies and fails with `invalid_tab_inventory` when a scoped tab row belongs to another workspace."
+    },
+    {
+      "id": "AC3",
+      "text": "`withHerdrLayoutLock` acquires and releases the layout lock for an available directory and fails immediately with `herdr_layout_busy` when a live owner holds the lock."
+    },
+    {
+      "id": "AC4",
+      "text": "`recoverHerdrRunLayout` refreshes `restartTerminal: true` when a verified workspace's root terminal ID changed after a server restart, and fails with `herdr_layout_identity_changed` when the root tab has split into multiple panes."
+    },
+    {
+      "id": "AC5",
+      "text": "`openHerdrRunLayout` opens the assigned worktree from a verified parent workspace, reserves missing panes via `herdr.beforeCreate`, creates the area tab, checkpoints custody, and fails with `repository_parent_unverified` when the parent lookup is unverified."
+    },
+    {
+      "id": "AC6",
+      "text": "`closeHerdrRunLayout` verifies creation custody (`createdWorkspaceId === workspaceId`), caller pane protection and idle shell occupancy before closing the run workspace, and fails with `run_shell_caller` when `callerPaneId` matches the root pane."
+    },
+    {
+      "id": "AC7",
+      "text": "`closeHerdrRepoLayoutIfIdle` retains an adopted parent workspace (`createdByPdd: false`) returning `closed: false`, and fails with `invalid_herdr_layout_input` when `repository` or `commonDir` is empty."
+    }
+  ],
+  "initial_world": {
+    "realpaths": [
+      {
+        "path": "/symlink/repo",
+        "reply": {
+          "realpath": "/real/repo"
+        }
+      },
+      {
+        "path": "/real/repo",
+        "reply": {
+          "realpath": "/real/repo"
+        }
+      },
+      {
+        "path": "/real/repo/.git",
+        "reply": {
+          "realpath": "/real/repo/.git"
+        }
+      },
+      {
+        "path": "/real/wt/42",
+        "reply": {
+          "realpath": "/real/wt/42"
+        }
+      }
+    ],
+    "calls": {
+      "claimLock": 0,
+      "lookupRepositoryParent": 0,
+      "command": 0
+    },
+    "released": [],
+    "before_create": [],
+    "before_close": [],
+    "checkpoints": []
+  },
+  "simulation": {
+    "fs.realpath": {
+      "action": "collection.get",
+      "world_pointer": "/realpaths",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "realpath": ""
+      },
+      "result_value_pointer": ""
+    },
+    "fs.claimLock": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/claimLock",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "directory": "/state/herdr-free"
+          },
+          "result": {
+            "acquired": true,
+            "ownerPid": 1001
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "directory": "/state/herdr-busy"
+          },
+          "result": {
+            "acquired": false,
+            "ownerPid": 2002
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "fs.releaseLock": {
+      "action": "port.write",
+      "world_pointer": "/released",
+      "result_template": {}
+    },
+    "worktree.lookupRepositoryParent": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/lookupRepositoryParent",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/real/wt/42",
+            "repository": "org/repo",
+            "commonDir": "/real/repo/.git"
+          },
+          "result": {
+            "state": "verified",
+            "root": "/real/repo",
+            "commonDir": "/real/repo/.git",
+            "bare": false
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/real/wt/99",
+            "repository": "org/repo",
+            "commonDir": "/real/repo/.git"
+          },
+          "result": {
+            "state": "unverified",
+            "root": "",
+            "commonDir": "/real/repo/.git",
+            "bare": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "herdr.command": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/command",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "args": [
+              "workspace",
+              "list"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"workspace_list\",\"workspaces\":[{\"workspace_id\":\"ws-run-42\",\"label\":\"repo#42 feature\",\"checkout_path\":\"/real/wt/42\",\"repo_key\":\"/real/repo/.git\",\"is_linked_worktree\":true}]}"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "args": [
+              "tab",
+              "list",
+              "--workspace",
+              "ws-run-42"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"tab_list\",\"tabs\":[{\"tab_id\":\"tab-root\",\"workspace_id\":\"ws-run-42\",\"title\":\"1\"}]}"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "args": [
+              "pane",
+              "list",
+              "--workspace",
+              "ws-run-42"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"pane_list\",\"panes\":[{\"pane_id\":\"pane-root\",\"workspace_id\":\"ws-run-42\",\"tab_id\":\"tab-root\",\"terminal_id\":\"term-restarted\"}]}"
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "args": [
+              "workspace",
+              "list"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"workspace_list\",\"workspaces\":[{\"workspace_id\":\"ws-run-split\",\"label\":\"repo#42 feature\",\"checkout_path\":\"/real/wt/42\",\"repo_key\":\"/real/repo/.git\",\"is_linked_worktree\":true}]}"
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "args": [
+              "tab",
+              "list",
+              "--workspace",
+              "ws-run-split"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"tab_list\",\"tabs\":[{\"tab_id\":\"tab-root\",\"workspace_id\":\"ws-run-split\",\"title\":\"1\"}]}"
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "args": [
+              "pane",
+              "list",
+              "--workspace",
+              "ws-run-split"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"pane_list\",\"panes\":[{\"pane_id\":\"pane-root\",\"workspace_id\":\"ws-run-split\",\"tab_id\":\"tab-root\",\"terminal_id\":\"term-1\"},{\"pane_id\":\"pane-extra\",\"workspace_id\":\"ws-run-split\",\"tab_id\":\"tab-root\",\"terminal_id\":\"term-2\"}]}"
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {
+            "args": [
+              "workspace",
+              "list"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"workspace_list\",\"workspaces\":[{\"workspace_id\":\"ws-parent\",\"label\":\"repo\",\"checkout_path\":\"/real/repo\",\"repo_key\":\"/real/repo/.git\",\"is_linked_worktree\":false}]}"
+          }
+        },
+        {
+          "call_index": 8,
+          "args": {
+            "args": [
+              "worktree",
+              "open",
+              "--workspace",
+              "ws-parent",
+              "--path",
+              "/real/wt/42",
+              "--label",
+              "repo#42 feature",
+              "--no-focus"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"worktree_opened\",\"workspace_id\":\"ws-run-42\",\"already_open\":false,\"tab_id\":\"tab-root\",\"pane_id\":\"pane-root\",\"terminal_id\":\"term-root\",\"title\":\"1\"}"
+          }
+        },
+        {
+          "call_index": 9,
+          "args": {
+            "args": [
+              "tab",
+              "create",
+              "--workspace",
+              "ws-run-42",
+              "--title",
+              "story",
+              "--no-focus"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"tab_created\",\"workspace_id\":\"ws-run-42\",\"tab_id\":\"tab-story\",\"pane_id\":\"pane-story\",\"terminal_id\":\"term-story\"}"
+          }
+        },
+        {
+          "call_index": 10,
+          "args": {
+            "args": [
+              "workspace",
+              "list"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"workspace_list\",\"workspaces\":[{\"workspace_id\":\"ws-run-42\",\"label\":\"repo#42 feature\",\"checkout_path\":\"/real/wt/42\",\"repo_key\":\"/real/repo/.git\",\"is_linked_worktree\":true}]}"
+          }
+        },
+        {
+          "call_index": 11,
+          "args": {
+            "args": [
+              "tab",
+              "list",
+              "--workspace",
+              "ws-run-42"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"tab_list\",\"tabs\":[{\"tab_id\":\"tab-root\",\"workspace_id\":\"ws-run-42\",\"title\":\"1\"}]}"
+          }
+        },
+        {
+          "call_index": 12,
+          "args": {
+            "args": [
+              "pane",
+              "list",
+              "--workspace",
+              "ws-run-42"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"pane_list\",\"panes\":[{\"pane_id\":\"pane-root\",\"workspace_id\":\"ws-run-42\",\"tab_id\":\"tab-root\",\"terminal_id\":\"term-root\"}]}"
+          }
+        },
+        {
+          "call_index": 13,
+          "args": {
+            "args": [
+              "agent",
+              "get",
+              "--pane",
+              "pane-root"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"error\",\"code\":\"agent_not_found\"}"
+          }
+        },
+        {
+          "call_index": 14,
+          "args": {
+            "args": [
+              "pane",
+              "process-info",
+              "--pane",
+              "pane-root"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"pane_process_info\",\"pane_id\":\"pane-root\",\"shell_pid\":4100,\"foreground_pgid\":4100,\"foreground_processes\":[{\"pid\":4100,\"name\":\"bash\"}]}"
+          }
+        },
+        {
+          "call_index": 15,
+          "args": {
+            "args": [
+              "workspace",
+              "close",
+              "--workspace",
+              "ws-run-42"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"workspace_closed\",\"workspace_id\":\"ws-run-42\"}"
+          }
+        },
+        {
+          "call_index": 16,
+          "args": {
+            "args": [
+              "workspace",
+              "list"
+            ]
+          },
+          "result": {
+            "reply": "{\"type\":\"workspace_list\",\"workspaces\":[]}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "herdr.beforeCreate": {
+      "action": "port.write",
+      "world_pointer": "/before_create",
+      "result_template": {}
+    },
+    "herdr.beforeClose": {
+      "action": "port.write",
+      "world_pointer": "/before_close",
+      "result_template": {}
+    },
+    "herdr.checkpoint": {
+      "action": "port.write",
+      "world_pointer": "/checkpoints",
+      "result_template": {}
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "same-path-symlink-alias",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "samePath",
+      "input": {
+        "a": "/symlink/repo",
+        "b": "/real/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/same",
+          "op": "equals",
+          "value": true
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "same-path-empty-error",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "samePath",
+      "input": {
+        "a": "",
+        "b": "/real/repo"
+      },
+      "expected_error": "invalid_path_input",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_path_input"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "validate-scoped-tab-inventory",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "validateHerdrInventory",
+      "input": {
+        "reply": {
+          "type": "tab_list",
+          "tabs": [
+            {
+              "tab_id": "tab-1",
+              "workspace_id": "ws-run-42",
+              "title": "1"
+            }
+          ]
+        },
+        "kind": "tab",
+        "workspaceId": "ws-run-42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/count",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/ids/0",
+          "op": "equals",
+          "value": "tab-1"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "validate-out-of-scope-tab-inventory",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "validateHerdrInventory",
+      "input": {
+        "reply": {
+          "type": "tab_list",
+          "tabs": [
+            {
+              "tab_id": "tab-other",
+              "workspace_id": "ws-other",
+              "title": "1"
+            }
+          ]
+        },
+        "kind": "tab",
+        "workspaceId": "ws-run-42"
+      },
+      "expected_error": "invalid_tab_inventory",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_tab_inventory"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "layout-lock-acquire-and-release",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "withHerdrLayoutLock",
+      "input": {
+        "directory": "/state/herdr-free"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/locked",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/released/0/directory",
+          "op": "equals",
+          "value": "/state/herdr-free"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "layout-lock-busy",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "withHerdrLayoutLock",
+      "input": {
+        "directory": "/state/herdr-busy"
+      },
+      "expected_error": "herdr_layout_busy",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "herdr_layout_busy"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "recover-restarted-terminal",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "recoverHerdrRunLayout",
+      "input": {
+        "run": {
+          "runId": "run-42",
+          "layout": {
+            "workspaceId": "ws-run-42",
+            "createdWorkspaceId": "ws-run-42",
+            "restartTerminal": false,
+            "root": {
+              "tabId": "tab-root",
+              "paneId": "pane-root",
+              "terminalId": "term-old",
+              "rootLabel": "1"
+            }
+          }
+        },
+        "cwd": "/real/wt/42",
+        "commonDir": "/real/repo/.git"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/workspaceClosed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/restartTerminal",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/root/terminalId",
+          "op": "equals",
+          "value": "term-restarted"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/checkpoints/0/workspaceId",
+          "op": "equals",
+          "value": "ws-run-42"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "recover-split-root-refuses",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "recoverHerdrRunLayout",
+      "input": {
+        "run": {
+          "runId": "run-42",
+          "layout": {
+            "workspaceId": "ws-run-split",
+            "createdWorkspaceId": null,
+            "restartTerminal": false,
+            "root": {
+              "tabId": "tab-root",
+              "paneId": "pane-root",
+              "terminalId": "term-1",
+              "rootLabel": "1"
+            }
+          }
+        },
+        "cwd": "/real/wt/42",
+        "commonDir": "/real/repo/.git"
+      },
+      "expected_error": "herdr_layout_identity_changed",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "herdr_layout_identity_changed"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "open-herdr-run-layout",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "openHerdrRunLayout",
+      "input": {
+        "runId": "run-42",
+        "repository": "org/repo",
+        "sourceRoot": "/real/repo",
+        "commonDir": "/real/repo/.git",
+        "cwd": "/real/wt/42",
+        "issue": 42,
+        "workflow": "feature",
+        "stageId": "story"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/repoWorkspaceId",
+          "op": "equals",
+          "value": "ws-parent"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/workspaceId",
+          "op": "equals",
+          "value": "ws-run-42"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/createdWorkspaceId",
+          "op": "equals",
+          "value": "ws-run-42"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/tabId",
+          "op": "equals",
+          "value": "tab-story"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/before_create/0/missingPanes",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "open-herdr-parent-unverified",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "openHerdrRunLayout",
+      "input": {
+        "runId": "run-99",
+        "repository": "org/repo",
+        "sourceRoot": "/real/repo",
+        "commonDir": "/real/repo/.git",
+        "cwd": "/real/wt/99",
+        "issue": 99,
+        "workflow": "feature",
+        "stageId": "story"
+      },
+      "expected_error": "repository_parent_unverified",
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "repository_parent_unverified"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "close-herdr-run-layout",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "closeHerdrRunLayout",
+      "input": {
+        "runId": "run-42",
+        "cwd": "/real/wt/42",
+        "commonDir": "/real/repo/.git",
+        "callerPaneId": "pane-outside",
+        "layout": {
+          "workspaceId": "ws-run-42",
+          "createdWorkspaceId": "ws-run-42",
+          "root": {
+            "tabId": "tab-root",
+            "paneId": "pane-root",
+            "terminalId": "term-root",
+            "rootLabel": "1"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/phase",
+          "op": "equals",
+          "value": "closed"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/workflow-herdr-layout-herdr-beforeClose",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "close-herdr-caller-pane-refused",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "closeHerdrRunLayout",
+      "input": {
+        "runId": "run-42",
+        "cwd": "/real/wt/42",
+        "commonDir": "/real/repo/.git",
+        "callerPaneId": "pane-root",
+        "layout": {
+          "workspaceId": "ws-run-42",
+          "createdWorkspaceId": "ws-run-42",
+          "root": {
+            "tabId": "tab-root",
+            "paneId": "pane-root",
+            "terminalId": "term-root",
+            "rootLabel": "1"
+          }
+        }
+      },
+      "expected_error": "run_shell_caller",
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "run_shell_caller"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "close-repo-layout-adopted-retained",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "closeHerdrRepoLayoutIfIdle",
+      "input": {
+        "repository": "org/repo",
+        "commonDir": "/real/repo/.git",
+        "parentWorkspaceId": "ws-parent",
+        "createdByPdd": false,
+        "activeRuns": 0
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/closed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-herdr-layout-herdr-command",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "close-repo-layout-empty-input",
+      "entry_path": "prompts/cli/workflow-herdr-layout.prompt.md",
+      "operation": "closeHerdrRepoLayoutIfIdle",
+      "input": {
+        "repository": "",
+        "commonDir": "/real/repo/.git",
+        "parentWorkspaceId": "ws-parent",
+        "createdByPdd": true,
+        "activeRuns": 0
+      },
+      "expected_error": "invalid_herdr_layout_input",
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_herdr_layout_input"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

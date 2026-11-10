@@ -32,25 +32,377 @@ saved area from the current package. [Replay evidence](workflow-replay.prompt.md
 
 Own detection of a workflow with no approval gate before implementation. An area `gate: "approve"` or `before: "approve"` provides the explicit approval boundary; `then: "ask-code"` also provides a boundary before its following area. If none of these exists, return optional `warnings` containing one plain advisory that names the workflow and says it has no approve gate before code. This includes a valid custom single-area `pr` workflow. Do not reject, insert a gate, reorder steps or prevent startup. Workflows with a boundary retain their existing returned shape (no warning field required). Preserve all existing exports and inputs; this optional string-array field on a workflow is the only result addition. Listing renders the advisory in plain text and retains it in each affected JSON workflow; the runner displays it on startup. Detection policy belongs here, not in the runner.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+## Dependencies
 
-Only formatWorkflowList is declared. Workflow discovery, real project/home/package precedence, filesystem validation and instruction loading remain native. Native evidence owners: test/workflow-areas.test.mjs.
+- [Replay evidence](workflow-replay.prompt.md): owns the `pdd.replay-evidence.v1` manifest contract.
+- In Runtime checks, `files.stat({path})` and `files.read({path})` inspect `.git` markers and `pdd-NAME/workflow.json` files across project, home and package skill folders, and `fs.readdir({path})` returns `{entries}` for each skill root directory. `readWorkflowAreas` fails with `workflow_unknown` when no skill folder defines the requested workflow and `workflow_invalid` when the winning `workflow.json` violates the shape rules; `listWorkflowAreas` returns `{workflows}` and fails with `workflow_invalid` when any winning `workflow.json` violates the shape rules; `formatWorkflowList({list, options})` returns `{text}` and fails with `invalid_workflow_list` when a workflow record has an empty `areas` array. Native filesystem permissions and symlink traversal stay in `test/workflow-areas.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "28d1f08b6fd9b9f89bdb04001ea372937e265eb26f182232ceb52e63dd9c92c6",
+  "prose_sha256": "6c921aa903031205bbf888eae3974339a8a069114378fc2cb1654c9243b9c952",
   "entries": [
+    {
+      "operation": "readWorkflowAreas",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "packageRoot": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "home": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "packageRoot",
+          "name",
+          "cwd",
+          "home"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "skill": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "project",
+              "home",
+              "package"
+            ]
+          },
+          "areas": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "steps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "optional": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "gate": {
+                  "type": "string",
+                  "enum": [
+                    "approve",
+                    "pr"
+                  ]
+                },
+                "before": {
+                  "type": "string",
+                  "enum": [
+                    "approve"
+                  ]
+                },
+                "then": {
+                  "type": "string",
+                  "enum": [
+                    "ask-code"
+                  ]
+                },
+                "replay_evidence": {
+                  "type": "string",
+                  "enum": [
+                    "pdd.replay-evidence.v1"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "steps",
+                "optional",
+                "gate"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "skill",
+          "dir",
+          "source",
+          "areas"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "workflow_unknown",
+        "workflow_invalid"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "fs.readdir"
+      ]
+    },
+    {
+      "operation": "listWorkflowAreas",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "packageRoot": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "home": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "packageRoot",
+          "cwd",
+          "home"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "skill": {
+                  "type": "string"
+                },
+                "dir": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "project",
+                    "home",
+                    "package"
+                  ]
+                },
+                "areas": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "steps": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "optional": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "gate": {
+                        "type": "string",
+                        "enum": [
+                          "approve",
+                          "pr"
+                        ]
+                      },
+                      "before": {
+                        "type": "string",
+                        "enum": [
+                          "approve"
+                        ]
+                      },
+                      "then": {
+                        "type": "string",
+                        "enum": [
+                          "ask-code"
+                        ]
+                      },
+                      "replay_evidence": {
+                        "type": "string",
+                        "enum": [
+                          "pdd.replay-evidence.v1"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "steps",
+                      "optional",
+                      "gate"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "skill",
+                "dir",
+                "source",
+                "areas"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "workflows"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "workflow_invalid"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "fs.readdir"
+      ]
+    },
     {
       "operation": "formatWorkflowList",
       "input_schema": {
         "type": "object",
         "properties": {
           "list": {
-            "type": "string",
-            "description": "JSON text encoding of the discovered workflow records. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "skill": {
+                  "type": "string"
+                },
+                "dir": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "project",
+                    "home",
+                    "package"
+                  ]
+                },
+                "areas": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "steps": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "optional": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "gate": {
+                        "type": "string",
+                        "enum": [
+                          "approve",
+                          "pr"
+                        ]
+                      },
+                      "before": {
+                        "type": "string",
+                        "enum": [
+                          "approve"
+                        ]
+                      },
+                      "then": {
+                        "type": "string",
+                        "enum": [
+                          "ask-code"
+                        ]
+                      },
+                      "replay_evidence": {
+                        "type": "string",
+                        "enum": [
+                          "pdd.replay-evidence.v1"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "steps",
+                      "optional",
+                      "gate"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "skill",
+                "dir",
+                "source",
+                "areas"
+              ],
+              "additionalProperties": false
+            }
           },
           "options": {
             "type": "object",
@@ -80,18 +432,130 @@ Only formatWorkflowList is declared. Workflow discovery, real project/home/packa
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid_workflow_list"
+      ],
       "resource_operations": []
     }
   ],
   "calls": [],
-  "resources": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
   "limits": {
-    "max_steps": 64,
-    "max_model_calls": 16
+    "max_steps": 32,
+    "max_model_calls": 12
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

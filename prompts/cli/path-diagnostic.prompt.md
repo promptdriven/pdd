@@ -13,16 +13,316 @@ For a conflict (the selected executable differs, or another distinct pdd is pres
 ## Dependencies
 
 - Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring. The [CLI](pdd-cli.prompt.md) owns dispatch and output streams.
-- Runtime: Node filesystem, child-process and path primitives provide local discovery and bounded version probes. Package metadata and `bin/pdd.mjs` identify the running pdd.
+- In Runtime checks, `files.stat({path})` and `files.read({path})` read `<packageRoot>/package.json`, `host.realpath({path})` returns `{exists, executable, realpath}` for `<packageRoot>/bin/pdd.mjs` and candidate paths, `host.whichPdd({cwd, pathEnv})` returns `{status, stdout}` from `which -a pdd`, and `host.probeVersion({command, cwd})` returns `{status, stdout, timedOut}` for `<selected> --version`. `pathDiagnostic({packageRoot, cwd, env, mode, execPath})` returns `{lines}` and fails with `invalid_path_diagnostic_mode` when `mode` is not `setup`, `version` or `workflow`. Real child-process timeouts, filesystem mode bits and symlink loops stay in `test/path-diagnostic.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "e6b049f54d4649343d6a590871c0cc6a0f1807ed59bf74728f83758ee070b4ac",
-  "reason": "PATH, executable identity, symlinks and bounded binary probes require native evidence. Native evidence owners: test/path-diagnostic.test.mjs."
+  "prose_sha256": "8698d43ecd4c355641ad88e8c97897006e93aa0d347bda3fa83601a3d8535de4",
+  "entries": [
+    {
+      "operation": "pathDiagnostic",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "packageRoot": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "PATH": {
+                "type": "string"
+              },
+              "PDD_PATH_DIAGNOSTIC_PROBE": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "mode": {
+            "type": "string"
+          },
+          "execPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "packageRoot",
+          "cwd",
+          "env",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_path_diagnostic_mode"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "host.realpath",
+        "host.whichPdd",
+        "host.probeVersion",
+        "compute.hash_utf8"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "host",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "realpath",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "executable": {
+                "type": "boolean"
+              },
+              "realpath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exists",
+              "executable",
+              "realpath"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "whichPdd",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "pathEnv": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "pathEnv"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "stdout"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "probeVersion",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "timedOut": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "status",
+              "stdout",
+              "timedOut"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 24,
+    "max_model_calls": 10
+  },
+  "conventions": []
 }
 ```
 </details>

@@ -1,0 +1,246 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-setup-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When a workflow agent is ready with an optional fallback hint, `setupWithWorkflowAgent` writes the hint to stderr, invokes `setup.setup` once with the selected agent, `cwd` and `env`, and returns its integer `exitCode`."
+    },
+    {
+      "id": "AC2",
+      "text": "When no workflow agent is ready, `setupWithWorkflowAgent` writes the readiness owner's actionable message to stderr, does not call `setup.setup`, and returns `exitCode: 1`."
+    },
+    {
+      "id": "AC3",
+      "text": "When the setup callback is unavailable (`hasSetup: false`), `setupWithWorkflowAgent` writes the missing-action recovery instruction to stderr without calling `readiness.checkWorkflowAgents` and returns `exitCode: 1`."
+    },
+    {
+      "id": "AC4",
+      "text": "Passing an empty `cwd` fails with `invalid_setup_input` before any port call."
+    }
+  ],
+  "initial_world": {
+    "calls": {
+      "checkWorkflowAgents": 0,
+      "setup": 0
+    },
+    "stderr": []
+  },
+  "simulation": {
+    "readiness.checkWorkflowAgents": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/checkWorkflowAgents",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/repo/ready",
+            "env": {
+              "HOME": "/home/dev",
+              "PDD_AGENT": "codex"
+            }
+          },
+          "result": {
+            "ok": true,
+            "agent": {
+              "agent": "codex",
+              "command": "codex",
+              "status": "ready"
+            },
+            "hint": "Note: claude is not signed in; using codex.",
+            "message": ""
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/repo/unready",
+            "env": {
+              "HOME": "/home/dev",
+              "PDD_AGENT": "claude"
+            }
+          },
+          "result": {
+            "ok": false,
+            "agent": null,
+            "hint": "",
+            "message": "No ready workflow agent found. Sign in to Claude Code or Codex before running pdd setup."
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "setup.setup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/setup",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "agent": {
+              "agent": "codex",
+              "command": "codex",
+              "status": "ready"
+            },
+            "cwd": "/repo/ready",
+            "env": {
+              "HOME": "/home/dev",
+              "PDD_AGENT": "codex"
+            }
+          },
+          "result": {
+            "exitCode": 0
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "stderr.write": {
+      "action": "port.write",
+      "world_pointer": "/stderr",
+      "result_template": {}
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "ready-agent-runs-setup",
+      "entry_path": "prompts/cli/workflow-setup.prompt.md",
+      "operation": "setupWithWorkflowAgent",
+      "input": {
+        "cwd": "/repo/ready",
+        "env": {
+          "HOME": "/home/dev",
+          "PDD_AGENT": "codex"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/stderr/0/text",
+          "op": "contains",
+          "value": "Note: claude is not signed in; using codex."
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-setup-readiness-checkWorkflowAgents",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-setup-setup-setup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "unready-agent-refuses-setup",
+      "entry_path": "prompts/cli/workflow-setup.prompt.md",
+      "operation": "setupWithWorkflowAgent",
+      "input": {
+        "cwd": "/repo/unready",
+        "env": {
+          "HOME": "/home/dev",
+          "PDD_AGENT": "claude"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/stderr/1/text",
+          "op": "contains",
+          "value": "No ready workflow agent found."
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-setup-setup-setup",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "missing-setup-action",
+      "entry_path": "prompts/cli/workflow-setup.prompt.md",
+      "operation": "setupWithWorkflowAgent",
+      "input": {
+        "cwd": "/repo/ready",
+        "env": {
+          "HOME": "/home/dev"
+        },
+        "hasSetup": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-setup-stderr-write",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-setup-readiness-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "empty-cwd-error",
+      "entry_path": "prompts/cli/workflow-setup.prompt.md",
+      "operation": "setupWithWorkflowAgent",
+      "input": {
+        "cwd": "",
+        "env": {
+          "HOME": "/home/dev"
+        }
+      },
+      "expected_error": "invalid_setup_input",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_setup_input"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

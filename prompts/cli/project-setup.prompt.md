@@ -39,16 +39,210 @@ Keep every old byte: read the file as bytes and only append. A file that is not 
 
 ## Dependencies
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) runs it for `pdd setup`.
+- Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) runs it for `pdd setup`.
+- In Runtime checks, `files.stat({path})`, `files.read({path})` and `files.write({path, content})` inspect and update `<packageRoot>/skills/pdd-setup/SKILL.md`, `<packageRoot>/RUNBOOK.md`, `<cwd>/CLAUDE.md`, `<cwd>/AGENTS.md` and `<root>/.gitignore`. `setupProject({cwd, packageRoot})` fails with `missing_pdd_block` when the skill file has no `<!-- pdd:start -->`...`<!-- pdd:end -->` block and `invalid_pdd_markers` when the target instruction file has an invalid marker count or order; `ignorePddFolder({root})` fails with `invalid_gitignore_target` when `<root>/.gitignore` is a symlink (`is_symlink: true`). Raw non-UTF-8 byte preservation and native directory-entry checks stay in `test/workflow-setup.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "274b6bf4022458f053a9b73b25bc16c59505bf8ae40d48218d43bbf458ce12e5",
-  "reason": "Real instruction-file selection and Git exclusion edits need native evidence first. Native evidence owners: test/workflow-setup.test.mjs."
+  "prose_sha256": "32983fa3e6c9e8d9ac6d68bd5456f84e245ecf927d33784c0426d155fcee3fe7",
+  "entries": [
+    {
+      "operation": "setupProject",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "packageRoot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "packageRoot"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "file",
+          "changed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "missing_pdd_block",
+        "invalid_pdd_markers"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "ignorePddFolder",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "negated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "file",
+          "changed",
+          "negated"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_gitignore_target"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 24,
+    "max_model_calls": 10
+  },
+  "conventions": []
 }
 ```
 </details>

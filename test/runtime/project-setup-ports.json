@@ -1,0 +1,271 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/project-setup-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`setupProject` updates the `pdd:start` to `pdd:end` marker block in `CLAUDE.md` under `cwd` when present (preserving surrounding text and dropping `RUNBOOK.md` lines when `RUNBOOK.md` under `packageRoot` does not exist), and creates `AGENTS.md` under `cwd` when neither file exists."
+    },
+    {
+      "id": "AC2",
+      "text": "`setupProject` fails with `invalid_pdd_markers` without writing when the target file has reversed or duplicate marker lines."
+    },
+    {
+      "id": "AC3",
+      "text": "`ignorePddFolder` appends `.pdd/` to `.gitignore` under `root` when no `.pdd` rule is present, returns `changed: false, negated: true` without writing when a negation rule such as `!.pdd/config.json` is present, and fails with `invalid_gitignore_target` when `.gitignore` under `root` is a symlink."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/pkg/skills/pdd-setup/SKILL.md": {
+        "content": "# PDD Setup\n\n```markdown\n<!-- pdd:start -->\nUse PDD skills for changes.\nFollow RUNBOOK.md for merges.\n<!-- pdd:end -->\n```\n",
+        "is_symlink": false
+      },
+      "/repo-claude/CLAUDE.md": {
+        "content": "# Project rules\n\n<!-- pdd:start -->\nOld block\n<!-- pdd:end -->\n\nKeep tests green.\n",
+        "is_symlink": false
+      },
+      "/repo-bad/AGENTS.md": {
+        "content": "<!-- pdd:end -->\n<!-- pdd:start -->\n",
+        "is_symlink": false
+      },
+      "/repo-ignore/.gitignore": {
+        "content": "node_modules/\n",
+        "is_symlink": false
+      },
+      "/repo-negated/.gitignore": {
+        "content": "node_modules/\n!.pdd/config.json\n",
+        "is_symlink": false
+      },
+      "/repo-symlink/.gitignore": {
+        "content": "node_modules/\n",
+        "is_symlink": true
+      }
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "setup-replaces-claude-block",
+      "entry_path": "prompts/cli/project-setup.prompt.md",
+      "operation": "setupProject",
+      "input": {
+        "cwd": "/repo-claude",
+        "packageRoot": "/pkg"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/file",
+          "op": "equals",
+          "value": "/repo-claude/CLAUDE.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/changed",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1repo-claude~1CLAUDE.md/content",
+          "op": "equals",
+          "value": "# Project rules\n\n<!-- pdd:start -->\nUse PDD skills for changes.\n<!-- pdd:end -->\n\nKeep tests green.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "setup-creates-agents-md",
+      "entry_path": "prompts/cli/project-setup.prompt.md",
+      "operation": "setupProject",
+      "input": {
+        "cwd": "/repo-fresh",
+        "packageRoot": "/pkg"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/file",
+          "op": "equals",
+          "value": "/repo-fresh/AGENTS.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/changed",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1repo-fresh~1AGENTS.md/content",
+          "op": "equals",
+          "value": "<!-- pdd:start -->\nUse PDD skills for changes.\n<!-- pdd:end -->\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "setup-invalid-markers",
+      "entry_path": "prompts/cli/project-setup.prompt.md",
+      "operation": "setupProject",
+      "input": {
+        "cwd": "/repo-bad",
+        "packageRoot": "/pkg"
+      },
+      "expected_error": "invalid_pdd_markers",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_pdd_markers"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/project-setup-files-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ignore-appends-pdd",
+      "entry_path": "prompts/cli/project-setup.prompt.md",
+      "operation": "ignorePddFolder",
+      "input": {
+        "root": "/repo-ignore"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/file",
+          "op": "equals",
+          "value": "/repo-ignore/.gitignore"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/changed",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/negated",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/files/~1repo-ignore~1.gitignore/content",
+          "op": "equals",
+          "value": "node_modules/\n.pdd/\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ignore-respects-negation",
+      "entry_path": "prompts/cli/project-setup.prompt.md",
+      "operation": "ignorePddFolder",
+      "input": {
+        "root": "/repo-negated"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/changed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/negated",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/project-setup-files-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ignore-rejects-symlink",
+      "entry_path": "prompts/cli/project-setup.prompt.md",
+      "operation": "ignorePddFolder",
+      "input": {
+        "root": "/repo-symlink"
+      },
+      "expected_error": "invalid_gitignore_target",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_gitignore_target"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/project-setup-files-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

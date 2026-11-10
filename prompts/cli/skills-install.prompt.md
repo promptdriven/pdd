@@ -51,16 +51,528 @@ Replace the whole folder, so files that a new version removed do not stay. Copy 
 
 ## Dependencies
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+- Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+- In Runtime checks, `files.stat({path})` and `files.read({path})` read `<packageRoot>/package.json`, `fs.readSkillRoot({dir})` returns `{skills}` with raw per-skill entries (`name`, `isDirectory`, `isSymlink`, `skillMd` raw `SKILL.md` text or `null`, `markerJson` raw `.pdd-skill.json` text or `null`, and `digest`) for `<packageRoot>/skills` and each candidate agent skill folder, `compute.hash_utf8({text})` hashes skill file trees, and `fs.copySkill({src, dst, version, digest})` records atomic skill replacements and installations. `setupSkills` and `findSkills` return `{results}` (`agent` is `"Codex"` or `"Claude"`, Codex first) and fail with `missing_skills_package` when `<packageRoot>/package.json` is missing or has no `version`. Atomic sibling-folder renames and native symlink traversal stay in `test/session-skills.test.mjs` and `test/workflow-setup.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "40be4b0e4f350479faf9f1d4c11e5d1a56ac779b4d0995bf3d8f41a4130c3f09",
-  "reason": "Host skill ownership, symlink checks and installation writes need native evidence. Native evidence owners: test/gemini-workflow.test.mjs, test/session-skills.test.mjs, test/test-home-isolation.test.mjs, test/workflow-setup.test.mjs."
+  "prose_sha256": "2979eff27dd7e1cee236077358d72d9b8d7c1192f7d61a8443c474f4b050dec4",
+  "entries": [
+    {
+      "operation": "setupSkills",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "packageRoot": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "home": {
+            "type": "string"
+          },
+          "claudeConfigDir": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "packageRoot",
+          "cwd",
+          "home"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agent": {
+                  "type": "string",
+                  "enum": [
+                    "Codex",
+                    "Claude"
+                  ]
+                },
+                "root": {
+                  "type": "string"
+                },
+                "found": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "stale": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "older",
+                        "differs"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "staleSkills": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "older",
+                          "differs"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "version",
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "installed": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "updated": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "agent",
+                "root",
+                "found",
+                "stale",
+                "staleSkills",
+                "installed",
+                "updated"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "missing_skills_package"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "fs.readSkillRoot",
+        "fs.copySkill",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "findSkills",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "packageRoot": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "home": {
+            "type": "string"
+          },
+          "claudeConfigDir": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "packageRoot",
+          "cwd",
+          "home"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agent": {
+                  "type": "string",
+                  "enum": [
+                    "Codex",
+                    "Claude"
+                  ]
+                },
+                "found": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "stale": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "older",
+                        "differs"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "staleSkills": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "older",
+                          "differs"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "version",
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "agent",
+                "found",
+                "stale",
+                "staleSkills"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "missing_skills_package"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "fs.readSkillRoot",
+        "compute.hash_utf8"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "readSkillRoot",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "dir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dir"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "skills": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "isDirectory": {
+                      "type": "boolean"
+                    },
+                    "isSymlink": {
+                      "type": "boolean"
+                    },
+                    "skillMd": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "markerJson": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "digest": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "isDirectory",
+                    "isSymlink",
+                    "skillMd",
+                    "markerJson",
+                    "digest"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "skills"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "copySkill",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "src": {
+                "type": "string"
+              },
+              "dst": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "src",
+              "dst",
+              "version",
+              "digest"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 32,
+    "max_model_calls": 12
+  },
+  "conventions": []
 }
 ```
 </details>

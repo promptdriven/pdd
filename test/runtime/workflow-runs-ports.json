@@ -1,0 +1,841 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-runs-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`writeRun` acquires and releases `.ordinary-owner`, increments `journalSeq`, records `updatedAt`, writes `status.json` under `runDir` and `runs.json` under `stateDir`, and fails with `invalid_run_record` when `record.runDir` is empty."
+    },
+    {
+      "id": "AC2",
+      "text": "`readRun` reads `status.json` under `runDir` and fails with `invalid_run_dir` when `runDir` is empty."
+    },
+    {
+      "id": "AC3",
+      "text": "`updateRun` applies an ordinary state update while clearing `progressAt` when `preserveProgress` is false, and fails with `run_ownership_busy` when `.ordinary-owner` acquisition is refused."
+    },
+    {
+      "id": "AC4",
+      "text": "`readRunOwnership` reads `.ordinary-owner` under `runDir` without acquiring or writing, and fails with `invalid_run_dir` when `runDir` is empty."
+    },
+    {
+      "id": "AC5",
+      "text": "`updateRunCosts` updates `suiteMinutes` and sets `progressAt` to the prior file `mtimeMs` without advancing `journalSeq`, updating `updatedAt` or calling `metrics.journalRunMutation`, and fails with `run_missing` when `status.json` is absent."
+    },
+    {
+      "id": "AC6",
+      "text": "`gitContext` resolves `toplevel` and `commonDir` through `git.revParse` and `fs.realpath`, and fails with `invalid_cwd` when `cwd` is empty."
+    },
+    {
+      "id": "AC7",
+      "text": "`runForWorktree` selects an archived `-cancelled-` worktree run before a replacement active run on the same issue and fails with `invalid_cwd` when `cwd` is empty."
+    },
+    {
+      "id": "AC8",
+      "text": "`resolveRun`, `listRuns` and `allRuns` resolve and enumerate runs across repositories and `runs.json` under `stateDir` (including archived cancelled folders when `cancelled: true`), and fail on empty `cwd` or `stateDir`."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/.git/pdd/runs/42/status.json": {
+        "content": "{\"runId\":\"run-42\",\"runDir\":\"/repo/.git/pdd/runs/42\",\"commonDir\":\"/repo/.git\",\"root\":\"/wt/42\",\"repo\":\"org/repo\",\"number\":42,\"workflow\":\"feature\",\"state\":\"waiting\",\"journalSeq\":3,\"updatedAt\":\"2026-11-10T10:00:00Z\",\"startedAt\":\"2026-11-10T09:00:00Z\",\"progressAt\":1700000000000,\"draft\":false,\"suiteMinutes\":1.5}\n",
+        "is_symlink": false
+      },
+      "/repo/.git/pdd/runs/42/.ordinary-owner": {
+        "content": "{\"pid\":5500,\"hostname\":\"devbox\",\"token\":\"tok-existing\"}\n",
+        "is_symlink": false
+      },
+      "/repo/.git/pdd/runs/42-cancelled-old/status.json": {
+        "content": "{\"runId\":\"run-42-old\",\"runDir\":\"/repo/.git/pdd/runs/42\",\"commonDir\":\"/repo/.git\",\"root\":\"/wt/42-old\",\"repo\":\"org/repo\",\"number\":42,\"workflow\":\"feature\",\"state\":\"cancelled\",\"journalSeq\":2,\"updatedAt\":\"2026-11-10T08:00:00Z\",\"startedAt\":\"2026-11-10T07:00:00Z\",\"draft\":false}\n",
+        "is_symlink": false
+      },
+      "/state/runs.json": {
+        "content": "{\"runs\":[{\"runId\":\"run-42\",\"commonDir\":\"/repo/.git\",\"number\":42,\"repo\":\"org/repo\",\"root\":\"/wt/42\",\"runDir\":\"/repo/.git/pdd/runs/42\"}]}\n",
+        "is_symlink": false
+      }
+    },
+    "dirs": [
+      {
+        "path": "/repo/.git/pdd/runs",
+        "reply": {
+          "entries": [
+            "42",
+            "42-cancelled-old"
+          ]
+        }
+      }
+    ],
+    "realpaths": [
+      {
+        "path": "/repo",
+        "reply": {
+          "realpath": "/repo"
+        }
+      },
+      {
+        "path": "/repo/.git",
+        "reply": {
+          "realpath": "/repo/.git"
+        }
+      },
+      {
+        "path": "/wt/42",
+        "reply": {
+          "realpath": "/wt/42"
+        }
+      },
+      {
+        "path": "/wt/42-old",
+        "reply": {
+          "realpath": "/wt/42-old"
+        }
+      }
+    ],
+    "mtimes": [
+      {
+        "path": "/repo/.git/pdd/runs/42/status.json",
+        "reply": {
+          "mtimeMs": 1700000123000
+        }
+      }
+    ],
+    "git_contexts": [
+      {
+        "cwd": "/wt/42",
+        "reply": {
+          "status": 0,
+          "toplevel": "/wt/42",
+          "commonDir": "/repo/.git"
+        }
+      },
+      {
+        "cwd": "/wt/42-old",
+        "reply": {
+          "status": 0,
+          "toplevel": "/wt/42-old",
+          "commonDir": "/repo/.git"
+        }
+      },
+      {
+        "cwd": "/repo",
+        "reply": {
+          "status": 0,
+          "toplevel": "/repo",
+          "commonDir": "/repo/.git"
+        }
+      }
+    ],
+    "calls": {
+      "acquire": 0,
+      "now": 0
+    },
+    "released": [],
+    "costs": [],
+    "journaled": []
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "fs.readdir": {
+      "action": "collection.get",
+      "world_pointer": "/dirs",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "entries": []
+      },
+      "result_value_pointer": ""
+    },
+    "fs.realpath": {
+      "action": "collection.get",
+      "world_pointer": "/realpaths",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "realpath": ""
+      },
+      "result_value_pointer": ""
+    },
+    "fs.mtime": {
+      "action": "collection.get",
+      "world_pointer": "/mtimes",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "mtimeMs": 0
+      },
+      "result_value_pointer": ""
+    },
+    "ownership.acquire": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/acquire",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "runDir": "/repo/.git/pdd/runs/43"
+          },
+          "result": {
+            "acquired": true,
+            "token": "tok-43"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "runDir": "/repo/.git/pdd/runs/42"
+          },
+          "result": {
+            "acquired": true,
+            "token": "tok-42-update"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "runDir": "/repo/.git/pdd/runs/busy"
+          },
+          "result": {
+            "acquired": false,
+            "token": ""
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "runDir": "/repo/.git/pdd/runs/42"
+          },
+          "result": {
+            "acquired": true,
+            "token": "tok-42-cost"
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "runDir": "/repo/.git/pdd/runs/missing"
+          },
+          "result": {
+            "acquired": true,
+            "token": "tok-missing"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "ownership.release": {
+      "action": "port.write",
+      "world_pointer": "/released",
+      "result_template": {}
+    },
+    "clock.now": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/now",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "iso": "2026-11-10T11:00:00Z"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "iso": "2026-11-10T11:05:00Z"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "git.revParse": {
+      "action": "collection.get",
+      "world_pointer": "/git_contexts",
+      "key_argument_pointer": "/cwd",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/cwd",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "toplevel": "",
+        "commonDir": ""
+      },
+      "result_value_pointer": ""
+    },
+    "cost.captureCosts": {
+      "action": "port.write",
+      "world_pointer": "/costs",
+      "result_template": {}
+    },
+    "metrics.journalRunMutation": {
+      "action": "port.write",
+      "world_pointer": "/journaled",
+      "result_template": {}
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "write-new-run",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "writeRun",
+      "input": {
+        "record": {
+          "runId": "run-43",
+          "runDir": "/repo/.git/pdd/runs/43",
+          "commonDir": "/repo/.git",
+          "root": "/wt/43",
+          "repo": "org/repo",
+          "number": 43,
+          "workflow": "bug",
+          "state": "running",
+          "journalSeq": 0,
+          "draft": true
+        },
+        "stateDir": "/state"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/run/journalSeq",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/run/updatedAt",
+          "op": "equals",
+          "value": "2026-11-10T11:00:00Z"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/run/draft",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/released/0/token",
+          "op": "equals",
+          "value": "tok-43"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-runs-files-write",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "write-run-invalid-record",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "writeRun",
+      "input": {
+        "record": {
+          "runId": "run-43",
+          "runDir": "",
+          "commonDir": "/repo/.git",
+          "root": "/wt/43",
+          "repo": "org/repo",
+          "number": 43,
+          "workflow": "bug",
+          "state": "running"
+        },
+        "stateDir": "/state"
+      },
+      "expected_error": "invalid_run_record",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_run_record"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-existing-run",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "readRun",
+      "input": {
+        "runDir": "/repo/.git/pdd/runs/42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/run/runId",
+          "op": "equals",
+          "value": "run-42"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/run/journalSeq",
+          "op": "equals",
+          "value": 3
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-run-empty-dir",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "readRun",
+      "input": {
+        "runDir": ""
+      },
+      "expected_error": "invalid_run_dir",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_run_dir"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "update-run-clears-progress-at",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "updateRun",
+      "input": {
+        "runDir": "/repo/.git/pdd/runs/42",
+        "state": "running",
+        "preserveProgress": false,
+        "stateDir": "/state"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/run/state",
+          "op": "equals",
+          "value": "running"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/run/journalSeq",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/run/progressAt",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/released/1/token",
+          "op": "equals",
+          "value": "tok-42-update"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "update-run-ownership-busy",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "updateRun",
+      "input": {
+        "runDir": "/repo/.git/pdd/runs/busy",
+        "state": "running",
+        "preserveProgress": false,
+        "stateDir": "/state"
+      },
+      "expected_error": "run_ownership_busy",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "run_ownership_busy"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-run-ownership-snapshot",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "readRunOwnership",
+      "input": {
+        "runDir": "/repo/.git/pdd/runs/42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/snapshot/pid",
+          "op": "equals",
+          "value": 5500
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/snapshot/token",
+          "op": "equals",
+          "value": "tok-existing"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/snapshot/warning",
+          "op": "equals",
+          "value": null
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-run-ownership-empty-dir",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "readRunOwnership",
+      "input": {
+        "runDir": ""
+      },
+      "expected_error": "invalid_run_dir",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_run_dir"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "update-run-costs-preserves-seq-and-sets-progress-at",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "updateRunCosts",
+      "input": {
+        "runDir": "/repo/.git/pdd/runs/42",
+        "suiteMinutes": 4.25
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/run/journalSeq",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/run/progressAt",
+          "op": "equals",
+          "value": 1700000123000
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/run/suiteMinutes",
+          "op": "equals",
+          "value": 4.25
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-runs-metrics-journalRunMutation",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "update-run-costs-missing",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "updateRunCosts",
+      "input": {
+        "runDir": "/repo/.git/pdd/runs/missing",
+        "suiteMinutes": 1
+      },
+      "expected_error": "run_missing",
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "run_missing"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "git-context-resolved",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "gitContext",
+      "input": {
+        "cwd": "/wt/42"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/context/toplevel",
+          "op": "equals",
+          "value": "/wt/42"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/context/commonDir",
+          "op": "equals",
+          "value": "/repo/.git"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "git-context-empty-cwd",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "gitContext",
+      "input": {
+        "cwd": ""
+      },
+      "expected_error": "invalid_cwd",
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_cwd"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-for-archived-worktree",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "runForWorktree",
+      "input": {
+        "cwd": "/wt/42-old"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/run/runId",
+          "op": "equals",
+          "value": "run-42-old"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/run/runDir",
+          "op": "equals",
+          "value": "/repo/.git/pdd/runs/42-cancelled-old"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-for-worktree-empty-cwd",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "runForWorktree",
+      "input": {
+        "cwd": ""
+      },
+      "expected_error": "invalid_cwd",
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_cwd"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "resolve-run-by-number",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "resolveRun",
+      "input": {
+        "ref": "42",
+        "cwd": "/repo",
+        "stateDir": "/state"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/runId",
+          "op": "equals",
+          "value": "run-42"
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/error",
+          "op": "equals",
+          "value": null
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "resolve-run-empty-cwd",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "resolveRun",
+      "input": {
+        "ref": "42",
+        "cwd": "",
+        "stateDir": "/state"
+      },
+      "expected_error": "invalid_cwd",
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_cwd"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "list-runs-current-repo",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "listRuns",
+      "input": {
+        "cwd": "/repo",
+        "stateDir": "/state"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/runIds",
+          "op": "equals",
+          "value": [
+            "run-42"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "list-runs-empty-cwd",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "listRuns",
+      "input": {
+        "cwd": "",
+        "stateDir": "/state"
+      },
+      "expected_error": "invalid_cwd",
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_cwd"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "all-runs-with-cancelled",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "allRuns",
+      "input": {
+        "cancelled": true,
+        "stateDir": "/state"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/runIds",
+          "op": "equals",
+          "value": [
+            "run-42",
+            "run-42-old"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "all-runs-empty-state-dir",
+      "entry_path": "prompts/cli/workflow-runs.prompt.md",
+      "operation": "allRuns",
+      "input": {
+        "cancelled": true,
+        "stateDir": ""
+      },
+      "expected_error": "invalid_state_dir",
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_state_dir"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

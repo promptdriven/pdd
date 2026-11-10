@@ -13,16 +13,14 @@ With a ready selection, print its optional one-line `hint` to ports.stderr, then
 - [Skills install](skills-install.prompt.md), [project setup](project-setup.prompt.md), and [agent MCP setup](agent-mcp-setup.prompt.md) retain their existing setup behavior. The caller's supplied setup action owns their execution.
 - The [CLI](pdd-cli.prompt.md) owns public dispatch. Adding this adapter does not by itself change pdd setup; the pending shared-file wiring must be integrated before claiming the public command fixed.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-readiness.checkWorkflowAgents and setup.setup bind the existing readiness and ports.setup callbacks; stderr binds the actual output stream. Missing-action tests omit the setup binding. Supplied replies cover ordering and exactly-once decisions only. Actual status processes, consent, installs and configuration writes remain native. Native evidence owners: test/workflow-setup.test.mjs.
+- In Runtime checks, `readiness.checkWorkflowAgents({cwd, env})` supplies `{ok, agent, hint, message}`, `setup.setup({agent, cwd, env})` executes the caller's setup callback and returns `{exitCode}`, and `stderr.write({text})` records stderr lines. An empty `cwd` fails with `invalid_setup_input` before any port call; when `hasSetup` is `false`, `setupWithWorkflowAgent` prints the missing-action recovery instruction to `stderr.write` and returns `{exitCode: 1}` without calling `readiness.checkWorkflowAgents`. Actual status processes, interactive consent, skill copies and configuration writes stay in `test/workflow-setup.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "d731c1122403b57d003af0144fc99f5d217b22d2ddef548a7626bbad19e1d7c4",
+  "prose_sha256": "59338a1229aa0ab7e814187c7453b2ef2faff7747cce43051ef984a1db5eaaf5",
   "entries": [
     {
       "operation": "setupWithWorkflowAgent",
@@ -33,8 +31,20 @@ readiness.checkWorkflowAgents and setup.setup bind the existing readiness and po
             "type": "string"
           },
           "env": {
-            "type": "string",
-            "description": "JSON text encoding of the caller environment. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "HOME": {
+                "type": "string"
+              },
+              "PDD_AGENT": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "hasSetup": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -55,7 +65,9 @@ readiness.checkWorkflowAgents and setup.setup bind the existing readiness and po
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid_setup_input"
+      ],
       "resource_operations": [
         "readiness.checkWorkflowAgents",
         "setup.setup",
@@ -80,8 +92,17 @@ readiness.checkWorkflowAgents and setup.setup bind the existing readiness and po
                 "type": "string"
               },
               "env": {
-                "type": "string",
-                "description": "JSON text encoding of the exact caller environment. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PDD_AGENT": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -93,13 +114,48 @@ readiness.checkWorkflowAgents and setup.setup bind the existing readiness and po
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the readiness reply including ready agent or safe message. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "ok": {
+                "type": "boolean"
+              },
+              "agent": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "agent": {
+                        "type": "string"
+                      },
+                      "command": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent",
+                      "command",
+                      "status"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hint": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
               }
             },
             "required": [
-              "value"
+              "ok",
+              "agent",
+              "hint",
+              "message"
             ],
             "additionalProperties": false
           }
@@ -118,15 +174,40 @@ readiness.checkWorkflowAgents and setup.setup bind the existing readiness and po
             "type": "object",
             "properties": {
               "agent": {
-                "type": "string",
-                "description": "JSON text encoding of the ready selection. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                "type": "object",
+                "properties": {
+                  "agent": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent",
+                  "command",
+                  "status"
+                ],
+                "additionalProperties": false
               },
               "cwd": {
                 "type": "string"
               },
               "env": {
-                "type": "string",
-                "description": "JSON text encoding of the exact caller environment. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PDD_AGENT": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -182,11 +263,10 @@ readiness.checkWorkflowAgents and setup.setup bind the existing readiness and po
     }
   ],
   "limits": {
-    "max_steps": 64,
-    "max_model_calls": 16
+    "max_steps": 24,
+    "max_model_calls": 10
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

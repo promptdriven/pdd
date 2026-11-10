@@ -1,0 +1,451 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-areas-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Reading a bundled workflow skips any home copy with the same name, returns the package definition with `before`, `then` and `replay_evidence` preserved, and reading a custom home single-area `pr` workflow adds the missing-approve-gate advisory."
+    },
+    {
+      "id": "AC2",
+      "text": "Reading an unknown workflow fails with `workflow_unknown`."
+    },
+    {
+      "id": "AC3",
+      "text": "Listing workflows across project, home and package skill folders returns them sorted by name with project overrides winning over bundled workflows."
+    },
+    {
+      "id": "AC4",
+      "text": "Listing workflows fails with `workflow_invalid` when a winning `workflow.json` violates the version or area gate rules."
+    },
+    {
+      "id": "AC5",
+      "text": "Formatting a workflow list renders plain-text area gates (`approve → pr` for `before: \"approve\"`), advisories and the no-work footer, and rejects a workflow record with no areas with `invalid_workflow_list`."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/.git": {
+        "content": "gitdir: /repo/.git\n",
+        "is_symlink": false
+      },
+      "/repo/.agents/skills/pdd-bug/workflow.json": {
+        "content": "{\"version\":2,\"areas\":[{\"name\":\"triage\",\"steps\":[\"reproduce\"],\"optional\":[],\"gate\":\"approve\"},{\"name\":\"fix\",\"steps\":[\"patch\",\"verify\"],\"optional\":[],\"gate\":\"pr\",\"replay_evidence\":\"pdd.replay-evidence.v1\"}]}\n",
+        "is_symlink": false
+      },
+      "/home/.agents/skills/pdd-feature/workflow.json": {
+        "content": "{\"version\":1,\"areas\":[]}\n",
+        "is_symlink": false
+      },
+      "/home/.agents/skills/pdd-docs/workflow.json": {
+        "content": "{\"version\":2,\"areas\":[{\"name\":\"write\",\"steps\":[\"draft\",\"check\"],\"optional\":[\"check\"],\"gate\":\"pr\"}]}\n",
+        "is_symlink": false
+      },
+      "/pkg/skills/pdd-feature/workflow.json": {
+        "content": "{\"version\":2,\"areas\":[{\"name\":\"story\",\"steps\":[\"prompt\",\"test\"],\"optional\":[],\"gate\":\"pr\",\"before\":\"approve\",\"then\":\"ask-code\"},{\"name\":\"code\",\"steps\":[\"build\",\"verify\"],\"optional\":[],\"gate\":\"pr\",\"replay_evidence\":\"pdd.replay-evidence.v1\"}]}\n",
+        "is_symlink": false
+      },
+      "/pkg/skills/pdd-bug/workflow.json": {
+        "content": "{\"version\":2,\"areas\":[{\"name\":\"fix\",\"steps\":[\"patch\"],\"optional\":[],\"gate\":\"pr\"}]}\n",
+        "is_symlink": false
+      },
+      "/bad-repo/.git": {
+        "content": "gitdir: /bad-repo/.git\n",
+        "is_symlink": false
+      },
+      "/bad-repo/.agents/skills/pdd-broken/workflow.json": {
+        "content": "{\"version\":1,\"areas\":[]}\n",
+        "is_symlink": false
+      }
+    },
+    "dirs": [
+      {
+        "path": "/repo/.agents/skills",
+        "reply": {
+          "entries": [
+            "pdd-bug"
+          ]
+        }
+      },
+      {
+        "path": "/repo/.claude/skills",
+        "reply": {
+          "entries": []
+        }
+      },
+      {
+        "path": "/home/.agents/skills",
+        "reply": {
+          "entries": [
+            "pdd-docs",
+            "pdd-feature"
+          ]
+        }
+      },
+      {
+        "path": "/home/.claude/skills",
+        "reply": {
+          "entries": []
+        }
+      },
+      {
+        "path": "/pkg/skills",
+        "reply": {
+          "entries": [
+            "pdd-bug",
+            "pdd-feature"
+          ]
+        }
+      },
+      {
+        "path": "/bad-repo/.agents/skills",
+        "reply": {
+          "entries": [
+            "pdd-broken"
+          ]
+        }
+      },
+      {
+        "path": "/bad-repo/.claude/skills",
+        "reply": {
+          "entries": []
+        }
+      }
+    ]
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "fs.readdir": {
+      "action": "collection.get",
+      "world_pointer": "/dirs",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "entries": []
+      },
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "read-bundled-feature",
+      "entry_path": "prompts/cli/workflow-areas.prompt.md",
+      "operation": "readWorkflowAreas",
+      "input": {
+        "packageRoot": "/pkg",
+        "name": "feature",
+        "cwd": "/repo/src",
+        "home": "/home"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "package"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/dir",
+          "op": "equals",
+          "value": "/pkg/skills"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/areas/0/before",
+          "op": "equals",
+          "value": "approve"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/areas/0/then",
+          "op": "equals",
+          "value": "ask-code"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/areas/1/replay_evidence",
+          "op": "equals",
+          "value": "pdd.replay-evidence.v1"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-home-custom-advisory",
+      "entry_path": "prompts/cli/workflow-areas.prompt.md",
+      "operation": "readWorkflowAreas",
+      "input": {
+        "packageRoot": "/pkg",
+        "name": "docs",
+        "cwd": "/repo",
+        "home": "/home"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "home"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/warnings/0",
+          "op": "contains",
+          "value": "docs"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/warnings/0",
+          "op": "contains",
+          "value": "no approve gate"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-unknown-workflow",
+      "entry_path": "prompts/cli/workflow-areas.prompt.md",
+      "operation": "readWorkflowAreas",
+      "input": {
+        "packageRoot": "/pkg",
+        "name": "nonexistent",
+        "cwd": "/repo",
+        "home": "/home"
+      },
+      "expected_error": "workflow_unknown",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workflow_unknown"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "list-workflows",
+      "entry_path": "prompts/cli/workflow-areas.prompt.md",
+      "operation": "listWorkflowAreas",
+      "input": {
+        "packageRoot": "/pkg",
+        "cwd": "/repo",
+        "home": "/home"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/workflows/0/name",
+          "op": "equals",
+          "value": "bug"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/workflows/0/source",
+          "op": "equals",
+          "value": "project"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/workflows/1/name",
+          "op": "equals",
+          "value": "docs"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/workflows/1/source",
+          "op": "equals",
+          "value": "home"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/workflows/2/name",
+          "op": "equals",
+          "value": "feature"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/workflows/2/source",
+          "op": "equals",
+          "value": "package"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "list-invalid-workflow",
+      "entry_path": "prompts/cli/workflow-areas.prompt.md",
+      "operation": "listWorkflowAreas",
+      "input": {
+        "packageRoot": "/pkg",
+        "cwd": "/bad-repo",
+        "home": "/home"
+      },
+      "expected_error": "workflow_invalid",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workflow_invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "format-workflow-list",
+      "entry_path": "prompts/cli/workflow-areas.prompt.md",
+      "operation": "formatWorkflowList",
+      "input": {
+        "list": [
+          {
+            "name": "feature",
+            "skill": "pdd-feature",
+            "dir": "/pkg/skills",
+            "source": "package",
+            "areas": [
+              {
+                "name": "story",
+                "steps": [
+                  "prompt",
+                  "test"
+                ],
+                "optional": [],
+                "gate": "pr",
+                "before": "approve",
+                "then": "ask-code"
+              },
+              {
+                "name": "code",
+                "steps": [
+                  "build",
+                  "verify"
+                ],
+                "optional": [],
+                "gate": "pr",
+                "replay_evidence": "pdd.replay-evidence.v1"
+              }
+            ]
+          },
+          {
+            "name": "docs",
+            "skill": "pdd-docs",
+            "dir": "/home/.agents/skills",
+            "source": "home",
+            "areas": [
+              {
+                "name": "write",
+                "steps": [
+                  "draft"
+                ],
+                "optional": [],
+                "gate": "pr"
+              }
+            ],
+            "warnings": [
+              "Workflow docs has no approve gate before code."
+            ]
+          }
+        ],
+        "options": {
+          "json": false
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "approve → pr"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "Workflow docs has no approve gate before code."
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "Listing starts no work. Use pdd workflow run NAME ISSUE."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "format-invalid-workflow-list",
+      "entry_path": "prompts/cli/workflow-areas.prompt.md",
+      "operation": "formatWorkflowList",
+      "input": {
+        "list": [
+          {
+            "name": "broken",
+            "skill": "pdd-broken",
+            "dir": "/repo/.agents/skills",
+            "source": "project",
+            "areas": []
+          }
+        ],
+        "options": {
+          "json": false
+        }
+      },
+      "expected_error": "invalid_workflow_list",
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_workflow_list"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

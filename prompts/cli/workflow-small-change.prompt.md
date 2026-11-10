@@ -38,8 +38,8 @@ must derive requests from the full issue and trusted follow-ups, never the plan.
 ## Dependencies
 
 - [Replay evidence](workflow-replay.prompt.md): required fingerprint contract
-  `sourceFingerprint` for current Git-visible content. File I/O uses Node fs;
-  callers supply the run folder and repository root. Tests use disposable files.
+  `sourceFingerprint` for current Git-visible content.
+- In Runtime checks, `files.stat({path})` and `files.read({path})` inspect `<runDir>/small-change-checklist.json`, and `replay.sourceFingerprint({root})` returns `{kind, sha256}` for `<root>`. `readSmallChangeChecklist({run})` returns `{status, items, mustFix}` (`mustFix` is `[{id:"checklist", code:"missing-checklist"|"malformed-checklist"|"stale-checklist"}]` when `status` is `missing`, `malformed` or `stale`) and fails with `invalid_checklist_run` when `run.runId`, `run.runDir` or `run.root` is empty; `reviewSmallChangeChecklist({checklist, requests})` returns `{findings}` and fails with `invalid_request_inventory` when `requests` is empty. Native Git index enumeration and disposable filesystem checks stay in `test/workflow-small-change-scope.test.mjs`.
 
 Small-change checklist and Formal check facts remain in detailed text status and JSON run rows. Preserve compact list/all text rows; these views keep existing Runtime coverage lines but do not add the detailed small-change evidence block. The saved evidence remains available through the run detail and JSON.
 
@@ -47,10 +47,432 @@ Small-change checklist and Formal check facts remain in detailed text status and
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "ff7bf2fbb3b4f726d9cb006f9046639ddb6966e7f40b18185171db8918e3e83a",
-  "reason": "The checklist reader binds real Git-visible content fingerprints and bounded native file identity. Supplied records cannot prove current source or write custody. Native evidence owners: test/workflow-small-change-scope.test.mjs."
+  "prose_sha256": "f6ea0715cd45e75bef520c266849bf8c105ab45011cb0cedf479ae9c31f04e1e",
+  "entries": [
+    {
+      "operation": "readSmallChangeChecklist",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "runDir": {
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runId",
+              "runDir",
+              "root"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "missing",
+              "malformed",
+              "stale"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "request": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "quote": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "done",
+                    "excluded"
+                  ]
+                },
+                "evidence": {
+                  "type": "string"
+                },
+                "exclusion": {
+                  "type": "object",
+                  "properties": {
+                    "reason": {
+                      "type": "string"
+                    },
+                    "quote": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "quote"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "request",
+                "source",
+                "quote",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "mustFix": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "code"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "status",
+          "items",
+          "mustFix"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_checklist_run"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "replay.sourceFingerprint"
+      ]
+    },
+    {
+      "operation": "reviewSmallChangeChecklist",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "checklist": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "recorded",
+                  "missing",
+                  "malformed",
+                  "stale"
+                ]
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "request": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "quote": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "done",
+                        "excluded"
+                      ]
+                    },
+                    "evidence": {
+                      "type": "string"
+                    },
+                    "exclusion": {
+                      "type": "object",
+                      "properties": {
+                        "reason": {
+                          "type": "string"
+                        },
+                        "quote": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason",
+                        "quote"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "request",
+                    "source",
+                    "quote",
+                    "state"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "mustFix": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "status",
+              "items",
+              "mustFix"
+            ],
+            "additionalProperties": false
+          },
+          "requests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "request": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "quote": {
+                  "type": "string"
+                },
+                "exclusion_quote": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "request",
+                "source",
+                "quote"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "checklist",
+          "requests"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "code"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "findings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_request_inventory"
+      ],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "replay",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "sourceFingerprint",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "sha256"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 24,
+    "max_model_calls": 10
+  },
+  "conventions": []
 }
 ```
 </details>

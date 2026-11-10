@@ -160,17 +160,912 @@ A layout with phase closed normally refuses reopening. Permit it only for its sa
 - Runtime Herdr public workspace/worktree/tab/pane commands and JSON identities, capability baseline 0.9.1 without version pin, supplied by the area-chat command port.
 - Node filesystem/crypto primitives supply canonical identity, SHA-256 label qualification and the private cross-process lock. Durable run custody is supplied by the caller, not reconstructed from a registry.
 
-The native module remains unbound to the Interpreter: its callback/checkpoint ports, real filesystem identity and cross-process lock have no declared JSON transport binding. No check-only entry or invented adapter is part of this contract. Native tests must establish allocation, chat dispatch and cleanup effects; an Interpreter pass cannot prove them.
-
+- In Runtime checks, `fs.realpath({path})` resolves canonical paths for `samePath` and workspace/worktree comparisons, `fs.claimLock({directory})` and `fs.releaseLock({directory})` bind the layout lock boundary, `worktree.lookupRepositoryParent({cwd, repository, commonDir})` supplies the verified parent clone, `herdr.command({args})` executes session-`pdd` Herdr CLI commands (`workspace list`, `tab list`, `pane list`, `worktree open`, `tab create`, `agent get`, `pane process-info`, `workspace close`), `herdr.beforeCreate({missingPanes})`, `herdr.beforeClose({})` and `herdr.checkpoint({patch})` bind the caller's pane-budget, pre-close and custody-checkpoint callbacks, and `compute.hash_utf8({text})` computes SHA-256 label qualification. `samePath` fails with `invalid_path_input` when either path is empty; `closeHerdrRepoLayoutIfIdle` fails with `invalid_herdr_layout_input` when `repository` or `commonDir` is empty. Native cross-process signal recovery and live Herdr daemon sockets stay in `test/herdr-layout.test.mjs` and `test/workflow-run-owner-layout.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "bbf99ac7a298c2d7dff3146a221cda61b6467d7cede3468fc0a84586f17f58bf",
-  "reason": "Prompt declares unbound: native callbacks, realpath identity and cross-process lock have no JSON transport binding. Native evidence owners: test/herdr-layout.test.mjs, test/workflow-checkout-ownership.formal.test.mjs, test/workflow-run-owner-layout.test.mjs, test/workflow-stopped-panes.test.mjs."
+  "prose_sha256": "f6a698f0baa5eba7d06b5c6813128f6417ff7e212ffdd1e15ee4e17daac1a20b",
+  "entries": [
+    {
+      "operation": "samePath",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "b": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "same": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "same"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_path_input"
+      ],
+      "resource_operations": [
+        "fs.realpath"
+      ]
+    },
+    {
+      "operation": "validateHerdrInventory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "reply": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "workspaces": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "workspace_id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "checkout_path": {
+                      "type": "string"
+                    },
+                    "repo_key": {
+                      "type": "string"
+                    },
+                    "is_linked_worktree": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "workspace_id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "tabs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "tab_id": {
+                      "type": "string"
+                    },
+                    "workspace_id": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tab_id",
+                    "workspace_id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "panes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "pane_id": {
+                      "type": "string"
+                    },
+                    "workspace_id": {
+                      "type": "string"
+                    },
+                    "tab_id": {
+                      "type": "string"
+                    },
+                    "terminal_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pane_id",
+                    "workspace_id",
+                    "tab_id",
+                    "terminal_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "workspace",
+              "tab",
+              "pane"
+            ]
+          },
+          "workspaceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reply",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_workspace_inventory",
+        "invalid_tab_inventory",
+        "invalid_pane_inventory"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "withHerdrLayoutLock",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "directory"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "locked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "locked"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "herdr_layout_busy",
+        "invalid_layout_directory"
+      ],
+      "resource_operations": [
+        "fs.claimLock",
+        "fs.releaseLock"
+      ]
+    },
+    {
+      "operation": "recoverHerdrRunLayout",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "layout": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {
+                    "type": "string"
+                  },
+                  "createdWorkspaceId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "restartTerminal": {
+                    "type": "boolean"
+                  },
+                  "root": {
+                    "type": "object",
+                    "properties": {
+                      "tabId": {
+                        "type": "string"
+                      },
+                      "paneId": {
+                        "type": "string"
+                      },
+                      "terminalId": {
+                        "type": "string"
+                      },
+                      "rootLabel": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "tabId",
+                      "paneId",
+                      "terminalId",
+                      "rootLabel"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "workspaceId",
+                  "createdWorkspaceId",
+                  "root"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "runId",
+              "layout"
+            ],
+            "additionalProperties": false
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "commonDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "cwd",
+          "commonDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "workspaceClosed": {
+            "type": "boolean"
+          },
+          "restartTerminal": {
+            "type": "boolean"
+          },
+          "root": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "tabId": {
+                    "type": "string"
+                  },
+                  "paneId": {
+                    "type": "string"
+                  },
+                  "terminalId": {
+                    "type": "string"
+                  },
+                  "rootLabel": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tabId",
+                  "paneId",
+                  "terminalId",
+                  "rootLabel"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "workspaceClosed",
+          "restartTerminal",
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "herdr_layout_identity_changed",
+        "layout_cleanup_uncertain"
+      ],
+      "resource_operations": [
+        "fs.realpath",
+        "herdr.command",
+        "herdr.checkpoint"
+      ]
+    },
+    {
+      "operation": "openHerdrRunLayout",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "sourceRoot": {
+            "type": "string"
+          },
+          "commonDir": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "issue": {
+            "type": "integer"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "stageId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "repository",
+          "sourceRoot",
+          "commonDir",
+          "cwd",
+          "issue",
+          "workflow",
+          "stageId"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "repoWorkspaceId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "createdWorkspaceId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restartTerminal": {
+            "type": "boolean"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "paneId": {
+            "type": "string"
+          },
+          "terminalId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoWorkspaceId",
+          "workspaceId",
+          "createdWorkspaceId",
+          "restartTerminal",
+          "tabId",
+          "paneId",
+          "terminalId"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_herdr_layout_input",
+        "repository_parent_unverified",
+        "herdr_layout_identity_changed"
+      ],
+      "resource_operations": [
+        "fs.realpath",
+        "worktree.lookupRepositoryParent",
+        "herdr.beforeCreate",
+        "herdr.command",
+        "herdr.checkpoint",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "closeHerdrRunLayout",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "commonDir": {
+            "type": "string"
+          },
+          "callerPaneId": {
+            "type": "string"
+          },
+          "layout": {
+            "type": "object",
+            "properties": {
+              "workspaceId": {
+                "type": "string"
+              },
+              "createdWorkspaceId": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "root": {
+                "type": "object",
+                "properties": {
+                  "tabId": {
+                    "type": "string"
+                  },
+                  "paneId": {
+                    "type": "string"
+                  },
+                  "terminalId": {
+                    "type": "string"
+                  },
+                  "rootLabel": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tabId",
+                  "paneId",
+                  "terminalId",
+                  "rootLabel"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "workspaceId",
+              "createdWorkspaceId",
+              "root"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "runId",
+          "cwd",
+          "commonDir",
+          "layout"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "phase": {
+            "type": "string",
+            "enum": [
+              "closed",
+              "close_intent"
+            ]
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "layout_cleanup_uncertain",
+        "run_has_open_tabs",
+        "run_shell_caller",
+        "run_shell_busy",
+        "herdr_layout_identity_changed"
+      ],
+      "resource_operations": [
+        "fs.realpath",
+        "herdr.command",
+        "herdr.beforeClose",
+        "herdr.checkpoint"
+      ]
+    },
+    {
+      "operation": "closeHerdrRepoLayoutIfIdle",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "commonDir": {
+            "type": "string"
+          },
+          "parentWorkspaceId": {
+            "type": "string"
+          },
+          "createdByPdd": {
+            "type": "boolean"
+          },
+          "activeRuns": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repository",
+          "commonDir",
+          "parentWorkspaceId",
+          "createdByPdd",
+          "activeRuns"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "closed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "closed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid_herdr_layout_input"
+      ],
+      "resource_operations": [
+        "herdr.command"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "realpath",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "realpath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "realpath"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "claimLock",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "directory": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "directory"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "acquired": {
+                "type": "boolean"
+              },
+              "ownerPid": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "acquired",
+              "ownerPid"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "releaseLock",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "directory": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "directory"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "worktree",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "lookupRepositoryParent",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              },
+              "commonDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "repository",
+              "commonDir"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "verified",
+                  "unverified"
+                ]
+              },
+              "root": {
+                "type": "string"
+              },
+              "commonDir": {
+                "type": "string"
+              },
+              "bare": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "state",
+              "root",
+              "commonDir",
+              "bare"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "herdr",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "command",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "description": "JSON text of the Herdr CLI reply."
+              }
+            },
+            "required": [
+              "reply"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "beforeCreate",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "missingPanes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "missingPanes"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "beforeClose",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "checkpoint",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "phase": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase",
+              "workspaceId"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 48,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

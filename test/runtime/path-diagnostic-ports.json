@@ -1,0 +1,312 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/path-diagnostic-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "In `setup` mode when another `pdd` shadows a symlink to this `pdd` on `PATH`, `pathDiagnostic` probes only the selected candidate once, lists the candidates in order, explains environment-activation PATH reordering, and outputs both the absolute Node-plus-pdd command and the `export PATH` + `hash -r` fix."
+    },
+    {
+      "id": "AC2",
+      "text": "In `workflow` mode when `PATH` selects a different `pdd`, `pathDiagnostic` returns a single one-line shadowing warning with `\"$PDD_BIN\"`, and when `PDD_PATH_DIAGNOSTIC_PROBE` is `\"1\"`, returns `lines: []` without calling `host.whichPdd` or `host.probeVersion`."
+    },
+    {
+      "id": "AC3",
+      "text": "Passing an unsupported `mode` fails with `invalid_path_diagnostic_mode`."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/pkg/package.json": {
+        "content": "{\"name\":\"@promptdriven/pdd\",\"version\":\"0.2.0\"}\n",
+        "is_symlink": false
+      }
+    },
+    "realpaths": [
+      {
+        "path": "/pkg/bin/pdd.mjs",
+        "reply": {
+          "exists": true,
+          "executable": true,
+          "realpath": "/pkg/bin/pdd.mjs"
+        }
+      },
+      {
+        "path": "/conda/bin/pdd",
+        "reply": {
+          "exists": true,
+          "executable": true,
+          "realpath": "/conda/bin/pdd"
+        }
+      },
+      {
+        "path": "/usr/local/bin/pdd",
+        "reply": {
+          "exists": true,
+          "executable": true,
+          "realpath": "/pkg/bin/pdd.mjs"
+        }
+      }
+    ],
+    "calls": {
+      "whichPdd": 0,
+      "probeVersion": 0
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "host.realpath": {
+      "action": "collection.get",
+      "world_pointer": "/realpaths",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "exists": false,
+        "executable": false,
+        "realpath": ""
+      },
+      "result_value_pointer": ""
+    },
+    "host.whichPdd": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/whichPdd",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/repo",
+            "pathEnv": "/conda/bin:/usr/local/bin"
+          },
+          "result": {
+            "status": 0,
+            "stdout": "/conda/bin/pdd\n/usr/local/bin/pdd\n"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/repo",
+            "pathEnv": "/conda/bin:/usr/local/bin"
+          },
+          "result": {
+            "status": 0,
+            "stdout": "/conda/bin/pdd\n/usr/local/bin/pdd\n"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "host.probeVersion": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/probeVersion",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "command": "/conda/bin/pdd",
+            "cwd": "/repo"
+          },
+          "result": {
+            "status": 0,
+            "stdout": "pdd, version 0.0.50\n",
+            "timedOut": false
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "command": "/conda/bin/pdd",
+            "cwd": "/repo"
+          },
+          "result": {
+            "status": 0,
+            "stdout": "pdd, version 0.0.50\n",
+            "timedOut": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "setup-report-conflict",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "pathDiagnostic",
+      "input": {
+        "packageRoot": "/pkg",
+        "cwd": "/repo",
+        "env": {
+          "PATH": "/conda/bin:/usr/local/bin"
+        },
+        "mode": "setup",
+        "execPath": "/usr/bin/node"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines/0",
+          "op": "contains",
+          "value": "/pkg/bin/pdd.mjs (0.2.0)"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines/2",
+          "op": "contains",
+          "value": "1. /conda/bin/pdd"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines/3",
+          "op": "contains",
+          "value": "2. /usr/local/bin/pdd (this pdd, 0.2.0)"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines/4",
+          "op": "contains",
+          "value": "PATH selects: /conda/bin/pdd (pdd, version 0.0.50)"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/path-diagnostic-host-probeVersion",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "workflow-one-line-warning",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "pathDiagnostic",
+      "input": {
+        "packageRoot": "/pkg",
+        "cwd": "/repo",
+        "env": {
+          "PATH": "/conda/bin:/usr/local/bin"
+        },
+        "mode": "workflow",
+        "execPath": "/usr/bin/node"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines/0",
+          "op": "contains",
+          "value": "$PDD_BIN"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines/0",
+          "op": "contains",
+          "value": "/conda/bin/pdd"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "recursion-guard-skips-probe",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "pathDiagnostic",
+      "input": {
+        "packageRoot": "/pkg",
+        "cwd": "/repo",
+        "env": {
+          "PATH": "/conda/bin:/usr/local/bin",
+          "PDD_PATH_DIAGNOSTIC_PROBE": "1"
+        },
+        "mode": "setup",
+        "execPath": "/usr/bin/node"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/path-diagnostic-host-whichPdd",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/path-diagnostic-host-probeVersion",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "invalid-mode-error",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "pathDiagnostic",
+      "input": {
+        "packageRoot": "/pkg",
+        "cwd": "/repo",
+        "env": {
+          "PATH": "/usr/local/bin"
+        },
+        "mode": "unknown"
+      },
+      "expected_error": "invalid_path_diagnostic_mode",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_path_diagnostic_mode"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

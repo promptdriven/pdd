@@ -1,0 +1,557 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-story-card-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`storyCard` renders the issue title, asked text, verdict, Story criteria, test cases table, changed prompts and `ask-code` next-step footer, and fails with `invalid_story_card_input` when `root` is empty."
+    },
+    {
+      "id": "AC2",
+      "text": "`storyFingerprint` computes the Story SHA-256 and the canonical decision SHA-256 of test `{criteria, cases}`, and fails with `invalid_story_fingerprint_input` when `root` is empty."
+    },
+    {
+      "id": "AC3",
+      "text": "`fingerprintChanges` reports criterion additions/removals and test case expected-value changes, and fails with `invalid_fingerprint_input` when a row path is empty."
+    },
+    {
+      "id": "AC4",
+      "text": "`fullCheckPass` reconciles `batch.json` and `summary.json` against `preflight.findTests` and `preflight.captureSource`, returning `pass: true` when all discovered tests and changed prompts match a passing snapshot, and fails with `invalid_full_check_input` when `root` or `stateDir` is empty."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/user_stories/greet.md": {
+        "content": "# Greet user\n\n## Acceptance criteria\n\n1. Greets Alice.\n\n## What must not change\n\nKeep CLI exit codes.\n",
+        "is_symlink": false
+      },
+      "/repo/test/runtime/greet.json": {
+        "content": "{\"story_path\":\"user_stories/greet.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"Greets Alice.\"}],\"steps\":[{\"step_id\":\"greet-alice\",\"input\":{\"name\":\"Alice\"},\"checks\":[{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/greeting\",\"op\":\"equals\",\"value\":\"Hello, Alice!\"}]}]}\n",
+        "is_symlink": false
+      },
+      "/state/batches/20261110-120000-check/batch.json": {
+        "content": "{\"intent\":\"check\",\"root\":\"/repo\",\"created_at\":\"2026-11-10T12:00:00Z\",\"source_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"tests\":[{\"path\":\"test/runtime/greet.json\",\"state\":\"passed\",\"criteria\":{\"total\":1,\"passed\":1}}],\"contract_snapshots\":[{\"story_path\":\"user_stories/greet.md\",\"tests\":[\"test/runtime/greet.json\"],\"files\":[{\"path\":\"prompts/cli/greet.prompt.md\",\"sha256\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},{\"path\":\"user_stories/greet.md\",\"sha256\":\"5d5dad9c5d189586f1256a1e9207f467fdada63a75da7524719994813e1342ab\"},{\"path\":\"test/runtime/greet.json\",\"sha256\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"}]}]}\n",
+        "is_symlink": false
+      },
+      "/state/batches/20261110-120000-check/summary.json": {
+        "content": "{\"batch\":\"20261110-120000-check\",\"repo\":\"/repo\",\"source_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"tests\":[{\"path\":\"test/runtime/greet.json\",\"state\":\"passed\",\"criteria\":{\"total\":1,\"passed\":1}}]}\n",
+        "is_symlink": false
+      }
+    },
+    "realpaths": [
+      {
+        "path": "/repo",
+        "reply": {
+          "realpath": "/repo"
+        }
+      },
+      {
+        "path": "/repo/user_stories/greet.md",
+        "reply": {
+          "realpath": "/repo/user_stories/greet.md"
+        }
+      },
+      {
+        "path": "/repo/test/runtime/greet.json",
+        "reply": {
+          "realpath": "/repo/test/runtime/greet.json"
+        }
+      }
+    ],
+    "dirs": [
+      {
+        "path": "/state/batches",
+        "reply": {
+          "entries": [
+            "20261110-120000-check"
+          ]
+        }
+      }
+    ],
+    "calls": {
+      "findTests": 0,
+      "captureSource": 0
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "fs.realpath": {
+      "action": "collection.get",
+      "world_pointer": "/realpaths",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "realpath": ""
+      },
+      "result_value_pointer": ""
+    },
+    "fs.readdir": {
+      "action": "collection.get",
+      "world_pointer": "/dirs",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "entries": []
+      },
+      "result_value_pointer": ""
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    },
+    "preflight.findTests": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/findTests",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo",
+            "excludeFixtureProjects": true
+          },
+          "result": {
+            "tests": [
+              "test/runtime/greet.json"
+            ],
+            "untestedStories": [],
+            "error": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "preflight.captureSource": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/captureSource",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo",
+            "tests": [
+              "test/runtime/greet.json"
+            ]
+          },
+          "result": {
+            "source_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "contract_snapshots": [
+              {
+                "story_path": "user_stories/greet.md",
+                "tests": [
+                  "test/runtime/greet.json"
+                ],
+                "files": [
+                  {
+                    "path": "prompts/cli/greet.prompt.md",
+                    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                  },
+                  {
+                    "path": "user_stories/greet.md",
+                    "sha256": "5d5dad9c5d189586f1256a1e9207f467fdada63a75da7524719994813e1342ab"
+                  },
+                  {
+                    "path": "test/runtime/greet.json",
+                    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                  }
+                ]
+              }
+            ],
+            "error": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "render-story-card",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "storyCard",
+      "input": {
+        "run": {
+          "repository": "org/repo",
+          "number": 42,
+          "title": "Add greeting",
+          "url": "https://github.com/org/repo/issues/42",
+          "issue": {
+            "asked": "> Please greet Alice by name."
+          },
+          "steps": [
+            {
+              "summary": "Verdict: ready for review."
+            }
+          ],
+          "areas": [
+            {
+              "name": "story",
+              "gate": "pr",
+              "then": "ask-code"
+            },
+            {
+              "name": "code",
+              "gate": "pr"
+            }
+          ]
+        },
+        "root": "/repo",
+        "changed": [
+          "prompts/cli/greet.prompt.md",
+          "user_stories/greet.md",
+          "test/runtime/greet.json"
+        ],
+        "prompts": [
+          {
+            "path": "prompts/cli/greet.prompt.md",
+            "added": 12,
+            "removed": 2
+          }
+        ],
+        "through": "code"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "Story card: org/repo#42 \"Add greeting\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "Asked: \"Please greet Alice by name.\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "Verdict: ready for review."
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "Next step: when the check passes in full, pdd opens PR 1, then makes the code PR."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "story-card-empty-root",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "storyCard",
+      "input": {
+        "run": {
+          "repository": "org/repo",
+          "number": 42,
+          "title": "Add greeting",
+          "url": "https://github.com/org/repo/issues/42"
+        },
+        "root": "",
+        "changed": [],
+        "prompts": []
+      },
+      "expected_error": "invalid_story_card_input",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_story_card_input"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "compute-story-fingerprint",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "storyFingerprint",
+      "input": {
+        "root": "/repo",
+        "changed": [
+          "user_stories/greet.md",
+          "test/runtime/greet.json"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stories/0/path",
+          "op": "equals",
+          "value": "user_stories/greet.md"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stories/0/sha256",
+          "op": "equals",
+          "value": "5d5dad9c5d189586f1256a1e9207f467fdada63a75da7524719994813e1342ab"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/tests/0/path",
+          "op": "equals",
+          "value": "test/runtime/greet.json"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/tests/0/sha256",
+          "op": "equals",
+          "value": "9d649070c88e2005d891638e0af177eb82e971ff78da15df31a449dbe3d5110c"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "story-fingerprint-empty-root",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "storyFingerprint",
+      "input": {
+        "root": "",
+        "changed": []
+      },
+      "expected_error": "invalid_story_fingerprint_input",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_story_fingerprint_input"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "diff-fingerprint-changes",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "fingerprintChanges",
+      "input": {
+        "saved": {
+          "stories": [
+            {
+              "path": "user_stories/greet.md",
+              "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "criteria": [
+                "1. Greets Alice."
+              ]
+            }
+          ],
+          "tests": [
+            {
+              "path": "test/runtime/greet.json",
+              "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "cases": [
+                {
+                  "case": "greet-alice",
+                  "expected": "AC1 /greeting equals \"Hi, Alice!\""
+                }
+              ]
+            }
+          ]
+        },
+        "current": {
+          "stories": [
+            {
+              "path": "user_stories/greet.md",
+              "sha256": "5d5dad9c5d189586f1256a1e9207f467fdada63a75da7524719994813e1342ab",
+              "criteria": [
+                "1. Greets Alice.",
+                "2. Rejects empty name."
+              ]
+            }
+          ],
+          "tests": [
+            {
+              "path": "test/runtime/greet.json",
+              "sha256": "9d649070c88e2005d891638e0af177eb82e971ff78da15df31a449dbe3d5110c",
+              "cases": [
+                {
+                  "case": "greet-alice",
+                  "expected": "AC1 /greeting equals \"Hello, Alice!\""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines/0",
+          "op": "equals",
+          "value": "Story changed: user_stories/greet.md"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines/1",
+          "op": "equals",
+          "value": "  + 2. Rejects empty name."
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines/2",
+          "op": "contains",
+          "value": "case greet-alice: expected was AC1 /greeting equals \"Hi, Alice!\"; now AC1 /greeting equals \"Hello, Alice!\""
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "fingerprint-changes-empty-path",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "fingerprintChanges",
+      "input": {
+        "saved": {
+          "stories": [
+            {
+              "path": "",
+              "sha256": null,
+              "criteria": []
+            }
+          ],
+          "tests": []
+        },
+        "current": {
+          "stories": [],
+          "tests": []
+        }
+      },
+      "expected_error": "invalid_fingerprint_input",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_fingerprint_input"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "full-check-pass-verified",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "fullCheckPass",
+      "input": {
+        "root": "/repo",
+        "since": "2026-11-10T00:00:00Z",
+        "tests": [
+          "test/runtime/greet.json"
+        ],
+        "prompts": [
+          "prompts/cli/greet.prompt.md"
+        ],
+        "stories": [
+          "user_stories/greet.md"
+        ],
+        "stateDir": "/state"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/tests/0/batch",
+          "op": "equals",
+          "value": "20261110-120000-check"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/problems",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-story-card-preflight-findTests",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-story-card-preflight-captureSource",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "full-check-pass-empty-root",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "fullCheckPass",
+      "input": {
+        "root": "",
+        "since": "2026-11-10T00:00:00Z",
+        "tests": [],
+        "prompts": [],
+        "stories": [],
+        "stateDir": "/state"
+      },
+      "expected_error": "invalid_full_check_input",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid_full_check_input"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
