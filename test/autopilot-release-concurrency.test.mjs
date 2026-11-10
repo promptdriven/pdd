@@ -146,7 +146,13 @@ test("3157: public release keeps a concurrent stop and fresh replacement cache",
 });
 
 
-for (const [name, emptyLatestCache] of [["the exact cached era", false], ["an empty latest cache", true]]) test("3157: public release blocks an older tick from restoring " + name, async t => {
+const releaseTickCases = [
+  {name:"the exact cached era", invocation:"complete"},
+  {name:"an empty latest cache", invocation:"complete", emptyLatestCache:true},
+  {name:"an absent invocation cache", invocation:"absent"},
+  {name:"an incomplete invocation cache", invocation:"incomplete"},
+];
+for (const {name, invocation, emptyLatestCache = false} of releaseTickCases) test("3157: public release blocks an older tick from restoring " + name, async t => {
   const f = await fixture(t, {agent:"codex"});
   const now = () => f.clock;
   const github = createGithubRepoFake({repository:repo, owner:"example", issues:18, now});
@@ -159,13 +165,16 @@ for (const [name, emptyLatestCache] of [["the exact cached era", false], ["an em
   const issue = "https://github.com/" + repo + "/issues/17";
   const cached = {issue, owner:coordinatorId, coordinatorId, machine, active:false,
     commentId:String(first.commentId), labelEventId:String(first.eventId)};
+  const incomplete = {issue, owner:coordinatorId, coordinatorId, machine, active:false, commentId:String(first.commentId)};
+  const invocationClaims = invocation === "complete" ? [cached] : invocation === "incomplete" ? [incomplete] : null;
+  const invocationIntake = invocationClaims && {at:f.clock,eligible:[],groups:[],claims:invocationClaims};
   writeFileSync(join(f.source, "pdd.json"), JSON.stringify({autopilot:{mode:"observe",trust:[]}}));
   writeFileSync(stateFile, JSON.stringify({enabled:true, defaultBranch:"main", baseBranch:"main", stateFile,
     cwd:f.source, repo, packageRoot, runs:1, coordinatorId, machine, controlRevision:"before-release", activatedAt:1,
     agent:{id:"codex",kind:"codex",command:"codex"}, environment:f.ports.env, recipeDelivered:true,
-    githubIntake:{at:f.clock,eligible:[],groups:[],claims:[cached]}, parkedNumbers:[17,99]}));
-  let tickReached, continueTick, emptied = false;
-  const tickAtIntake = new Promise(resolve => { tickReached = resolve; });
+    ...(invocationIntake ? {githubIntake:invocationIntake} : {}), parkedNumbers:[17,99]}));
+  let tickReached, continueTick, emptied = false, intakeRead = false, tickPaused = false;
+  const tickWithClaim = new Promise(resolve => { tickReached = resolve; });
   const tickMayFinish = new Promise(resolve => { continueTick = resolve; });
   const originalExec = f.ports.execFile;
   const fakeExec = async (file, args, options={}) => {
@@ -190,27 +199,31 @@ for (const [name, emptyLatestCache] of [["the exact cached era", false], ["an em
       if (file === "gh" && args[0] === "repo") return {code:0, stdout:JSON.stringify({nameWithOwner:repo,url:"https://github.com/" + repo,defaultBranchRef:{name:"main"}}), stderr:""};
       return {code:0,...await f.ports.execFile(file,args,options)};
     },
-    tidyRuns:async()=>{}, listRuns:async()=>[], readRunProgress:async()=>[], readEnvironmentWaits:async()=>[],
-    reconcileDependencyIntake:async()=>{
-      tickReached();
-      await tickMayFinish;
-      return {eligible:[],claims:[cached],groups:[],queued:[],skipped:[]};
-    },
+    tidyRuns:async()=>{}, listRuns:async()=>{
+      if (!tickPaused && intakeRead) {
+        tickPaused = true;
+        tickReached();
+        await tickMayFinish;
+      }
+      return [];
+    }, readRunProgress:async()=>[], readEnvironmentWaits:async()=>[],
+    reconcileDependencyIntake:async()=>{ intakeRead = true; return {eligible:[],claims:[cached],groups:[],queued:[],skipped:[]}; },
     queryIssues:async()=>({status:304}), sendDigest:async()=>({exitCode:0}), sendAlert:async()=>({exitCode:0}),
     readAttention:async()=>[], warn:()=>{},
   };
   const ticking = tickAutopilot(stateFile, ports);
-  await tickAtIntake;
+  await tickWithClaim;
   const released = await runAutopilotLauncher({command:"release", cwd:f.source, env:f.ports.env, issues:["17"]}, ports);
   assert.equal(released.exitCode, 0, released.message);
   assert.equal(emptied, emptyLatestCache, "the controlled cache transition ran only for the empty-cache ordering");
+  const expectedClaims = emptyLatestCache || invocation === "complete" ? [] : invocationClaims ?? [];
   const releasedState = JSON.parse(readFileSync(stateFile, "utf8"));
-  assert.deepEqual(releasedState.githubIntake.claims, [], "release keeps the current cache clear before the held tick continues");
-  assert.notEqual(releasedState.controlRevision, "before-release", "the successful release invalidates an older tick control snapshot");
+  assert.deepEqual(releasedState.githubIntake?.claims ?? [], expectedClaims, "release only prunes a complete exact cached era before the held tick continues");
   continueTick();
   await ticking;
   const latest = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.deepEqual(latest.githubIntake?.claims ?? [], expectedClaims, "an older tick must not restore the released cache");
+  assert.notEqual(releasedState.controlRevision, "before-release", "the successful release invalidates an older tick control snapshot");
   assert.equal(latest.controlRevision, releasedState.controlRevision, "the older tick cannot replace the released control revision");
-  assert.deepEqual(latest.githubIntake.claims, [], "an older tick must not restore the released cache");
   assert.deepEqual(latest.parkedNumbers, [17,99], "the release does not replace unrelated cached reservations");
 });
