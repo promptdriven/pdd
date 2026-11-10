@@ -125,7 +125,6 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     const owners = json(ownerReply.json); const snapshot = read.snapshot;
     if (settings.mode === 'off') return { allowed: false, reason: 'off' };
     if (settings.healthPaused === true) return { allowed: false, reason: 'health' };
-    if (settings.parkingWakePending?.length) return {allowed: false, reason: 'runs'};
     const key = issueKey(issue);
     const selected = key && root(key, repository) ? key : null;
     const claim = selected && (owners.claims || []).find(x => issueKey(x.issue) === selected && x.active);

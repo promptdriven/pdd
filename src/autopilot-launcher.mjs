@@ -1964,7 +1964,9 @@ async function runTick(stateFile, ports, completion) {
       for (const item of [...fresh]) {
         const group = (state.githubIntake?.groups ?? []).find(group => group.members?.some(key => Number(/\/issues\/(\d+)$/.exec(key)?.[1]) === item.number));
         const retained = group && existing.find(run => !['completed', 'cancelled'].includes(run.state) && group.members.includes(run.issue?.url));
-        if (!retained && !state.parking?.wakePending?.length) continue;
+        const {working, limit} = state.parking ?? {};
+        const wakeBlocksFresh = state.parking?.wakePending?.length && (!Number.isSafeInteger(working) || !Number.isSafeInteger(limit) || working < 0 || limit < 1 || working >= limit);
+        if (!retained && !wakeBlocksFresh) continue;
         if (retained) {
           const request = `Issue #${item.number} belongs to this run's root-cause group. Keep it with this run and its saved work.\n${JSON.stringify(item)}`;
           await p.scanAction(() => changeRun({ref: String(retained.number), cwd: state.cwd, packageRoot: state.packageRoot, text: request}, {...p, queueOnly: Boolean(retained.parking), requestKey: `group:${retained.runId}:${item.number}`, execFile: p.execFile ?? (async (file, args, options) => p.execute(file, args, options))}));
