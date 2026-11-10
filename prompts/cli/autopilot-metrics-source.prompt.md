@@ -32,9 +32,10 @@ every page. Only a local merged metric establishes Autopilot attribution; never
 move its occurrence time using mutable PR metadata. For a recorded Autopilot
 merge, a completed check run with matching `head_sha` and conclusion `failure`,
 `timed_out`, `action_required`, `startup_failure`, `cancelled` or `stale` records
-`merge-ci-red` at `completed_at`. A commit status with matching `sha` and state
-`failure` or `error` records it at `created_at` (a status is an immutable occurrence).
-A missing or foreign SHA supplies no evidence. Check/status observations dedupe
+`merge-ci-red` at `completed_at`. Commit statuses returned by the exact-SHA endpoint with state `failure` or
+`error` record it at `created_at` (a status is an immutable occurrence). The
+endpoint binds normal status objects, which omit `sha`; reject an explicitly
+foreign `sha` when supplied. Check runs require a matching `head_sha`. Check/status observations dedupe
 by issue and reporting day through the scorecard. Reverts and BAD audits require
 explicit hook records with discovery time. Independent GitHub read failures stay
 local and do not suppress the other CI source. Do not emit raw bodies, names or

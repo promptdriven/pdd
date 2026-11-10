@@ -381,7 +381,9 @@ job also preserve its actual `started` and saved agent/PR work timestamps, so
 upgrading a surviving job retains known work without inventing earlier steps.
 
 After confirming the PR matches the job head, record only allowlisted fixed
-Evidence lines from the result/PR body at first local observation. Keep the
+Evidence lines from the result/PR body at first local observation. Any malformed
+Evidence line in that observation rejects the whole set; never discard a
+conflicting malformed line while retaining a pass. Keep the
 observed `(head, evidence)` signatures on the job: unchanged lines never create
 new check events on later ticks. Newly observed evidence has the current time,
 never a mutable PR/comment timestamp or a caller-supplied backdated time. No line

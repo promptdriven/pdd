@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: f97de7377cedddb83779e40b353d507696a028b38e3fbabcb309502abaa4efb4).
+// Generated from prompts/cli/autopilot-core.prompt.md.
 import * as nativeFs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand
 import { fileReport, listReportDrafts } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
+import { recordAutopilotMetric } from './autopilot-metrics-source.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -159,6 +160,13 @@ function context({ state, settings, budget }, ports) {
   const ctx = { state, settings, budget, ports, fs, now, root, dirs, repo, gh, jobs, git, owners, heartbeat, execFile, counts: { started: 0, merged: 0, ended: 0, repairs: 0 },
     timeout: settings.jobTimeoutMinutes * MIN, pdd: join(state.packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs'), skip: new Set(), warn: ports.warn ?? (() => {}) };
   ctx.saveJob = job => save(fs, join(dirs.jobs, `${job.issue}.json`), job);
+  ctx.metric = (job, kind, fields = {}) => {
+    try { recordAutopilotMetric({ root, repo, issue: job.issue, kind, at: now(), ...(job.pr ? { pr: job.pr } : {}), ...fields }, { fs }); return true; }
+    catch { ctx.warn(`Autopilot core metric of #${job.issue} could not be recorded`); return false; }
+  };
+  ctx.saveMetricJob = job => {
+    try { ctx.saveJob(job); } catch { ctx.warn(`Autopilot core metric bookkeeping of #${job.issue} could not be saved`); }
+  };
   ctx.comment = (number, body) => gh.ok('POST', `repos/${repo}/issues/${number}/comments`, { body: safeBody(body) });
   let warned = false;
   ctx.machineState = () => readMachine(fs, root, text => { if (!warned) { warned = true; ctx.warn(text); } }, now());
@@ -349,6 +357,7 @@ function startJob(ctx, job, role, cwd, prompt, command = null) {
   ctx.fs.mkdirSync(ctx.dirs.logs, { recursive: true, mode: 0o700 });
   const result = join(ctx.dirs.logs, `${id}.result.json`);
   const run = command ?? agentCommand(ctx.state.agent);
+  ctx.metric(job, 'worked');
   return ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
     env: jobEnvironment(ctx.ports.env ?? process.env), issue: job.issue, role, branch: job.branch, head: job.head });
 }
@@ -394,6 +403,7 @@ async function intake(ctx, rows) {
     const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
       branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), deadline: ctx.now() + ctx.timeout };
     ctx.saveJob(job);
+    ctx.metric(job, 'started', { at: job.started });
     try { job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result)); ctx.saveJob(job); ctx.counts.started++; free--; }
     catch (error) {
       await end(ctx, job, cause('job', 'no-result', `the agent could not start: ${oneLine(error.message)}`))
@@ -468,6 +478,19 @@ async function suiteState(ctx, job) {
 }
 function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent, job.suite?.agent]) if (part) ctx.jobs.stop(part); }
 
+function recordEvidence(ctx, job, body) {
+  const value = '(?:pass|fail|not-run)(?: \\(\\d+/\\d+\\))?';
+  const fixed = new RegExp(`^Evidence: runtime=${value}; vectors=${value}; formal=${value}; tests=${value}$`);
+  const lines = typeof body === 'string' ? body.split(/\r?\n/).map(line => line.trim()).filter(line => line.startsWith('Evidence:')) : [];
+  if (!lines.length || lines.some(line => !fixed.test(line))) return;
+  const evidence = lines.join('\n');
+  const signature = JSON.stringify([job.head, evidence]);
+  if (job.metricEvidence?.includes(signature)) return;
+  if (ctx.metric(job, 'evidence', { head: job.head, evidence })) {
+    job.metricEvidence = [...(job.metricEvidence ?? []), signature]; ctx.saveMetricJob(job);
+  }
+}
+
 async function mergeCheck(ctx, job) {
   const { gh, repo, state, settings } = ctx;
   // A merged PR is a merge, also past the deadline: END never runs on a merged issue.
@@ -489,6 +512,7 @@ async function mergeCheck(ctx, job) {
     return end(ctx, job, cause('job', 'head-moved', `PR #${job.pr} is at head ${short(pr.head?.sha)} of ${pr.head?.ref} into ${pr.base?.ref}, not the job head ${short(job.head)} of ${job.branch} into ${state.baseBranch}`));
   // "Runtime: not run" is allowed and files no report by itself; a Runtime report comes only from a failed job
   // whose cause kind is runtime (END).
+  recordEvidence(ctx, job, pr.body);
   job.runtime = normalRuntime(job.runtime);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge.
   const reds = runtimeReds(pr.body, job.runtime, job.promptChanged);
@@ -505,6 +529,9 @@ async function mergeCheck(ctx, job) {
   }
   if (reds.length) return repairOrEnd(ctx, job, reds);
   if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
+  if (ci.state === 'green' && job.metricValidatedHead !== job.head && ctx.metric(job, 'validated', {
+    head: job.head, validation: { review: { head: job.head, verdict: 'PASS', fresh: true }, tests: { head: job.head, state: 'pass' }, ci: { head: job.head, state: 'pass' } }
+  })) { job.metricValidatedHead = job.head; ctx.saveMetricJob(job); }
   // The head must contain the current base tip, so that what merges is what was tested.
   const compare = await gh.ok('GET', `repos/${repo}/compare/${encodeURIComponent(state.baseBranch)}...${job.head}`);
   if (!(compare?.behind_by === 0)) return refreshBase(ctx, job);
@@ -526,6 +553,7 @@ async function mergeCheck(ctx, job) {
   }
   const merged = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
   if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false }); ctx.saveJob(job); return; }
+  job.autopilotMerge = { head: job.head, at: ctx.now() }; ctx.saveMetricJob(job);
   return finishMerge(ctx, job);
 }
 function repairOrEnd(ctx, job, reds) {
@@ -555,7 +583,12 @@ async function refreshBase(ctx, job) {
 }
 async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
-  if (!(read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`)).merged) { job.lastError = 'the merge is not confirmed'; ctx.saveJob(job); return; }
+  const pr = read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`);
+  if (!pr.merged) { job.lastError = 'the merge is not confirmed'; ctx.saveJob(job); return; }
+  if (job.autopilotMerge?.head === job.head && pr.head?.sha === job.head) {
+    const mergedAt = Date.parse(pr.merged_at);
+    ctx.metric(job, 'merged', { head: job.head, at: Number.isFinite(mergedAt) ? mergedAt : job.autopilotMerge.at });
+  }
   const issue = await gh.ok('GET', `repos/${repo}/issues/${job.issue}`);
   if (issue.state === 'open') await gh.ok('PATCH', `repos/${repo}/issues/${job.issue}`, { state: 'closed', state_reason: 'completed' });
   if (labelsOf(issue).includes('pdd:working')) await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
@@ -735,6 +768,10 @@ async function finishLocal(ctx, job, outcome, text) {
   // Each step has its own error boundary; the job file goes last in all cases, so a failed step never keeps a job.
   const step = async (name, action) => { try { await action(); } catch (error) { ctx.warn(`Autopilot core cleanup of #${job.issue} (${name}): ${error.message}`); } };
   try {
+    ctx.metric(job, 'started', { at: job.started });
+    ctx.metric(job, 'worked');
+    for (const at of [job.prAt, job.agent?.started, job.review?.agent?.started, job.suite?.agent?.started])
+      if (Number.isFinite(at)) ctx.metric(job, 'worked', { at });
     ctx.skip.add(job.issue);
     await step('processes', () => stopChecks(ctx, job));
     const mine = name => name === String(job.issue) || name.startsWith(`${job.issue}-`) || name.startsWith(`${job.issue}.`);
@@ -756,6 +793,7 @@ async function finishLocal(ctx, job, outcome, text) {
 const stopReason = row => !row ? 'the issue is closed' : !labelsOf(row).includes('pdd:working') ? 'pdd:working was removed'
   : labelsOf(row).includes('pdd:stuck') ? 'pdd:stuck was added' : row.assignees?.length ? 'the issue was assigned to a person' : null;
 async function advance(ctx, job) {
+  ctx.metric(job, 'worked');
   if (job.phase === 'ending') return continueEnd(ctx, job);
   if (ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES)
     return end(ctx, job, cause('job', 'claim-expired', `the claim expired: no heartbeat for ${((ctx.now() - job.claim.lastSeen) / HOUR).toFixed(1)} hours (the tick did not run, for example while the machine slept)`));
@@ -777,6 +815,7 @@ async function advance(ctx, job) {
       prAt: ctx.now(), deadline: ctx.now() + ctx.timeout });
     delete job.lastError; delete job.lastErrorTool;
     ctx.saveJob(job); ctx.produced();
+    recordEvidence(ctx, job, r.evidence);
     return mergeCheck(ctx, job);
   }
   if (object(r) && r.outcome === 'failed') {

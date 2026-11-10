@@ -10,6 +10,8 @@ const head='a'.repeat(40), stale='b'.repeat(40), merge='c'.repeat(40);
 const at='2026-11-10T12:00:00Z', observedAt='2026-11-11T10:00:00Z';
 const evidence='Evidence: runtime=pass (2/2); vectors=pass (3/3); formal=not-run; tests=pass';
 const comment=(sha=head)=>({created_at:at,body:`Autopilot merge check passed for head ${sha}.\n- CI: green (2 check(s))\n- Full test suite: pass\n- Review: PASS from a fresh reviewer\n${evidence}\n<!-- pdd:autopilot-core:merge:${sha} -->`});
+const metric=(kind,extra={})=>({metric:{repo:'owner/alpha',issue:1,kind,at,pr:10,head,...extra}});
+const validation={review:{head,verdict:'PASS',fresh:true},tests:{head,state:'pass'},ci:{head,state:'pass'}};
 const rows=report=>Object.fromEntries(report.rows.map(row=>[row.key,row.day]));
 function world(t) {
   const root=fs.mkdtempSync(join(tmpdir(),'autopilot-metrics-')); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -27,9 +29,9 @@ function world(t) {
   return {root,core,save,add,calls,ports:{stateRoot:root,github},read:ports=>readAutopilotMetrics({timezone:'UTC',observedAt},{stateRoot:root,github,...ports})};
 }
 
-test('reads core jobs/history, ignores corrupt lines, deduplicates and collects core PR evidence',async t=>{
+test('reads core jobs/history, ignores corrupt lines and deduplicates durable local evidence',async t=>{
   const w=world(t);
-  w.save(join(w.core,'history.jsonl'),`{broken\n${JSON.stringify({at:Date.parse('2026-11-09T11:00:00Z'),issue:1,outcome:'merged',pr:10})}\n`);
+  w.save(join(w.core,'history.jsonl'),`{broken\n${[metric('merged',{at:'2026-11-10T13:00:00Z'}),metric('evidence',{evidence}),metric('validated',{validation})].map(row=>JSON.stringify(row)).join('\n')}\n`);
   w.save(join(w.core,'jobs','1.json'),{schema:'pdd.core-job.v1',issue:1,started:Date.parse('2026-11-10T09:00:00Z'),prAt:Date.parse(at),pr:10,head,agent:{started:Date.parse(at)}});
   const other=w.add('b'.repeat(20),'owner/beta'); w.save(join(other,'jobs','1.json'),{schema:'pdd.core-job.v1',issue:1,started:Date.parse(at)});
   const report=await w.read();
@@ -38,7 +40,7 @@ test('reads core jobs/history, ignores corrupt lines, deduplicates and collects 
 });
 
 test('missing evidence never implies Runtime/vector/formal success or validation',async t=>{
-  const w=world(t); w.save(join(w.core,'history.jsonl'),JSON.stringify({at:Date.parse(at),issue:1,outcome:'merged',pr:10}));
+  const w=world(t); w.save(join(w.core,'history.jsonl'),JSON.stringify(metric('merged')));
   const report=await w.read({github:async(repo,path)=>path === 'pulls/10' ? {head:{sha:head},body:'Runtime: PASS',updated_at:at} : path.includes('comments') ? [{...comment(),body:comment().body.replace(evidence,'')}] : {check_runs:[]}});
   assert.equal(rows(report).runtime,0); assert.equal(rows(report).vectors,0); assert.equal(rows(report).formal,0); assert.equal(rows(report).validated,0); assert.equal(rows(report).merged,1);
 });
@@ -53,13 +55,13 @@ test('stale review heads, absent/red CI and manual PR merges cannot establish va
 });
 
 test('foreign merge-commit CI and unrecorded prior merges never count regressions',async t=>{
-  const w=world(t); w.save(join(w.core,'history.jsonl'),JSON.stringify({at:Date.parse(at),issue:1,outcome:'merged',pr:10}));
+  const w=world(t); w.save(join(w.core,'history.jsonl'),JSON.stringify(metric('merged')));
   const report=await w.read({github:async(repo,path)=>path.includes('check-runs') ? {check_runs:[{head_sha:stale,status:'completed',conclusion:'failure',completed_at:at}]} : w.ports.github(repo,path)});
   assert.equal(rows(report).regressions,0);
 });
 
-test('PR merge time refines cleanup history across the 09:00 boundary without double counting',async t=>{
-  const w=world(t); w.save(join(w.core,'history.jsonl'),JSON.stringify({at:Date.parse('2026-11-10T09:01:00Z'),issue:1,outcome:'merged',pr:10}));
+test('durable merge time survives cleanup across the 09:00 boundary without double counting',async t=>{
+  const w=world(t); w.save(join(w.core,'history.jsonl'),[JSON.stringify({at:Date.parse('2026-11-10T09:01:00Z'),issue:1,outcome:'merged',pr:10}),JSON.stringify(metric('merged',{at:'2026-11-10T08:59:00Z'}))].join('\n'));
   const report=await w.read({github:async(repo,path)=>path === 'pulls/10' ? {head:{sha:head},merged_at:'2026-11-10T08:59:00Z'} : []});
   assert.equal(rows(report).merged,0);
   assert.equal(rows(report).worked,1);
@@ -70,7 +72,7 @@ test('merge-check comment followed by manual merge cannot credit Autopilot or it
   const w=world(t);
   w.save(join(w.core,'jobs','1.json'),{schema:'pdd.core-job.v1',issue:1,started:Date.parse(at),pr:10,head});
   const report=await w.read();
-  assert.equal(rows(report).validated,1);
+  assert.equal(rows(report).validated,0);
   assert.equal(rows(report).merged,0);
   assert.equal(rows(report).regressions,0);
 });
@@ -86,7 +88,7 @@ test('hook preserves starts and BAD/revert discoveries after cleanup without lea
 
 test('reader skips symlinks and never follows saved job log/worktree paths',async t=>{
   const w=world(t), other=w.add('b'.repeat(20),'owner/beta');
-  w.save(join(other,'history.jsonl'),JSON.stringify({at:Date.parse(at),issue:5,outcome:'merged'}));
+  w.save(join(other,'history.jsonl'),JSON.stringify({metric:{repo:'owner/beta',issue:5,kind:'merged',at}}));
   fs.symlinkSync(join(other,'history.jsonl'),join(w.core,'history.jsonl'));
   w.save(join(w.core,'jobs','1.json'),{schema:'pdd.core-job.v1',issue:1,started:Date.parse(at),agent:{log:'/outside/private',result:'/outside/private'},worktree:'/outside/private'});
   const report=await w.read(); assert.equal(rows(report).merged,1); assert.equal(rows(report).started,1);
@@ -97,13 +99,14 @@ test('missing local state is zero and storage permission errors are exposed',asy
   await assert.rejects(()=>w.read({fs:{lstatSync(){throw Object.assign(Error('denied'),{code:'EACCES'})}}}),/denied/);
 });
 
-test('native adapter collects paginated comments and checks through a fake process',async t=>{
+test('native adapter collects paginated check runs and commit statuses through a fake process',async t=>{
   const w=world(t), calls=[];
-  w.save(join(w.core,'history.jsonl'),JSON.stringify({at:Date.parse(at),issue:1,outcome:'merged',pr:10}));
+  w.save(join(w.core,'history.jsonl'),JSON.stringify(metric('merged')));
+  recordAutopilotMetric({root:w.core,repo:'owner/alpha',issue:1,kind:'validated',at,pr:10,head,validation});
   const report=await w.read({github:undefined,execFile:async(file,args)=>{
     calls.push([file,args]);
     const endpoint=args.at(-1);
-    if(endpoint.includes('/comments')) return {stdout:JSON.stringify([[],[comment()]])};
+    if(endpoint.includes('/statuses')) return {stdout:JSON.stringify([[],[{sha:merge,state:'error',created_at:'2026-11-10T14:00:00Z'}]])};
     if(endpoint.includes('/check-runs')) return {stdout:JSON.stringify([{check_runs:[]},{check_runs:[{head_sha:merge,status:'completed',conclusion:'failure',completed_at:'2026-11-10T14:00:00Z'}]}])};
     return {stdout:JSON.stringify([{head:{sha:head},merged_at:'2026-11-10T13:00:00Z',merge_commit_sha:merge}])};
   }});

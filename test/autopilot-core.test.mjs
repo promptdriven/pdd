@@ -1007,7 +1007,7 @@ test('R21 a cut history line, with or without a newline, is skipped; the per-iss
 test('R22 a start that throws is a no-result end: 3 in a row pause intake at once; no issue is marked', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } });
   for (let n = 1; n <= 20; n++) w.issue(n);
-  const lines = () => existsSync(join(w.root, 'history.jsonl')) ? readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').length : 0;
+  const lines = () => existsSync(join(w.root, 'history.jsonl')) ? readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.outcome).length : 0;
   const r = await w.tick({ jobs: { ...w.jobs, start: () => { throw Error('ENOSPC: no space left on device'); } } });
   assert.ok(lines() <= 3, `at most 3 claims before the pause: ${lines()}`);
   assert.match(r.message, /paused/);

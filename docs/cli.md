@@ -870,9 +870,12 @@ own date/cohort selection and UTC default. Export/import cover the repository
 ledger; they do not transfer the local core scorecard.
 
 Core state is read from `~/.local/state/pdd/autopilot`. Completed core history
-without a recorded start cannot establish a start. The `recordAutopilotMetric`
-hook in `src/autopilot-metrics-source.mjs` lets core preserve starts, steps,
-evidence and regression discoveries in its history before removing job files.
+without a recorded start cannot establish a start. Core records starts, steps,
+per-head check observations, exact-head validation and explicit merge attribution
+in durable local history before removing job files. Pass evidence uses its first
+local observation time; editing PR text or a public comment cannot move or
+establish a pass. Regressions include failing check runs and commit statuses on
+the exact merge commit. Missing local attribution never credits a manual merge.
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 

@@ -109,3 +109,31 @@ test('measurement append failure stays local while real core lifecycle merges an
   assert.equal(w.github.merges.length,1);assert.equal(fs.existsSync(join(w.root,'jobs','17.json')),false);
   assert.ok(warnings.some(s=>/metric/i.test(s)));
 });
+
+test('R4 malformed duplicate Evidence lines cannot be filtered into a pass',async t=>{
+  const w=await lifecycle(t);w.issue(17);await w.tick();
+  w.build(17,{body:`Runtime: PASS\n${evidence}\nEvidence: runtime=maybe; vectors=pass; formal=pass; tests=pass`});
+  await w.tick();assert.equal(rows(await w.read()).runtime,0);
+});
+
+test('measurement bookkeeping save errors do not interrupt evidence, validation or merge cleanup',async t=>{
+  const w=await lifecycle(t);w.issue(17);await w.tick();w.build(17,{body:`Runtime: PASS\n${evidence}`});
+  const failed=new Set(), badFs={...fs,renameSync(from,to){
+    if(to === join(w.root,'jobs','17.json')) {
+      const job=JSON.parse(fs.readFileSync(from,'utf8'));
+      for(const key of ['metricEvidence','metricValidatedHead','autopilotMerge']) if(job[key] && !failed.has(key)) { failed.add(key);throw Error('measurement bookkeeping unavailable'); }
+    }
+    return fs.renameSync(from,to);
+  }};
+  await w.tick({fs:badFs});assert.ok(w.job(17,'review'),'measurement save cannot defer checks');
+  w.review(17,'PASS');w.suite(17);await w.tick({fs:badFs});
+  assert.equal(w.github.merges.length,1);assert.equal(fs.existsSync(join(w.root,'jobs','17.json')),false);
+  assert.deepEqual([...failed],['metricEvidence','metricValidatedHead','autopilotMerge']);
+});
+
+
+test('R5 native GitHub status objects bind to the requested merge SHA without a sha property',async t=>{
+  const w=fixture(t);recordAutopilotMetric({root:w.core,repo:'owner/repo',issue:1,kind:'merged',at:monday,pr:10,head});
+  const report=await w.read(async(repo,path)=>path === 'pulls/10' ? {head:{sha:head},merge_commit_sha:merge} : path.endsWith('/check-runs') ? {check_runs:[]} : [{id:123,state:'failure',context:'ci',created_at:tuesday}]);
+  assert.equal(rows(report).regressions,1);
+});

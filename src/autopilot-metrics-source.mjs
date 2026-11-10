@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {nativeGithubCounter} from './github-calls.mjs';
-import {calculateAutopilotMetrics,normalizeAutopilotMetric,parseAutopilotEvidence} from './autopilot-metrics.mjs';
+import {calculateAutopilotMetrics,normalizeAutopilotMetric} from './autopilot-metrics.mjs';
 
 const execute = nativeGithubCounter(promisify(execFile),{purpose:'other'});
 const validRepo = repo => typeof repo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repo) && !repo.split('/').some(part=>part === '.' || part === '..');
@@ -30,7 +30,7 @@ function json(raw) { try { return JSON.parse(raw); } catch { return null; } }
 async function nativeGithub(repo,path,run=execute) {
   const {stdout}=await run('gh',['api','--paginate','--slurp',`repos/${repo}/${path}?per_page=100`],{maxBuffer:16*1024*1024});
   const pages=JSON.parse(stdout);
-  if (path.endsWith('/comments')) return pages.flat();
+  if (path.endsWith('/statuses')) return pages.flat();
   if (path.endsWith('/check-runs')) return {check_runs:pages.flatMap(page=>page.check_runs ?? [])};
   return pages[0];
 }
@@ -69,8 +69,7 @@ export async function readAutopilotMetrics({timezone,observedAt},ports={}) {
         if (event?.repo !== repo) continue;
         events.push(event); associate(repo,event.issue,event.pr);
       } else if (['merged','ended','released','handed-over','abandoned','stopped'].includes(row?.outcome)) {
-        if (row.outcome === 'merged') add({repo,issue:row.issue,at:row.at,kind:'worked'});
-        add({repo,issue:row.issue,at:row.at,kind:row.outcome === 'merged' ? 'merged' : 'worked',...(validPr(row.pr) ? {pr:row.pr} : {})});
+        add({repo,issue:row.issue,at:row.at,kind:'worked',...(validPr(row.pr) ? {pr:row.pr} : {})});
         if (Number.isSafeInteger(row.issue) && row.issue > 0) associate(repo,row.issue,row.pr);
       }
     }
@@ -80,7 +79,6 @@ export async function readAutopilotMetrics({timezone,observedAt},ports={}) {
       if (job?.schema !== 'pdd.core-job.v1' || job.issue !== Number(file.slice(0,-5))) continue;
       add({repo,issue:job.issue,kind:'started',at:job.started});
       for (const at of [job.prAt,job.agent?.started,job.review?.agent?.started,job.suite?.agent?.started]) add({repo,issue:job.issue,kind:'worked',at});
-      if (typeof job.evidence === 'string') add({repo,issue:job.issue,kind:'evidence',at:job.prAt,evidence:job.evidence});
       associate(repo,job.issue,job.pr);
     }
   }
@@ -88,25 +86,15 @@ export async function readAutopilotMetrics({timezone,observedAt},ports={}) {
     let pull;
     try { pull=await github(repo,`pulls/${pr}`); } catch { continue; }
     if (!validHead(pull?.head?.sha)) continue;
-    const head=pull.head.sha.toLowerCase();
-    const actualMerge=normalizeAutopilotMetric({repo,issue:1,kind:'merged',at:pull.merged_at});
-    if (actualMerge) for (const event of events) if (event.repo === repo && event.pr === pr && event.kind === 'merged') event.at=actualMerge.at;
     const each = event => { for (const issue of issues) add({repo,issue,pr,...event}); };
-    if (typeof pull.body === 'string' && /^\s*Evidence:/m.test(pull.body)) each({kind:'evidence',at:pull.updated_at,head,evidence:pull.body});
-    let comments=[];
-    try { const rows=await github(repo,`issues/${pr}/comments`); if (Array.isArray(rows)) comments=rows; } catch { /* Missing observations are not success. */ }
-    for (const comment of comments) {
-      if (typeof comment?.body !== 'string') continue;
-      const lines=comment.body.split(/\r?\n/).map(line=>line.trim());
-      if (!lines.includes(`<!-- pdd:autopilot-core:merge:${head} -->`) || !lines.includes(`Autopilot merge check passed for head ${head}.`)) continue;
-      each({kind:'evidence',at:comment.created_at,head,evidence:comment.body});
-      if (parseAutopilotEvidence(comment.body).tests && lines.includes('- Full test suite: pass') && lines.includes('- Review: PASS from a fresh reviewer') && lines.some(line=>/^- CI: green \([1-9]\d* check\(s\)\)$/.test(line))) each({kind:'validated',at:comment.created_at,head,validation:{review:{head,verdict:'PASS',fresh:true},tests:{head,state:'pass'},ci:{head,state:'pass'}}});
-    }
     if (!validHead(pull.merge_commit_sha)) continue;
-    // A red merge commit is a regression only after our own merge is recorded.
-    let checks;
-    try { checks=await github(repo,`commits/${pull.merge_commit_sha}/check-runs`); } catch { continue; }
-    for (const check of checks?.check_runs ?? []) if (check.head_sha === pull.merge_commit_sha && check.status === 'completed' && ['failure','timed_out','action_required'].includes(check.conclusion)) each({kind:'regression',at:check.completed_at,reason:'merge-ci-red'});
+    // Each independent CI read can fail without hiding the other source.
+    const sha=pull.merge_commit_sha.toLowerCase();
+    let checks, statuses;
+    try { checks=await github(repo,`commits/${sha}/check-runs`); } catch { /* Not recorded. */ }
+    try { statuses=await github(repo,`commits/${sha}/statuses`); } catch { /* Not recorded. */ }
+    for (const check of checks?.check_runs ?? []) if (check.head_sha?.toLowerCase() === sha && check.status === 'completed' && ['failure','timed_out','action_required','startup_failure','cancelled','stale'].includes(check.conclusion)) each({kind:'regression',at:check.completed_at,reason:'merge-ci-red'});
+    for (const status of Array.isArray(statuses) ? statuses : []) if ((status.sha === undefined || validHead(status.sha) && status.sha.toLowerCase() === sha) && ['failure','error'].includes(status.state)) each({kind:'regression',at:status.created_at,reason:'merge-ci-red'});
   }
   return calculateAutopilotMetrics({events,timezone,observedAt});
 }
