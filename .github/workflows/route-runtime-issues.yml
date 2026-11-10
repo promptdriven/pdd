@@ -1,0 +1,68 @@
+name: Route Runtime issues
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply the printed routing actions to issues
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: runtime-issue-router
+  cancel-in-progress: false
+
+jobs:
+  route:
+    # A dedicated runner provides gh, Node >=22 and a tool-free headless agent.
+    runs-on: [self-hosted, runtime-router]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Restore classifications and application receipts
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/runtime-issue-router
+          key: runtime-router-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            runtime-router-v1-${{ github.ref_name }}-
+      - name: Write local operator configuration
+        env:
+          ROUTER_OWNER: ${{ vars.RUNTIME_ROUTER_OWNER }}
+          ROUTER_COMMAND: ${{ vars.RUNTIME_ROUTER_AGENT_COMMAND }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {writeFileSync} from 'node:fs';
+          try {
+            const config = {owner:process.env.ROUTER_OWNER, agentCommand:JSON.parse(process.env.ROUTER_COMMAND)};
+            writeFileSync('.cache-runtime-router-config.json', JSON.stringify(config), {mode:0o600});
+          } catch {
+            console.error('Set valid RUNTIME_ROUTER_OWNER and RUNTIME_ROUTER_AGENT_COMMAND repository variables.');
+            process.exitCode = 1;
+          }
+          NODE
+      - name: Plan or apply routing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROUTER_REPO: ${{ github.repository }}
+          ROUTER_APPLY: ${{ inputs.apply }}
+        run: |
+          router_args=(--repo "$ROUTER_REPO" --config .cache-runtime-router-config.json)
+          if [ "$ROUTER_APPLY" = true ]; then router_args+=(--apply); fi
+          node scripts/route-runtime-issues.mjs "${router_args[@]}"
+      - name: Save classifications even when an issue failed
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/runtime-issue-router
+          key: runtime-router-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Remove local operator configuration
+        if: always()
+        run: rm -f .cache-runtime-router-config.json

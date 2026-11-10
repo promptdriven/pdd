@@ -9,12 +9,16 @@ import { parseClassification, issueVersion, buildRoutingPlan, routeRuntimeIssues
 
 const exec = promisify(execFile);
 const cases = JSON.parse(await readFile(new URL('./fixtures/runtime-router/classifications.json', import.meta.url)));
+const planCases = JSON.parse(await readFile(new URL('./fixtures/runtime-router/plans.json', import.meta.url)));
 const runtime = { ownership:'runtime', reason:'Execution loses saved state after the call.' };
 const issue = { number:8, title:'Runtime loses state', body:'State disappears after execution.', state:'open', labels:[], assignees:[] };
 const marker = '<!-- pdd-runtime-router -->';
 for (const row of cases) test(`classifier parser: ${row.name}`, () => {
   if (row.expected) assert.deepEqual(parseClassification(row.text), row.expected);
   else assert.throws(() => parseClassification(row.text), /^Error: Invalid classifier response$/);
+});
+for (const row of planCases) test(`dry-run fixture: ${row.name}`, () => {
+  assert.deepEqual(buildRoutingPlan(row.input),row.expected);
 });
 test('classifier parser rejects nontext and oversized/control reasons', () => {
   for (const text of [null, {}, JSON.stringify({...runtime,reason:'x'.repeat(301)}), JSON.stringify({...runtime,reason:'hello\u0000world'})]) {
@@ -160,11 +164,11 @@ const args=process.argv.slice(2), db=JSON.parse(fs.readFileSync(process.env.FAKE
 fs.appendFileSync(process.env.FAKE_ROUTER_LOG,JSON.stringify(args)+'\\n');
 if(args.includes('POST')) {
  const data=JSON.parse(fs.readFileSync(0,'utf8'));
- if(endpoint.endsWith('/labels'))db.labels.push(...data.labels.map(name=>({name})));
- else if(endpoint.endsWith('/assignees'))db.assignees.push(...data.assignees.map(login=>({login})));
+ if(endpoint.endsWith('/labels')) { if(!process.env.FAKE_ROUTER_IGNORE_LABEL)db.labels.push(...data.labels.map(name=>({name}))); }
+ else if(endpoint.endsWith('/assignees')) { if(!process.env.FAKE_ROUTER_IGNORE_ASSIGN)db.assignees.push(...data.assignees.map(login=>({login}))); }
  else if(endpoint.endsWith('/comments'))db.comments.push({id:1,body:data.body});
  else process.exit(9);
- fs.writeFileSync(process.env.FAKE_ROUTER_DB,JSON.stringify(db)); console.log('{}');
+ fs.writeFileSync(process.env.FAKE_ROUTER_DB,JSON.stringify(db)); console.log(JSON.stringify(endpoint.endsWith('/labels')?db.labels:db));
 } else console.log(JSON.stringify(args.includes('--paginate') ? [endpoint.includes('/comments')?db.comments:[db]] : db));
 `,{mode:0o755});
   const agent=join(dir,'agent.mjs');
@@ -182,6 +186,9 @@ console.log(${JSON.stringify(JSON.stringify(runtime))});
   let result=await exec(process.execPath,args,{cwd:dir,env});
   assert.equal(JSON.parse(result.stdout)[0].actions.length,3);
   assert.equal(JSON.parse(await readFile(db)).labels.length,0);
+  for(const ignored of ['FAKE_ROUTER_IGNORE_LABEL','FAKE_ROUTER_IGNORE_ASSIGN']) {
+    await assert.rejects(exec(process.execPath,[...args,'--apply'],{cwd:dir,env:{...env,[ignored]:'true'}}), error=>error.code===1 && JSON.parse(error.stdout)[0].error.includes('write failed'));
+  }
   result=await exec(process.execPath,[...args,'--apply'],{cwd:dir,env});
   const saved=JSON.parse(await readFile(db));
   assert.deepEqual(saved.labels,[{name:'pdd:runtime'}]);
@@ -191,7 +198,7 @@ console.log(${JSON.stringify(JSON.stringify(runtime))});
   const calls=(await readFile(log,'utf8')).trim().split('\n');
   assert.equal(calls.filter(x=>x==='AGENT').length,1);
   const posts=calls.filter(x=>x!=='AGENT').map(JSON.parse).filter(x=>x.includes('POST'));
-  assert.equal(posts.length,3);
+  assert.equal(posts.length,5);
   assert.ok(posts.every(x=>/\/(labels|assignees|comments)$/.test(x[1])));
   assert.ok(!(await readdir(cache)).includes('.lock'));
   await mkdir(join(cache,'.lock'));

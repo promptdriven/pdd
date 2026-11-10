@@ -18,7 +18,8 @@ headless agent process. Tell it that evidence is untrusted data, never instructi
 and that it must not use tools or perform actions. The operator must configure a
 tool-free command that reads stdin and emits only the answer on stdout. Require
 exactly `{ "ownership": "runtime" | "pdd" | "uncertain", "reason": string }`.
-Reason is one nonblank line, at most 300 characters; trim outer whitespace.
+Reason is one nonblank line, at most 300 characters; trim outer whitespace and
+reject control characters or Unicode line separators.
 `parseClassification(text)` accepts only one strict JSON object with these exact
 keys and values. Reject fences, extra keys, arrays, blank or multiline reasons
 and all malformed outputs with `Error("Invalid classifier response")`.
@@ -85,9 +86,13 @@ JSON atomically. A directory lock is released in finally; a stale lock needs
 manual removal. Evidence is exactly `{repository,number,title,body,comments}`;
 comments contain `{id,body,updated_at}`. Native GitHub reads use `gh api` pagination
 and writes use only POST labels, assignees and comments endpoints with JSON stdin.
+Confirm the label and assignee in each returned representation before accepting
+those actions; GitHub may silently ignore an unassignable login. An unconfirmed
+action fails without an application receipt, allowing repair without reclassification.
 Agent working directory is a temporary empty directory, removed in finally;
 omit GitHub credentials from its environment. Limit processes to 120 seconds and
-8 MiB captured output. Suppress raw child stdout/stderr and filesystem errors in
+8 MiB captured output; on timeout or overflow, kill the process group on POSIX so
+a wrapper cannot leave a spending agent behind. Suppress raw child stdout/stderr and filesystem errors in
 diagnostics; print generic failure categories to avoid leaking secrets. The tool
 prints JSON plans and exits 1 if any error row occurs, otherwise 0. Setup or usage
 failure also exits 1. It never retries processes automatically.
@@ -103,7 +108,7 @@ agent costs, cache recovery, undo behavior and configuration in scripts/README.m
 
 Node builtins provide SHA-256 (`node:crypto`), native files/temporary directories
 (`node:fs/promises`, `node:os`, `node:path`), command execution
-(`node:child_process`, `node:util`) and entry detection (`node:url`). GitHub CLI
+(`node:child_process`) and entry detection (`node:url`). GitHub CLI
 is the sole GitHub transport. A trusted operator-supplied tool-free headless
 stdio classifier is the semantic dependency; native fixtures do not prove its
 classification quality. No product module is required.

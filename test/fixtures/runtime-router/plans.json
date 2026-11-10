@@ -1,0 +1,22 @@
+[
+  {
+    "name": "fresh Runtime issue",
+    "input": {"issue":{"number":42,"state":"open","labels":[],"assignees":[]},"version":"fixture-version","classification":{"ownership":"runtime","reason":"The execution engine fails after the call."},"owner":"runtime-owner","comments":[]},
+    "expected": {"number":42,"version":"fixture-version","ownership":"runtime","reason":"The execution engine fails after the call.","actions":[{"type":"label","label":"pdd:runtime"},{"type":"assign","owner":"runtime-owner"},{"type":"comment","body":"Runtime ownership: The execution engine fails after the call.\n\n<!-- pdd-runtime-router -->"}]}
+  },
+  {
+    "name": "supplied test vectors stay",
+    "input": {"issue":{"number":43,"state":"open","labels":[],"assignees":[]},"version":"fixture-version","classification":{"ownership":"pdd","reason":"Repair the test vectors supplied to Runtime."},"owner":"runtime-owner","comments":[]},
+    "expected": {"number":43,"version":"fixture-version","ownership":"pdd","reason":"Repair the test vectors supplied to Runtime.","actions":[]}
+  },
+  {
+    "name": "mixed report requires review",
+    "input": {"issue":{"number":44,"state":"open","labels":[],"assignees":[]},"version":"fixture-version","classification":{"ownership":"uncertain","reason":"Need to locate failure relative to the call."},"owner":"runtime-owner","comments":[]},
+    "expected": {"number":44,"version":"fixture-version","ownership":"uncertain","reason":"Need to locate failure relative to the call.","actions":[]}
+  },
+  {
+    "name": "retain other assignees and existing explanation",
+    "input": {"issue":{"number":45,"state":"open","labels":[{"name":"pdd:runtime"},{"name":"bug"}],"assignees":[{"login":"other-owner"}]},"version":"fixture-version","classification":{"ownership":"runtime","reason":"Execution fails."},"owner":"runtime-owner","comments":[{"body":"Runtime ownership: Previous reason.\n\n<!-- pdd-runtime-router -->"}]},
+    "expected": {"number":45,"version":"fixture-version","ownership":"runtime","reason":"Execution fails.","actions":[{"type":"assign","owner":"runtime-owner"}]}
+  }
+]
