@@ -16,12 +16,12 @@ test('factory intake: a mixed assigned and free batch starts the free issue', as
   await w.start();
   await w.reviewDependencies();
   const completed = w.commands.filter(c => c.argv[0] === 'dependencies' && c.argv[1] === 'complete');
-  assert.ok(completed.length);
+  assert.equal(completed.length, 1, 'INTAKE_FACTORY_DUPLICATE_INTAKE');
   assert.ok(completed.every(c => JSON.parse(c.stdout).state === 'complete'), 'INTAKE_FACTORY_SORT_PENDING');
   // Do not tick again: completion must deliver eligible free work immediately.
   const packet = [...w.packets].reverse().find(p => p.issues.some(i => i.number === 17 && i.eligible));
   assert.ok(packet, 'INTAKE_FACTORY_FREE_NOT_ELIGIBLE');
-  assert.ok(w.github.reviewComments(17).length > 0);
+  assert.equal(w.github.reviewComments(17).length, 1, 'INTAKE_FACTORY_DUPLICATE_REVIEW');
   assert.equal(w.github.issues.get(17).comments.filter(c => c.body.includes('<!-- pdd-issue-sort:v1 -->')).length, 1);
   const issue = packet.issues.find(i => i.number === 17);
   w.github.claim(17, { coordinatorId: w.state().coordinatorId, machine: w.state().machine });

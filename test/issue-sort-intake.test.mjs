@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, complete, repository, key } from './helpers/issue-sort-fixture.mjs';
-import { readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
+import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { prepareDependencyIntake, completeDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 import { saveSortBatch, validateSortBatch } from '../src/issue-sort-github.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
@@ -46,6 +46,14 @@ test('an assigned requested issue needs no sort and its supplied sort is ignored
 
 for (const failure of ['throw', 'unconfirmed']) test(`one ${failure} sort save leaves other issues saved, routed and eligible`, async () => {
   const w = fixture([1, 2, 3]);
+  const sortReads = [];
+  w.ports.dependencyReads = createDependencyReadPorts({}).dependencyReads;
+  w.ports.dependencyReads.stored = () => true;
+  const page = w.ports.github.page;
+  w.ports.github.page = async args => {
+    if (args.kind === 'issues' && args.issue === 0) sortReads.push(w.writes.filter(x => x.body?.includes('<!-- pdd-issue-sort:v1 -->')).length);
+    return page(args);
+  };
   let note; w.ports.results = { save: async ({ json }) => { note = JSON.parse(json); return { ok: true }; } };
   const append = w.ports.github.appendComment;
   w.ports.github.appendComment = async args => {
@@ -63,6 +71,7 @@ for (const failure of ['throw', 'unconfirmed']) test(`one ${failure} sort save l
   assert.equal(w.issues[1].state, 'closed');
   assert.equal(result.state, 'pending'); assert.equal(result.pendingIssue, key(3));
   assert.equal(result.sortFailures[0].issue, key(3)); assert.ok(result.sortFailures[0].reason.length);
+  assert.ok(sortReads.some(count => count > 0), 'INTAKE_PARTIAL_SORT_SNAPSHOT_NOT_REFRESHED');
   assert.equal(note.reviewIds.length, 3); assert.equal(note.sortFailures[0].issue, key(3));
   assert.deepEqual(note.rows.map(x => x.key), [key(3)]);
   const next = await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
@@ -147,11 +156,50 @@ test('an assigned sibling with a stale sort cannot hold free work', async () => 
 
 test('assigned umbrella markers are not recovered from the snapshot or live index', async () => {
   const w = fixture([1, 2, 3, 100]);
-  w.issues[3].body += '\n<!-- pdd-issue-group:v1 shared-context -->';
+  const marker = '<!-- pdd-issue-group:v1 shared-context -->';
   w.issues[3].assignees = [{ login: 'person' }];
-  const result = await complete(w, [3, 2, 1].map(n => w.record(n)));
+  w.review(100);
+  const liveUmbrella = { ...w.issues[3], body: w.issues[3].body + String.fromCharCode(10) + marker };
+  const page = w.ports.github.page;
+  let liveIndex = false, liveMarkerScans = 0;
+  w.ports.github.page = async args => {
+    const response = await page(args);
+    if (args.kind !== 'issues' || args.issue !== 0) return response;
+    const value = JSON.parse(response.json);
+    if (liveIndex) {
+      liveMarkerScans++;
+      value.items = value.items.filter(issue => issue.number !== 100);
+      value.items.push(liveUmbrella);
+    }
+    return { json: JSON.stringify(value) };
+  };
+  const admit = w.ports.github.withSortGroupAdmission;
+  w.ports.github.withSortGroupAdmission = (args, action) => admit(args, async () => {
+    liveIndex = true;
+    try { return await action(); } finally { liveIndex = false; }
+  });
+  const { request } = await prepareDependencyIntake({ repository }, w.ports);
+  const prepared = JSON.parse(request.snapshotJson);
+  assert.ok(prepared.reviews.some(review => review.issue === key(100)), 'INTAKE_ASSIGNED_UMBRELLA_NOT_REVIEWED');
+  assert.ok(!request.issues.includes(key(100)), 'INTAKE_ASSIGNED_UMBRELLA_ENQUEUED');
+  assert.ok(!prepared.issues.find(issue => issue.key === key(100)).sortText.includes(marker), 'INTAKE_UMBRELLA_MARKER_IN_SNAPSHOT');
+  const reviews = request.issues.map(issue => ({
+    analysis: 'No prerequisite is needed.',
+    base: prepared.reviews.filter(review => review.issue === issue).map(review => review.id),
+    continuation: '',
+    issue,
+    inputs: [{ key: issue, revision: prepared.issues.find(row => row.key === issue).revision }],
+    candidates: prepared.issues.map(row => ({ key: row.key, revision: row.revision })),
+    outcome: 'complete',
+    dependencies: [],
+    questions: [],
+    effects: 'none',
+  }));
+  const sorts = [3, 2, 1].map(n => w.record(n));
+  const result = await completeDependencyIntake({ request, analysis: { reviews, impactJson: '', sorts } }, w.ports);
   assert.equal(result.state, 'complete');
   const snapshot = await read(w);
+  assert.ok(liveMarkerScans > 0, 'INTAKE_LIVE_UMBRELLA_PATH_NOT_EXERCISED');
   assert.ok(snapshot.sortContext.groups.length);
   assert.ok(snapshot.sortContext.groups.every(g => g.umbrella !== key(100) && !g.members.includes(key(100))), 'INTAKE_ASSIGNED_UMBRELLA_RECOVERED');
   assert.equal(w.writes.filter(x => x.issue === 100).length, 0);

@@ -1,5 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: f23da0df69949b62ac68a4c0f8929f2d6726d657c881a6cd27f501386607b7cb).
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: 54535b68f8459aa57072cb1b7b8b304610b644d9afe53a578faa15facbbaa7b0).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -351,24 +351,38 @@ export async function completeDependencyIntake({ cwd = '', request, analysis }, 
       if (applied.state !== 'confirmed') return finish(pendingResult('write-unconfirmed', { stage: 'edge-confirmation', issue: review.issue, reviewIds: ids, questions }));
     }
   }
-  // The saved snapshot takes the new reviews now, so the next request comes from it without another full observation.
-  if (analysis.reviews.length && ports.dependencyReads?.stored(request.repository) && !ports.snapshots) {
-    try { await snapshotRead(ports, { cwd, repository: request.repository }); } catch { /* The next tick reads the changes. */ }
-  }
+  const refreshSavedSnapshot = async () => {
+    if ((analysis.reviews.length || sorts.length) && ports.dependencyReads?.stored(request.repository) && !ports.snapshots) {
+      try { await snapshotRead(ports, { cwd, repository: request.repository }); } catch { /* The next tick reads the changes. */ }
+    }
+  };
   // #3053: one paced effect stream; route only after complete validation.
   if (prepared.sortContext) {
+    let sortFailures = [];
     try {
       const write = pacedSortWrites(ports, { cwd, repository: request.repository });
       const saved = await saveSortBatch({ repository: request.repository, snapshot, sorts }, ports, write);
       for (const skip of saved.skipped) sortSkipped.set(skip.issue, skip);
-      const sortFailures = [...saved.failed];
+      sortFailures = [...saved.failed];
       const settings = await ports.settings.read({ cwd, repository: request.repository });
       await syncSortGroups({ cwd, repository: request.repository, snapshot, mode: settings.mode, failures: sortFailures }, ports, write);
       await syncMixedParts({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
       const routed = await routeSortIssues({ cwd, repository: request.repository, snapshot, mode: settings.mode }, ports, write);
       sortFailures.push(...(routed.failed ?? []));
-      if (sortFailures.length) return finish({ ...pendingResult('write-unconfirmed', { stage: 'sort', issue: sortFailures[0].issue, reviewIds: ids, questions, rows: sortFailures.map(x => ({ key: x.issue, revision: rows(snapshot).get(x.issue) ?? '' })) }), sortFailures });
-    } catch { return finish(pendingResult('write-unconfirmed', { stage: 'sort', reviewIds: ids, questions })); }
+    } catch {
+      await refreshSavedSnapshot();
+      return finish(pendingResult('write-unconfirmed', { stage: 'sort', reviewIds: ids, questions }));
+    }
+    // Commit confirmed reviews and all successful sort effects together. A partial
+    // sort failure must still leave successful sibling writes visible to the next tick.
+    await refreshSavedSnapshot();
+    if (sortFailures.length) {
+      const pending = pendingResult('write-unconfirmed', { stage: 'sort', issue: sortFailures[0].issue, reviewIds: ids, questions, rows: sortFailures.map(x => ({ key: x.issue, revision: rows(snapshot).get(x.issue) ?? '' })) });
+      return finish({ ...pending, sortFailures });
+    }
+  } else {
+    // Legacy callers have no sort effects, so save their reviews directly.
+    await refreshSavedSnapshot();
   }
   return finish({ state: questions.length ? 'question' : 'complete', reviewIds: ids, eligible: [], questions });
 }
