@@ -101,7 +101,6 @@ export async function readAutopilotMetrics({timezone,observedAt},ports={}) {
       if (!lines.includes(`<!-- pdd:autopilot-core:merge:${head} -->`) || !lines.includes(`Autopilot merge check passed for head ${head}.`)) continue;
       each({kind:'evidence',at:comment.created_at,head,evidence:comment.body});
       if (parseAutopilotEvidence(comment.body).tests && lines.includes('- Full test suite: pass') && lines.includes('- Review: PASS from a fresh reviewer') && lines.some(line=>/^- CI: green \([1-9]\d* check\(s\)\)$/.test(line))) each({kind:'validated',at:comment.created_at,head,validation:{review:{head,verdict:'PASS',fresh:true},tests:{head,state:'pass'},ci:{head,state:'pass'}}});
-      if (Number.isFinite(Date.parse(comment.created_at)) && Date.parse(comment.created_at) <= Date.parse(pull.merged_at)) each({kind:'merged',at:pull.merged_at,head});
     }
     if (!validHead(pull.merge_commit_sha)) continue;
     // A red merge commit is a regression only after our own merge is recorded.

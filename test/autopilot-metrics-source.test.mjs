@@ -66,6 +66,15 @@ test('PR merge time refines cleanup history across the 09:00 boundary without do
   assert.equal(report.rows.find(row=>row.key === 'merged').weekAverage,0.5);
 });
 
+test('merge-check comment followed by manual merge cannot credit Autopilot or its regressions',async t=>{
+  const w=world(t);
+  w.save(join(w.core,'jobs','1.json'),{schema:'pdd.core-job.v1',issue:1,started:Date.parse(at),pr:10,head});
+  const report=await w.read();
+  assert.equal(rows(report).validated,1);
+  assert.equal(rows(report).merged,0);
+  assert.equal(rows(report).regressions,0);
+});
+
 test('hook preserves starts and BAD/revert discoveries after cleanup without leaking arbitrary fields',async t=>{
   const w=world(t); w.save(join(w.core,'history.jsonl'),'{cut');
   for(const event of [{kind:'started',at},{kind:'merged',at,pr:10},{kind:'regression',at:'2026-11-10T14:00:00Z',pr:10,reason:'reverted'}]) recordAutopilotMetric({root:w.core,repo:'OWNER/alpha',issue:1,...event,privateText:'never store this'});

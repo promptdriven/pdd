@@ -30,8 +30,9 @@ fixed-line tests pass and lines `- Full test suite: pass`,
 `- Review: PASS from a fresh reviewer`, `- CI: green (N check(s))`, N > 0.
 Those core attestations establish fresh independent review, suite and CI on
 that exact head; CI none, missing lines and stale heads count zero.
-PR merged_at plus a matching preceding core merge comment establishes an
-Autopilot merge; a manual merge without this evidence or merged history does not.
+Only local merged history or a merged hook event establishes an Autopilot merge.
+A merge-check comment precedes the attempt, so a later PR merged_at plus that
+comment cannot by itself attribute a merge to Autopilot.
 For a locally recorded merge associated with a PR, its valid merged_at refines
 the history timestamp (which can reflect cleanup). Count the PR's actual merge
 day once, rather than two days when cleanup crosses 09:00.
