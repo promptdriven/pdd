@@ -24,7 +24,7 @@ const until = async (predicate, message) => {
 };
 function fixture(t) {
   const root=fs.mkdtempSync(join(tmpdir(),'pdd-validation-receipt-'));
-  const env={PATH:process.env.PATH,HOME:join(root,'home'),XDG_CONFIG_HOME:join(root,'config'),PDD_INTERPRETER_QUEUE:join(root,'interpreter'),PDD_SUITE_QUEUE:join(root,'queue')};
+  const env={PATH:process.env.PATH,HOME:join(root,'home'),XDG_CONFIG_HOME:join(root,'config'),PDD_SUITE_QUEUE:join(root,'queue')};
   for (const dir of Object.values(env).slice(1)) fs.mkdirSync(dir,{recursive:true});
   const ports={...checkMachine({taskset:null}).ports,say:()=>{}};
   fs.writeFileSync(join(env.PDD_SUITE_QUEUE,'capacity.json'),JSON.stringify(withCheckLifetime(calculateCheckCapacity({checks:1},ports))));
@@ -331,7 +331,7 @@ test('native injected spawner retains its ticket and environment when descendant
   assert.equal(result.exitCode,1);
   const row=read(f.receipt);assert.equal(row.state,'running');assert.equal(row.outcome,'unknown');
   assert.equal(row.exitCode,null);assert.equal(row.finishedAt,null);assert.equal(row.childPid,987654);
-  for(const key of ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR','PDD_INTERPRETER_QUEUE']) assert.equal(fs.existsSync(environment[key]),true,key);
+  for(const key of ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR']) assert.equal(fs.existsSync(environment[key]),true,key);
   const progress=readSuiteProgress({cwd:f.root,env:f.env},{...f.ports,alive:()=>true});
   assert.equal(progress.state,'running');assert.equal(progress.outcome,'unknown');
 });

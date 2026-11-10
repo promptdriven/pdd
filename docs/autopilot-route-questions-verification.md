@@ -9,7 +9,7 @@ node --test test/autopilot-route-questions.test.mjs
 node --test test/autopilot-parking.test.mjs test/autopilot-cli.test.mjs test/command-catalog.test.mjs test/docs-commands.test.mjs test/skills.test.mjs test/cost-ledger.test.mjs test/docs-first-time.test.mjs
 ```
 
-The route checks use the repository's workflow fixture, real temporary Git repositories, fake Herdr and GitHub, and a controlled clock. The fixture supplies private `HOME`, `XDG_CONFIG_HOME` and `PDD_INTERPRETER_QUEUE`. Each fixture removes its files when the test ends.
+The route checks use the repository's workflow fixture, real temporary Git repositories, fake Herdr and GitHub, and a controlled clock. The fixture supplies private `HOME` and `XDG_CONFIG_HOME`. Each fixture removes its files when the test ends.
 
 The checks call the native workflow park API, CLI parser/dispatcher, coordinator tick and JSON status. They cover route classification, full question preservation, two reports before a tick, grouping and counting, one issue write per repeated kind, uncertain writes, installed capability wakes, retained sessions and independent gates/questions. Ordinary PDD/native vocabulary does not turn a product decision into a route gap. Local maintenance records questions without opening issues.
 

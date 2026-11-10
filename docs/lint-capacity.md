@@ -40,19 +40,6 @@ or it is interrupted; explicit retry retains its finite default. Reading standal
 leaves checks alone if they were already sent or their history is uncertain.
 A missing or mismatched reply never counts as a pass.
 
-Lint and check share a machine queue with a default cap of 2 requests. Set
-`PDD_INTERPRETER_CONCURRENCY` to a positive safe integer for another cap. All
-profiles must use the same absolute `PDD_INTERPRETER_QUEUE` when overriding the
-default `/tmp/pdd-interpreter-UID` directory. Waiting status shows the position;
-Autopilot pauses its stuck clock during that wait. Each queue ticket is also a
-request ledger row with timestamps, outcome and active request counts. Busy
-feedback temporarily lowers the cap. An uncertain dispatch with a live owner keeps its slot until
-a same-ID terminal read confirms completion. Admission releases waiting and
-running tickets whose owners are confirmed dead. The ledger records
-`releaseReason: "owner-dead"`. A dispatched ticket keeps its observed outcome, or
-`unknown` if no outcome was received. Local slot release does not prove remote
-completion and never authorizes a resend.
-
 The optional profile cap for checks, remote lint and new simulation setup has no
 default limit. Set `PDD_MAX_JOBS` to a
 positive safe decimal integer to share that cap across repositories and

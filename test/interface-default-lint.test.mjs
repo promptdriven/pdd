@@ -87,7 +87,7 @@ for (const json of [false, true]) test(`default lint keeps global diagnostics wi
 for (const json of [false, true]) test(`CLI default lint saves native evidence (${json ? 'JSON' : 'text'})`, t => {
   const setup = harbor(t, repo => mixed(repo, 'selected'));
   const env = { ...process.env, HOME: setup.home, XDG_CONFIG_HOME: join(setup.home, '.config'), PDD_STATE_DIR: setup.state,
-    PDD_RUNTIME_URL: 'http://127.0.0.1:1', PDD_INTERPRETER_QUEUE: join(setup.sandbox, 'queue'), PDD_SUITE_QUEUE: join(setup.sandbox, 'suite') };
+    PDD_RUNTIME_URL: 'http://127.0.0.1:1', PDD_SUITE_QUEUE: join(setup.sandbox, 'suite') };
   for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'PDD_VM_SUITE_LOCK']) delete env[key];
   const args = [new URL('../bin/pdd.mjs', import.meta.url).pathname, 'lint', ...(json ? ['--json'] : [])];
   const result = spawnSync(process.execPath, args, { cwd: setup.repo, env, encoding: 'utf8', timeout: 15_000 });

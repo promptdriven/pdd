@@ -81,7 +81,7 @@ function checkOutput(output, rows, compact) {
 function noExternalPorts(state) {
   const calls = { fetch: 0, gh: 0 };
   const stdout = sink(), stderr = sink();
-  return { calls, stdout, stderr, env: { HOME: state.home, PDD_INTERPRETER_QUEUE: join(state.home, 'interpreter-queue'), PDD_STATE_DIR: state.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
+  return { calls, stdout, stderr, env: { HOME: state.home, PDD_STATE_DIR: state.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
     fetch: () => { calls.fetch++; assert.fail('unexpected network'); },
     gh: () => { calls.gh++; assert.fail('unexpected sign-in'); },
     screenBrowser: () => assert.fail('unexpected browser') };
@@ -113,7 +113,7 @@ globalThis.fetch = () => {
   const audit = join(state.folder, 'audit.txt'); fs.writeFileSync(audit, '');
   const out = spawnSync(process.execPath, ['--import', join(state.folder, 'no-network.mjs'), cli, name, ...argv], {
     cwd: state.repo, input: '', encoding: 'utf8', timeout: 30000,
-    env: { HOME: state.home, PDD_INTERPRETER_QUEUE: join(state.home, 'interpreter-queue'), PATH: bin, PDD_TEST_AUDIT: audit, PDD_STATE_DIR: state.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
+    env: { HOME: state.home, PATH: bin, PDD_TEST_AUDIT: audit, PDD_STATE_DIR: state.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
   });
   assert.equal(out.error, undefined); assert.equal(out.signal, null);
   const effects = fs.readFileSync(audit, 'utf8').split('\n').filter(Boolean);

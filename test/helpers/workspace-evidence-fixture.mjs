@@ -38,7 +38,7 @@ export async function evidenceFixture(t) {
     chats:[],pr:[],startedAt:1,updatedAt:2};
   const f={base,root,clone,other,nested,runDir,status,head,git,read:()=>JSON.parse(readFileSync(status,'utf8')),save:r=>writeFileSync(status,JSON.stringify(r,null,2)+'\n'),clock:1000,effects:[]};
   f.save(run);
-  f.ports={stateDir:join(base,'state'),env:{HOME:join(base,'home'),PDD_INTERPRETER_QUEUE:join(base,'interpreter-queue')},now:()=>++f.clock,readPrStatus:async()=>({}),
+  f.ports={stateDir:join(base,'state'),env:{HOME:join(base,'home')},now:()=>++f.clock,readPrStatus:async()=>({}),
     herdr:async()=>assert.fail('Evidence must not invoke Herdr'),confirm:async()=>assert.fail('Registration adds no approval gate'),
     execFile:async(file,args,opts)=>{
       f.effects.push([file,...args]);assert.equal(file,'git','No network, model, publication or other program');

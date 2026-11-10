@@ -30,7 +30,7 @@ function harbor(t) {
 // Ports that fail the test if anything reaches the network or gh.
 function offline(home) {
   const calls = { fetch: 0, gh: 0 };
-  const ports = { env: { HOME: home, PDD_INTERPRETER_QUEUE: join(home, 'interpreter-queue'), PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, stdout: sink(), stderr: sink(),
+  const ports = { env: { HOME: home, PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, stdout: sink(), stderr: sink(),
     fetch: async () => { calls.fetch += 1; throw Error('network'); }, gh: () => { calls.gh += 1; return { status: 1, stdout: '' }; } };
   return { ports, calls };
 }

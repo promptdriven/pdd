@@ -47,11 +47,7 @@ process.on('message',async m=>{
     };
     const workflowRunner=Object.fromEntries(Object.entries(runner).map(([k,v])=>[k,typeof v==='function'?(input,p)=>v(input,{...ports,...p,herdr:ports.workflowHerdr,env:p?.env??env}):v]));
     let code;
-    if(operation==='hold-interpreter'||operation==='hold-interpreter-dispatched') {
-      const {acquireInterpreterSlot,markInterpreterDispatch}=await import('../../../src/interpreter-queue.mjs');
-      const slot=await acquireInterpreterSlot({cwd,origin:'https://factory.invalid',requestId:'dead-holder',kind:'check',env});
-      if(operation==='hold-interpreter-dispatched')await markInterpreterDispatch(slot);code=0;
-    } else if(operation==='tick') {const result=await tickAutopilot(stateFile,ports);code=result.exitCode;stdout=result.message;}
+    if(operation==='tick') {const result=await tickAutopilot(stateFile,ports);code=result.exitCode;stdout=result.message;}
     else code=await runPdd(argv,{cwd,packageRoot,env,stdout:out,stderr:err,
       stdin:(async function*(){if(stdin!==undefined)yield stdin;})(),workflowRunner,
       workflowAgentPorts:{run:async()=>({code:0,stdout:'Logged in using ChatGPT',stderr:''})},

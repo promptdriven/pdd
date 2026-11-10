@@ -606,13 +606,10 @@ test('3091 interpreter test mode requires three no-verdict observations and clea
   ports.readRuntimeWaits = async () => [40, 41, 42].map((number, i) => ({number, at: i + 1, cause: 'service', mark: 'tests:1'}));
   await tick();
   assert.equal(JSON.parse(readFileSync(stateFile)).interpreterPattern.testMode, true);
-  const capacity = JSON.parse(readFileSync(join(f.ports.env.PDD_INTERPRETER_QUEUE, 'capacity.json')));
-  assert.equal(Object.keys(capacity.testOwners).length, 1, 'test uses the existing interpreter queue');
   ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled healthy'}); await tick();
   assert.equal(JSON.parse(readFileSync(stateFile)).runtime.outage.probe.number, 40);
   verdict = true; await tick();
   assert.equal(JSON.parse(readFileSync(stateFile)).interpreterPattern.testMode, false);
-  assert.equal(JSON.parse(readFileSync(join(f.ports.env.PDD_INTERPRETER_QUEUE, 'capacity.json'))).testOwners, undefined);
 });
 
 test('3091 account health parks a failed chat until its actual reset', async t => {
@@ -655,29 +652,6 @@ test('3091 native release is idempotent after a lost comment reply and preserves
   github.claim(17, {coordinatorId: 'new-owner', machine: 'other-machine'});
   assert.equal((await releaseParkedClaim(input, ports)).state, 'skipped');
   assert.ok(github.issues.get(17).labels.includes('pdd:working'));
-});
-
-test('3091 shared interpreter admission is serial in test mode and concurrent after a verdict', async t => {
-  const {f, tick, stateFile, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.runtimeWait = {at: f.clock, reason: 'no verdict', cause: 'service'}; save(f, run);
-  await tick(); assert.equal(f.record().parking?.phase, 'parked');
-  fullTicks(f, stateFile, ports);
-  ports.readRuntimeWaits = async () => [40, 41, 42].map((number, i) => ({number, at: i + 1, cause: 'service', mark: 'tests:1'}));
-  ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
-  await tick();
-  const {acquireInterpreterSlot, observeInterpreterRequest} = await import('../src/interpreter-queue.mjs');
-  const env = f.ports.env, queuePorts = {now: () => f.clock, alive: () => true, sleep: () => new Promise(resolve => setTimeout(resolve, 2))};
-  const request = requestId => ({cwd: f.source, origin: 'https://controlled.invalid', requestId, kind: 'check', env});
-  const settle = requestId => observeInterpreterRequest({...request(requestId), outcome: 'verdict', terminal: true}, queuePorts);
-  await acquireInterpreterSlot(request('one'), queuePorts);
-  let admitted = false;
-  const second = acquireInterpreterSlot(request('two'), queuePorts).then(value => {admitted = true; return value;});
-  t.after(async () => {await settle('one'); await second; await settle('two'); await settle('three');});
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(admitted, false, 'test mode must hold the second interpreter request');
-  await settle('one'); await second;
-  const third = await acquireInterpreterSlot(request('three'), queuePorts);
-  assert.ok(third, 'after the verdict two interpreter requests can hold slots together');
 });
 
 test('3091 process shutdown follows saved-session custody and frees panes only after confirmation', async t => {
@@ -861,26 +835,25 @@ for (const changed of ['runId', 'at', 'phase']) test(`3091 repair release revali
 });
 
 // Repair 2: AC2/AC6. Check admission can occur after chat shutdown.
-for (const custody of ['native-running', 'suite-waiting', 'interpreter-unavailable']) test(`3091 repair2 post-park ${custody} retains occupancy through timeout`, async t => {
+for (const custody of ['native-running', 'suite-waiting', 'suite-unavailable']) test(`3091 repair2 post-park ${custody} retains occupancy through timeout`, async t => {
   const {f, tick, stateFile, ports} = await setup(t);
   const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick(); assert.equal(f.record().parking?.phase, 'parked');
   fullTicks(f, stateFile, ports);
   let settle;
   if (custody === 'native-running') {
-    const {acquireInterpreterSlot, observeInterpreterRequest} = await import('../src/interpreter-queue.mjs');
-    const request = {cwd: run.root, origin: 'https://controlled.invalid', requestId: 'post-park', kind: 'check', env: f.ports.env};
-    await acquireInterpreterSlot(request, {now: () => f.clock});
-    settle = () => observeInterpreterRequest({...request, outcome: 'not_sent', terminal: true}, {now: () => f.clock});
-    t.after(settle);
+    mkdirSync(f.ports.queueRoot, {recursive: true});
+    const ticketPath = join(f.ports.queueRoot, 'ticket-1.json');
+    const ticket = {ticket: 1, pid: process.pid, cwd: run.root, state: 'running', queuedAt: f.clock, startedAt: f.clock, finishedAt: null, reason: null};
+    writeFileSync(ticketPath, JSON.stringify(ticket));
+    settle = () => writeFileSync(ticketPath, JSON.stringify({...ticket, state: 'finished', finishedAt: f.clock}));
   } else {
-    const key = custody === 'suite-waiting' ? 'readSuiteProgress' : 'readInterpreterProgress';
-    ports[key] = () => ({state: custody === 'suite-waiting' ? 'waiting' : 'unavailable'});
-    settle = () => {delete ports[key];};
+    ports.readSuiteProgress = () => ({state: custody === 'suite-waiting' ? 'waiting' : 'unavailable'});
+    settle = () => {delete ports.readSuiteProgress;};
   }
   // Read admission before the next tick can save a check reservation.
   const owners = JSON.parse((await createDependencyReadPorts({cwd: f.source}, {...f.ports,
-    owners: undefined, readSuiteProgress: ports.readSuiteProgress, readInterpreterProgress: ports.readInterpreterProgress}).owners.read({repository: run.repo, issues: []})).json);
+    owners: undefined, readSuiteProgress: ports.readSuiteProgress}).owners.read({repository: run.repo, issues: []})).json);
   assert.equal(owners.runs.find(row => row.runId === run.runId)?.occupied, true, 'post-park check must block native admission');
   await tick();
   assert.equal(JSON.parse(readFileSync(stateFile)).parking.working, 1, 'post-park check consumes working capacity');
@@ -899,10 +872,10 @@ test('3091 repair2 release rechecks native check custody under the run lock', as
   const {f, tick} = await setup(t);
   const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
   await tick();
-  const {acquireInterpreterSlot, observeInterpreterRequest} = await import('../src/interpreter-queue.mjs');
-  const request = {cwd: run.root, origin: 'https://controlled.invalid', requestId: 'release-check', kind: 'check', env: f.ports.env};
-  await acquireInterpreterSlot(request, {now: () => f.clock});
-  t.after(() => observeInterpreterRequest({...request, outcome: 'not_sent', terminal: true}, {now: () => f.clock}));
+  mkdirSync(f.ports.queueRoot, {recursive: true});
+  const ticketPath = join(f.ports.queueRoot, 'ticket-1.json');
+  const ticket = {ticket: 1, pid: process.pid, cwd: run.root, state: 'running', queuedAt: f.clock, startedAt: f.clock, finishedAt: null, reason: null};
+  writeFileSync(ticketPath, JSON.stringify(ticket));
   const {releaseParkedRun} = await import('../src/workflow-runner.mjs');
   let releases = 0;
   const result = await releaseParkedRun({ref: '17', cwd: f.source, runId: run.runId, at: f.record().parking.at,

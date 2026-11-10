@@ -160,7 +160,6 @@ The parent alert adapter gives the real alert owner the same injected GitHub exe
 - [Workflow runner](../cli/workflow-runner.prompt.md): workflow and gates.
 - [Parking](../cli/autopilot-parking.prompt.md): park and wake policy.
 - [Alerts](../cli/autopilot-alerts.prompt.md): incident updates and delivery results.
-- [Interpreter queue](../cli/interpreter-queue.prompt.md): local admission boundary.
 - [Autopilot skill](../../skills/pdd-autopilot/SKILL.md),
   [check](../../skills/pdd-check/SKILL.md), and
   [merge](../../skills/pdd-merge/SKILL.md): scripted agent responsibilities.

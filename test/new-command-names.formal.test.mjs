@@ -112,7 +112,7 @@ test('removed names run nothing on runPdd', async t => {
   let count = 0;
   for (const command of ['check', 'try']) for (const head of [[], ['help']]) for (const tail of tails([[], ['place-order']], false)) {
     const argv = [...head, command, ...tail], stdout = sink(), stderr = sink(), [before, after] = oracle(command, tail);
-    const env = { HOME: setup.home, PDD_INTERPRETER_QUEUE: join(setup.home, 'interpreter-queue'), PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: `${bin}:/usr/bin:/bin` };
+    const env = { HOME: setup.home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: `${bin}:/usr/bin:/bin` };
     const code = await runPdd(argv, { stdout, stderr, cwd: setup.repo, env, packageRoot: root, workflowRunner: spy, workflowAreas: spy,
       mcpServer: spy, runtimeSlots: spy, contracts: spy, product: spy, workflowProve: spy, gitContext: spy });
     assert.equal(code, 2, label(argv)); assert.equal(stdout.text, '', label(argv));

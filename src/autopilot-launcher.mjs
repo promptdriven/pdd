@@ -9,8 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 09dd048bd02275b49d06e674c8ffed1bd8325bd8fad9d53038b820f431bbff65).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 70128b5290341b787d0a826467e22baad812e19eecc3972e507e71a0687b047e).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -101,7 +100,7 @@ function portsFor(state, ports) {
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'PDD_INTERPRETER_QUEUE', 'PDD_INTERPRETER_CONCURRENCY'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 function checkCapacityWords(state, p) {
   try {
     const c = readCheckStatus({env:p.env}, p.checkCapacityPorts ?? p);
@@ -362,8 +361,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     list: () => listRuns({cwd: state.cwd, cancelled: true}, worker),
     checkProgress: async run => {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
-      if (busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
-        || busy((p.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: p.env}, {now: p.now, ...p.interpreterQueuePorts}))) return true;
+      if (busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))) return true;
       const chat = currentChat(run), live = chat ? await chatSession(chat, {...worker, run}) : null;
       return Boolean(live?.alive && !['idle', 'done'].includes(live.status));
     },
@@ -591,8 +589,7 @@ async function readRunProgress(state, p) {
         const changedAt = Number.isFinite(run.progressAt) ? run.progressAt : statSync(file).mtimeMs;
         const suite = (p.readSuiteProgress ?? readSuiteProgress)({cwd:run.root, since:changedAt, env:p.env}, p);
         if (suite?.state === 'unavailable') p.warn(`Run #${run.number} full test suite queue unavailable: ${suite.reason}`);
-        const interpreter = typeof run.root === 'string' ? (p.readInterpreterProgress ?? readInterpreterProgress)({ cwd: run.root, since: changedAt, env: p.env }, { now: p.now, ...p.interpreterQueuePorts }) : null;
-        progress.push({ number: run.number, changedAt: changedAt + (suite?.pausedMs ?? 0) + (interpreter?.pausedMs ?? 0), ...(suite ? {suite} : {}), ...(interpreter ? {interpreter} : {}) });
+        progress.push({ number: run.number, changedAt: changedAt + (suite?.pausedMs ?? 0), ...(suite ? {suite} : {}) });
       }
     } catch { /* Missing or unreadable records supply no progress fact. */ }
   }
@@ -772,7 +769,6 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   const saved = state.runtime ?? {}, now = p.now();
   let lostDecision = lostWaits.length ? saved.lostDecision : null;
   const pattern = state.interpreterPattern ?? {streak: 0, seen: {}};
-  const hadTestMode = Boolean(pattern.testMode);
   let verdictAt = null;
   if (p.readInterpreterVerdict) {
     const verdict = await p.readInterpreterVerdict(pattern.verdictAt ?? 0);
@@ -801,7 +797,6 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
   pattern.seen = Object.fromEntries(Object.entries(pattern.seen).filter(([, at]) => now - at < RUNTIME_KEEP));
   if (pattern.streak >= 3) pattern.testMode = true;
   state.interpreterPattern = pattern;
-  if (pattern.testMode || hadTestMode) await (p.configureInterpreterTestMode ?? configureInterpreterTestMode)({env: p.env, owner: state.stateFile, enabled: Boolean(pattern.testMode)}, {now: p.now, ...p.interpreterQueuePorts});
   // A wake is kept while its run works on it, so a second wait of the same step is seen; a recovery keeps it too.
   const retried = Object.fromEntries(Object.entries(saved.retried ?? {}).filter(([, value]) => now - value.at < RUNTIME_KEEP));
   let outage = saved.outage ? structuredClone(saved.outage) : null, access = saved.access ? structuredClone(saved.access) : null;
@@ -1831,7 +1826,7 @@ async function runTick(stateFile, ports, completion) {
     }
     const runProgress = await (p.readRunProgress ?? readRunProgress)(state, p);
     const suiteByNumber = new Map(runProgress.filter(row => row.suite).map(row => [row.number, row.suite]));
-    for (const { number, changedAt, suite, interpreter } of runProgress) {
+    for (const { number, changedAt, suite } of runProgress) {
       if (suite?.state === 'unavailable') continue;
       if (suite && (suite.state !== 'finished' || suite.reason)) {
         const key = `suite:${number}:${suite.ticket ?? suite.queuedAt}`;
@@ -1841,7 +1836,6 @@ async function runTick(stateFile, ports, completion) {
         }
         continue;
       }
-      if (['waiting', 'unavailable'].includes(interpreter?.state)) continue;
       const key = `run:${number}`;
       if (!environmentNumbers.has(number) && p.now() - changedAt >= STUCK_AFTER && state.timeSeen[key] !== changedAt) {
         timeRules.push({ kind: 'stuck-run', number, reason: `Run #${number} has had no progress for 60 minutes; follow the pdd:stuck rule.` });

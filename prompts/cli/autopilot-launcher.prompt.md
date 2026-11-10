@@ -1224,18 +1224,6 @@ route that can remove the mark after success.
 
 For `status`, include the local [issue cost report](cost-ledger.prompt.md) for normal and automatic runs in the selected repository; `--all` includes indexed repositories. Refresh numeric cost checkpoints through `updateRunCosts`, preserving the workflow progress timestamp, sequence and completion journal. Before refreshing a selected cost record, verify its runId and startedAt under run ownership. Archived attempts can retain a former runDir now owned by a new attempt: retain their saved cost snapshot and never substitute or update that new attempt. Measurement failure must not fail status. `status --json` returns only the versioned cost report and skips timer, Herdr, settings-on-GitHub and workflow readiness probes. It works without a saved launcher. Human status appends `costStatusLines`; neither status form fetches CI durations.
 
-
-
-## Machine interpreter waiting
-
-Read [machine interpreter progress](interpreter-queue.prompt.md) for the run's
-worktree using the same machine queue environment. Keep workflow state separate
-from queue state. Show waiting with its position in workflow status. Exclude the
-union of persisted queue waiting intervals from the no-progress clock. An active
-wait or unavailable queue cannot establish a stuck run. Completed waiting time
-remains excluded after restart. Do not wake a chat or mutate queue records during
-observation. Preserve queue path and concurrency settings in launcher environments.
-
 This module has native Node integration tests against the settings module and
 bundled skill. Timer services, real sign-ins and cross-machine skill execution
 need live verification; syntax-only checks do not prove those effects.
@@ -1260,7 +1248,7 @@ Use [parking policy](autopilot-parking.prompt.md) as required generation/runtime
 
 When supplying workflow parking ports, set `autopilotStateFile` to this coordinator's actual saved state file. The runner uses it for a fresh authority read at each native close boundary, including after asynchronous Herdr inspection. Preserve the runner's source, repository, coordinator, machine and enabled-state checks.
 
-Packet `parking` is `{working,parked,blockers,wakePending,limit}`; blockers maps display names to counts, and wakePending lists ready run numbers awaiting capacity in oldest-first order. Include the same local counts and interpreter test-mode streak in status without GitHub calls. Defer fresh issues while a ready wake remains pending. Issues in a saved #3053 group with a parked member go to its existing run via the request journal; do not offer a second run. Do not restrict different issues merely because their files overlap. Existing check slots, pane budget, area PR, daily cost, account, trust and ownership gates still apply. A parked run's claim receives heartbeats until release; the four-hour stuck rule must not expire it. Save parking/interpreter observations on all tick exit paths. Renew the existing interpreter queue test-mode lease through configureInterpreterTestMode; a terminal verdict removes that restriction immediately. No AI call in this tick work.
+Packet `parking` is `{working,parked,blockers,wakePending,limit}`; blockers maps display names to counts, and wakePending lists ready run numbers awaiting capacity in oldest-first order. Include the same local counts and interpreter test-mode streak in status without GitHub calls. Defer fresh issues while a ready wake remains pending. Issues in a saved #3053 group with a parked member go to its existing run via the request journal; do not offer a second run. Do not restrict different issues merely because their files overlap. Existing check slots, pane budget, area PR, daily cost, account, trust and ownership gates still apply. A parked run's claim receives heartbeats until release; the four-hour stuck rule must not expire it. Save parking/interpreter observations on all tick exit paths. No AI call in this tick work.
 
 ## Lost-verdict decision after recovery (#3097)
 
@@ -1363,8 +1351,6 @@ person questions and explicit blockers.
 - [Environment recovery](autopilot-environment.prompt.md): required native generation and verification context for classification, retry records and host admission.
 
 - [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
-
-- [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
 
 - [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake and display size, cause and umbrella in status without a GitHub read.
 

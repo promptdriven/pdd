@@ -28,7 +28,7 @@ async function cliFixture(t, edit) {
   });
   async function run(args) {
     const proc = spawn(process.execPath, [CLI, ...args], { cwd: h.repo,
-      env: { ...process.env, HOME: h.home, PDD_INTERPRETER_QUEUE: join(h.home, 'native-interpreter-queue'), PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin, PATH: bin + ':' + process.env.PATH },
+      env: { ...process.env, HOME: h.home, PDD_STATE_DIR: h.state, PDD_RUNTIME_URL: f.origin, PATH: bin + ':' + process.env.PATH },
       stdio: ['ignore', 'pipe', 'pipe'] });
     t.after(() => { if (proc.exitCode === null) proc.kill(); });
     let out = '', err = '';

@@ -31,7 +31,7 @@ function repoWith(t, files) {
 // Offline: anything that reaches the network or gh fails the count.
 async function check(setup, words, options = {}) {
   const calls = { fetch: 0, gh: 0 };
-  const ports = { env: { HOME: setup.home, PDD_INTERPRETER_QUEUE: join(setup.home, 'interpreter-queue'), PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, stdout: sink(), stderr: sink(),
+  const ports = { env: { HOME: setup.home, PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, stdout: sink(), stderr: sink(),
     fetch: async () => { calls.fetch += 1; throw Error('network'); }, gh: () => { calls.gh += 1; return { status: 1, stdout: '' }; } };
   const code = await runCheck({ words, options, cwd: setup.repo }, ports);
   return { code, calls, out: ports.stdout.text, err: ports.stderr.text, json: options['--json'] && ports.stdout.text ? JSON.parse(ports.stdout.text) : null };

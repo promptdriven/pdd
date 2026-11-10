@@ -844,29 +844,6 @@ The GET-only `--request UUID` route reads known criterion coverage from an ownin
 
 Explicit lint JSON uses the deciding selected row for its aggregate public state, reason and lint_state, including a locally broken capture. Local broken tests keep internal refusal recovery and exit 4, but all public and saved projections use `not run` with `broken-test` and retain their original refusal details. Apply the same projection in files preview.
 
-## Machine interpreter admission
-
-Every lint and check POST also uses [machine admission](interpreter-queue.prompt.md),
-after ordinary profile admission and before immutable dispatch evidence, including
-the permanent Check claim and restart fuse. Expired or interrupted machine waits
-leave no Check claim or sent request ID, so a new process can retry that unsent
-work from the saved batch with zero charged calls. Waiting
-must not send a request or poll its unsent ID. Already dispatched checks keep
-being read while another check waits for the machine queue. Register the allocated ID, mark possible dispatch before
-POST and hold the machine ticket until a matching terminal receipt or confirmed
-unsent refusal. A lost reply, command return or interruption records unknown and
-keeps capacity; same-ID reads can later release it. Use existing capacity proof
-rules for retry authority. Machine busy feedback never grants retry permission,
-including when a capacity reply has uncertain accounting. Feed successful verdicts,
-busy, unknown and refused outcomes from POST and subsequent same-ID reads into
-the request ledger, including the documented `pdd test --request ID` read. A
-matching terminal request read releases retained machine capacity without sending
-a new POST or granting replay authority. Incomplete accounting stays unknown. Never record a request
-as not sent after its POST may have started. Private queue file identities do not allocate interpreter request IDs; saved reads
-keep the existing zero-new-request-ID promise. Ledger/queue failures stop new sends
-with a local-state-unavailable error; recovery advice remains read-only. Retain
-existing per-profile cap defaults and Simulator setup policy.
-
 ## Missing and native-only interfaces
 
 Use the preflight owner's missing-block, kind, native-reason and draft-gap findings in local lint, even without Stories. Preserve server ownership of other schema/hash diagnostics in explicit lint, and retain the existing local limits gate, its hints and selected rows. Keep SVG advice separate. Server lint reports these local findings before authentication or upload. Checks and lint omit native-only scenarios from uploads even when criteria, checks or reached declarations are invalid. Preserve local refusals and native-only paths/reasons; internal recovery keeps invalid rows refused and valid rows not_run, including called prompts. Public output uses the outcome owner state and reason. Mixed selections still run the other scenarios. Save the exact source selection as source_selection {tests, exclude_fixture_projects}, and separately save native_source {tests, sha256} for omitted native-only scenarios. Neither the native capture nor its scenarios enter uploads. Preserve native_only [{path, reason}] in batch rows. Saved reads retain both source identities. A selection with only native-only scenarios still saves local check/lint evidence, coverage, refusals and reasons without authentication or Runtime requests; mark that batch local_only true and every row unsent, and allow its saved read without authentication or Runtime requests. This also applies when other selected rows are refused locally and no row is ready. An unavailable native capture keeps sha256 null and freshness unknown. Native-only is never a pass and does not silently turn a partial result into success. Each test summary shows repository Runtime coverage: N of M prompts checkable, K native-only. Count valid current full/partial blocks as checkable, valid current native-only declarations separately, and include missing/invalid/stale prompts in M. Keep this separate from module binding coverage.
@@ -962,7 +939,6 @@ pointer, but deduplication must retain the original location identity.
 - [References](contract-refs.prompt.md): required generation and verification
   context for canonical provenance and explicit-lint copy comparison.
 
-- [Machine interpreter queue](interpreter-queue.prompt.md): required context for machine admission, waiting progress and request ledger.
 - [Runtime slots](runtime-slots.prompt.md): required generation and verification context for shared local admission and jobs. Runtime listing binds its own files port; native process exclusion remains a native verification obligation.
 
 - [Local bindings](runtime-bindings.prompt.md): required generation/runtime context for the local inventory helper.

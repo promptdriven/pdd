@@ -1077,7 +1077,7 @@ test('time rule revalidates trust on a cached due claim without forwarding stran
 
 test('time rules read active status file modification times from the Git common directory', async t => {
   const f = await fixture(t); delete f.ports.readRunProgress;
-  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue')};
   const invoke = f.invoke;
   f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra});
   const changedAt = f.time;
@@ -1940,7 +1940,7 @@ test('digest runs before rate-limit retry and its failure does not stop the laun
 });
 for (const state of ['running', 'waiting']) test(`cost polling cannot postpone the native stalled-run rule for ${state} runs`, async t => {
   const f = await fixture(t); delete f.ports.readRunProgress;
-  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue')};
   const invoke = f.invoke;
   f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra}); f.ports.skipMetricsDelivery = true;
   const { updateRun } = await import('../src/workflow-runs.mjs');
@@ -1971,39 +1971,6 @@ for (const state of ['running', 'waiting']) test(`cost polling cannot postpone t
   assert.equal((await f.invoke('status', { json: true })).exitCode, 0);
   await f.tick(); assert.equal(f.prompts.length, 1);
   f.time++; await f.tick(); assert.equal(f.prompts.length, 2);
-});
-test('interpreter queue waiting and unavailable ownership cannot trigger the stuck rule', async t => {
-  const f = await fixture(t), changedAt = f.time;
-  f.runProgress = [{ number: 3066, changedAt, interpreter: { state: 'waiting', position: 2, pausedMs: 0 } }];
-  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
-  f.time += 2 * hour; await f.tick();
-  assert.equal(f.prompts.length, 0, 'machine queue waiting must pause the stuck rule');
-  f.runProgress[0].interpreter.state = 'unavailable'; await f.tick();
-  assert.equal(f.prompts.length, 0, 'unreadable queue ownership cannot prove no progress');
-  f.runProgress[0] = { number: 3066, changedAt: f.time - hour / 2, interpreter: { state: 'finished', pausedMs: 1.5 * hour } };
-  await f.tick(); assert.equal(f.prompts.length, 0);
-  f.time += hour / 2; await f.tick();
-  assert.deepEqual(packet(f).timeRules.filter(row => row.kind === 'stuck-run').map(row => row.number), [3066]);
-});
-
-test('native run progress subtracts saved interpreter waiting after a launcher restart', async t => {
-  const f = await fixture(t); delete f.ports.readRunProgress;
-  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
-  const invoke = f.invoke;
-  f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra});
-  const changedAt = f.time, folder = join(f.cwd, '.git', 'pdd', 'runs', '3066'); mkdirSync(folder, { recursive: true });
-  const file = join(folder, 'status.json');
-  writeFileSync(file, JSON.stringify({ v: 1, number: 3066, repo: 'owner/repo', state: 'running', root: f.cwd }));
-  utimesSync(file, new Date(changedAt), new Date(changedAt));
-  f.ports.readInterpreterProgress = ({ cwd, since }) => {
-    assert.equal(cwd, f.cwd); assert.equal(since, changedAt);
-    return { state: 'finished', position: null, pausedMs: hour };
-  };
-  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
-  f.time += hour; await f.tick();
-  assert.equal(f.prompts.length, 0, 'saved interpreter wait must be excluded after restart');
-  f.time += hour; await f.tick();
-  assert.deepEqual(packet(f).timeRules.filter(row => row.kind === 'stuck-run').map(row => row.number), [3066]);
 });
 test('2709: a full pane budget holds fresh intake and the next tick can release the hold', async t => {
   const f = await fixture(t), warnings = [];
@@ -2155,7 +2122,7 @@ test('3071 repair refreshed packet base agrees with automatic workflow startup',
 for (const [name, root] of [['absent', undefined], ['null', null], ['number', 42], ['object', {}]])
   test(`3091 integration verdict scan keeps incomplete ${name} root rows unknown`, async t => {
     const f = await fixture(t);
-    f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+    f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue')};
     assert.equal((await f.invoke('start', {env: f.ports.env})).exitCode, 0);
     const folder = join(f.cwd, '.git', 'pdd', 'runs', '901'); mkdirSync(folder, {recursive: true});
     const file = join(folder, 'status.json');

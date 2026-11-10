@@ -133,7 +133,7 @@ function assertCli(f,expectedBoundary=null) {
   const result=spawnSync(process.execPath,[fileURLToPath(new URL('../bin/pdd.mjs',import.meta.url)),
     'test','--explain-bindings','place-order','--json'],{cwd:f.repo,encoding:'utf8',env:{...process.env,
       HOME:f.home,XDG_CONFIG_HOME:join(f.home,'config'),PDD_STATE_DIR:f.state,
-      PDD_INTERPRETER_QUEUE:join(f.home,'interpreter-queue'),PDD_RUNTIME_URL:'http://127.0.0.1:1'}});
+      PDD_RUNTIME_URL:'http://127.0.0.1:1'}});
   assert.equal(result.status,4,'3135_REPAIR2_CLI_MISSING_BINDING');
   const plan=JSON.parse(result.stdout).plans[0];
   assert.deepEqual(plan.boundary,expectedBoundary);

@@ -314,7 +314,7 @@ const origin = { repository: 'example/project', coordinatorId: 'coordinator-a', 
 async function autopilotUnchanged(t) {
   const f = await fixture(t, { name: 'bug', agent: 'codex' });
   assert.equal((await startRun({ name: 'bug', issue: '17', agent: 'codex', through: 'code', coordinator: { ...origin, activation: 'start-a' }, cwd: f.source, packageRoot }, f.ports)).exitCode, 1, 'Autopilot refuses the normal-only start option');
-  f.ports.env = { HOME: f.ports.env.HOME, PDD_STATE_DIR: join(f.state, 'runtime'), PDD_INTERPRETER_QUEUE: f.ports.env.PDD_INTERPRETER_QUEUE };
+  f.ports.env = { HOME: f.ports.env.HOME, PDD_STATE_DIR: join(f.state, 'runtime') };
   assert.equal((await startRun({ name: 'bug', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
   let run = f.record();
   for (const dir of ['prompts', 'user_stories', 'tests']) mkdirSync(join(run.root, dir), { recursive: true });

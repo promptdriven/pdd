@@ -23,7 +23,7 @@ for (const [raw, limit, warnings] of [[undefined, 8, 0], ['2', 2, 0], ['0', 8, 1
       if (entry.method === 'GET') return { status: 200, json: f.check(entry.url.split('/').at(-1)) };
       return f.normal(entry);
     });
-    const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '32' };
+    const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin };
     if (raw !== undefined) env.PDD_MAX_UPLOADS = raw;
     const { ports } = portsFor(env, { now: Date.now, sleep: ms => new Promise(done => setTimeout(done, Math.min(ms, 10))), pollMs: 10,
       fetch: async (url, init) => {
@@ -73,7 +73,7 @@ for (const [raw, limit, warnings] of [[undefined, 8, 0], ['2', 2, 0], ['0', 8, 1
 for (const raw of ['', '-1', '+2', '1.5', ' 2', 'garbage', '9007199254740992', '02']) {
   test(`2704 uploads: setting ${JSON.stringify(raw)} has one consistent warning`, async t => {
     const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
-    const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '32', PDD_MAX_UPLOADS: raw });
+    const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PDD_MAX_UPLOADS: raw });
     assert.equal(await runCheck({ cwd: setup.repo, words: [], options: { '--json': true } }, ports), 0);
     const warnings = ports.stderr.text.split('\n').filter(line => /Warning:.*PDD_MAX_UPLOADS/.test(line));
     assert.equal(warnings.length, raw === '02' ? 0 : 1);

@@ -111,7 +111,7 @@ test('jobs: real CLI outside Git, no auth or runtime calls; errors never look em
   const sandbox = temp(t), stateDir = join(sandbox, 'state'), gh = join(sandbox, 'gh');
   writeFileSync(gh, `#!/bin/sh\necho forbidden >&2\nexit 77\n`); chmodSync(gh, 0o700);
   const fake = await fakeRuntime(t, () => { assert.fail('jobs contacted runtime'); });
-  const env = { HOME: sandbox, PDD_INTERPRETER_QUEUE: join(sandbox, 'interpreter-queue'), PATH: sandbox, PDD_STATE_DIR: stateDir, PDD_RUNTIME_URL: fake.origin };
+  const env = { HOME: sandbox, PATH: sandbox, PDD_STATE_DIR: stateDir, PDD_RUNTIME_URL: fake.origin };
   const guard = join(sandbox, 'no-effects.mjs');
   writeFileSync(guard, `import http from 'node:http'; import https from 'node:https'; import net from 'node:net'; import child from 'node:child_process'; import {syncBuiltinESMExports} from 'node:module';
 const stop=()=>{throw Error('Forbidden jobs side effect');}; globalThis.fetch=stop; process.kill=stop;
@@ -169,7 +169,7 @@ test('slots: ten real CLI checks across repositories share a limit of three and 
   assert.equal(early.status, 404);
   assert.equal(jobs.size, 0); assert.equal(active, 0);
   const gh = join(setup.sandbox, 'gh'); writeFileSync(gh, '#!/bin/sh\nif [ "$1" = auth ]; then echo fixture-token; else echo "octo 4242"; fi\n'); chmodSync(gh, 0o700);
-  const env = { HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '3', PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '3', PDD_INTERPRETER_QUEUE: join(setup.sandbox, 'machine-queue') };
+  const env = { HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '3', PDD_RUNTIME_URL: fake.origin };
   const start = i => child([join(root, 'bin/pdd.mjs'), 'test', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env, t });
   const waitFor = async predicate => {
     const deadline = Date.now() + 60_000;
