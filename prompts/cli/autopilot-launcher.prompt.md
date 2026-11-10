@@ -1364,8 +1364,10 @@ stays `full`. The full engine below is unchanged; this section only adds a branc
   NAME` saves `state.label`, which replaces the core's `label` setting. `start --mode
   auto|observe|off` saves `state.mode`, which replaces the core's `mode` (the tick,
   the start's off check and status, which names the source `this machine`); it never
-  writes `pdd.json` (unlike `pdd autopilot observe`). With an effective engine that
-  is not core, `--mode` is refused before any change. A core start whose machine mode
+  writes `pdd.json` (unlike `pdd autopilot observe`). `start --report file|draft|off`
+  saves `state.report` the same way: it replaces the core's `report` in the tick and
+  status (`reports MODE (this machine)`). With an effective engine that is not core,
+  `--mode` or `--report` is refused before any change. A core start whose machine mode
   is `off` saves the state as disabled with mode off, stops the timer and returns exit
   0 with `Autopilot core is off on this machine for REPO: mode off is saved and the
   timer is stopped. To turn it on, run pdd autopilot start --engine core --mode auto or

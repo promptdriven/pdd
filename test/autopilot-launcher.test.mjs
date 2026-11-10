@@ -464,8 +464,8 @@ test('the core engine timer fires every 10 minutes, the full engine every 30; st
     assert.match((await f.invoke('status', { env })).message, /timer active, every 30 minutes \(run pdd autopilot start to use 10 minutes for the core engine\)/);
     // start --mode saves the machine's core mode; pdd.json is not written.
     const config = readFileSync(join(f.cwd, 'pdd.json'), 'utf8');
-    const observed = await f.invoke('start', { env, engine: 'core', mode: 'observe' });
-    assert.equal(observed.exitCode, 0, observed.message); assert.equal(f.state().mode, 'observe');
+    const observed = await f.invoke('start', { env, engine: 'core', mode: 'observe', report: 'draft' });
+    assert.equal(observed.exitCode, 0, observed.message); assert.equal(f.state().mode, 'observe'); assert.equal(f.state().report, 'draft');
     assert.match((await f.invoke('status', { env })).message, /mode observe \(this machine\)/);
     assert.equal(readFileSync(join(f.cwd, 'pdd.json'), 'utf8'), config);
     const back = await f.invoke('start', { env, engine: 'full' });

@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2c0c21d9352ae12d5141d13aa72c37fef03cdc0163b37326123aabba1ecc7990).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 9e13148186c4c3b4219de0b5a75dba9208fd85cce58816c68f0c9c63a128a539).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1539,12 +1539,15 @@ function timerLine(state, active) {
 const machineLabel = state => typeof state?.label === 'string' && state.label.trim() ? state.label.trim() : null;
 // The machine's saved core mode (pdd autopilot start --mode) wins over pdd.json for the core engine.
 const machineMode = state => ['auto', 'observe', 'off'].includes(state?.mode) ? state.mode : null;
+// The machine's saved core report mode (pdd autopilot start --report) wins over pdd.json for the core engine.
+const machineReport = state => ['file', 'draft', 'off'].includes(state?.report) ? state.report : null;
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
 async function coreTick(stateFile, state, p, ports) {
   const core = readCoreSettings(state.cwd);
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
+  if (machineReport(state)) core.report = machineReport(state);
   if (core.mode === 'off') return ok('Autopilot is off.');
   await automaticBase(state, p);
   let budget = { state: 'normal' };
@@ -2428,6 +2431,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.engine !== undefined && !['core', 'full'].includes(input.engine)) return { exitCode: 2, message: 'Use --engine core or --engine full.' };
   if (input.label !== undefined && !(typeof input.label === 'string' && input.label.trim())) return { exitCode: 2, message: 'Use --label with a GitHub label name.' };
   if (input.mode !== undefined && !['auto', 'observe', 'off'].includes(input.mode)) return { exitCode: 2, message: 'Use --mode auto, --mode observe or --mode off.' };
+  if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
   let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
@@ -2441,7 +2445,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const previous=read(join(stateFolder(ports,env),`${id}.json`));
       const state={...previous,cwd};
       // --mode is a machine setting of the core engine only; it never writes pdd.json.
-      if (command==='start' && input.mode && engineOf({...state,engine:input.engine ?? previous?.engine}).engine!=='core') throw Error('--mode works with the core engine only; add --engine core.');
+      if (command==='start' && (input.mode || input.report) && engineOf({...state,engine:input.engine ?? previous?.engine}).engine!=='core') throw Error(`${input.mode ? '--mode' : '--report'} works with the core engine only; add --engine core.`);
       let profile;
       if (resumeCustody) {
         if (!previous) throw Error('Original coordinator recovery needs saved local state.');
@@ -2515,7 +2519,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
-    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; }
+    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; }
     let initialRevision = previous?.controlRevision ?? null;
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
     // Explicit undefined values mask unrelated ambient provider directories in portsFor.
@@ -2527,8 +2531,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const timerActive = Boolean(await timer('status', state, p)), settingsNow = readCoreSettings(state.cwd);
       const label = machineLabel(state) ?? settingsNow.label;
       if (machineMode(state)) settingsNow.mode = machineMode(state);
+      if (machineReport(state)) settingsNow.report = machineReport(state);
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerLine(state, timerActive)}; next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}\n`
-        + coreStatus({ state, settings: { ...settingsNow, label }, sources: { engine: engineOf(state).source, label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json' } },
+        + coreStatus({ state, settings: { ...settingsNow, label }, sources: { engine: engineOf(state).source, label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json' } },
           { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
     }

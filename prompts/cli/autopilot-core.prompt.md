@@ -654,11 +654,11 @@ with the machine id.
 `state.engine` (`core` or `full`, saved by `pdd autopilot start --engine`),
 `state.label` (saved by `start --label`) and `state.mode` (saved by `start --mode`)
 win over `pdd.json` for this repository on this machine. The launcher applies them;
-`coreStatus` takes `sources: {engine, label, mode}` (`machine` or `pdd.json`) and
+`coreStatus` takes `sources: {engine, label, mode, report}` (`machine` or `pdd.json`) and
 names the source: `engine core (this machine: pdd autopilot start --engine core)` or
 `engine core (pdd.json autopilot.engine)`, `only issues with LABEL (this machine)`
-or `(pdd.json)`, and `mode M (this machine)`; mode `observe` adds `(every check, no
-merge)`.
+or `(pdd.json)`, `mode M (this machine)` and `reports R (this machine)`; mode
+`observe` adds `(every check, no merge)`.
 
 ## Ports
 

@@ -2386,3 +2386,31 @@ test('Q7 C1 a PR back from a conflict update goes first in the lane; C2 a reserv
   await v.tick();
   assert.equal(jobFile(v, 19).lane.state, 'waiting', 'a reservation of its file keeps #19 waiting'); assert.equal(jobFile(v, 19).lane.holder, jobFile(v, 20).pr);
 });
+
+// ---- start --report (machine report mode) ---------------------------------------------------------------------
+test('S1 a machine report mode saved by start --report wins over pdd.json in the tick and in status', async t => {
+  const { runAutopilotLauncher, tickAutopilot } = await import('../src/autopilot-launcher.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test', report: 'file' } }));
+  w.issue(17);
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core', report: 'draft',
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
+  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') return w.gh(args, options);
+      if (command !== 'git') assert.fail(`unexpected program ${command}`);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
+  await tickAutopilot(stateFile, ports);
+  w.finish(17, 'build', { result: { outcome: 'failed', kind: 'pdd', component: 'pdd test', code: 'crash', cause: 'pdd test crashed' } });
+  await tickAutopilot(stateFile, ports);
+  assert.equal(w.reports.issues.size, 0, 'the machine says draft: nothing is filed'); assert.equal(listReportDrafts({ root: w.reportRoot }).length, 1);
+  const status = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env }, ports);
+  assert.match(status.message, /reports draft \(this machine\)/);
+  assert.equal((await runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [], report: 'loud' }, ports)).exitCode, 2);
+});
