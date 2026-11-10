@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 5790195b833647aad2a34f06d1b6068fb439cb87cb8b8a71b47852e8a9e86f4f).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 1371a075d0a4f0ab5d6b83315c22ae3f4c7d65331b2522cccc89ad00b3bb16e7).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -120,7 +120,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {

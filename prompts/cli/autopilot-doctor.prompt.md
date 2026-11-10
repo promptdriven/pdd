@@ -65,7 +65,8 @@ Check these boundaries in order and continue after failures:
   read-only account port. Limited and unknown are warnings. For Claude,
   unsupported read-only usage evidence is warning with `claude` and /usage advice;
   no generation call to discover allowance, and no credit/reset advice.
-- With `autopilot.engine: "core"` in the checked repository's `pdd.json`, jobs run
+- With the core engine (the input's `engine`, which a machine start saved, else
+  `autopilot.engine: "core"` in the checked repository's `pdd.json`), jobs run
   headless: report `PASS herdr: Not needed: autopilot.engine is core, so jobs run
   headless without Herdr`, run no Herdr command and add no `herdr-room` check.
   Otherwise:

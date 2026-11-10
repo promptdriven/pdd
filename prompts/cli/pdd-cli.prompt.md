@@ -251,6 +251,6 @@ Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with
 
 Dispatch `autopilot-check-base` to the Autopilot launcher with command check-base and both operands in issues, using the same reply validation and stream rules as its other commands. Do not run the remote settings warning for this command.
 
-Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning.
+Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label` when given.
 
 For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to runInterfaceDraft alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.

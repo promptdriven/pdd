@@ -45,8 +45,15 @@ function extend(f, w) {
     const route = endpoint.slice(prefix.length).split('?')[0];
     if (method !== 'GET') f.writes.push([method, route, input]);
     let m;
+    if ((m = /^\/compare\/([^/]+)\.\.\.([0-9a-f]{40})$/.exec(route))) {
+      const count = range => Number(spawnSync('git', ['--git-dir', w.remote, 'rev-list', '--count', range], { encoding: 'utf8' }).stdout.trim());
+      const base = decodeURIComponent(m[1]), behind = count(`${m[2]}..refs/heads/${base}`), ahead = count(`refs/heads/${base}..${m[2]}`);
+      return ok(200, { behind_by: behind, ahead_by: ahead, status: behind ? (ahead ? 'diverged' : 'behind') : ahead ? 'ahead' : 'identical' });
+    }
     if ((m = /^\/pulls\/(\d+)$/.exec(route))) {
       const pr = f.prs.get(Number(m[1])); if (!pr) return ok(404, { message: 'Not Found' });
+      const tip = spawnSync('git', ['--git-dir', w.remote, 'rev-parse', '--verify', '-q', `refs/heads/${pr.branch}`], { encoding: 'utf8' }).stdout.trim();
+      if (/^[0-9a-f]{40}$/.test(tip) && tip !== pr.syncedTip) { pr.head = tip; pr.syncedTip = tip; }
       if (method === 'PATCH') { if (input.body !== undefined) pr.body = input.body; if (input.state) pr.state = input.state; }
       return ok(200, restPr(pr));
     }
@@ -135,15 +142,16 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   };
   w.kill = (issue, role) => { const job = w.job(issue, role); w.alive.delete(job.pid); return job; };
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.
-  w.build = (issue, { body, role = 'build', checks = 'success', runtime } = {}) => {
+  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {} } = {}) => {
     const job = w.job(issue, role);
     writeFileSync(join(job.cwd, `change-${issue}.txt`), `change ${job.id}\n`);
     git(job.cwd, 'add', '.'); git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
     const head = git(job.cwd, 'rev-parse', 'HEAD');
     let pr = [...w.github.prs.values()].find(p => p.branch === job.branch);
     if (pr) { pr.head = head; if (body) pr.body = body; } else pr = w.github.openPr({ branch: job.branch, head, ...(body ? { body } : {}) });
+    pr.syncedTip = head;
     if (checks) w.github.setChecks(head, checks);
-    w.finish(issue, role, { result: { outcome: 'pr', pr: pr.number, head, ...(runtime ? { runtime } : {}) } });
+    w.finish(issue, role, { result: { outcome: 'pr', pr: pr.number, head, ...(runtime ? { runtime } : {}), ...result } });
     return { pr, head };
   };
   w.review = (issue, verdict, mustFix = []) => {
@@ -167,6 +175,11 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.peer = async (options = {}) => coreWorld(t, { repository, settings, machine: 'machine-b', coordinatorId: 'coord-b', ...options,
     shared: { dir, remote: w.remote, github: w.github, reports: w.reports, clock: w.clock } });
   w.comments = n => w.github.issues.get(n).comments.map(c => c.body);
+  w.baseCommit = (file, text) => {
+    const seed = join(dir, `seed-${Math.random().toString(36).slice(2)}`); git(dir, 'clone', '-q', w.remote, seed);
+    writeFileSync(join(seed, file), text); git(seed, 'add', '.'); git(seed, 'commit', '-qm', `base ${file}`); git(seed, 'push', '-q', 'origin', 'HEAD:main');
+    return git(seed, 'rev-parse', 'HEAD');
+  };
   w.labels = n => w.github.issues.get(n).labels;
   w.git = git;
   return w;

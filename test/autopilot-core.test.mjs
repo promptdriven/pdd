@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { coreWorld } from './helpers/core-world.mjs';
 import { autopilotEngine, coreSettings, readyIssues, coreStatus } from '../src/autopilot-core.mjs';
@@ -640,4 +640,191 @@ test('R5 should-fix: a cleared tool error, a dead suite, a restart, a partial cl
   assert.equal(existsSync(join(w.root, 'jobs', '17.json')), false);
   assert.equal(alerts.length, 1); assert.equal(alerts[0].issue, 17); assert.match(alerts[0].text, /could not finish/);
   assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /"outcome":"abandoned"/);
+});
+
+// ---- Review 2 regressions (each failed on cdb09e95a) ----------------------------------------------------
+test('R6 the Runtime gate is an allowlist: only PASS or "not run" lines and states merge', async t => {
+  const blocked = ['Runtime: FAILED (2 of 3 Stories fail)', '## Runtime: FAIL (lint refused)', '| Runtime | FAIL |', 'Runtime: ❌ FAIL',
+    'Tests: pass; Runtime: FAIL', 'Runtime: see the log', 'Runtime: PASS\nRuntime: not run (busy)'];
+  for (const line of blocked) {
+    const w = await coreWorld(t);
+    w.issue(17); await w.tick();
+    w.build(17, { body: `Fixes #17\n\n${line}` }); await w.tick();
+    assert.equal(w.github.merges.length, 0, line);
+    assert.ok(w.job(17, 'repair'), `${line}: a red Runtime line goes to repair`);
+    assert.match(w.job(17, 'repair').input, /Runtime/, line);
+  }
+  for (const state of ['failed', 'error', 'unknown']) {
+    const w = await coreWorld(t);
+    w.issue(17); await w.tick();
+    w.build(17, { runtime: { state, kind: 'runtime', component: 'pdd test', code: 'x', cause: 'y' } }); await w.tick();
+    assert.equal(w.github.merges.length, 0, state); assert.ok(w.job(17, 'repair'), state);
+  }
+  const missing = await coreWorld(t);
+  missing.issue(17); await missing.tick();
+  missing.build(17, { body: 'Fixes #17' }); await missing.tick();
+  assert.match(missing.job(17, 'repair').input, /no Runtime line/i, 'no Runtime line and no "no prompt changed" result is red');
+  for (const [body, result] of [['Fixes #17\n\n- **Runtime:** ✅ PASS', {}], ['Fixes #17\n\nThe runtime check flow is unchanged.', { promptChanged: false }],
+    ['Fixes #17\n\n> Runtime: not run (no prompt changed)', {}]]) {
+    const w = await coreWorld(t);
+    w.issue(17); await w.tick();
+    const { pr } = w.build(17, { body, result }); await w.tick();
+    w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+    assert.deepEqual(w.github.merges, [pr.number], body);
+  }
+});
+
+test('R7 a job file with no agent record, or one whose advance keeps failing, ends and frees its slot and claim', async t => {
+  const { readAgentJob } = await import('../src/agent-job.mjs');
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18);
+  await w.tick();
+  const job = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  delete job.agent; writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(job));
+  await w.tick({ jobs: { ...w.jobs, read: spec => readAgentJob(spec) } });
+  assert.equal(endComments(w, 17).length, 1); assert.match(endComments(w, 17)[0], /no agent record/);
+  assert.ok(w.job(18, 'build'), 'the slot is free');
+  // Advance throws on every tick: at the deadline plus 2 ticks the job ends; after the deadline it gets no heartbeat.
+  const v = await coreWorld(t, { settings: { runs: 1, jobTimeoutMinutes: 60 } });
+  v.issue(17); v.issue(18);
+  await v.tick();
+  const broken = { ...v.jobs, read: () => { throw Error('broken job record'); } };
+  const beats = [];
+  const heartbeat = async job => { if (job.issue === 17) beats.push(v.now()); return { state: 'refreshed' }; };
+  for (let i = 0; i < 6; i++) { v.advance(20 * MIN); await v.tick({ jobs: broken, heartbeat }); }
+  assert.equal(endComments(v, 17).length, 1, 'ended within the deadline plus 2 ticks');
+  assert.ok(beats.every(at => at < Date.parse('2026-11-10T12:00:00Z') + 60 * MIN), 'no heartbeat after the deadline');
+  assert.ok(v.job(18, 'build'));
+});
+
+test('R8 a non-zero test exit is a red suite and gets a repair; only a runner failure is a broken suite', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 2); await w.tick();
+  assert.ok(w.job(17, 'repair'), 'exit 2 (make, pytest) is a red suite');
+  const v = await coreWorld(t, { settings: { report: 'draft' } });
+  v.issue(17); await v.tick(); v.build(17); await v.tick();
+  v.review(17, 'PASS');
+  for (let i = 0; i < 3; i++) { writeFileSync(v.job(17, 'suite').log, 'Test suite execution timeout after 120 minutes.\n'); v.suite(17, 124); await v.tick(); }
+  assert.equal(v.job(17, 'repair'), undefined, 'a runner timeout never uses a repair');
+  assert.match(endComments(v, 17)[0], /Cause: pdd \/ suite-broken/);
+});
+
+test('R9 a worktree that Git still lists but whose folder is gone does not block the review checkout', async t => {
+  const w = await coreWorld(t, { settings: { jobTimeoutMinutes: 30 } });
+  w.issue(17); await w.tick();
+  const path = join(w.root, 'worktrees', '17-review');
+  w.git(w.cwd, 'worktree', 'add', '-q', '--detach', path, 'HEAD');
+  w.git(w.cwd, 'worktree', 'lock', path);
+  rmSync(path, { recursive: true, force: true });
+  w.build(17); await w.tick();
+  assert.ok(w.job(17, 'review'), 'the review starts');
+});
+
+test('R10 a merge whose finish failed is finished as merged on the next tick, not as a person stop', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  let fail = false; const gh = w.gh;
+  w.gh = async (args, o) => {
+    if (fail && args.some(x => /\/issues\/17$/.test(String(x)))) return { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' };
+    const r = await gh(args, o); if (args[0] === 'pr' && args[1] === 'merge' && r.code === 0) fail = true; return r;
+  };
+  await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  fail = false; w.github.close(17);
+  await w.tick();
+  const history = readFileSync(join(w.root, 'history.jsonl'), 'utf8');
+  assert.match(history, /"outcome":"merged"/); assert.doesNotMatch(history, /"outcome":"stopped"/);
+  assert.ok(!w.labels(17).includes('pdd:working'));
+  assert.match(w.job(17, 'build').input, /do not assign/i, 'the agent is told not to assign the issue or change its labels');
+});
+
+test('R11 a loser claim comment that stays is removed by the winner, which then merges', async t => {
+  const a = await coreWorld(t, { settings: { runs: 1 } });
+  const b = await a.peer();
+  a.issue(17);
+  const noDelete = gh => async (args, o) => args.includes('DELETE') && args.some(x => /issues\/comments\/\d+$/.test(String(x))) && !noDelete.allow
+    ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' } : gh(args, o);
+  const ghA = a.gh, ghB = b.gh;
+  a.gh = noDelete(ghA); b.gh = noDelete(ghB);
+  await Promise.all([a.tick(), b.tick()]);
+  const win = a.job(17, 'build') ? a : b;
+  assert.ok(win.job(17, 'build') && !(win === a ? b : a).job(17));
+  assert.equal(a.comments(17).filter(c => c.includes('"labelEventId"')).length, 2, 'the loser comment stayed');
+  noDelete.allow = true;
+  const { pr } = win.build(17); await win.tick();
+  win.review(17, 'PASS'); win.suite(17, 0);
+  const r = await win.tick();
+  assert.deepEqual(a.github.merges, [pr.number], r.message);
+  assert.equal(a.comments(17).filter(c => c.includes('"labelEventId"')).length, 1);
+});
+
+test('R12 every text the core posts on GitHub is redacted and capped', async t => {
+  const token = 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+  const w = await coreWorld(t, { settings: { repairs: 0 } });
+  w.issue(17); w.issue(18);
+  await w.tick();
+  w.build(17); await w.tick();
+  w.review(17, 'FAIL', [`Remove the token ${token} from config.js`, 'x'.repeat(5000)]); w.suite(17, 0); await w.tick();
+  w.finish(18, 'build', { result: { outcome: 'failed', kind: 'job', code: 'x', cause: `push failed for https://user:${token}@github.com/acme/widgets.git` } }); await w.tick();
+  const posted = [...w.github.issues.values()].flatMap(issue => issue.comments.map(c => c.body))
+    .concat([...w.github.prs.values()].flatMap(pr => pr.comments.map(c => c.body)));
+  assert.ok(posted.length >= 3);
+  for (const body of posted) { assert.ok(!body.includes(token), body.slice(0, 200)); assert.ok(body.length <= 20000, `${body.length}`); }
+});
+
+test('R13 base drift: a PR behind the base is refreshed natively without a repair; a conflict starts a repair', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick();
+  const first = w.build(17); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  w.baseCommit('other.txt', 'base moved\n');
+  await w.tick();
+  assert.equal(w.github.merges.length, 0, 'no merge of a head that lacks the base tip');
+  const job = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  assert.notEqual(job.head, first.head); assert.equal(job.repairs, 0, 'a refresh is not a repair');
+  await w.tick();
+  assert.equal(first.pr.head, job.head, 'the refreshed head is pushed to the PR branch');
+  assert.equal(w.job(17, 'review').head, job.head, 'the review runs again for the new head');
+  assert.equal(w.job(17, 'suite').head, job.head, 'the suite runs again for the new head');
+  w.github.setChecks(job.head); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [first.pr.number]);
+  const v = await coreWorld(t);
+  v.issue(17); await v.tick();
+  v.build(17); await v.tick();
+  v.review(17, 'PASS'); v.suite(17, 0);
+  v.baseCommit('change-17.txt', 'conflicting base text\n');
+  await v.tick();
+  assert.ok(v.job(17, 'repair'), 'a merge conflict with the base starts a repair job');
+  assert.match(v.job(17, 'repair').input, /conflict/i);
+});
+
+test('R14 a machine engine and label saved by start win over pdd.json; status names the source', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { createHash } = await import('node:crypto');
+  const { spawnSync } = await import('node:child_process');
+  const { mkdirSync } = await import('node:fs');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test' } }));
+  w.issue(17); w.issue(18, { labels: ['pdd:autopilot'] });
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core', label: 'pdd:autopilot',
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
+  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') return w.gh(args, options);
+      if (command !== 'git') assert.fail(`unexpected program ${command}`);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+  const result = await tickAutopilot(stateFile, ports);
+  assert.match(result.message, /Autopilot core: 1 started/, 'the machine engine core wins over pdd.json (full)');
+  assert.ok(w.job(18, 'build') && !w.job(17), 'the machine label wins over pdd.json (no label)');
+  const status = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env }, ports);
+  assert.match(status.message, /engine core \(this machine: pdd autopilot start --engine core\)/);
+  assert.match(status.message, /only issues with pdd:autopilot \(this machine\)/);
 });

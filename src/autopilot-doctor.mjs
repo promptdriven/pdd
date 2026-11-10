@@ -141,7 +141,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   add('agent-usage',usage.state==='healthy'?'pass':'warn',usage.state==='limited'?'Agent usage limit reached; retry after allowance is available':usage.state==='healthy'?'Read-only usage check healthy':`${agent?.kind ?? 'Agent'} usage is unproved${agent?.kind==='claude'?'; run /usage in Claude Code':''}`,agent?.kind==='claude'?quote(agent.command??'claude'):retry);
 
   // The core engine runs jobs headless: Herdr is not needed.
-  const engine = json(read(join(cwd,'pdd.json')))?.autopilot?.engine === 'core' ? 'core' : 'full';
+  const engine = (['core','full'].includes(input.engine) ? input.engine : json(read(join(cwd,'pdd.json')))?.autopilot?.engine) === 'core' ? 'core' : 'full';
   const herdr = engine === 'core' ? null : await run('herdr',['--version']);
   if (engine === 'core') add('herdr','pass','Not needed: autopilot.engine is core, so jobs run headless without Herdr','pdd autopilot status');
   else add('herdr',ready(herdr)?'pass':'fail','Herdr installation','curl -fsSL https://herdr.dev/install.sh | sh');

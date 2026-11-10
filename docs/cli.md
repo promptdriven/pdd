@@ -106,7 +106,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session and check for work immediately. A user timer checks again every 30 minutes. `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
+| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes. `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full` and `--label NAME` save this machine's engine and opt-in label for this repo; they win over `pdd.json`, and a later start without them keeps them. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
@@ -1363,7 +1363,11 @@ Build scripts and commands without test results do not qualify.
 ## Core engine
 
 Set `autopilot.engine` to `core` in `pdd.json` to run the small native engine
-instead of the coordinator chat. The default is `full`. The core engine needs no
+instead of the coordinator chat. The default is `full`. To choose it on one
+machine only, run `pdd autopilot start --engine core`; `--label NAME` sets the
+opt-in label the same way. The machine values win over `pdd.json`, and
+`pdd autopilot status` says where the engine and the label come from. Comments
+that the core engine posts are redacted for secrets and cut in length. The core engine needs no
 Herdr: `pdd autopilot doctor` skips the Herdr checks, `start` opens no Herdr
 session, and each job is a headless Codex or Claude process with a log file.
 
@@ -1392,10 +1396,16 @@ Each tick, without AI calls:
    result ends. A job with a PR goes to the merge check.
 4. Merge check: the PR head is the job's head, CI is green for that head, the
    full test suite passes for that head, a fresh reviewer agent that did not write
-   the change gives PASS for that head (the tick posts the verdict on the PR), the
-   PR does not say `Runtime: FAIL`, and the base check passes. Then
+   the change gives PASS for that head (the tick posts the verdict on the PR), every
+   `Runtime:` line of the PR says `PASS` or `not run (…)`, the head contains the
+   current base tip, and the base check passes. Then
    `gh pr merge --merge --match-head-commit HEAD` merges it, and the issue closes.
-   A red check starts one repair job on the same branch, up to `repairs` times.
+   A red check starts one repair job on the same branch, up to `repairs` times. A
+   missing or unclear `Runtime:` line is red, unless the job says no prompt
+   changed. A non-zero exit of the test command is red; a failure of the suite
+   runner itself (it could not start, was killed or timed out) runs the suite again
+   and never uses a repair. When the base moved, Autopilot merges the base into the
+   PR branch itself and checks the new head again; a merge conflict starts a repair.
 5. Fill free slots: claim the oldest ready issue with `pdd:working` and a claim
    comment, make a worktree and start one headless job. The job makes one PR with
    prompt, tests and code, and writes one `Runtime:` line in the PR body.

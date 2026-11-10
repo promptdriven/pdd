@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c203a792259ec66aab37b6060865c7199e51782074490e08a26fa7c325dd442f).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 0f6be696136e17abdac7d0e9a4aec6be3ea1cf37850f8681b7dc8bde838b1794).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1522,10 +1522,14 @@ function workflowCleanupPorts(p, ports) {
 }
 // The small native engine (autopilot.engine "core"): no coordinator chat, Herdr, parking or AI scheduling.
 const engineAt = cwd => { try { return autopilotEngine(JSON.parse(readFileSync(join(cwd, 'pdd.json'), 'utf8'))); } catch { return 'full'; } };
+// The machine's saved engine (pdd autopilot start --engine) wins over pdd.json.
+const engineOf = state => ['core', 'full'].includes(state?.engine) ? { engine: state.engine, source: 'machine' } : { engine: engineAt(state.cwd), source: 'pdd.json' };
+const machineLabel = state => typeof state?.label === 'string' && state.label.trim() ? state.label.trim() : null;
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
 async function coreTick(stateFile, state, p, ports) {
   const core = readCoreSettings(state.cwd);
+  if (machineLabel(state)) core.label = machineLabel(state);
   if (core.mode === 'off') return ok('Autopilot is off.');
   await automaticBase(state, p);
   let budget = { state: 'normal' };
@@ -1533,7 +1537,7 @@ async function coreTick(stateFile, state, p, ports) {
   catch { /* An unreadable ledger leaves the budget normal. */ }
   p.etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now });
   const listIssues = async () => {
-    const result = await queryIssues(state, p);
+    const result = p.queryIssues ? await p.queryIssues(state) : await queryIssues(state, p);
     if (result.reserveBlocked || result.rateLimited) throw Error('GitHub limit is low; the issue list waits for the reset.');
     if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; }
     if (result.pages) state.pages = result.pages;
@@ -1582,7 +1586,7 @@ async function runTick(stateFile, ports, completion) {
       try { state = read(stateFile); if (!state?.enabled) return await outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state); }
       finally { release(); }
     }
-    if (engineAt(state.cwd) === 'core') return completion ? { state: 'inactive' } : await coreTick(stateFile, state, p, ports);
+    if (engineOf(state).engine === 'core') return completion ? { state: 'inactive' } : await coreTick(stateFile, state, p, ports);
     try { await (ports.tidyRuns ?? tidyRuns)({timeBudgetMs:5000}, workflowCleanupPorts(p, ports)); }
     catch (error) { p.warn(`Finished chat cleanup waits (${error.code ?? 'unavailable'}).`); }
     const config = await settings(state, p);
@@ -2404,6 +2408,8 @@ async function localCosts(input, ports, state = {}) {
 }
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, checks, resumeCustody, issues = [] } = input;
+  if (input.engine !== undefined && !['core', 'full'].includes(input.engine)) return { exitCode: 2, message: 'Use --engine core or --engine full.' };
+  if (input.label !== undefined && !(typeof input.label === 'string' && input.label.trim())) return { exitCode: 2, message: 'Use --label with a GitHub label name.' };
   let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
@@ -2422,7 +2428,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
         profile=custodyProjection(state,resolve(input.cwd,resumeCustody));
       } else profile=savedProfile(previous,env);
       coordinatorState=resumeCustody?{...state,paneId:profile.paneId,workspaceId:profile.workspaceId,agent:profile.agent}:state;
-      doctorInput={...input,cwd,env,profile,coordinatorPaneId:resumeCustody?profile.paneId:previous?.paneId};
+      doctorInput={...input,cwd,env,profile,coordinatorPaneId:resumeCustody?profile.paneId:previous?.paneId,engine:input.engine ?? previous?.engine};
     } catch (error) {
       if (command==='start') return bad(error.message);
       // Doctor still reports repository failures in its complete report.
@@ -2489,6 +2495,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
+    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); }
     let initialRevision = previous?.controlRevision ?? null;
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
     // Explicit undefined values mask unrelated ambient provider directories in portsFor.
@@ -2496,10 +2503,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
       CODEX_HOME:startSelection.env.CODEX_HOME,CLAUDE_CONFIG_DIR:startSelection.env.CLAUDE_CONFIG_DIR,GEMINI_CLI_HOME:startSelection.env.GEMINI_CLI_HOME} : input.env;
     p = portsFor(state, { ...ports, env: invocationEnv });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
-    if (command === 'status' && engineAt(state.cwd) === 'core') {
-      const timerActive = Boolean(await timer('status', state, p));
+    if (command === 'status' && engineOf(state).engine === 'core') {
+      const timerActive = Boolean(await timer('status', state, p)), settingsNow = readCoreSettings(state.cwd);
+      const label = machineLabel(state) ?? settingsNow.label;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}\n`
-        + coreStatus({ state, settings: readCoreSettings(state.cwd) }, { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
+        + coreStatus({ state, settings: { ...settingsNow, label }, sources: { engine: engineOf(state).source, label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null } },
+          { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
     }
     if (command === 'status') {
@@ -2608,7 +2617,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return { exitCode: result.exitCode, message: result.message };
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status, add or release.' };
-    const core = engineAt(state.cwd) === 'core';
+    const core = engineOf(state).engine === 'core';
     const readiness = core ? { state: 'ready' } : await workflowReadiness(state, p);
     if (readiness.state !== 'ready') return bad(`Autopilot did not start: pdd workflows cannot start in ${state.cwd}. ${readiness.message} Nothing was started or claimed, and every timer is unchanged.`);
     const priorBase = state.baseBranch;

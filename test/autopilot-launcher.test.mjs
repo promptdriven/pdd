@@ -2460,3 +2460,21 @@ test('start: guarded cleanup reclaims a finished workflow shell after its chat h
   assert.equal(w.herdr.panes.length,paneCount-1);
   assert.ok(!w.herdr.paneOf(run.layout));
 });
+
+test('start --engine core --label saves the machine engine and label, opens no Herdr session, and status names the source', async t => {
+  const f = await fixture(t);
+  const started = await f.invoke('start', { engine: 'core', label: 'pdd:autopilot' });
+  assert.equal(started.exitCode, 0, started.message);
+  assert.match(started.message, /See: pdd autopilot status/);
+  assert.equal(f.state().engine, 'core'); assert.equal(f.state().label, 'pdd:autopilot');
+  assert.ok(!(f.herdrCalls ?? []).some(args => args[0] === 'workspace' || args[0] === 'pane' && args[1] === 'run'), 'no coordinator workspace or chat');
+  const again = await f.invoke('start');
+  assert.equal(again.exitCode, 0, again.message);
+  assert.equal(f.state().engine, 'core', 'a start without --engine keeps the saved engine');
+  const status = await f.invoke('status');
+  assert.match(status.message, /engine core \(this machine: pdd autopilot start --engine core\)/);
+  assert.match(status.message, /only issues with pdd:autopilot \(this machine\)/);
+  const back = await f.invoke('start', { engine: 'full' });
+  assert.equal(f.state().engine, 'full', back.message);
+  assert.equal((await f.invoke('start', { engine: 'turbo' })).exitCode, 2);
+});

@@ -1358,6 +1358,11 @@ person questions and explicit blockers.
 value other than `core` (or an unreadable file) is the full engine. The default
 stays `full`. The full engine below is unchanged; this section only adds a branch.
 
+- Engine source: `state.engine` (`core` or `full`), saved by `start --engine`, wins
+  over `pdd.json`; a start without `--engine` keeps the saved value. `start --label
+  NAME` saves `state.label`, which replaces the core's `label` setting. Other values
+  of `--engine`, or a blank label, return exit code 2 before any effect. Doctor gets
+  the effective engine as `engine` in its input.
 - Tick: after the tick lock and the coordinator identity are settled, and before any
   workflow cleanup, a core engine runs the core tick and returns its result. A
   completion request returns `inactive` with no work. The core tick selects the

@@ -48,7 +48,7 @@ Help forms and completion name only the `NAMES` words.
 
 Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs, --checks and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --resume-custody supplies the verified original-owner projection.
+- `pdd autopilot start [--runs N] [--checks N] [--engine core|full] [--label NAME] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent, or headless jobs with the core engine; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --engine (choice core or full) and --label (text) save this machine's engine and opt-in label for this repo, over pdd.json; --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.

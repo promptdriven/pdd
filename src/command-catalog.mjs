@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 64f260017499475ad9532b081d6e70ba19786c789e0132996a388711a9480b9e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 85a2b9d7777d8ea21d86fe580b7e70529f8cd5ddf38c4e188be957297298411f).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -24,8 +24,8 @@ const routes = [
   { id: 'metrics.import', prefix: ['metrics', 'import'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics import FILE', 'Import a metrics bundle.')] },
   { id: 'metrics.record', prefix: ['metrics', 'record'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics record FILE', 'Record explicit metrics observations.')] },
   { id: 'autopilot.doctor', prefix: ['autopilot', 'doctor'], local: 'autopilot-doctor', operands: [], options: [], forms: [form('pdd autopilot doctor', 'Read-only first-start checks and fix commands; no AI call or GitHub write.')] },
-  { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'},{name:'--checks',kind:'text'},{name:'--resume-custody',kind:'text'}],
-    forms: [form('pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]', 'Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --resume-custody supplies the verified original-owner projection.')] },
+  { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'},{name:'--checks',kind:'text'},{name:'--engine',kind:'value',choices:['core','full']},{name:'--label',kind:'text'},{name:'--resume-custody',kind:'text'}],
+    forms: [form('pdd autopilot start [--runs N] [--checks N] [--engine core|full] [--label NAME] [--resume-custody FILE]', 'Start this repo in an interactive Herdr agent, or headless jobs with the core engine; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --engine and --label save this machine\'s engine and opt-in label for this repo, over pdd.json; --resume-custody supplies the verified original-owner projection.')] },
   { id: 'autopilot.audit', prefix: ['autopilot', 'audit'], local: 'autopilot-audit', operands: [{name:'run',type:'text'},{name:'pr',type:'text'}], options: [],
     forms: [form('pdd autopilot audit RUN PR', 'Audit an automatic merge once with a fresh agent and save its verdict.')] },
   { id: 'autopilot.check-base', prefix: ['autopilot', 'check-base'], local: 'autopilot-check-base', operands: [{name:'run',type:'text'},{name:'pr',type:'text'}], options: [],
