@@ -424,7 +424,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
 | `live-resource-policy` | The live resource bindings or run config broke a path, upload, size, schema or server policy rule | Use repository-relative Git-visible non-symlink JSON files (at most 65536 bytes) with schemas `prompt-runtime.live-resource-bindings.v1` and `prompt-runtime.live-resource-run-config.v1` and a positive integer `max_live_calls`. |
 | `live-resource-binding-missing` | A declared resource required for live execution has no binding in `live.resource_bindings` | Add the missing resource binding in the file named by `live.resource_bindings`, or switch the test back to simulated mode. |
-| `live-replay-unavailable` | The server refused live resource replay on this endpoint or run | Remove `"live"` from the test when using simulated or Try endpoints, or run `pdd test` when live replay is enabled on the server. |
+| `live-replay-unavailable` | The selected endpoint cannot replay the live resource calls | On Check, remove live settings to use simulated checks or wait for Check support. On Try, use a test that does not depend on live resource calls; `--new` does not enable replay. |
 
 ## 12. `pdd simulate` and Save as test
 

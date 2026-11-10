@@ -206,6 +206,52 @@ test('LIVE-MODE5: live service-restarted stays unknown and never creates a repla
   }
 });
 
+test('LIVE-MODE6: malformed live JSON does not echo source bytes in a local refusal', async t => {
+  const sentinel = 'SENTINEL';
+  const { repo, home, state } = harbor(t, r => {
+    addLiveFiles(r);
+    writeFileSync(join(r, 'runtime/live-resources.json'), `{"schema_version":"prompt-runtime.live-resource-bindings.v1","operations":[{"resource":${sentinel},"operation":"log","kind":"command"}]}`);
+  });
+  let networkCalls = 0;
+  const { ports } = portsFor(
+    { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
+    { fetch: async () => { networkCalls += 1; throw Error('unexpected network call'); } },
+  );
+  const code = await runCheck({ words: ['place-order'], options: { '--json': true }, cwd: repo }, ports);
+  assert.equal(code, 4);
+  assert.equal(networkCalls, 0);
+  const out = JSON.parse(ports.stdout.text);
+  assert.equal(out.rows[0].refusals[0].code, 'live-resource-policy');
+  assert.match(out.rows[0].refusals[0].message, /valid UTF-8 JSON/i);
+  assert.doesNotMatch(out.rows[0].refusals[0].message, /Unexpected token|position \d+|line \d+ column \d+/i);
+  assert.equal(ports.stdout.text.includes(sentinel), false);
+  assert.equal(ports.stderr.text.includes(sentinel), false);
+});
+
+// The Try endpoint refuses live replay without suggesting an unavailable retry.
+test('LIVE-MODE7: live-replay-unavailable advice depends on Try and does not suggest --new', async t => {
+  const { repo, home, state } = harbor(t, r => addLiveFiles(r));
+  const fake = await fakeRuntime(t, (entry, runtime) => {
+    if (entry.method === 'POST' && entry.command === 'lint') return { status: 200, json: runtime.lint(entry.request.requestId) };
+    const id = entry.method === 'POST' ? entry.request.requestId : entry.url.split('/').at(-1);
+    return { status: 200, json: runtime.job(id, 'try', 'refused', {
+      exitCode: 4, refusals: [{ code: 'live-replay-unavailable' }],
+    }, 0) };
+  });
+  const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin });
+  const code = await runTry({ words: ['place-order'], options: { '--no-open': true, '--no-wait': true }, cwd: repo }, ports);
+  assert.equal(code, 4);
+  assert.doesNotMatch(ports.stdout.text, /--new|pdd simulate/i);
+  assert.match(ports.stdout.text, /live-replay-unavailable/i);
+  assert.match(ports.stdout.text, /live resource.*replay|replay.*live resource/i);
+  assert.match(ports.stdout.text, /test without .*live resource operations/i);
+  const tryPost = fake.posts.find(post => post.command === 'try');
+  assert.ok(tryPost);
+  assert.equal(tryPost.request.resource_mode, undefined);
+  assert.equal(tryPost.request.resource_bindings, undefined);
+  assert.equal(tryPost.request.resource_run_config, undefined);
+});
+
 // Path safety, Git visibility, upload membership, symlink and size/schema policy refusals.
 test('LIVE-MODE3: path safety, untracked files, symlinks, upload omission, size limits and schema errors refuse locally with live-resource-policy', async t => {
   const cases = [
@@ -323,7 +369,7 @@ test('LIVE-MODE4: server refusals live-resource-policy, live-resource-binding-mi
   const serverRefusals = [
     ['live-resource-policy', null, /The live resource bindings or run config failed the live resource policy/i, /prompt-runtime\.live-resource-bindings\.v1/],
     ['live-resource-binding-missing', 'git_origin', /A live check reached a resource operation that has no live binding/i, /add a live binding/i],
-    ['live-replay-unavailable', null, /Live resource steps cannot be replayed in Try/i, /Try does not replay live resource calls/i],
+    ['live-replay-unavailable', null, /Check endpoint.*live resource/i, /simulated/i],
   ];
 
   for (const [code, detail, msgPattern, hintPattern] of serverRefusals) {
@@ -343,6 +389,7 @@ test('LIVE-MODE4: server refusals live-resource-policy, live-resource-binding-mi
     assert.match(ports.stdout.text, new RegExp(code), `${code}: expected code in stdout`);
     assert.match(ports.stdout.text, msgPattern, `${code}: expected clear message in stdout`);
     assert.match(ports.stdout.text, hintPattern, `${code}: expected repair hint in stdout`);
+    if (code === 'live-replay-unavailable') assert.doesNotMatch(ports.stdout.text, /Try does not replay|pdd simulate|--new/i);
 
     // 2. HTTP 422 direct server refusal on POST /v1/check
     const fake422 = await fakeRuntime(t, entry => {
@@ -355,5 +402,6 @@ test('LIVE-MODE4: server refusals live-resource-policy, live-resource-binding-mi
     assert.match(run422.ports.stdout.text, new RegExp(code), `${code} 422: expected code in stdout`);
     assert.match(run422.ports.stdout.text, msgPattern, `${code} 422: expected clear message in stdout`);
     assert.match(run422.ports.stdout.text, hintPattern, `${code} 422: expected repair hint in stdout`);
+    if (code === 'live-replay-unavailable') assert.doesNotMatch(run422.ports.stdout.text, /Try does not replay|pdd simulate|--new/i);
   }
 });

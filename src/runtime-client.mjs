@@ -1,7 +1,7 @@
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2c195c1dc0ae33578b5fcf0397de2d260baa786e65fc1ae2063b3f2b8679cd74).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: badf1c8efc53c63cdea097a67aeac911875ac25aa21faf30e42c8fc2068ae7b7).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -1002,8 +1002,8 @@ function judgePost(reply, id, command, secrets) {
   if ([400, 413, 415, 422].includes(reply.status) && error?.code) {
     const code = cleanText(error.code, secrets);
     const section = cleanText(error.field ?? error.section ?? reply.json?.details?.field, secrets) || null;
-    const message = cleanText(error.message, secrets) || LIVE_REFUSAL_MESSAGES[code] || null;
-    const liveHint = LIVE_REFUSAL_HINTS[code] || null;
+    const message = cleanText(error.message, secrets) || liveRefusalMessage(code, command);
+    const liveHint = liveRefusalHint(code, command);
     return { kind: 'refused', refusal: { code, section, message,
       engine_message: reply.json.details ? cleanText(JSON.stringify(reply.json.details), secrets) : null,
       ...(reply.status === 422 ? { reason: cleanText(error.reason, secrets) || null, fix: cleanText(error.fix, secrets) || null,
@@ -1071,13 +1071,18 @@ function select(found, words, root) {
 const LIVE_REFUSAL_MESSAGES = Object.freeze({
   'live-resource-policy': 'The live resource bindings or run config failed the live resource policy.',
   'live-resource-binding-missing': 'A live check reached a resource operation that has no live binding in resource_bindings.',
-  'live-replay-unavailable': 'Live resource steps cannot be replayed in Try.',
 });
 const LIVE_REFUSAL_HINTS = Object.freeze({
   'live-resource-policy': 'pdd: check resource_bindings (prompt-runtime.live-resource-bindings.v1) and resource_run_config (prompt-runtime.live-resource-run-config.v1): both must be repository-relative regular files inside the upload, at most 65536 bytes, with no symlinks and allowed live policy bounds.',
   'live-resource-binding-missing': 'pdd: add a live binding for the named resource and operation in resource_bindings (prompt-runtime.live-resource-bindings.v1), then run pdd test again.',
-  'live-replay-unavailable': 'pdd: run a fresh pdd test check instead; Try does not replay live resource calls.',
 });
+const liveRefusalMessage = (code, endpoint = 'check') => code === 'live-replay-unavailable'
+  ? endpoint === 'try' ? 'Try cannot replay live resource calls.' : 'The Check endpoint cannot replay live resource steps.'
+  : LIVE_REFUSAL_MESSAGES[code] ?? null;
+const liveRefusalHint = (code, endpoint = 'check') => code === 'live-replay-unavailable'
+  ? endpoint === 'try' ? 'pdd: Try cannot replay live resource calls. Use a test without live resource operations; making a new Try will not change this.'
+    : 'pdd: remove the live settings to use simulated checks, or wait until the Check endpoint supports live replay. Repeating this live check will not help.'
+  : LIVE_REFUSAL_HINTS[code] ?? null;
 
 const localRows = rows => rows.map(row => ({ ...row, ...(row.refusals.length ? {unsent:true} : {}), state: row.refusals.length ? 'refused' : row.native_only?.length ? 'not_run' : 'ready', phase: row.refusals.length || row.native_only?.length ? 'local' : 'server',
   ...(row.native_only?.length ? {unsent:true,note:{code:'native-only',message:row.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}} : {}),
@@ -1268,9 +1273,9 @@ const cleanItem = (item, secrets) => ({ code: cleanText(item.code, secrets) || '
 // Hints that make a server refusal readable: the local P9 rule, P7 status or live resource policy.
 function addHints(row, root, visible) {
   for (const item of row.refusals) {
-    if (LIVE_REFUSAL_MESSAGES[item.code]) {
-      if (!item.message || item.message === item.code || GENERIC_REFUSAL.test(item.message)) item.message = LIVE_REFUSAL_MESSAGES[item.code];
-      item.hint ||= LIVE_REFUSAL_HINTS[item.code];
+    if (LIVE_REFUSAL_MESSAGES[item.code] || item.code === 'live-replay-unavailable') {
+      if (!item.message || item.message === item.code || GENERIC_REFUSAL.test(item.message)) item.message = liveRefusalMessage(item.code, 'check');
+      item.hint ||= liveRefusalHint(item.code, 'check');
       if (row.next_step === 'Tell the person the reason. Do not resend it automatically.') row.next_step = null;
     }
     const index = Number(/^steps\[(\d+)\]/.exec(item.section ?? '')?.[1]), step = row.steps?.[index];
@@ -3783,15 +3788,19 @@ const GENERIC_REFUSAL = /^The runtime refused this job\b/;
 function trySetupRefused(context, test, appMap, refusals, reportUrl) {
   if (context.doorMode) throw new Stop(125, refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean).join('; ') || 'The interpreter refused this Try.');
   const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
-  const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
-    reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message), LIVE_REFUSAL_MESSAGES[text(item.code)]].find(Boolean),
-    fix: text(item.fix) || LIVE_REFUSAL_HINTS[text(item.code)] || '', where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') }));
+  const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => {
+    const code = text(item.code) || 'refused';
+    return { code, section: text(item.section),
+      reason: [text(item.reason), APP_MAP_RULES[code], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message), liveRefusalMessage(code, 'try')].find(Boolean),
+      fix: code === 'live-replay-unavailable' ? liveRefusalHint(code, 'try') : text(item.fix) || liveRefusalHint(code, 'try') || '',
+      where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') };
+  });
   const mapped = !!appMap && items.some(item => Object.hasOwn(APP_MAP_RULES, item.code) || /^app-map-/.test(item.code) || /app[-_]map/i.test(item.section));
-  const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.fix)?.fix;
-  const again = `run pdd simulate ${test.story} --new.`;
+  const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.code === 'live-replay-unavailable')?.fix ?? items.find(item => item.fix)?.fix;
+  const again = items.some(item => item.code === 'live-replay-unavailable') ? '' : `run pdd simulate ${test.story} --new.`;
   line(context.ports.stdout, `The Try could not start: ${mapped ? 'the app map was refused' : 'the server refused it'} (${why}).`);
-  line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${appMap} (RUNBOOK §13), then ${again}`
-    : `Fix what it names, then ${again}${reportUrl ? ` Details: ${reportUrl}` : ''}`);
+  line(context.ports.stdout, fix ? `${fix}${again ? ` Then ${again}` : ''}` : mapped ? `Fix ${appMap} (RUNBOOK §13), then ${again}`
+    : `Fix what it names${again ? `, then ${again}` : '.'}${reportUrl ? ` Details: ${reportUrl}` : ''}`);
   return 4;
 }
 
@@ -4315,8 +4324,9 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
     if (reply.status && ![200, 202].includes(reply.status)) {
       knownOutcome = reply.status >= 400 && reply.status < 500 && reply.status != 408;
       const errCode = cleanText(reply.json?.error?.code, [identity.token]);
-      const errMsg = cleanText(reply.json?.error?.message, [identity.token]) || LIVE_REFUSAL_MESSAGES[errCode];
-      const errHint = LIVE_REFUSAL_HINTS[errCode] ? ` ${LIVE_REFUSAL_HINTS[errCode]}` : '';
+      const errMsg = cleanText(reply.json?.error?.message, [identity.token]) || liveRefusalMessage(errCode, 'try');
+      const hint = liveRefusalHint(errCode, 'try');
+      const errHint = hint ? ` ${hint}` : '';
       throw new Stop(125, (errMsg || errCode || `The interpreter refused the command (HTTP ${reply.status}).`) + errHint + recovery);
     }
     const end = ports.now() + 900_000;
@@ -4331,9 +4341,10 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
           const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets: [identity.token] });
           const why = answer.result?.refusals?.[0];
           const whyCode = cleanText(why?.code, [identity.token]);
-          const whyHint = LIVE_REFUSAL_HINTS[whyCode] ? ` ${LIVE_REFUSAL_HINTS[whyCode]}` : '';
+          const hint = liveRefusalHint(whyCode, 'try');
+          const whyHint = hint ? ` ${hint}` : '';
           if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}${recovery}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
-          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || LIVE_REFUSAL_MESSAGES[whyCode] || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]) + whyHint + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
+          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || liveRefusalMessage(whyCode, 'try') || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]) + whyHint + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
         }
         let observation = answer.result.report ?? {};
         if (typeof observation.action_id === 'string') {
