@@ -21,8 +21,8 @@ The bundled skills also include pdd-product, pdd-autopilot, pdd-check, pdd-merge
 <!-- pdd:start -->
 ## PDD
 This project uses PDD: prompts are the source. Write the prompt, Story and test cases first, then the code.
-Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.
-Full run with PRs: `pdd workflow run NAME ISSUE` (NAME: feature, bug or small-change).
+Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change, pdd-product. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.
+Full run with PRs: `pdd workflow run NAME ISSUE` (NAME: feature, bug, small-change or product).
 Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.
 <!-- pdd:end -->
 ```
