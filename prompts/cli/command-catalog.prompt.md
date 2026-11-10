@@ -89,7 +89,7 @@ For `workflow.run` and `workflow.approve`, also accept the value option `--throu
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
 - workflow.cancel `workflow cancel ISSUE`.
 - workflow.open `workflow open ISSUE [AREA] [--new] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.
-- workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Simulator links without starting or resuming a chat.
+- workflow.view `workflow view ISSUE [--json]` (local `workflow-view`): one required issue operand and optional `--json`. Help says it shows a read-only review of gates, approvals, files, PRs and Simulator links without starting or resuming a chat.
 - workflow.list `workflow list [--json]`.
 - workflow.prove `workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]` (local `workflow-prove`): one required issue operand, two text options and an optional integer `--timeout` from 1 to 120 (minutes). Help says it runs the supplied command on the merge-base of committed head with the fetched base branch and committed head, including when no eligible tests changed, with a limit per phase (default 10 minutes; --timeout sets 1 to 120), and saves a non-gating report that pull requests show as pdd's own result. No native option passthrough. Both text options are required by CLI dispatch before effects; parser retains ordinary text/duplicate/blank validation. [Old-code proof](workflow-prove.prompt.md) owns execution, outcome and saved-result policy (required generation/runtime/verification context).
 Outside the scope selectors below, no resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
@@ -195,7 +195,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
   pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
   pdd workflow status [ISSUE] [--all] [--cancelled] [--json]  Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.
-  pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
+  pdd workflow view ISSUE [--json]  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
   pdd workflow open ISSUE [AREA] [--new]  Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.
   pdd  Show local commands.
   pdd --help  Show local commands.

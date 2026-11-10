@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 0ff0081adb287056f3b443b516d614b56dca97c4622b92ec4e1b74451f41d56d).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: da92a90d1ef807570d52b66183e53227aa1e88ed816f28cdb7df462357253261).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -146,7 +146,7 @@ async function sessionCandidates(stage, ports) {
     if (parsed.malformed || identities.some(item => item.id !== meta.id || item.cwd !== meta.cwd)) {
       throw new Error('unreadable_session');
     }
-    matches.push({ meta, rows: parsed.rows });
+    matches.push({ path, meta, rows: parsed.rows });
   }
   return matches;
 }
@@ -193,4 +193,24 @@ export async function findNativeSessions(stage, ports = {}) {
   try { matches = await sessionCandidates(stage, ports); }
   catch (error) { throw Object.assign(new Error(`The native session files cannot be read completely (${error.message}).`), { code: 'session_unreadable' }); }
   return [...new Map(matches.map(match => [match.meta.id, { id: match.meta.id, startedAt: match.meta.timestamp }])).values()];
+}
+
+// Read only the current area's own native chat; absent or ambiguous evidence stays unknown.
+export async function readGateMessage({ stage, gateAt }, ports = {}) {
+  if (!stage || !['codex', 'claude'].includes(stage.agent) || !sessionId.test(stage.sessionId ?? '') || !Number.isFinite(gateAt) || !Number.isFinite(stage.startedAt) || !Number.isFinite(stage.endedAt)) return null;
+  try {
+    const now = (ports.now ?? Date.now)();
+    const matches = await sessionCandidates(stage, ports);
+    if (!matches.length || new Set(matches.map(match => match.meta.id)).size !== 1) return null;
+    let result = null;
+    for (const row of matches.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).flatMap(match => match.rows)) {
+      const at = epoch(row.timestamp);
+      if (at === null || at < gateAt || at > now) continue;
+      let content;
+      if (stage.agent === 'codex' && row.type === 'response_item' && row.payload?.type === 'message' && row.payload.role === 'assistant' && row.payload.phase !== 'analysis') content = textBlocks(row.payload.content, ['output_text', 'text']);
+      if (stage.agent === 'claude' && row.type === 'assistant' && row.message?.role === 'assistant' && row.sessionId === stage.sessionId && row.cwd === stage.root && !row.isSidechain && !row.isMeta) content = textBlocks(row.message.content, ['text']);
+      if (content?.trim() && (!result || at >= result.at)) result = { text: content, at };
+    }
+    return result?.text ?? null;
+  } catch { return null; }
 }

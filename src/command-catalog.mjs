@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1a0336c40f0f5173e81259827dd85adb927bb8ea2474f2ccb5a770be7fb7a611).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 72a6d5fa5fad16595af09365086d628602d49859c24b1d27c916070201f7665b).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -104,8 +104,8 @@ const routes = [
     operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--all',kind:'flag'},{name:'--cancelled',kind:'flag'},{name:'--json',kind:'flag'}],
     forms: [form('pdd workflow status [ISSUE] [--all] [--cancelled] [--json]', 'Show this repo\'s runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.')] },
   { id: 'workflow.view', prefix: ['workflow', 'view'], local: 'workflow-view',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.')] },
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--json',kind:'flag'}],
+    forms: [form('pdd workflow view ISSUE [--json]', 'Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.')] },
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
     operands: [{name:'issue',type:'issue'}, {name:'area',type:'workflow-name',optional:true}], options: [{name:'--new',kind:'flag'},{name:'--model',kind:'text'},{name:'--herdr-agent-name',kind:'text'},{name:'--codex-threads',kind:'text'}],
     forms: [form('pdd workflow open ISSUE [AREA] [--new] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]', 'Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.')] },

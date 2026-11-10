@@ -5,7 +5,7 @@ import * as fs from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { readApprovalEvidence, findNativeSessions } from '../src/approval-evidence.mjs';
+import { readApprovalEvidence, findNativeSessions, readGateMessage } from '../src/approval-evidence.mjs';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const otherId = '22222222-2222-4222-8222-222222222222';
@@ -260,4 +260,47 @@ test('Codex: the current "# AGENTS.md instructions" + <INSTRUCTIONS> record is g
   const f = await fixture(t);
   await f.write([meta(), user('# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Project instructions\n</INSTRUCTIONS>')]);
   assert.equal((await f.read()).code, 'user_message_missing');
+});
+
+
+for (const agent of ['codex', 'claude']) test(`${agent} gate text combines resumed snapshots by timestamp`, async t => {
+  const f = await fixture(t, agent);
+  const stage = { ...f.request.stage, sessionId: id, endedAt: now };
+  const assistant = (text, at, extra = {}) => agent === 'codex'
+    ? { type: 'response_item', timestamp: iso(at), payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text }], ...extra } }
+    : { type: 'assistant', sessionId: id, cwd, timestamp: iso(at), message: { role: 'assistant', content: [{ type: 'text', text }] }, ...extra };
+  const identity = agent === 'codex' ? meta() : claude('start', start);
+  const name = prefix => join(f.directory, agent === 'codex' ? `rollout-${prefix}-${id}.jsonl` : `${prefix}-${id}.jsonl`);
+  await f.write([identity, assistant('stale', gate - 1), assistant('latest', gate + 8), assistant('older later in file', gate + 2)], name('a'));
+  await f.write([identity, assistant('earlier snapshot', gate + 4), agent === 'codex' ? user('user', gate + 9) : claude('user', gate + 9),
+    assistant('excluded', gate + 10, agent === 'codex' ? { phase: 'analysis' } : { isSidechain: true })], name('b'));
+  const read = () => readGateMessage({ stage, gateAt: gate }, f.ports);
+  assert.equal(await read(), 'latest');
+  await f.write([identity, assistant('tie first', gate + 8), assistant('tie winner', gate + 8)], name('b'));
+  assert.equal(await read(), 'tie winner');
+  await f.write([identity, assistant('broken', gate + 9)], name('c'), '{bad}\n');
+  assert.equal(await read(), null);
+});
+
+for (const agent of ['codex', 'claude']) test(`${agent} gate text uses observation time after the session-start window`, async t => {
+  const f = await fixture(t, agent);
+  const stage = { ...f.request.stage, sessionId: id };
+  const gateAt = start + 2000;
+  const observedAt = start + 5000;
+  f.ports.now = () => observedAt;
+  const assistant = (text, at) => agent === 'codex'
+    ? { type: 'response_item', timestamp: iso(at), payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text }] } }
+    : { type: 'assistant', sessionId: id, cwd, timestamp: iso(at), message: { role: 'assistant', content: [{ type: 'text', text }] } };
+  const identity = agent === 'codex' ? meta() : claude('start', start);
+  const file = agent === 'codex' ? join(f.directory, `rollout-${id}.jsonl`) : f.file;
+  const read = () => readGateMessage({ stage, gateAt }, f.ports);
+  await f.write([identity, assistant('before gate', gateAt - 1), assistant('eligible', start + 3000)], file);
+  assert.equal(await read(), 'eligible');
+  await f.write([identity, assistant('before gate', gateAt - 1)], file);
+  assert.equal(await read(), null);
+  await f.write([identity, assistant('at observation', observedAt), assistant('future', observedAt + 1)], file);
+  assert.equal(await read(), 'at observation');
+  const outside = agent === 'codex' ? meta({ timestamp: iso(stage.endedAt + 1) }) : claude('start', stage.endedAt + 1);
+  await f.write([outside, assistant('eligible', start + 3000)], file);
+  assert.equal(await read(), null);
 });
