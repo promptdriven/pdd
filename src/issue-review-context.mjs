@@ -1,6 +1,16 @@
 // Implements prompts/cli/issue-review-context.prompt.md. Pure retrieval, never authority.
 const source = key => /^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/HEAD\//.test(key);
 const canonicalSource = (repository, path) => `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
+export function namedReviewSourceLinks(repository, text) {
+  const links = new Set();
+  for (const match of String(text ?? '').matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/blob\/([^\s`<>#?)]+)/g)) {
+    if (match[1].toLowerCase() !== repository.toLowerCase()) continue;
+    const tail = match[2].replace(/[.,;:!\]'"}]+$/, '');
+    if (tail.split('/').length < 2 || tail.split('/').some(part => !part)) continue;
+    links.add(`https://github.com/${repository.toLowerCase()}/blob/${tail}`);
+  }
+  return [...links].sort();
+}
 export function namedReviewSources(repository, text) {
   const paths = new Set();
   const add = path => {
@@ -8,10 +18,8 @@ export function namedReviewSources(repository, text) {
     if (!path || path.startsWith('/') || path.split('/').some(x => !x || x === '.' || x === '..') || /[\\\0]/.test(path)) return;
     paths.add(canonicalSource(repository, path));
   };
-  const plain = String(text ?? '').replace(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/blob\/[^/\s]+\/([^\s`<>#?)]+)/g, (_, repo, path) => {
-    if (repo.toLowerCase() === repository.toLowerCase()) add(path.replace(/[.,;:!\]'"}]+$/, ''));
-    return '';
-  }).replace(/https?:\/\/[^\s`<>]+/g, '');
+  const plain = String(text ?? '').replace(/https:\/\/github\.com\/[^/\s]+\/blob\/[^\s`<>#?)]+/g, '')
+    .replace(/https?:\/\/[^\s`<>]+/g, '');
   for (const m of plain.matchAll(/(?:^|[\s`('"\[])([\w.-]+(?:\/[\w.%+-]+)*\.[a-zA-Z][a-zA-Z0-9]*)(?=$|[\s`)'"\]:,;.])/g)) {
     if (m[1].includes('/') || /\.(?:[cm]?[jt]sx?|py|md|json|toml|ya?ml|sql|html|css|sh|rs|go|java|rb|c|h|cpp|hpp|proto|txt|svg)$/i.test(m[1])) add(m[1]);
   }

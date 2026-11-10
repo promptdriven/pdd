@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,7 +63,7 @@ test('a label-only change does not trigger a full re-review', async () => {
 
 test('named file edit and trusted answer trigger only their own review', async () => {
   const w = reviewWorld(4);
-  w.issues[0].body = 'See https://github.com/EXAMPLE/PROJECT/blob/main/src/own.mjs.';
+  w.issues[0].body = 'See `src/own.mjs`.';
   w.files.set(sourceKey('src/own.mjs'), 'own-v1');
   await reviewAll(w, { background: true });
   w.files.set(w.background, 'background-v2');
@@ -177,15 +178,26 @@ test('uppercase explicit issue URLs are mandatory outside top-k', async () => {
 test('native evidence reads named files without enumerating repository source', async t => {
   const root = mkdtempSync(join(tmpdir(), 'pdd-review-context-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  mkdirSync(join(root, '.git')); mkdirSync(join(root, 'src'));
+  mkdirSync(join(root, '.git')); mkdirSync(join(root, 'src')); mkdirSync(join(root, 'foo/src'), { recursive: true });
   writeFileSync(join(root, 'src/own.mjs'), 'export const own = true;');
   writeFileSync(join(root, 'src/unrelated.mjs'), 'export const unrelated = true;');
-  const w = reviewWorld(1); w.issues[0].body = 'See `src/own.mjs`, [the source](https://github.com/EXAMPLE/PROJECT/blob/main/src/own.mjs), and https://github.com/example/project/blob/main/src/own.mjs. Upgrade from v1.2 to v1.3. See example.com.';
+  writeFileSync(join(root, 'foo/src/own.mjs'), 'export const wrong = true;');
+  const w = reviewWorld(1); w.issues[0].body = 'See `src/own.mjs`, [the source](https://github.com/EXAMPLE/PROJECT/blob/main/src/own.mjs), https://github.com/example/project/blob/main/src/own.mjs, and https://github.com/example/project/blob/feature/foo/src/own.mjs. Upgrade from v1.2 to v1.3. See example.com.';
   let enumerations = 0;
+  const commit = 'a'.repeat(40);
   const execFile = async (file, args) => {
     if (file === 'gh' && args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: repository, url: `https://github.com/${repository}`, defaultBranchRef: { name: 'main' } }) };
     if (file === 'git' && args[0] === 'remote') return { stdout: `https://github.com/${repository}.git` };
-    if (file === 'git' && args[0] === 'rev-parse') return { stdout: args.includes('--show-toplevel') ? root : join(root, '.git') };
+    if (file === 'git' && args[0] === 'rev-parse') {
+      if (args.includes('--show-toplevel')) return { stdout: root };
+      if (args.includes('--path-format=absolute')) return { stdout: join(root, '.git') };
+      const ref = args.at(-1);
+      return ['refs/heads/main^{commit}', 'refs/heads/feature/foo^{commit}'].includes(ref)
+        ? { stdout: commit, code: 0 } : { stdout: '', code: 1 };
+    }
+    if (file === 'git' && args[0] === 'check-ref-format') return { stdout: '', code: 0 };
+    if (file === 'git' && args[0] === 'cat-file' && args[1] === '-t')
+      return args[2] === `${commit}:src/own.mjs` ? { stdout: 'blob', code: 0 } : { stdout: '', code: 1 };
     if (file === 'git' && args[0] === 'ls-files') { enumerations++; return { stdout: 'src/own.mjs\0src/unrelated.mjs\0' }; }
     assert.fail(`unexpected fake command: ${file} ${args.join(' ')}`);
   };
@@ -194,6 +206,58 @@ test('native evidence reads named files without enumerating repository source', 
   assert.deepEqual(evidence.source.map(x => x.path), ['src/own.mjs']);
   assert.equal(enumerations, 0);
   assert.deepEqual(evidence.source[0].issues, [key(1)]);
+});
+
+test('a slash-ref GitHub file link resolves exactly and its source edit queues review', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-review-slash-ref-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, '.git')); mkdirSync(join(root, 'src')); mkdirSync(join(root, 'foo/src'), { recursive: true });
+  writeFileSync(join(root, 'src/own.mjs'), 'export const own = "v1";');
+  writeFileSync(join(root, 'foo/src/own.mjs'), 'export const wrong = "v1";');
+  const w = reviewWorld(1), actual = sourceKey('src/own.mjs'), inferred = sourceKey('foo/src/own.mjs');
+  w.issues[0].body = 'See https://github.com/' + repository + '/blob/feature/foo/src/own.mjs.';
+  const digest = value => createHash('sha256').update(value).digest('hex');
+  w.files.set(actual, digest('export const own = "v1";'));
+  w.files.set(inferred, digest('export const wrong = "v1";'));
+  const commit = 'b'.repeat(40);
+  let ambiguous = false;
+  const execFile = async (file, args) => {
+    if (file === 'gh' && args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: repository, url: 'https://github.com/' + repository, defaultBranchRef: { name: 'main' } }) };
+    if (file === 'git' && args[0] === 'remote') return { stdout: 'https://github.com/' + repository + '.git' };
+    if (file === 'git' && args[0] === 'rev-parse') {
+      if (args.includes('--show-toplevel')) return { stdout: root };
+      if (args.includes('--path-format=absolute')) return { stdout: join(root, '.git') };
+      const ref = args.at(-1);
+      return ref === 'refs/heads/feature/foo^{commit}' || ambiguous && ref === 'refs/heads/feature^{commit}'
+        ? { stdout: commit, code: 0 } : { stdout: '', code: 1 };
+    }
+    if (file === 'git' && args[0] === 'check-ref-format') return { stdout: '', code: 0 };
+    if (file === 'git' && args[0] === 'cat-file' && args[1] === '-t')
+      return args[2] === commit + ':src/own.mjs' || ambiguous && args[2] === commit + ':foo/src/own.mjs'
+        ? { stdout: 'blob', code: 0 } : { stdout: '', code: 1 };
+    assert.fail('unexpected fake command: ' + file + ' ' + args.join(' '));
+  };
+  const ports = { ...w.ports, evidence: undefined, execFile };
+  const first = await prepareDependencyIntake({ cwd: root, repository }, ports);
+  assert.deepEqual(first.queued, [key(1)]);
+  const snapshot = JSON.parse(first.request.snapshotJson), context = JSON.parse(first.request.contextJson);
+  assert.deepEqual(snapshot.issues.find(issue => issue.key === key(1)).namedSources, [actual]);
+  assert.deepEqual(context.source.map(row => row.path), ['src/own.mjs']);
+  assert.equal((await completeDependencyIntake({ cwd: root, request: first.request, analysis: analysisFor(w, first.request) }, ports)).state, 'complete');
+
+  writeFileSync(join(root, 'foo/src/own.mjs'), 'export const wrong = "v2";');
+  w.files.set(inferred, digest('export const wrong = "v2";'));
+  assert.deepEqual((await prepareDependencyIntake({ cwd: root, repository }, ports)).queued, [], 'an inferred path is not a review input');
+  ambiguous = true;
+  const unresolved = await prepareDependencyIntake({ cwd: root, repository }, ports);
+  assert.deepEqual(unresolved.queued, []);
+  assert.deepEqual(unresolved.skipped, [key(1)], 'ambiguous source links cannot validate a cached review');
+  ambiguous = false;
+  writeFileSync(join(root, 'src/own.mjs'), 'export const own = "v2";');
+  w.files.set(actual, digest('export const own = "v2";'));
+  const changed = await prepareDependencyIntake({ cwd: root, repository }, ports);
+  assert.deepEqual(changed.queued, [key(1)], 'editing the exact named file makes its saved review stale');
+  assert.deepEqual(JSON.parse(changed.request.contextJson).source.map(row => row.path), ['src/own.mjs']);
 });
 
 test('saved duplicate targets are fetched even when absent from open roots', async () => {

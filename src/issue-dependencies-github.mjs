@@ -1,4 +1,4 @@
-import { namedReviewSources, tracksReviewInput } from './issue-review-context.mjs';
+import { namedReviewSources, namedReviewSourceLinks, tracksReviewInput } from './issue-review-context.mjs';
 import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
@@ -24,7 +24,7 @@ const DEFAULT_CACHE = Symbol('default etag cache');
 const NATIVE_FLOORS = Symbol('native dependency floor guards');
 const NATIVE_READ_SCOPE = Symbol('native dependency read scope'), NATIVE_AUTHORITY = Symbol('native authority');
 const NATIVE_CONTEXT = Symbol('native context'), NATIVE_EVIDENCE = Symbol('native evidence'), NATIVE_SETTINGS = Symbol('native settings');
-const nativeReadScope = () => ({ repositories: new Map(), checkouts: new Map(), authorityData: new Map(), authorityResults: new Map() });
+const nativeReadScope = () => ({ repositories: new Map(), checkouts: new Map(), sourceLinks: new Map(), authorityData: new Map(), authorityResults: new Map() });
 const repositoryName = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(x);
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -756,6 +756,68 @@ async function selectedCheckout(cwd, repository, ports) {
   return scope.checkouts.get(key);
 }
 
+const canonicalReviewSource = (repository, path) => `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
+function safeReviewSourcePath(path) {
+  return path && !isAbsolute(path) && !/[\\\0]/.test(path)
+    && path.split('/').every(part => part && part !== '.' && part !== '..' && !part.includes('/')) ? path : '';
+}
+async function resolveNamedReviewLink(repository, link, cwd, ports) {
+  const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/(.+)$/.exec(link);
+  if (!match || !sameRepo(match[1], repository)) return link;
+  const parts = match[2].split('/');
+  if (parts.length < 2 || parts.some(part => !part)) return link;
+  const decode = part => { try { return decodeURIComponent(part); } catch { return ''; } };
+  const sourcePath = pieces => {
+    let path;
+    try { path = decodeURIComponent(pieces.join('/')); } catch { return ''; }
+    return safeReviewSourcePath(path);
+  };
+  if (decode(parts[0]) === 'HEAD') {
+    const path = sourcePath(parts.slice(1));
+    return path ? canonicalReviewSource(repository, path) : link;
+  }
+  const root = await selectedCheckout(cwd, repository, ports);
+  if (!root) return link;
+  const exec = ports.execFile ?? execute;
+  const run = async args => {
+    try {
+      const result = await exec('git', args, { cwd: root, encoding: 'utf8', shell: false });
+      return { ok: result?.code === undefined || result.code === 0, value: String(result?.stdout ?? '').trim() };
+    } catch (error) { return { ok: false, value: String(error?.stdout ?? '').trim() }; }
+  };
+  const paths = new Set();
+  for (let boundary = 1; boundary < parts.length; boundary++) {
+    const ref = parts.slice(0, boundary).map(decode).join('/');
+    const path = sourcePath(parts.slice(boundary));
+    if (!ref || !path) continue;
+    const refs = [`refs/heads/${ref}`, `refs/remotes/origin/${ref}`, `refs/tags/${ref}`];
+    if (/^[a-f0-9]{40,64}$/i.test(ref)) refs.push(ref);
+    for (const candidate of refs) {
+      if (!/^[a-f0-9]{40,64}$/i.test(candidate)) {
+        const valid = await run(['check-ref-format', candidate]);
+        if (!valid.ok) continue;
+      }
+      const resolved = await run(['rev-parse', '--verify', '--quiet', '--end-of-options', `${candidate}^{commit}`]);
+      if (!resolved.ok || !/^[a-f0-9]{40,64}$/i.test(resolved.value)) continue;
+      const type = await run(['cat-file', '-t', `${resolved.value}:${path}`]);
+      if (type.ok && type.value === 'blob') paths.add(path);
+    }
+  }
+  return paths.size === 1 ? canonicalReviewSource(repository, [...paths][0]) : link;
+}
+async function namedReviewSourceKeys(repository, text, cwd, ports) {
+  const sources = new Set(namedReviewSources(repository, text)), cache = ports[NATIVE_READ_SCOPE]?.sourceLinks;
+  for (const link of namedReviewSourceLinks(repository, text)) {
+    let resolved;
+    if (cache) {
+      if (!cache.has(link)) cache.set(link, await resolveNamedReviewLink(repository, link, cwd, ports));
+      resolved = cache.get(link);
+    } else resolved = await resolveNamedReviewLink(repository, link, cwd, ports);
+    sources.add(resolved);
+  }
+  return [...sources].sort();
+}
+
 function nativeAuthority(cwd, ports) {
   const s = service(cwd, ports), scope = ports[NATIVE_READ_SCOPE];
   const dataFor = repository => {
@@ -876,7 +938,7 @@ function nativeEvidence(cwd, ports) {
     }
     // Explicit source paths in trusted requirements retain subject scope. Other
     // repository files remain optional context for the coordinator to examine.
-    for (const r of requirements) for (const key of namedReviewSources(repository, r.text)) {
+    for (const r of requirements) for (const key of await namedReviewSourceKeys(repository, r.text, at, readPorts)) {
       const targets = required.get(key) ?? new Set(); targets.add(r.issue); required.set(key, targets);
     }
     for (const [key, targets] of required) try {
@@ -1436,7 +1498,7 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
     if (labels.includes('pdd:working')) holds.push('Claimed');
     if (labels.includes('pdd:stuck')) holds.push('Stuck');
     if (labels.includes('pdd:code-pending')) holds.push('Code pending');
-    const issue = { key, namedSources: namedReviewSources(i.repository, authority.authority === 'trusted' && sameRepo(i.repository, repository) ? `${raw.title ?? ''}\n${raw.body ?? ''}` : ''), namedIssues: [], sortCompleted: raw.state === 'closed' && raw.state_reason === 'completed', sorts: [], sortRouteNotes: [], labels, sortText: authority.authority === 'trusted' ? raw.body ?? '' : '', nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
+    const issue = { key, namedSources: await namedReviewSourceKeys(i.repository, authority.authority === 'trusted' && sameRepo(i.repository, repository) ? `${raw.title ?? ''}\n${raw.body ?? ''}` : '', cwd, ports), namedIssues: [], sortCompleted: raw.state === 'closed' && raw.state_reason === 'completed', sorts: [], sortRouteNotes: [], labels, sortText: authority.authority === 'trusted' ? raw.body ?? '' : '', nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
       state: !detailKnown ? 'unknown' : raw.state === 'open' ? 'open' : raw.state === 'closed' ? raw.state_reason === 'not_planned' ? 'not_planned' : 'completed' : 'unknown',
       authority: authority.authority === 'trusted' ? 'trusted' : authority.authority === 'outsider' ? 'untrusted' : 'unknown',
       conditions: conditionRows.map(c => c.text ?? c.condition).filter(Boolean), execution: execution?.execution ?? execution?.state ?? (labels.includes('pdd:working') ? 'running' : context.nativeExecution ? 'unknown' : 'idle'), holds: [...new Set(holds)],
@@ -1484,7 +1546,7 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
           else impacts.push(record.value);
         } else if (!bookkeeping(comment.body) && current.authority === 'trusted') {
           context.inputs ??= []; context.inputs.push({ key: `${key}#issuecomment-${comment.id}`, revision: hash(comment.body ?? '') });
-          issue.namedSources = [...new Set([...issue.namedSources, ...(sameRepo(i.repository, repository) ? namedReviewSources(i.repository, comment.body) : [])])].sort();
+          issue.namedSources = [...new Set([...issue.namedSources, ...(sameRepo(i.repository, repository) ? await namedReviewSourceKeys(i.repository, comment.body, cwd, ports) : [])])].sort();
           addNamed(comment.body);
         }
       }

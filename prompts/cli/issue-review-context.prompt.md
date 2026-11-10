@@ -5,12 +5,19 @@ backlog memory. Their storage and trust remain with their existing owners.
 This module has no outside effects and makes no AI calls.
 
 Export `namedReviewSources(repository,text)` as sorted unique canonical local
-`blob/HEAD` URLs for safe file paths explicitly named in trusted issue text.
-Include paths in trusted comments and same-repository GitHub file links.
+`blob/HEAD` URLs for safe relative paths explicitly named in trusted issue text.
 Bare filenames must have a recognized source/document extension; version numbers
 and domain names are not filenames. Directory paths admit alphabetic extensions.
-Sentence punctuation around file links is not part of the path; encoded filename punctuation remains literal. Explicit issue URLs are canonicalized to lowercase owner/repository names. Exclude
-other repositories, traversal and absolute paths. `tracksReviewInput(issue,key)`
+Sentence punctuation around links is not part of a path; encoded filename punctuation remains literal. Exclude
+other repositories, traversal and absolute paths. Export
+`namedReviewSourceLinks(repository,text)` as sorted unique same-repository GitHub
+`blob` links, preserving their encoded ref and path tail. This parser has no
+outside effects. The repository evidence reader checks exact local refs and exact
+tree paths to resolve each link. A unique path becomes a canonical local
+`blob/HEAD` source. A missing or ambiguous link stays unavailable required
+context; it cannot validate a cached review. Do not infer the ref boundary from
+the first path component, fetch refs, or enumerate the source tree.
+`tracksReviewInput(issue,key)`
 is false only for a local source locator outside the issue's `namedSources` list.
 Missing namedSources preserves legacy direct-caller freshness. Reading a file as
 background must not make every future edit to it require semantic review.
