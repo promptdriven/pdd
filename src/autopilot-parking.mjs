@@ -78,7 +78,8 @@ function currentBlocker(run) {
     until: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/.exec(reason)?.[0] ?? null};
   if (/review lease/i.test(reason)) return {kind: 'review', until: run.pr?.at(-1)?.url ?? null};
   if (/waiting for CI|CI (?:pending|result)/i.test(reason)) return {kind: 'ci', until: run.pr?.at(-1)?.url ?? null};
-  if (run.question && !run.question.answeredAt || run.gate) return {kind: 'person', until: null};
+  const retryingApprovePrCheck = run.state === 'running' && run.gate?.kind === 'approve-pr' && !run.done?.check && !question;
+  if (question || run.gate && !retryingApprovePrCheck) return {kind: 'person', until: null};
   if (environmentRecovery(run)) return {kind: 'environment', until: null};
   if (run.state === 'waiting' && run.pr?.length) return {kind: 'ci', until: run.pr.at(-1).url};
   return null;

@@ -53,7 +53,7 @@ the same merge.
 | Lost verdict | One Runtime cause issue parks the run. Closing it wakes the saved session for one replacement check without a person action. |
 | Named issue close | Dependency, PDD and route waits wake on any close, without merged-PR evidence. |
 | Binding hold | Unrelated base work leaves the run parked. An owning prompt or interface edit wakes it. |
-| Runtime causes | Cause issues group affected attempts and use the configured owner. Three failures within 30 minutes serialize checks; a later same-kind verdict wakes the wait once. |
+| Runtime causes | The launcher parks only the affected run and sends cause details through the injected shared reporter. It makes no direct issue writes and does not throttle checks on the client. A later same-kind verdict wakes the wait once. |
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |
 | Closing capacity | Absent starting panes gain confirmed close records. A working agent defers parking. A done current chat saves its screen and session before close. Retained cleanup names its retry cause, and a closing reservation blocks new starts at the run cap. |
 | Stopped panes across repositories | A full shared pane budget is reclaimed from stopped runs without saved session IDs or workspace-creation fields. Same-machine coordinator claims are recovered. A second repository starts its coordinator and first workflow run. Every held run then resumes its own current session. |

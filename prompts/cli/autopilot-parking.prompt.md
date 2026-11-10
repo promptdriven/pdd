@@ -61,7 +61,7 @@ hold, with no timed retry. Retain it until a bound explicit reply/retry arrives,
 
 ## Wake conditions (#3147)
 
-Export wakeCondition(blocker), returning plain words for the current clearing evidence. parkingSummary adds waits: an array of {number,condition} for each parked run. parkingWords includes these per-run conditions. A runtime blocker names its cause issue in until and carries cause, batch, checkKind and evidence (the saved run stop identity). It clears on that issue closing or a later verdict of the same check kind. A binding blocker can carry paths and revision: paths name the owning prompt and interface files declared by current selected-test or refusal evidence, and revision is their content identity on the base at first observation. Unrelated base edits do not wake it. Absent baseline evidence is not a change. Explicit questions and unrelated blockers retain precedence. Keep cached runtime/binding evidence only for the same stopped work.
+Export wakeCondition(blocker), returning plain words for the current clearing evidence. parkingSummary adds waits: an array of {number,condition} for each parked run. parkingWords includes these per-run conditions. A runtime blocker carries cause, batch, checkKind and evidence (the saved run stop identity); `until` is the shared reporter's issue number or null until reporting is wired and confirmed. It clears on that issue closing or a later verdict of the same check kind. A binding blocker can carry paths and revision: paths name the owning prompt and interface files declared by current selected-test, lint or refusal evidence, or recovered from the run's stop reason. Revision is their content identity on the refreshed base. An unfetched local base ref has no revision and is not evidence of change. Keep the first fetched identity while the run waits; a later owning-file change can wake it, while unrelated base edits cannot. Explicit questions and unrelated blockers retain precedence. When a runtime or binding wake resumes an inferred `approve-pr` check, clear `done.check`, preserve the gate, and deliver one retry instruction. A running `approve-pr` gate with no `done.check` is an inferred check retry, not a person blocker. Once the worker records its check result, the normal person approval gate applies. Keep cached runtime/binding evidence only for the same stopped work.
 
 ## Dependencies
 
@@ -72,6 +72,6 @@ Export wakeCondition(blocker), returning plain words for the current clearing ev
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"2a82740717b47e23657bfec7e5389ed41097feb9c6b441505460c1ac37b609d4","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"15af057331f95832773d9f257de952528acfb40e1654af29852b58a8fa73064c","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

@@ -181,7 +181,7 @@ for (const throughPerson of [true, false])
     f.tick(); await tick(); assert.deepEqual(f.record().parking.interpreterWait, wait);
     ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
     await tick();
-    assert.equal(f.record().parking.phase, 'parked', 'lost verdict waits for a recorded person decision');
+    assert.equal(f.record().parking.phase, 'parked', 'an unreported Runtime cause stays parked');
     assert.deepEqual(f.record().gate, changed.gate);
     assert.deepEqual(f.record().decisions, changed.decisions);
     assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
@@ -192,7 +192,7 @@ for (const throughPerson of [true, false])
     assert.deepEqual(warnings, []);
   });
 
-// #3091 final review: exercise saved-batch inference through the production reader.
+// #3091 final review: exercise saved-batch Runtime cause inference through the production reader.
 for (const previous of ['person', 'interpreter'])
   test(`3091 integration finished check replaces existing ${previous} park with current batch`, async t => {
     const {f, tick, ports, stateFile, warnings} = await setup(t, 'claude', 'feature');
@@ -217,8 +217,8 @@ for (const previous of ['person', 'interpreter'])
     save(f, held);
     if (previous === 'interpreter') savedBatch(oldBatch);
     await tick();
-    assert.equal(f.record().parking.blocker.kind, previous);
-    if (previous === 'interpreter') assert.equal(f.record().parking.interpreterWait.batch, oldBatch);
+    assert.equal(f.record().parking.blocker.kind, previous === 'person' ? 'person' : 'runtime');
+    if (previous === 'interpreter') assert.equal(f.record().parking.blocker.cause, 'runner-stopped');
     const age = f.record().parking.at;
     f.tick();
     const changed = f.record(); delete changed.question;
@@ -227,9 +227,9 @@ for (const previous of ['person', 'interpreter'])
     savedBatch(newBatch);
     await tick();
     const parked = f.record();
-    assert.equal(parked.parking.blocker.kind, 'interpreter');
-    assert.equal(parked.parking.interpreterWait.batch, newBatch);
-    assert.deepEqual(parked.parking.interpreterGate, changed.gate);
+    assert.equal(parked.parking.blocker.kind, 'runtime');
+    assert.equal(parked.parking.blocker.cause, 'runner-stopped');
+    assert.equal(parked.parking.interpreterWait, undefined);
     assert.equal(parked.parking.personWait, undefined);
     assert.equal(parked.parking.at, age);
     assert.equal(parked.parking.phase, 'parked');
@@ -238,8 +238,8 @@ for (const previous of ['person', 'interpreter'])
     assert.equal(parked.chats.at(-1).session.id, held.chats.at(-1).session.id);
     assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
     f.tick(); await tick();
-    assert.deepEqual(f.record().parking.interpreterWait, parked.parking.interpreterWait);
-    assert.deepEqual(f.record().parking.interpreterGate, changed.gate);
+    assert.equal(f.record().parking.blocker.kind, 'runtime');
+    assert.deepEqual(f.record().parking.blocker, parked.parking.blocker);
     // A named person blocker still wins over the same inferred saved-check evidence.
     const explicit = f.record(); explicit.blockedOn = {kind: 'person', until: null}; save(f, explicit);
     await tick();
@@ -249,9 +249,9 @@ for (const previous of ['person', 'interpreter'])
     assert.deepEqual(f.record().gate, changed.gate);
     const inferred = f.record(); delete inferred.blockedOn; save(f, inferred);
     await tick();
-    assert.equal(f.record().parking.blocker.kind, 'interpreter');
-    assert.equal(f.record().parking.interpreterWait.batch, newBatch);
-    assert.deepEqual(f.record().parking.interpreterGate, changed.gate);
+    assert.equal(f.record().parking.blocker.kind, 'runtime');
+    assert.equal(f.record().parking.blocker.cause, 'runner-stopped');
+    assert.equal(f.record().parking.interpreterWait, undefined);
     ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
     await tick();
     assert.equal(f.record().parking.phase, 'parked', 'lost verdict waits for a recorded person decision');
@@ -260,15 +260,15 @@ for (const previous of ['person', 'interpreter'])
     assert.deepEqual(f.record().automaticOrigin, changed.automaticOrigin);
     assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
     assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
-    assert.equal(alerts.some(row=>row.kind==='decision'),false, '3147: batch failures need a Runtime cause issue, not a person decision');
+    assert.equal(alerts.some(row=>row.kind==='decision'),false, 'a saved Runtime failure does not become a person decision');
     assert.ok(JSON.parse(readFileSync(stateFile)).runtimeIncidents?.causes['runner-stopped']);
     await tick(); assert.equal(deliveries(f).length, 0);
     assert.deepEqual(warnings, []);
   });
 
-// #3091: saved-check identity must be current even when only one input changes.
+// #3091: saved-check identity must be current across Runtime park updates.
 for (const change of ['batch', 'check', 'result', 'verdict'])
-  test(`3091 batch refresh ${change} evidence at an inferred interpreter park`, async t => {
+  test(`3091 batch refresh ${change} evidence at a Runtime park`, async t => {
     const {f, tick, ports, stateFile, warnings} = await setup(t, 'claude', 'feature');
     fullTicks(f, stateFile, ports);
     const alerts=[]; ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0};};
@@ -288,11 +288,12 @@ for (const change of ['batch', 'check', 'result', 'verdict'])
     };
     savedBatch(oldBatch);
     await tick();
-    const original = f.record(), age = original.parking.at, oldWait = original.parking.interpreterWait;
-    assert.equal(oldWait.batch, oldBatch);
-    assert.equal(original.parking.blocker.kind, 'interpreter');
+    const original = f.record(), age = original.parking.at, oldBlocker = original.parking.blocker;
+    const startingPattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+    assert.equal(oldBlocker.kind, 'runtime');
+    assert.equal(oldBlocker.batch, oldBatch);
     f.tick(); await tick();
-    assert.deepEqual(f.record().parking.interpreterWait, oldWait);
+    assert.deepEqual(f.record().parking.blocker, oldBlocker);
     assert.equal(f.record().parking.at, age);
     f.tick();
     const changed = f.record();
@@ -317,49 +318,95 @@ for (const change of ['batch', 'check', 'result', 'verdict'])
     assert.equal(parked.chats.at(-1).session.id, held.chats.at(-1).session.id);
     assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
     if (change === 'verdict') {
-      assert.equal(parked.parking.blocker.kind, 'person');
+      assert.equal(parked.parking.blocker.kind, 'runtime');
       assert.equal(parked.parking.interpreterWait, undefined);
       assert.equal(parked.parking.interpreterCheck, undefined);
       ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
       await tick();
-      assert.equal(f.record().parking.blocker.kind, 'person');
+      assert.equal(f.record().parking.blocker.kind, 'runtime',
+        'a same-batch verdict does not prove recovery after the incident observation');
       assert.equal(deliveries(f).length, 0);
     } else {
-      assert.equal(parked.parking.interpreterWait.batch, batch);
-      assert.deepEqual(parked.parking.interpreterGate, changed.gate);
-      assert.notEqual(parked.parking.interpreterWait.at, oldWait.at, 'changed evidence has a new wait identity');
-      const wait = parked.parking.interpreterWait;
+      const blocker = parked.parking.blocker;
+      assert.equal(blocker.kind, 'runtime');
+      assert.equal(blocker.batch, batch);
+      assert.equal(blocker.cause, 'runner-stopped');
+      assert.equal(parked.parking.interpreterWait, undefined);
       const pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
-      assert.equal(pattern.streak, 0, '3147: saved batch failures use cause-specific accounting');
+      assert.equal(pattern.streak, startingPattern?.streak ?? 0,
+        'Runtime causes do not add Interpreter incident observations');
       const causes = JSON.parse(readFileSync(stateFile)).runtimeIncidents.causes;
-      const expected = change === 'check' ? 1 : 2;
+      const expected = change === 'batch' ? 2 : 1;
       assert.equal(Object.values(causes).reduce((n,c)=>n+Object.keys(c.failures).length,0), expected);
       if (change === 'check') {
-        // Refresh a different gate at the same clock value and saved batch.
+        // A changed gate updates evidence without adding a duplicate incident.
         changed.gate = {...changed.gate, at: f.clock};
         const nextGate = f.record(); nextGate.gate = changed.gate; save(f, nextGate);
         await tick();
         const rebound = f.record();
-        assert.equal(rebound.parking.interpreterWait.batch, batch);
-        assert.notEqual(rebound.parking.interpreterWait.at, wait.at);
-        assert.deepEqual(rebound.parking.interpreterGate, changed.gate);
+        assert.equal(rebound.parking.blocker.kind, 'runtime');
+        assert.equal(rebound.parking.blocker.batch, batch);
+        assert.notEqual(rebound.parking.blocker.evidence, blocker.evidence);
         assert.equal(rebound.parking.at, age);
         f.tick(); await tick();
-        assert.deepEqual(f.record().parking.interpreterWait, rebound.parking.interpreterWait);
+        assert.deepEqual(f.record().parking.blocker, rebound.parking.blocker);
       } else {
         f.tick(); await tick();
-        assert.deepEqual(f.record().parking.interpreterWait, wait);
+        assert.deepEqual(f.record().parking.blocker, blocker);
       }
       ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
       await tick();
-      assert.equal(f.record().parking.phase, 'parked', 'lost verdict waits for a recorded person decision');
+      assert.equal(f.record().parking.phase, 'parked', 'an unreported Runtime cause stays parked');
+      assert.equal(f.record().parking.blocker.kind, 'runtime');
       for (const key of ['gate', 'decisions', 'automaticOrigin']) assert.deepEqual(f.record()[key], changed[key]);
       assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
       assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
-      assert.equal(alerts.some(row=>row.kind==='decision'),false, '3147: no person decision for Runtime batch recovery');
+      assert.equal(alerts.some(row=>row.kind==='decision'),false, 'a Runtime cause does not become a person decision');
       await tick(); assert.equal(deliveries(f).length, 0);
     }
     assert.deepEqual(warnings, []);
+  });
+
+for (const code of ['provider-call-cap', 'call-cap-reached'])
+  test('3147 ' + code + ' parks as local issue work without Runtime report or automatic retry', async t => {
+    const {f, tick, ports, stateFile} = await setup(t, 'claude', 'feature');
+    fullTicks(f, stateFile, ports);
+    const held = f.record();
+    held.state = 'waiting';
+    held.gate = {kind: 'approve-pr', area: held.areas[held.area].name};
+    held.done.check = {at: f.clock};
+    save(f, held);
+    const createdAt = Math.max(f.clock, held.startedAt + 1000);
+    const stamp = new Date(createdAt).toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const batch = stamp.slice(0, 8) + '-' + stamp.slice(8) + '-cap1';
+    const stateRoot = f.ports.env.PDD_STATE_DIR ?? join(f.ports.env.HOME, '.pdd/runtime');
+    const folder = join(stateRoot, 'batches', batch);
+    mkdirSync(folder, {recursive: true});
+    writeFileSync(join(folder, 'batch.json'), JSON.stringify({batch, root: held.root, intent: 'check',
+      created_at: new Date(createdAt).toISOString(), rows: [{test: 'tests/value.json', state: 'partial',
+        reason: {code}, calls: 23, max_calls: 23}]}));
+    const current = readRunResults({root: held.root, since: held.startedAt}, {env: f.ports.env})
+      .find(row => row.kind === 'pdd test');
+    assert.equal(current?.batch, batch);
+    assert.equal(current?.states[0]?.reason?.code, code);
+    let healthCalls = 0, reportCalls = 0;
+    ports.runtimeHealth = async () => {healthCalls++; return {state: 'unavailable', detail: 'must not probe'};};
+    ports.reportRuntimeCause = async () => {reportCalls++; return {number: 1, url: 'https://github.com/promptdriven/pdd/issues/1'};};
+    const startingPattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
+    await tick();
+    const parked = f.record(), state = JSON.parse(readFileSync(stateFile));
+    assert.equal(parked.parking.blocker.kind, 'person');
+    assert.equal(parked.parking.interpreterWait, undefined);
+    assert.equal(healthCalls, 0);
+    assert.equal(reportCalls, 0);
+    const attempts = Object.values(state.runtimeIncidents?.causes ?? {}).flatMap(cause => Object.values(cause.runs ?? {}));
+    assert.equal(attempts.filter(attempt => attempt.batch === batch).length, 0);
+    assert.equal(state.interpreterPattern?.streak ?? 0, startingPattern?.streak ?? 0);
+    assert.equal(deliveries(f).length, 0);
+    assert.equal(launches(f).length, 0);
+    const saved = JSON.parse(readFileSync(join(folder, 'batch.json')));
+    assert.deepEqual([saved.rows[0].calls, saved.rows[0].max_calls], [23, 23]);
+    assert.equal(parked.gate.kind, 'approve-pr');
   });
 
 async function setup(t, agent = 'claude', name = 'small-change') {
@@ -1127,7 +1174,7 @@ for (const wait of ['stop', 'question']) test(`3091 backfill missing PR1 route $
   await tick(); assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
 });
 
-test('3147 backfill finished PR1 lost check waits for Runtime cause issue without approval', async t => {
+test('3147 backfill finished PR1 lost check parks on Runtime cause without approval', async t => {
   const {f, tick, ports, stateFile, warnings} = await setup(t);
   fullTicks(f, stateFile, ports);
   const alerts=[];ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0};};
@@ -1136,7 +1183,7 @@ test('3147 backfill finished PR1 lost check waits for Runtime cause issue withou
   held.done.check = {at: f.clock}; save(f, held);
   ports.readRunResults = () => [{kind: 'pdd test', batch: '20261101-120000-abcd', states: [{state: 'partial', reason: {code: 'runner-stopped'}}]}];
   await tick();
-  assert.equal(f.record().parking?.blocker.kind, 'interpreter');
+  assert.equal(f.record().parking?.blocker.kind, 'runtime');
   ports.runtimeHealth = async () => ({state: 'healthy', detail: 'controlled recovery'});
   await tick();
   assert.deepEqual(warnings, []);assert.equal(f.record().parking.phase,'parked');

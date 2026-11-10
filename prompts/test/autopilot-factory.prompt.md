@@ -156,7 +156,7 @@ The parent alert adapter gives the real alert owner the same injected GitHub exe
 
 ## Park wake and Runtime incidents (#3147)
 
-Add one factory scenario for each behavior: any-close wake for named dependency/PDD/route/Runtime issues; binding wake for owning prompt or interface base change with unrelated-change negative control; cause-based Runtime failure grouping and issue assignment with other checks still sent; three same-cause failures in 30 minutes serialize new checks; recovery by a later same-kind verdict with one send per park; another run sending its check while a failed run parks; and status naming every parked run's wake condition. Replace the lost-verdict person-resend scenario with automatic incident recovery. Keep controlled service fakes and private queues. New regression expectations must fail on the candidate base for their named defect, not a crash or missing import.
+Add one factory scenario for each behavior: any-close wake for named dependency/PDD/route/Runtime issues; binding wake for owning prompt or interface base change with unrelated-change negative control; cause-based Runtime failure parking through the injected shared reporter boundary, with no direct issue writes; three same-cause failures do not configure a client check throttle; recovery by a later same-kind verdict with one send per park; another run sending its check while a failed run parks; and status naming every parked run's wake condition. Replace the lost-verdict person-resend scenario with automatic incident recovery. Keep controlled service fakes and private queues. New regression expectations must fail on the candidate base for their named defect, not a crash or missing import.
 
 ## Dependencies
 

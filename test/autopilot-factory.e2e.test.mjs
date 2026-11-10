@@ -243,7 +243,7 @@ test('factory 2: machine restart retains claim, work and chat identity to merge'
   await a.finish();await a.merge();assert.deepEqual(w.leadActions,[]);
 });
 
-test('factory 3147: lost verdict files a cause and wakes for one automatic check after issue close',async t=>{
+test('factory 3147: lost verdict parks without direct reporting and wakes on a later check verdict',async t=>{
   const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);
   await a.until(r=>r.area===1);w.interpreter.mode='no-verdict';
   const lost=await a.step();assert.notEqual(lost.check.code,0);const batch=JSON.parse(lost.check.stdout).batch;
@@ -251,16 +251,17 @@ test('factory 3147: lost verdict files a cause and wakes for one automatic check
   const sent=w.interpreter.posts.filter(p=>p.command==='check').length;
   await w.tick();await w.tick();
   assert.equal(w.record().parking?.blocker.kind,'runtime','3147_FACTORY_RUNTIME_CAUSE');
-  const issue=w.github.issues.get(Number(w.record().parking.blocker.until));
-  assert.ok(issue.labels.includes('pdd:runtime'));assert.ok(issue.body.includes(batch));
+  assert.equal(w.record().parking.blocker.until,null,'3147_REPORT_PORT_NOT_WIRED');
+  assert.equal([...w.github.issues.values()].filter(issue=>issue.labels.includes('pdd:runtime')).length,0,'3147_NO_DIRECT_RUNTIME_ISSUE_WRITE');
   assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent);
   assert.equal(w.alerts.some(row=>row.kind==='decision'),false);
-  w.github.close(issue.number);w.interpreter.mode='verdict';await w.tick();
-  assert.equal(w.record().parking,undefined,'3147_FACTORY_RUNTIME_CLOSE_WAKE');
-  const again=await w.command(['test','value','--cache-clear','--json'],{cwd:w.record().root});a.checks.push(again);
-  assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent+1);
+  w.interpreter.mode='verdict';const again=await w.command(['test','value','--cache-clear','--json'],{cwd:w.record().root});a.checks.push(again);
+  await w.tick();
+  assert.equal(w.record().parking,undefined,'3147_FACTORY_LATER_VERDICT_WAKE');
+  const afterWake=w.interpreter.posts.filter(p=>p.command==='check').length;
+  assert.equal(afterWake,sent+1);
+  await w.tick();assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,afterWake,'3147_FACTORY_WAKE_ONCE');
   await w.command(['workflow','done','check','--summary','Prompt tests: 1 of 1 pass; automatic cause recovery'],{cwd:w.record().root});
-  await w.tick();assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent+1);
   await a.finish();await a.merge();assert.equal(w.commands.filter(c=>c.actor==='person').length,0);assert.deepEqual(w.leadActions,[]);
 });
 
@@ -733,20 +734,19 @@ async function runtimeFactory(t) {
   w.interpreter.mode='no-verdict';return w;
 }
 
-test('factory 3147: repeated Runtime attempts share one assigned cause issue',async t=>{
+test('factory 3147: repeated Runtime attempts park without direct issue writes',async t=>{
   const w=await runtimeFactory(t);await runtimeAttempt(w);await runtimeAttempt(w);
   assert.equal(w.record().parking?.blocker.kind,'runtime','3147_FACTORY_GROUP_CAUSE');
-  const issues=[...w.github.issues.values()].filter(row=>row.labels.includes('pdd:runtime'));
-  assert.equal(issues.length,1);assert.deepEqual(issues[0].assignees,['runtime-team']);
-  assert.ok(issues[0].body.includes('Run #17'));assert.deepEqual(w.leadActions,[]);
+  assert.equal([...w.github.issues.values()].filter(row=>row.labels.includes('pdd:runtime')).length,0,'3147_REPORTING_MUST_USE_SHARED_PORT');
+  assert.ok(w.record().parking.blocker.batch);assert.deepEqual(w.leadActions,[]);
 });
 
-test('factory 3147: three same-cause failures serialize new checks',async t=>{
+test('factory 3147: repeated same-cause failures do not serialize checks',async t=>{
   const w=await runtimeFactory(t);
   for(let i=1;i<=3;i++) {
     await runtimeAttempt(w);
     const mode=readJson(join(w.env.PDD_INTERPRETER_QUEUE,'capacity.json')).testOwners;
-    assert.equal(Boolean(mode?.[`${w.stateFile}:runtime-causes`]),i===3,'3147_FACTORY_THREE_SERIALIZE');
+    assert.equal(Boolean(mode?.[`${w.stateFile}:runtime-causes`]),false,'3147_FACTORY_NO_RUNTIME_THROTTLE');
   }
   assert.ok(w.interpreter.posts.filter(row=>row.command==='check').length>=3);assert.deepEqual(w.leadActions,[]);
 });
@@ -756,7 +756,7 @@ test('factory 3147: a later same-kind verdict wakes a Runtime wait once',async t
   const sent=w.interpreter.posts.filter(row=>row.command==='check').length;
   w.interpreter.mode='verdict';await w.command(['test','value','--cache-clear','--json'],{cwd:w.record().root});
   await w.tick();assert.equal(w.record().parking,undefined,'3147_FACTORY_VERDICT_WAKE');
-  assert.equal(Boolean(readJson(join(w.env.PDD_INTERPRETER_QUEUE,'capacity.json')).testOwners?.[`${w.stateFile}:runtime-causes`]),false);
+  assert.equal(Boolean(readJson(join(w.env.PDD_INTERPRETER_QUEUE,'capacity.json')).testOwners?.[`${w.stateFile}:runtime-causes`]),false,'3147_FACTORY_NO_RUNTIME_THROTTLE');
   await w.tick();assert.equal(w.interpreter.posts.filter(row=>row.command==='check').length,sent+1);assert.deepEqual(w.leadActions,[]);
 });
 
@@ -774,9 +774,8 @@ test('factory 3147: a Runtime failure parks one run while another run still chec
   await w.tick();
   assert.equal(w.record().parking?.blocker.kind,'runtime','3147_FACTORY_OTHER_CHECKS');
   assert.equal(w.record(18).parking?.blocker.kind,'runtime');
-  assert.equal(w.record().parking.blocker.until,w.record(18).parking.blocker.until);
-  const issue=w.github.issues.get(Number(w.record().parking.blocker.until));
-  assert.ok(issue.body.includes('Run #17')&&issue.body.includes('Run #18'));assert.deepEqual(w.leadActions,[]);
+  assert.equal(w.record().parking.blocker.until,null);assert.equal(w.record(18).parking.blocker.until,null);
+  assert.equal([...w.github.issues.values()].filter(issue=>issue.labels.includes('pdd:runtime')).length,0);assert.deepEqual(w.leadActions,[]);
 });
 
 test('factory 3147: status names each parked run and its wake condition',async t=>{

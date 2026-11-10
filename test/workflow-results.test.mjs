@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readRunResults, resultLines, noResultLine, usableResult } from '../src/workflow-results.mjs';
+import { readRunResults, resultLines, noResultLine, usableResult, checkCause } from '../src/workflow-results.mjs';
 import { validateProofRecord } from '../src/workflow-prove.mjs';
 
 function folders(t) {
@@ -19,6 +19,13 @@ function folders(t) {
   return { root, state, runDir, batch, env: { PDD_STATE_DIR: state, HOME: base } };
 }
 const since = Date.parse('2026-11-03T10:00:00Z');
+
+test('3147: exhausted provider call caps are local issue work, not a service cause', () => {
+  for (const code of ['provider-call-cap', 'call-cap-reached']) {
+    assert.equal(checkCause([{state: 'partial', reason: {code}}]), 'issue');
+    assert.notEqual(checkCause([{state: 'partial', reason: {code}}]), 'service');
+  }
+});
 
 test('2904: reads the newest check and lint of this worktree since the run started, with source, engine and model', t => {
   const f = folders(t);

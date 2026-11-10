@@ -11,7 +11,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 09dd048bd02275b49d06e674c8ffed1bd8325bd8fad9d53038b820f431bbff65).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2e0957fc01b633e152e043f910704c3837ae064c7c7f12819517807f44586bde).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -350,11 +350,11 @@ async function trusted(row, state, config, p) {
 // A trusted claim comment that carries a lastSeen heartbeat.
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
-async function namedIssueClosed(until, state, p) {
+async function namedIssueClosed(until, state, p, repository = state.repo) {
   const number = /^(?:#)?([1-9][0-9]*)$/.exec(until ?? '')?.[1];
-  if (!number) return false;
+  if (!number || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? '')) return false;
   try {
-    const r = await p.execute('gh', ['api', `repos/${state.repo}/issues/${number}`], {purpose: 'dependencies'});
+    const r = await p.execute('gh', ['api', `repos/${repository}/issues/${number}`], {purpose: 'dependencies'});
     return r.code === 0 && JSON.parse(r.stdout).state === 'closed';
   } catch {return false;}
 }
@@ -362,37 +362,45 @@ async function bindingBase(run, state, p, retainedPaths, refresh = false) {
   try {
     let paths = retainedPaths;
     if (!paths?.length) {
-      const check = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env}).find(row => row.kind === 'pdd test');
+      const rows = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env});
+      const checks = rows.filter(row => ['pdd test', 'pdd lint'].includes(row.kind));
       const selected = new Set();
       const visit = (value, key = '') => {
-        if (typeof value === 'string' && (/\.prompt\.md$/.test(value) || /interface|contract/i.test(key) && /\.(?:json|md|ya?ml)$/.test(value)) && !value.startsWith('/') && !value.split('/').includes('..')) selected.add(value);
+        if (typeof value === 'string' && (/\.prompt\.md$/.test(value) || /interface|contract|binding/i.test(key) && /\.(?:json|md|ya?ml)$/.test(value)) && !value.startsWith('/') && !value.startsWith('-') && !value.split('/').includes('..')) selected.add(value);
         else if (Array.isArray(value)) value.forEach(item => visit(item, key));
         else if (value && typeof value === 'object') Object.entries(value).forEach(([key, item]) => visit(item, key));
       };
-      visit(check);
-      visit(check?.bindingPaths, 'interface');
-      for (const path of check?.tests ?? check?.states?.map(row => row.test) ?? []) {
-        if (typeof path !== 'string' || path.startsWith('/') || path.split('/').includes('..')) continue;
-        try {visit(JSON.parse(readFileSync(join(run.root, path), 'utf8')));} catch { /* Unavailable selection. */ }
+      for (const check of checks) {
+        visit(check);
+        visit(check?.bindingPaths, 'interface');
+        const tests = [...(Array.isArray(check?.tests) ? check.tests : []), ...(Array.isArray(check?.files) ? check.files : []), ...(check?.states?.map(row => row.test) ?? [])];
+        for (const path of tests) {
+          if (typeof path !== 'string' || path.startsWith('/') || path.startsWith('-') || path.split('/').includes('..')) continue;
+          try {visit(JSON.parse(readFileSync(join(run.root, path), 'utf8')));} catch { /* Unavailable selection. */ }
+        }
+      }
+      const reason = String(run.parkReason ?? '');
+      const pattern = /(?:^|[\s"'`(])((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:prompt\.md|json|ya?ml|md))(?=$|[\s"'`),;])/g;
+      for (const match of reason.matchAll(pattern)) {
+        const path = match[1], context = reason.slice(Math.max(0, match.index - 48), match.index + match[0].length + 48);
+        if (/\.prompt\.md$/.test(path) || /interface|contract|binding/i.test(context)) visit(path, 'interface');
       }
       if (!selected.size) return null;
       paths = [...selected, 'pdd-bindings.json'].sort();
     }
+    if (!refresh) return {paths};
     const base = `refs/remotes/origin/${state.baseBranch}`;
-    if (refresh) {
-      p.bindingRefresh ??= new Map();
-      if (!p.bindingRefresh.has(base)) {
-        p.bindingRefresh.set(base, false);
-        const result = await p.execute('git', ['fetch', 'origin', `refs/heads/${state.baseBranch}:${base}`, '--no-tags'], {cwd: state.cwd, timeout: 15_000});
-        p.bindingRefresh.set(base, result.code === 0);
-      }
-      if (!p.bindingRefresh.get(base)) return null;
+    p.bindingRefresh ??= new Map();
+    if (!p.bindingRefresh.has(base)) {
+      p.bindingRefresh.set(base, false);
+      const result = await p.execute('git', ['fetch', 'origin', `refs/heads/${state.baseBranch}:${base}`, '--no-tags'], {cwd: state.cwd, timeout: 15_000});
+      p.bindingRefresh.set(base, result.code === 0);
     }
-    let ref = base;
-    if ((await p.execute('git', ['rev-parse', '--verify', ref], {cwd: state.cwd})).code !== 0) ref = state.baseBranch;
+    if (!p.bindingRefresh.get(base)) return null;
+    if ((await p.execute('git', ['rev-parse', '--verify', base], {cwd: state.cwd})).code !== 0) return null;
     const contents = [];
     for (const path of paths) {
-      const r = await p.execute('git', ['ls-tree', ref, '--', path], {cwd: state.cwd});
+      const r = await p.execute('git', ['ls-tree', base, '--', path], {cwd: state.cwd});
       if (r.code !== 0) return null;
       contents.push([path, r.stdout.trim()]);
     }
@@ -400,45 +408,21 @@ async function bindingBase(run, state, p, retainedPaths, refresh = false) {
   } catch {return null;}
 }
 function runtimeIncidentPorts(state, p, parking) {
-  const execute = async args => {
-    const r = await p.execute('gh', args, {purpose: 'runtime'});
-    if (r.code !== 0) throw Object.assign(Error('Runtime issue request did not confirm success'),
-      {notCreated: /HTTP (?:400|401|403|404|422)\b/.test(r.stderr ?? '')});
-    return r.stdout;
-  };
   return {
     now: p.now, busy: parking.checkProgress,
     readCheck: run => (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env}).find(row => row.kind === 'pdd test'),
     health: () => (p.runtimeHealth ?? (async input => (await import('./runtime-client.mjs')).checkRuntimeHealth(input)))({env: p.env}),
     save: () => p.scanGuard(latest => {latest.runtimeIncidents = state.runtimeIncidents;}),
-    configure: enabled => (p.configureInterpreterTestMode ?? configureInterpreterTestMode)({env: p.env, owner: `${state.stateFile}:runtime-causes`, enabled}, {now: p.now, ...p.interpreterQueuePorts}),
-    findIssue: async marker => {
-      const rows = JSON.parse(await execute(['issue', 'list', '--repo', state.repo, '--state', 'all', '--search', `"${marker}" in:body`, '--limit', '100', '--json', 'number,url,body']));
-      return rows.find(row => row.body?.includes(marker));
+    reportRuntimeCause: typeof p.reportRuntimeCause === 'function' ? input => p.reportRuntimeCause(input) : undefined,
+    issueClosed: async issue => {
+      if (!Number.isSafeInteger(issue?.number) || issue.number < 1 || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(issue?.repository ?? '')) return false;
+      try {
+        const r = await p.execute('gh', ['api', `repos/${issue.repository}/issues/${issue.number}`], {purpose: 'dependencies'});
+        return r.code === 0 && JSON.parse(r.stdout).state === 'closed';
+      } catch {return false;}
     },
-    createIssue: async input => {
-      let result;
-      await p.scanAction(async () => {
-        try {await execute(['label', 'create', 'pdd:runtime', '--repo', state.repo, '--color', 'B60205', '--description', 'Runtime check failure', '--force']);} catch (error) {throw Object.assign(error, {notCreated: true});}
-        const args = ['issue', 'create', '--repo', state.repo, '--title', input.title, '--body', input.body, '--label', 'pdd:runtime'];
-        if (input.owner) args.push('--assignee', input.owner);
-        const url = (await execute(args)).trim();
-        const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(url)?.[1]);
-        if (!number) throw Error('Runtime issue identity unavailable');
-        result = {number, url};
-      });
-      return result;
-    },
-    updateIssue: input => p.scanAction(async () => {
-      // A failed update is retried on this same issue; it never creates another.
-      await execute(['issue', 'edit', String(input.number), '--repo', state.repo, '--body', input.body]);
-      if (input.reopen && await namedIssueClosed(String(input.number), state, p))
-        await execute(['issue', 'reopen', String(input.number), '--repo', state.repo]);
-    }),
-    issueClosed: number => namedIssueClosed(String(number), state, p),
   };
 }
-
 function parkingPorts(state, p, {localOnly = false} = {}) {
   const worker = {...workflowCleanupPorts(p,p), autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
     const result = await p.execute(file, args, options);
@@ -485,7 +469,8 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       if (blocker.kind === 'binding') {
         const prior = run.parking?.blocker;
         const snapshot = await bindingBase(run, state, p, prior?.paths, !localOnly);
-        blocker = {...blocker, until: blocker.until ?? /#([1-9][0-9]*)/.exec(run.parkReason ?? '')?.[1] ?? null, ...(snapshot ?? {}), ...(prior?.kind === 'binding' && prior.until === blocker.until ? prior : {})};
+        const until = blocker.until ?? /#([1-9][0-9]*)/.exec(run.parkReason ?? '')?.[1] ?? null;
+        blocker = {...blocker, until, ...(snapshot ?? {}), ...(prior?.kind === 'binding' && prior.until === until ? prior : {})};
       }
       let interpreterBatch = null, interpreterCheck;
       if (blocker.kind === 'interpreter' && !interpreterWaitFor({...run, parking: null})) {
@@ -501,6 +486,8 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
       text: rule?.text ?? (run.parking.blocker.kind === 'runtime'
         ? `Runtime cause ${run.parking.blocker.cause} is cleared. Read pdd test --read ${run.parking.blocker.batch} first and check for a newer own verdict. If there is still no verdict, send only its no-verdict tests once with the original --max-calls caps and --cache-clear. Keep passed and failed rows, approvals and independent questions. Runtime checks remain required.`
+        : run.parking.blocker.kind === 'binding'
+        ? 'The owning binding contract changed on the base. Read the saved pdd test result, then rerun the required prompt check for this run. Keep passed and failed rows, approvals and independent questions. Runtime checks remain required.'
         : ['pdd', 'pdd-route'].includes(run.parking.blocker.kind)
         ? `The PDD blocker ${run.parking.blocker.until} has cleared. ${run.parking.blocker.until === '#2897' ? 'Recheck the PR 1 re-entry and current-main integration route.' : 'Recheck the supported route for this fix.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
       {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
@@ -516,7 +503,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         return Boolean(blocker.revision && snapshot?.revision && blocker.revision !== snapshot.revision);
       }
       if (blocker.kind === 'runtime') return Boolean(state.runtimeIncidents?.causes?.[blocker.cause]?.recoveredAt)
-        || !localOnly && await namedIssueClosed(blocker.until, state, p);
+        || !localOnly && await namedIssueClosed(blocker.until, state, p, blocker.repository ?? state.repo);
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (['pdd', 'pdd-route'].includes(blocker.kind)) {
         if (!localOnly && await namedIssueClosed(blocker.until, state, p)) return true;

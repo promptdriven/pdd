@@ -5293,7 +5293,10 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
     if (refusal) return {...fail(refusal), recovery: 'skipped'};
   }
   const text = run.parking.text ?? input.text;
-  const inferredGate = (run.parking.blocker.kind === 'runtime' || run.parking.blocker.kind === 'interpreter' && run.parking.interpreterWait) && (run.parking.blocker.kind === 'runtime' || sameFact(run.gate, run.parking.interpreterGate)) && run.gate?.kind === 'approve-pr' && !openQuestion(run);
+  const retryBlocker = ['runtime', 'binding'].includes(run.parking.blocker.kind)
+    || run.parking.blocker.kind === 'interpreter' && run.parking.interpreterWait;
+  const inferredGate = retryBlocker && (run.parking.blocker.kind !== 'interpreter' || sameFact(run.gate, run.parking.interpreterGate))
+    && run.gate?.kind === 'approve-pr' && !openQuestion(run);
   if (text && (RUNTIME_WAKE_TAG.test(text) || isEnvironmentWake(text)) && (run.gate || openQuestion(run)) && !inferredGate) return skipped();
   commitRun(run, p, fresh => {
     if (fresh.parking?.at !== input.at) throw Object.assign(Error('Park changed'), {code: 'workflow_progress_refused'});
@@ -5303,7 +5306,7 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
         if (route && fresh.question?.text === route.question && !fresh.question.answeredAt) delete fresh.question;
         delete fresh.routeWait;
       }
-      if (fresh.parking.blocker.kind === 'runtime' && inferredGate) delete fresh.done.check;
+      if (['runtime', 'binding'].includes(fresh.parking.blocker.kind) && inferredGate) delete fresh.done.check;
       endRuntimeWait(fresh); delete fresh.blockedOn;
       // Consume the accepted stop before resume/delivery can save a new one.
       // Environment retry delivery still needs its cause for validation.
