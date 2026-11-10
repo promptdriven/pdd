@@ -101,6 +101,9 @@ and messages come from the same read snapshot.
 
 </details>
 
+`readGateMessage({stage, gateAt}, ports)` passively finds the unique native session using the same session identity and worktree matching as approval evidence. Files with the saved session ID are snapshots of one resumed session; consider their complete records together. Return the eligible assistant text with the latest timestamp between gateAt and the observation time, inclusive. For equal timestamps, select the later record in lexicographic file-path order, then record order within that file. Require the saved session id and matching worktree; exclude analysis, tool and user messages. Return null if discovery is unreadable, the session is ambiguous, or no eligible text exists. Never treat this text as approval evidence.
+
+
 ## Dependencies
 
 - [Prompting guide](../../docs/prompting-guide.md): authoring and generation.

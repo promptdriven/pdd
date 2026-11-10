@@ -1,0 +1,154 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-view-json-2574.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A JSON view at a gate contains version 1, the gate id and its current chat message, links to Stories, plan and PRs, and recorded approval actors and times."
+    },
+    {
+      "id": "AC2",
+      "text": "When no gate is open, the gate is null and links and approvals remain available."
+    },
+    {
+      "id": "AC3",
+      "text": "No private Try link appears in the JSON, including inside a message or an approval actor."
+    }
+  ],
+  "initial_world": {
+    "fixture_counters": {
+      "resolve": 0
+    },
+    "requests": []
+  },
+  "simulation": {
+    "runs.resolveRun": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/resolve",
+      "cases": [
+        {
+          "args": {
+            "ref": "2574",
+            "cwd": "/project"
+          },
+          "call_index": 1,
+          "result": {
+            "json": "{\"run\":{\"v\":1,\"runId\":\"json-view\",\"repo\":\"example/project\",\"number\":2574,\"root\":\"/project\",\"commonDir\":\"/project/.git\",\"runDir\":\"/project/.git/pdd/runs/2574\",\"state\":\"waiting\",\"area\":0,\"areas\":[{\"name\":\"story\",\"steps\":[]}],\"chats\":[],\"pr\":[{\"url\":\"https://github.com/example/project/pull/12\"}],\"decisions\":[{\"decision\":\"approve\",\"evidence\":{\"actor\":{\"kind\":\"person\",\"id\":\"https://runtime.example/s/private\"},\"at\":1000}}],\"gate\":{\"id\":\"gate-1\",\"area\":\"story\",\"at\":2000,\"kind\":\"approve\"}}}"
+          }
+        },
+        {
+          "args": {
+            "ref": "2574",
+            "cwd": "/project"
+          },
+          "call_index": 2,
+          "result": {
+            "json": "{\"run\":{\"v\":1,\"runId\":\"json-view\",\"repo\":\"example/project\",\"number\":2574,\"root\":\"/project\",\"commonDir\":\"/project/.git\",\"runDir\":\"/project/.git/pdd/runs/2574\",\"state\":\"waiting\",\"area\":0,\"areas\":[{\"name\":\"story\",\"steps\":[]}],\"chats\":[],\"pr\":[{\"url\":\"https://github.com/example/project/pull/12\"}],\"decisions\":[{\"decision\":\"approve\",\"evidence\":{\"actor\":{\"kind\":\"person\",\"id\":\"https://runtime.example/s/private\"},\"at\":1000}}],\"gate\":null}}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "files.readFileSync": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "content": null
+      }
+    },
+    "files.readdirSync": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "entries": null
+      }
+    },
+    "files.realpathSync": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "path": null
+      }
+    },
+    "files.lstatSync": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "stat": null
+      }
+    },
+    "files.existsSync": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "exists": false
+      }
+    },
+    "program.execFile": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "stdout": "",
+        "code": 0
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "gate",
+      "entry_path": "prompts/cli/workflow-view.prompt.md",
+      "operation": "viewRun",
+      "input": {
+        "ref": "2574",
+        "cwd": "/project",
+        "json": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "{\"version\":1,\"gate\":{\"id\":\"gate-1\",\"message\":null},\"links\":{\"stories\":[],\"plan\":[],\"prs\":[\"https://github.com/example/project/pull/12\"]},\"approvals\":[{\"actor\":{\"kind\":\"person\",\"id\":\"[private link removed]\"},\"at\":1000}]}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "{\"version\":1,\"gate\":{\"id\":\"gate-1\",\"message\":null},\"links\":{\"stories\":[],\"plan\":[],\"prs\":[\"https://github.com/example/project/pull/12\"]},\"approvals\":[{\"actor\":{\"kind\":\"person\",\"id\":\"[private link removed]\"},\"at\":1000}]}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "none",
+      "entry_path": "prompts/cli/workflow-view.prompt.md",
+      "operation": "viewRun",
+      "input": {
+        "ref": "2574",
+        "cwd": "/project",
+        "json": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "{\"version\":1,\"gate\":null,\"links\":{\"stories\":[],\"plan\":[],\"prs\":[\"https://github.com/example/project/pull/12\"]},\"approvals\":[{\"actor\":{\"kind\":\"person\",\"id\":\"[private link removed]\"},\"at\":1000}]}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "{\"version\":1,\"gate\":null,\"links\":{\"stories\":[],\"plan\":[],\"prs\":[\"https://github.com/example/project/pull/12\"]},\"approvals\":[{\"actor\":{\"kind\":\"person\",\"id\":\"[private link removed]\"},\"at\":1000}]}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

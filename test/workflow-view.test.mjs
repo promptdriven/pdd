@@ -128,3 +128,28 @@ test('VIEW-BIG-TEST: a 2.4 MB test is found by its name and links its Story and 
   assert.ok(r.stdout.includes(`Test cases: ${pathToFileURL(join(f.repo, 'tests/greet.json')).href}`), r.stdout);
   assert.ok(r.stdout.includes(`Test/app map: ${pathToFileURL(join(f.repo, 'tests/greet-notes.json')).href}`), r.stdout);
 });
+
+test('JSON view reads the current chat gate and excludes private Try links', t => {
+  const f = fixture(t), id = '12345678-1234-1234-1234-123456789abc';
+  const codex = join(f.home, '.codex'), dir = join(codex, 'sessions', '2025', '01', '01'); mkdirSync(dir, { recursive: true });
+  const row = value => JSON.stringify(value) + '\n';
+  const timestamp = ms => new Date(ms).toISOString();
+  const session = join(dir, `rollout-test-${id}.jsonl`);
+  writeFileSync(session, row({ type: 'session_meta', timestamp: timestamp(1000), payload: { id, cwd: f.repo, timestamp: timestamp(1000) } }) +
+    row({ type: 'response_item', timestamp: timestamp(1500), payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Old gate' }] } }) +
+    row({ type: 'response_item', timestamp: timestamp(2100), payload: { type: 'message', role: 'assistant', phase: 'analysis', content: [{ type: 'output_text', text: 'private thoughts' }] } }) +
+    row({ type: 'response_item', timestamp: timestamp(2200), payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Review the Story. Try: https://runtime.example/s/secret' }] } }));
+  f.env.CODEX_HOME = codex;
+  f.run.gate.id = 'gate-1'; f.run.chats = [{ area: 'prompt-pr', startedAt: 1000, session: { agent: 'codex', id } }];
+  f.run.decisions[0].evidence = { actor: { kind: 'person', id: 'https://runtime.example/s/private' }, at: 1000 };
+  f.save();
+  const result = f.cli('workflow', 'view', '2442', '--json'); assert.equal(result.status, 0, result.stderr);
+  const data = JSON.parse(result.stdout);
+  assert.equal(data.version, 1); assert.equal(data.gate.id, 'gate-1');
+  assert.match(data.gate.message, /Review the Story/); assert.doesNotMatch(result.stdout, /runtime\.example\/s\//);
+  assert.ok(data.links.stories.some(url => url.endsWith('/user_stories/greet.md')));
+  assert.ok(data.links.plan.some(url => url.endsWith('/user_stories/PLAN.md')));
+  assert.deepEqual(data.links.prs, [f.run.pr[0].url]); assert.equal(data.approvals[0].at, 1000);
+  f.run.gate = null; f.save(); const noGate = JSON.parse(f.cli('workflow', 'view', '2442', '--json').stdout);
+  assert.equal(noGate.gate, null); assert.deepEqual(noGate.links, data.links); assert.deepEqual(noGate.approvals, data.approvals);
+});

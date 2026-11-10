@@ -1,9 +1,11 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: 1f5a45871226d23e46286384b07a73e2c639444ace8c31cae7e4145f4a9f4ab9).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: 2d4a5f5deb876ba91b37cd55fba34391d3548a111a630d0541dc2c53c1171f72).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { approvalRecords } from './workflow-pr-evidence.mjs';
+import { readGateMessage } from './approval-evidence.mjs';
 import { resolveRun } from './workflow-runs.mjs';
 import { findTests, interfaceBlocks, isSecretPath, LIMITS, proseSha256 } from './runtime-preflight.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -44,7 +46,7 @@ function promptState(source) {
 }
 
 // This module deliberately uses no runner/chat helpers and never refreshes external state.
-export async function viewRun({ ref, cwd }, ports = {}) {
+export async function viewRun({ ref, cwd, json = false }, ports = {}) {
   const found = await resolveRun(ref, { cwd }, ports);
   if (found.error) return { exitCode: 1, message: found.error };
   const run = found.run, root = resolve(run.root), area = array(run.areas)[run.area];
@@ -85,6 +87,7 @@ export async function viewRun({ ref, cwd }, ports = {}) {
       }
     }
   }
+  if (json) for (const path of array(run.gate?.storyPaths)) add('Story', path);
   for (const { path } of files.values()) if (path.endsWith('.prompt.md')) {
     const source = readArtifact(root, path), state = source === null ? null : promptState(source);
     if (state) prompts.set(path, state);
@@ -103,6 +106,30 @@ export async function viewRun({ ref, cwd }, ports = {}) {
   const reports = urls.filter(url => /\/r\//.test(url)), tries = urls.filter(url => /\/s\//.test(url));
   const runtime = summaries.flatMap(summary => summary.split(LINE_BREAK)).filter(line => LINE_START.test(line.trim()));
   const gate = run.gate && (!ended(run) || run.state === 'completed' && run.gate.kind === 'ask-code') ? run.gate : null;
+  if (json) {
+    const clean = value => typeof value === 'string' ? value.replace(/(?:https?|file):\/\/[^\s<>"'`]+/gi, url => {
+      let decoded = url; try { decoded = decodeURIComponent(url); } catch {}
+      return /\/s\//i.test(decoded) ? '[private link removed]' : url;
+    }) : null;
+    const chat = array(run.chats).findLast(item => item.area === gate?.area);
+    const session = chat?.session;
+    const message = gate && session?.id && chat?.startedAt != null ? await readGateMessage({ stage: {
+      agent: session.agent ?? run.agent, root: run.root, startedAt: chat.startedAt, endedAt: Date.now(), sessionId: session.id
+    }, gateAt: gate.at }, { env: ports.env, claudeConfigDir: chat.configDir || undefined, codexHome: chat.configDir || undefined }) : null;
+    const stories = [], plan = [];
+    for (const [file, item] of [...files].sort(([a], [b]) => a.localeCompare(b))) {
+      if (item.role !== 'Story' && item.role !== 'Story/plan') continue;
+      const url = clean(pathToFileURL(file).href);
+      if (/\/plan\.md$/i.test(item.path)) plan.push(url); else stories.push(url);
+    }
+    const data = { version: 1, gate: gate ? { id: clean(gate.id), message: clean(message) } : null,
+      links: { stories, plan, prs: array(run.pr).map(pr => clean(pr.url)).filter(Boolean) },
+      approvals: approvalRecords(run).map(item => ({
+        actor: item.actor ? { kind: clean(item.actor.kind), id: clean(item.actor.id) } : null,
+        at: Number.isFinite(item.at) ? item.at : null
+      })) };
+    return { exitCode: 0, message: JSON.stringify(data) };
+  }
   const pending = gate?.kind === 'ask-code' ? 'Optional code-work authorization: make the code PR, or stop at PR 1.'
     : gate?.kind === 'approve-pr' ? `Approve ${text(gate.area)} after review/Try to open the PR.`
     : gate ? `Approve the ${text(gate.area)} area or ask for changes.` : ended(run) ? 'No active gate.'
