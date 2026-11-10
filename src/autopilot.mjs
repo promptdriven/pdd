@@ -101,8 +101,8 @@ function nativeGithub(root, exec) {
 }
 
 export async function runAutopilot(input, ports = {}) {
-  let mode = 'off', trust = [], warnings = [], github, parking;
-  const result = (exitCode, message, trusted = false) => ({ mode, trust, ...(github ? { github } : {}), ...(parking ? {parking} : {}), trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
+  let mode = 'off', trust = [], warnings = [], github, parking, runtimeOwner;
+  const result = (exitCode, message, trusted = false) => ({ mode, trust, ...(github ? { github } : {}), ...(parking ? {parking} : {}), ...(runtimeOwner ? {runtimeOwner} : {}), trusted, message: [...warnings, message].filter(Boolean).join('\n'), exitCode });
   const { action, names, author } = input;
   if (!['setup', 'mode', 'trust', 'untrust', 'isTrusted'].includes(action)
     || action === 'mode' && !modes.includes(input.mode)
@@ -131,6 +131,7 @@ export async function runAutopilot(input, ports = {}) {
       ...(Number.isFinite(setting.parking.hours) && setting.parking.hours > 0 ? {hours: setting.parking.hours} : {}),
       ...(Number.isSafeInteger(setting.parking.maxParked) && setting.parking.maxParked > 0 ? {maxParked: setting.parking.maxParked} : {}),
     };
+    if (typeof setting.runtimeOwner === 'string' && /^[a-z0-9][a-z0-9-]{0,38}$/i.test(setting.runtimeOwner)) runtimeOwner = setting.runtimeOwner;
     if (Object.hasOwn(setting, 'github')) github = githubBudgetSettings(setting.github);
     const invalid = raw !== null && (!object(saved) || Object.hasOwn(setting, 'mode') && !modes.includes(setting.mode));
     if (invalid) warnings.push(`Saved Autopilot mode ${JSON.stringify(object(saved) ? setting.mode : saved)} is invalid; ${action === 'mode' ? 'treating it as off.' : 'using off and leaving it unchanged.'}`);

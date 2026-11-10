@@ -20,6 +20,10 @@ Autopilot config optionally accepts `parking: {hours,maxParked}`. Positive finit
 `autopilot.audit` is an optional Boolean; false disables post-merge audits.
 Preserve it on settings writes. The audit owner reads it from the source checkout.
 
+## Runtime ownership (#3147)
+
+Preserve optional autopilot.runtimeOwner from pdd.json in read results as runtimeOwner when it is a valid GitHub login. It assigns Runtime cause issues; absence leaves issues unassigned.
+
 ## Dependencies
 
 - [GitHub calls](github-calls.prompt.md#budget): required generation and verification context for reading `autopilot.github` with `githubBudgetSettings`.
@@ -31,7 +35,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
 
 ```json
 {
-  "status": "approved",
+  "status": "draft",
   "entries": [
     {
       "operation": "runAutopilot",
@@ -329,7 +333,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256":"27a02e460e59e56b918e6d961f9c92c047a2b11910787e49afa34e5b045da782"
+  "prose_sha256":"ffa83c8137bc1fbc19bc462cb44dad066f62f41a510a7e0049d8e86062de1ee0"
 }
 ```
 </details>

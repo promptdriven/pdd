@@ -1,6 +1,7 @@
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {auditMerge, pendingAudits} from './autopilot-audit.mjs';
 import {collectRouteQuestions, idleParkingBlocker, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
+import {classifyRuntimeFailure, reconcileRuntimeIncidents} from './autopilot-runtime.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession, finishedChats} from './workflow-chat.mjs';
 import {WORKFLOW_CAPABILITIES, sweepIdleRuns, recoverAutomaticRunOwner, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
@@ -349,6 +350,95 @@ async function trusted(row, state, config, p) {
 // A trusted claim comment that carries a lastSeen heartbeat.
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
+async function namedIssueClosed(until, state, p) {
+  const number = /^(?:#)?([1-9][0-9]*)$/.exec(until ?? '')?.[1];
+  if (!number) return false;
+  try {
+    const r = await p.execute('gh', ['api', `repos/${state.repo}/issues/${number}`], {purpose: 'dependencies'});
+    return r.code === 0 && JSON.parse(r.stdout).state === 'closed';
+  } catch {return false;}
+}
+async function bindingBase(run, state, p, retainedPaths, refresh = false) {
+  try {
+    let paths = retainedPaths;
+    if (!paths?.length) {
+      const check = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env}).find(row => row.kind === 'pdd test');
+      const selected = new Set();
+      const visit = (value, key = '') => {
+        if (typeof value === 'string' && (/\.prompt\.md$/.test(value) || /interface|contract/i.test(key) && /\.(?:json|md|ya?ml)$/.test(value)) && !value.startsWith('/') && !value.split('/').includes('..')) selected.add(value);
+        else if (Array.isArray(value)) value.forEach(item => visit(item, key));
+        else if (value && typeof value === 'object') Object.entries(value).forEach(([key, item]) => visit(item, key));
+      };
+      visit(check);
+      visit(check?.bindingPaths, 'interface');
+      for (const path of check?.tests ?? check?.states?.map(row => row.test) ?? []) {
+        if (typeof path !== 'string' || path.startsWith('/') || path.split('/').includes('..')) continue;
+        try {visit(JSON.parse(readFileSync(join(run.root, path), 'utf8')));} catch { /* Unavailable selection. */ }
+      }
+      if (!selected.size) return null;
+      paths = [...selected, 'pdd-bindings.json'].sort();
+    }
+    const base = `refs/remotes/origin/${state.baseBranch}`;
+    if (refresh) {
+      p.bindingRefresh ??= new Map();
+      if (!p.bindingRefresh.has(base)) {
+        p.bindingRefresh.set(base, false);
+        const result = await p.execute('git', ['fetch', 'origin', `refs/heads/${state.baseBranch}:${base}`, '--no-tags'], {cwd: state.cwd, timeout: 15_000});
+        p.bindingRefresh.set(base, result.code === 0);
+      }
+      if (!p.bindingRefresh.get(base)) return null;
+    }
+    let ref = base;
+    if ((await p.execute('git', ['rev-parse', '--verify', ref], {cwd: state.cwd})).code !== 0) ref = state.baseBranch;
+    const contents = [];
+    for (const path of paths) {
+      const r = await p.execute('git', ['ls-tree', ref, '--', path], {cwd: state.cwd});
+      if (r.code !== 0) return null;
+      contents.push([path, r.stdout.trim()]);
+    }
+    return {paths, revision: createHash('sha256').update(JSON.stringify(contents)).digest('hex')};
+  } catch {return null;}
+}
+function runtimeIncidentPorts(state, p, parking) {
+  const execute = async args => {
+    const r = await p.execute('gh', args, {purpose: 'runtime'});
+    if (r.code !== 0) throw Object.assign(Error('Runtime issue request did not confirm success'),
+      {notCreated: /HTTP (?:400|401|403|404|422)\b/.test(r.stderr ?? '')});
+    return r.stdout;
+  };
+  return {
+    now: p.now, busy: parking.checkProgress,
+    readCheck: run => (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env}).find(row => row.kind === 'pdd test'),
+    health: () => (p.runtimeHealth ?? (async input => (await import('./runtime-client.mjs')).checkRuntimeHealth(input)))({env: p.env}),
+    save: () => p.scanGuard(latest => {latest.runtimeIncidents = state.runtimeIncidents;}),
+    configure: enabled => (p.configureInterpreterTestMode ?? configureInterpreterTestMode)({env: p.env, owner: `${state.stateFile}:runtime-causes`, enabled}, {now: p.now, ...p.interpreterQueuePorts}),
+    findIssue: async marker => {
+      const rows = JSON.parse(await execute(['issue', 'list', '--repo', state.repo, '--state', 'all', '--search', `"${marker}" in:body`, '--limit', '100', '--json', 'number,url,body']));
+      return rows.find(row => row.body?.includes(marker));
+    },
+    createIssue: async input => {
+      let result;
+      await p.scanAction(async () => {
+        try {await execute(['label', 'create', 'pdd:runtime', '--repo', state.repo, '--color', 'B60205', '--description', 'Runtime check failure', '--force']);} catch (error) {throw Object.assign(error, {notCreated: true});}
+        const args = ['issue', 'create', '--repo', state.repo, '--title', input.title, '--body', input.body, '--label', 'pdd:runtime'];
+        if (input.owner) args.push('--assignee', input.owner);
+        const url = (await execute(args)).trim();
+        const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(url)?.[1]);
+        if (!number) throw Error('Runtime issue identity unavailable');
+        result = {number, url};
+      });
+      return result;
+    },
+    updateIssue: input => p.scanAction(async () => {
+      // A failed update is retried on this same issue; it never creates another.
+      await execute(['issue', 'edit', String(input.number), '--repo', state.repo, '--body', input.body]);
+      if (input.reopen && await namedIssueClosed(String(input.number), state, p))
+        await execute(['issue', 'reopen', String(input.number), '--repo', state.repo]);
+    }),
+    issueClosed: number => namedIssueClosed(String(number), state, p),
+  };
+}
+
 function parkingPorts(state, p, {localOnly = false} = {}) {
   const worker = {...workflowCleanupPorts(p,p), autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
     const result = await p.execute(file, args, options);
@@ -368,6 +458,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return Boolean(live?.alive && !['idle', 'done'].includes(live.status));
     },
     observeBlocker: async run => {
+      if (p.runtimeBlockers?.has(run.number)) return p.runtimeBlockers.get(run.number);
       if (run.blockedOn) return null;
       if (run.state === 'waiting' && run.gate?.kind === 'approve-pr' && !run.question && run.done?.check) {
         let checks;
@@ -391,6 +482,11 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return health?.kind === 'usage-limit' ? {kind: 'account', until: Number.isFinite(reset) ? new Date(reset).toISOString() : null} : null;
     },
     park: async (run, blocker) => {
+      if (blocker.kind === 'binding') {
+        const prior = run.parking?.blocker;
+        const snapshot = await bindingBase(run, state, p, prior?.paths, !localOnly);
+        blocker = {...blocker, until: blocker.until ?? /#([1-9][0-9]*)/.exec(run.parkReason ?? '')?.[1] ?? null, ...(snapshot ?? {}), ...(prior?.kind === 'binding' && prior.until === blocker.until ? prior : {})};
+      }
       let interpreterBatch = null, interpreterCheck;
       if (blocker.kind === 'interpreter' && !interpreterWaitFor({...run, parking: null})) {
         let check;
@@ -403,16 +499,27 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       return p.scanAction(() => parkBlockedRun({...args(run), blocker, expected: run, interpreterBatch, interpreterCheck}, worker));
     },
     wake: (run, rule) => p.scanAction(() => wakeParkedRun({...args(run), at: run.parking.at,
-      text: rule?.text ?? (['pdd', 'pdd-route'].includes(run.parking.blocker.kind)
-        ? `The installed PDD contains ${run.parking.blocker.until}. ${run.parking.blocker.until === '#2897' ? 'The PR 1 re-entry and current-main integration route now exists.' : 'The required fix is available.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
+      text: rule?.text ?? (run.parking.blocker.kind === 'runtime'
+        ? `Runtime cause ${run.parking.blocker.cause} is cleared. Read pdd test --read ${run.parking.blocker.batch} first and check for a newer own verdict. If there is still no verdict, send only its no-verdict tests once with the original --max-calls caps and --cache-clear. Keep passed and failed rows, approvals and independent questions. Runtime checks remain required.`
+        : ['pdd', 'pdd-route'].includes(run.parking.blocker.kind)
+        ? `The PDD blocker ${run.parking.blocker.until} has cleared. ${run.parking.blocker.until === '#2897' ? 'Recheck the PR 1 re-entry and current-main integration route.' : 'Recheck the supported route for this fix.'} Continue this saved run from its retained work. Preserve approval gates and independent questions.` : undefined), expectedBlocker: run.parking.blocker},
       {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
       if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
-      if (['unknown','binding'].includes(blocker.kind)) return hasParkedReply(run, worker);
+      if (blocker.kind === 'unknown') return hasParkedReply(run, worker);
+      if (blocker.kind === 'binding') {
+        if (hasParkedReply(run, worker)) return true;
+        if (!localOnly && await namedIssueClosed(blocker.until, state, p)) return true;
+        const snapshot = await bindingBase(run, state, p, blocker.paths, !localOnly);
+        return Boolean(blocker.revision && snapshot?.revision && blocker.revision !== snapshot.revision);
+      }
+      if (blocker.kind === 'runtime') return Boolean(state.runtimeIncidents?.causes?.[blocker.cause]?.recoveredAt)
+        || !localOnly && await namedIssueClosed(blocker.until, state, p);
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (['pdd', 'pdd-route'].includes(blocker.kind)) {
+        if (!localOnly && await namedIssueClosed(blocker.until, state, p)) return true;
         const required = blocker.until === '#2897' ? 'capability:prompt-reentry' : /^#[1-9][0-9]*$/.test(blocker.until) ? `capability:issue-${blocker.until.slice(1)}` : blocker.until;
         if (typeof required !== 'string') return false;
         if (required.startsWith('capability:')) return (p.installedPddCapabilities ?? WORKFLOW_CAPABILITIES).includes(required.slice(11));
@@ -427,19 +534,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       if (localOnly) return false;
       if (p.blockerCleared) return await p.blockerCleared(run, blocker) === true;
       if (blocker.kind === 'dependency') {
-        // A closed issue alone is not proof of a merge.
-        const issue = await p.execute('gh', ['api', `repos/${state.repo}/issues/${blocker.until}`], {purpose: 'dependencies'});
-        if (issue.code !== 0 || JSON.parse(issue.stdout).state !== 'closed') return false;
-        const result = await p.execute('gh', ['api', `repos/${state.repo}/issues/${blocker.until}/timeline?per_page=100`, '--paginate', '--slurp'], {purpose: 'dependencies'});
-        if (result.code !== 0) return false;
-        const pages = JSON.parse(result.stdout);
-        for (const event of pages.flat()) {
-          const pull = event.source?.issue;
-          if (event.event !== 'cross-referenced' || !pull?.pull_request?.url || !pull.pull_request.url.startsWith(`https://api.github.com/repos/${state.repo}/pulls/`)) continue;
-          const reply = await p.execute('gh', ['api', pull.pull_request.url], {purpose: 'dependencies'});
-          if (reply.code === 0) {const pr = JSON.parse(reply.stdout); if (pr.merged === true && closingIssues(pr.body, state.repo).includes(Number(blocker.until))) return true;}
-        }
-        return false;
+        return namedIssueClosed(blocker.until, state, p);
       }
       if (['ci', 'review'].includes(blocker.kind)) {
         const pr = run.pr?.at(-1);
@@ -509,6 +604,7 @@ async function parkingTick(state, p, config, options = {}) {
     const ports = parkingPorts(state, p, options);
     const routes = (await ports.list()).filter(run => run.repo?.toLowerCase() === state.repo.toLowerCase() && run.sourceRoot === state.cwd
       && run.automaticOrigin?.coordinatorId === state.coordinatorId && run.automaticOrigin?.machine === state.machine);
+    p.runtimeBlockers = await reconcileRuntimeIncidents(state, runtimeIncidentPorts(state, p, ports), config, routes, options);
     await routeQuestionsTick(state, p, config, routes, options.localOnly);
     state.parking = await reconcileParking(state, ports, {...options, policy: config.parking, release: !options.localOnly});
     state.parkedNumbers = (await ports.list()).filter(run => run.parking && !['completed', 'cancelled'].includes(run.state)).map(run => run.number);
@@ -618,6 +714,10 @@ async function readRuntimeWaits(state, p) {
     if (!/^[1-9][0-9]*$/.test(name)) continue;
     try {
       const run = read(join(folder, name, 'status.json')), wait = run && interpreterWaitFor(run);
+      if (run?.automaticOrigin?.coordinatorId === state.coordinatorId) {
+        const check = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env}).find(row => row.kind === 'pdd test');
+        if (classifyRuntimeFailure(check)) continue; // Automatic cause incidents own these waits.
+      }
       if (run?.v === 1 && run.number === Number(name) && run.repo?.toLowerCase() === state.repo.toLowerCase()
         && (run.runtimeWait || run.automaticOrigin?.coordinatorId === state.coordinatorId && run.automaticOrigin?.machine === state.machine)
         && blockerFor(run)?.kind === 'interpreter' && Number.isFinite(wait?.at))
@@ -2054,7 +2154,7 @@ async function runTick(stateFile, ports, completion) {
   } finally {
     try {
       if (state && scanGuard) await scanGuard(latest => {
-        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','health','parking','parkedNumbers','interpreterPattern','auditHolds']) {
+        for (const key of ['defaultBranch','baseBranch','retryAt','cachedIssues','etag','pages','issuesSince','issuesFullAt','githubIntake','acknowledged','commentCache','seen','timeSeen','pullCache','recipeDelivered','dependencyPending','deliveryIntent','reconciliationIntent','uncertainDeliveryHistory','paneId','workspaceId','ownerLaunch','contextPane','contextBinding','relaunchPending','relaunchHeld','runtime','runtimeIncidents','health','parking','parkedNumbers','interpreterPattern','auditHolds']) {
           if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
         }
         latest.nextTick = (ports.now ?? Date.now)() + INTERVAL;
@@ -2387,6 +2487,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }
       await timer('stop', state, p);
       await releaseCheckCapacity({env:p.env,owner:stateFile}, p.checkCapacityPorts ?? p);
+      for (const owner of [stateFile, `${stateFile}:runtime-causes`])
+        await (p.configureInterpreterTestMode ?? configureInterpreterTestMode)({env: p.env, owner, enabled: false}, {now: p.now, ...p.interpreterQueuePorts});
       if (previous) { state.timerInstalled = false; save(stateFile, state); }
       return ok('Autopilot stopped on this machine; the current step can finish.');
     }

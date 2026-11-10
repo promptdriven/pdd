@@ -243,23 +243,25 @@ test('factory 2: machine restart retains claim, work and chat identity to merge'
   await a.finish();await a.merge();assert.deepEqual(w.leadActions,[]);
 });
 
-test('factory 3: lost verdict holds through ticks; one person-approved resend reaches merge',async t=>{
+test('factory 3147: lost verdict files a cause and wakes for one automatic check after issue close',async t=>{
   const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);
   await a.until(r=>r.area===1);w.interpreter.mode='no-verdict';
-  const lost=await a.step();assert.notEqual(lost.check.code,0);
-  const batch=JSON.parse(lost.check.stdout).batch;
-  await w.command(['workflow','status','17']);
+  const lost=await a.step();assert.notEqual(lost.check.code,0);const batch=JSON.parse(lost.check.stdout).batch;
   await w.command(['workflow','park','--interpreter','--reason',`Interpreter batch ${batch}: runner-stopped; no verdict.`],{cwd:w.record().root});
   const sent=w.interpreter.posts.filter(p=>p.command==='check').length;
-  await w.tick();await w.tick();assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent);
-  assert.equal(w.record().parking?.blocker?.kind,'interpreter',JSON.stringify({warnings:w.warnings,run:{state:w.record().state,origin:w.record().automaticOrigin,source:w.record().sourceRoot,chats:w.record().chats.map(c=>({area:c.area,session:c.session,state:c.state,closed:c.closed})),runtime:w.record().runtimeWait},state:{parking:w.state().parking,cwd:w.state().cwd,coordinatorId:w.state().coordinatorId,machine:w.state().machine}}));
-  assert.ok(w.alerts.some(a=>a.kind==='decision'),'GAP lost verdict needs a person decision, without a lead prompt');
-  w.interpreter.mode='verdict';
-  const decision=await w.command(['workflow','resend','17','--said','-'],{actor:'person',stdin:'Resend the lost factory check once with its saved call cap.'});
-  assert.equal(w.record().checkResends.at(-1).state,'verdict');assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent+1);
-  a.checks.push(decision);await w.tick();
-  await w.command(['workflow','done','check','--summary','Prompt tests: 1 of 1 pass; person-approved resend receipt retained'],{cwd:w.record().root});
-  await a.finish();assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent+1);await a.merge();assert.equal(w.commands.filter(c=>c.actor==='person').length,1);assert.deepEqual(w.leadActions,[]);
+  await w.tick();await w.tick();
+  assert.equal(w.record().parking?.blocker.kind,'runtime','3147_FACTORY_RUNTIME_CAUSE');
+  const issue=w.github.issues.get(Number(w.record().parking.blocker.until));
+  assert.ok(issue.labels.includes('pdd:runtime'));assert.ok(issue.body.includes(batch));
+  assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent);
+  assert.equal(w.alerts.some(row=>row.kind==='decision'),false);
+  w.github.close(issue.number);w.interpreter.mode='verdict';await w.tick();
+  assert.equal(w.record().parking,undefined,'3147_FACTORY_RUNTIME_CLOSE_WAKE');
+  const again=await w.command(['test','value','--cache-clear','--json'],{cwd:w.record().root});a.checks.push(again);
+  assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent+1);
+  await w.command(['workflow','done','check','--summary','Prompt tests: 1 of 1 pass; automatic cause recovery'],{cwd:w.record().root});
+  await w.tick();assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent+1);
+  await a.finish();await a.merge();assert.equal(w.commands.filter(c=>c.actor==='person').length,0);assert.deepEqual(w.leadActions,[]);
 });
 
 test('factory 4: stuck run parks and its merged dependency wakes it to merge',async t=>{
@@ -439,7 +441,7 @@ test('factory interpreter: a refused check remains a refusal and sends nothing o
   const report=JSON.parse(refused.check.stdout);assert.equal(report.rows[0].state,'refused');
   await w.command(['workflow','park','--interpreter','--reason','Interpreter refused the request; no verdict.'],{cwd:w.record().root});
   const posts=w.interpreter.posts.length;await w.tick();await w.tick();
-  assert.equal(w.interpreter.posts.length,posts);assert.equal(w.github.prs.length,0);assert.equal(w.record().parking?.blocker?.kind,'interpreter');assert.deepEqual(w.leadActions,[]);
+  assert.equal(w.interpreter.posts.length,posts);assert.equal(w.github.prs.length,0);assert.equal(w.record().parking?.blocker?.kind,'runtime','3147_FACTORY_PROVIDER_CAUSE');assert.deepEqual(w.leadActions,[]);
 });
 
 
@@ -693,4 +695,96 @@ test('factory 3125: a full workflow session admits healthy coordinator reuse in 
   assert.deepEqual(w.herdr.panes,workflowPanes);assert.deepEqual(w.coordinatorHerdr.panes,coordinatorPanes);
   assert.ok(w.herdr.panes.some(p=>p.pane_id===personal.result.root_pane.pane_id));
   assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
+});
+
+for(const kind of ['dependency','pdd','pdd-route'])test(`factory 3147: any issue close wakes ${kind}`,async t=>{
+  const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
+  w.github.add(18,{title:'Blocking fix',body:'Fix the required route.',created:w.time,updated:w.time});
+  const args=kind==='pdd-route'?['--route','native-replay','--until','#18']:['--blocker',kind,'--until',kind==='pdd'?'#18':'18'];
+  await w.command(['workflow','park',...args,'--reason','Required fix #18'],{cwd:w.record().root});
+  await w.tick();assert.equal(w.record().parking?.phase,'parked');
+  w.github.close(18);await w.tick();assert.equal(w.record().parking,undefined,'3147_FACTORY_ANY_CLOSE_WAKE');
+  const id=w.record().chats.at(-1).session.id;await w.tick();assert.equal(w.record().chats.at(-1).session.id,id);assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3147: binding hold wakes on its owning base contract only',async t=>{
+  const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
+  await w.command(['workflow','park','--reason','binding-missing: owning value.prompt.md interface'],{cwd:w.record().root});
+  // A terminal binding receipt uses the same batch projection as a Runtime refusal.
+  const run=w.record(),batch='20261110-120000-abcd';
+  put(w.env.PDD_STATE_DIR,`batches/${batch}/batch.json`,{batch,root:run.root,intent:'check',created_at:new Date(w.time).toISOString(),rows:[{test:'tests/value.json',state:'not run',reason:{code:'binding-missing'}}]});
+  await w.tick();assert.equal(w.record().parking?.blocker.kind,'binding');
+  put(w.mergeCheckout,'unrelated.txt','Unrelated base work');w.git(w.mergeCheckout,'add','.');w.git(w.mergeCheckout,'commit','-qm','Unrelated edit');w.git(w.mergeCheckout,'push','-q','origin','main');
+  await w.tick();assert.equal(w.record().parking?.phase,'parked');
+  put(w.mergeCheckout,'value.prompt.md',valuePrompt(2));w.git(w.mergeCheckout,'add','.');w.git(w.mergeCheckout,'commit','-qm','Restore binding contract');w.git(w.mergeCheckout,'push','-q','origin','main');
+  await w.tick();assert.equal(w.record().parking,undefined,'3147_FACTORY_BINDING_BASE_WAKE');
+  const status=await w.command(['autopilot','status']);assert.equal(status.code,0);assert.deepEqual(w.leadActions,[]);
+});
+
+async function runtimeAttempt(w) {
+  const result=await w.command(['test','value','--cache-clear','--json'],{cwd:w.record().root,allowFailure:true});
+  assert.notEqual(result.code,0);const batch=JSON.parse(result.stdout).batch;
+  await w.command(['workflow','park','--interpreter','--reason',`Interpreter batch ${batch}: runner-stopped; no verdict.`],{cwd:w.record().root});
+  await w.tick();w.time+=1000;return batch;
+}
+async function runtimeFactory(t) {
+  const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
+  const config=readJson(join(w.cwd,'pdd.json'));config.autopilot.runtimeOwner='runtime-team';put(w.cwd,'pdd.json',config);
+  w.interpreter.mode='no-verdict';return w;
+}
+
+test('factory 3147: repeated Runtime attempts share one assigned cause issue',async t=>{
+  const w=await runtimeFactory(t);await runtimeAttempt(w);await runtimeAttempt(w);
+  assert.equal(w.record().parking?.blocker.kind,'runtime','3147_FACTORY_GROUP_CAUSE');
+  const issues=[...w.github.issues.values()].filter(row=>row.labels.includes('pdd:runtime'));
+  assert.equal(issues.length,1);assert.deepEqual(issues[0].assignees,['runtime-team']);
+  assert.ok(issues[0].body.includes('Run #17'));assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3147: three same-cause failures serialize new checks',async t=>{
+  const w=await runtimeFactory(t);
+  for(let i=1;i<=3;i++) {
+    await runtimeAttempt(w);
+    const mode=readJson(join(w.env.PDD_INTERPRETER_QUEUE,'capacity.json')).testOwners;
+    assert.equal(Boolean(mode?.[`${w.stateFile}:runtime-causes`]),i===3,'3147_FACTORY_THREE_SERIALIZE');
+  }
+  assert.ok(w.interpreter.posts.filter(row=>row.command==='check').length>=3);assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3147: a later same-kind verdict wakes a Runtime wait once',async t=>{
+  const w=await runtimeFactory(t);await runtimeAttempt(w);assert.equal(w.record().parking?.phase,'parked');
+  const sent=w.interpreter.posts.filter(row=>row.command==='check').length;
+  w.interpreter.mode='verdict';await w.command(['test','value','--cache-clear','--json'],{cwd:w.record().root});
+  await w.tick();assert.equal(w.record().parking,undefined,'3147_FACTORY_VERDICT_WAKE');
+  assert.equal(Boolean(readJson(join(w.env.PDD_INTERPRETER_QUEUE,'capacity.json')).testOwners?.[`${w.stateFile}:runtime-causes`]),false);
+  await w.tick();assert.equal(w.interpreter.posts.filter(row=>row.command==='check').length,sent+1);assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3147: a Runtime failure parks one run while another run still checks',async t=>{
+  const w=await runtimeFactory(t);
+  w.github.add(18,{title:'Independent check',body:'Check an independent scenario.',created:w.time,updated:w.time});
+  await w.begin({number:18});
+  await runtimeAttempt(w);
+  const other=w.record(18);
+  for(const path of ['value.prompt.md','user_stories/value.md','tests/value.json'])put(other.root,path,readFileSync(join(w.record().root,path),'utf8'));
+  const before=w.interpreter.posts.filter(row=>row.command==='check').length;
+  const failed=await w.command(['test','value','--cache-clear','--json'],{cwd:other.root,allowFailure:true});assert.notEqual(failed.code,0);
+  assert.ok(w.interpreter.posts.filter(row=>row.command==='check').length>before);
+  await w.command(['workflow','park','--interpreter','--reason','Runtime no verdict in the independent run'],{cwd:other.root});
+  await w.tick();
+  assert.equal(w.record().parking?.blocker.kind,'runtime','3147_FACTORY_OTHER_CHECKS');
+  assert.equal(w.record(18).parking?.blocker.kind,'runtime');
+  assert.equal(w.record().parking.blocker.until,w.record(18).parking.blocker.until);
+  const issue=w.github.issues.get(Number(w.record().parking.blocker.until));
+  assert.ok(issue.body.includes('Run #17')&&issue.body.includes('Run #18'));assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3147: status names each parked run and its wake condition',async t=>{
+  const w=await factoryWorld(t);await w.begin();
+  w.github.add(18,{title:'Blocking fix',body:'Required fix.',created:w.time,updated:w.time});
+  await w.command(['workflow','park','--blocker','pdd','--until','#18','--reason','Wait for the required fix'],{cwd:w.record().root});
+  await w.tick();assert.equal(w.record().parking?.phase,'parked');
+  const status=await w.command(['autopilot','status']);
+  assert.ok(status.stdout.split('\n').some(line=>line.includes('#17:')&&line.includes('#18')&&/clos/i.test(line)),'3147_FACTORY_WAKE_STATUS');
+  assert.deepEqual(w.leadActions,[]);
 });

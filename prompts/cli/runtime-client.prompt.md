@@ -933,6 +933,10 @@ file and original section are one problem. Preserve the canonical JSON pointer,
 rule and other richer fields. Diagnostic display may replace section with a
 pointer, but deduplication must retain the original location identity.
 
+## Runtime health cause (#3147)
+
+When the free capacity health answer includes a cause or code, retain it as optional cause in the health result so the incident owner can classify a batch failure. Never require it; HTTP 401 or absence remains an ordinary access/absent health answer and does not invalidate batch evidence.
+
 ## Dependencies
 
 - [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.

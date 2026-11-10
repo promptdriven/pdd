@@ -518,10 +518,12 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   if (!token) return { state: 'access', detail: 'no gh sign-in', fix: HEALTH_SIGN_IN };
   const reply = await new Runtime({ origin, token, ports }).send('/v1/capacity', { method: 'GET' }, givenPorts.timeoutMs ?? 10_000);
   if (reply.lost) return { state: 'unavailable', detail: reply.unreachable ? 'not reached' : 'no answer' };
-  if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
+  const suppliedCause = reply.json?.cause ?? reply.json?.error?.cause ?? reply.json?.error?.code ?? reply.json?.code;
+  const cause = suppliedCause ? {cause: suppliedCause} : {};
+  if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}`, ...cause };
   if (reply.status === 200 && isObject(reply.json)) {
     const until = Date.parse(reply.json.maintenance?.until);
-    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance' } : { state: 'healthy', detail: 'HTTP 200' };
+    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance', ...cause } : { state: 'healthy', detail: 'HTTP 200', ...cause };
   }
   // An older interpreter without the capacity read still answered with JSON; a 404 page that is not JSON is a wrong address.
   if (reply.status === 404 && isObject(reply.json)) return { state: 'healthy', detail: 'HTTP 404' };

@@ -1,3 +1,4 @@
+import {classifyRuntimeFailure} from './autopilot-runtime.mjs';
 import {routeQuestionFor, idleParkingBlocker, idleSince, interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
 import { selectAutopilotBase } from './autopilot-base.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
@@ -3650,9 +3651,9 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
     blockedOn = {kind: 'pdd-route', until: fix};
   }
   if (blocker !== undefined) {
-    const kinds = ['person', 'pdd', 'dependency', 'account', 'github', 'ci', 'review'];
+    const kinds = ['person', 'pdd', 'runtime', 'dependency', 'account', 'github', 'ci', 'review'];
     const valid = kinds.includes(blocker) && !runtime
-      && (blocker === 'dependency' ? /^[1-9][0-9]*$/.test(String(until)) && Number.isSafeInteger(Number(until))
+      && (['dependency','runtime'].includes(blocker) ? /^[1-9][0-9]*$/.test(String(until)) && Number.isSafeInteger(Number(until))
         : blocker === 'pdd' ? /^(?:#[1-9][0-9]*|capability:[a-z][a-z0-9-]*|commit:[a-f0-9]{7,40}|\d+\.\d+\.\d+(?:-[\w.-]+)?)$/.test(until ?? '')
         : ['account', 'github'].includes(blocker) ? Number.isFinite(Date.parse(until))
         : until === undefined);
@@ -3675,7 +3676,7 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
     let check = null, cause;
     try { check = readOwnResults(run, p).find(result => result.kind === 'pdd test') ?? null; cause = check ? savedCheckCause(check.batch, { env: p.env }) : 'none'; }
     catch { cause = 'unknown'; }
-    if (RUNTIME_PARK_REFUSALS[cause]) return fail(RUNTIME_PARK_REFUSALS[cause]);
+    if (RUNTIME_PARK_REFUSALS[cause] && (check?.states?.some(row => row.state === 'failed') || !classifyRuntimeFailure(check))) return fail(RUNTIME_PARK_REFUSALS[cause]);
     wait = { at: p.now(), reason: clip(oneLine(text), 300), batch: check?.batch ?? null, cause };
   }
   const selectedArea=run.area, selectedGate=structuredClone(run.gate ?? null), selectedState=run.state, selectedOrigin=structuredClone(run.automaticOrigin);
@@ -5292,7 +5293,7 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
     if (refusal) return {...fail(refusal), recovery: 'skipped'};
   }
   const text = run.parking.text ?? input.text;
-  const inferredGate = run.parking.blocker.kind === 'interpreter' && run.parking.interpreterWait && sameFact(run.gate, run.parking.interpreterGate) && run.gate?.kind === 'approve-pr' && !openQuestion(run);
+  const inferredGate = (run.parking.blocker.kind === 'runtime' || run.parking.blocker.kind === 'interpreter' && run.parking.interpreterWait) && (run.parking.blocker.kind === 'runtime' || sameFact(run.gate, run.parking.interpreterGate)) && run.gate?.kind === 'approve-pr' && !openQuestion(run);
   if (text && (RUNTIME_WAKE_TAG.test(text) || isEnvironmentWake(text)) && (run.gate || openQuestion(run)) && !inferredGate) return skipped();
   commitRun(run, p, fresh => {
     if (fresh.parking?.at !== input.at) throw Object.assign(Error('Park changed'), {code: 'workflow_progress_refused'});
@@ -5302,6 +5303,7 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
         if (route && fresh.question?.text === route.question && !fresh.question.answeredAt) delete fresh.question;
         delete fresh.routeWait;
       }
+      if (fresh.parking.blocker.kind === 'runtime' && inferredGate) delete fresh.done.check;
       endRuntimeWait(fresh); delete fresh.blockedOn;
       // Consume the accepted stop before resume/delivery can save a new one.
       // Environment retry delivery still needs its cause for validation.

@@ -789,8 +789,7 @@ test('AUTOPILOT8: outcomes, the owner note, retries and the money limits', () =>
     'ask one question on the issue; that issue waits and the others go on.', 'for a Story, use pdd-prompting.',
     'Write each decision on the issue or PR.', 'After a restart, read the issue and PR first and do not redo finished steps.',
     'add the `pdd:stuck` label, write one comment with the cause, and take the next issue.', '60 minutes', '30M tokens');
-  has('pdd-merge/SKILL.md', 'If PR 1 has a PASS but no runtime verdict, it merges; add the `pdd:no-verdict` label to the PR.',
-    'A PR with no checker verdict (the checker could not run or gave none): add the `pdd:no-verdict` label, do not merge, and take the next issue.');
+  has('pdd-merge/SKILL.md', 'A PR with no checker verdict (the checker could not run or gave none): add the `pdd:no-verdict` label, do not merge, and take the next issue.');
   const merge = read('pdd-merge/SKILL.md');
   assert.ok(merge.indexOf('A PR with no checker verdict') < merge.indexOf('Apply all [$pdd-autopilot merge conditions]'), 'no checker verdict is handled before the PASS gate');
   for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, '`--max-calls`, strict mode, and never sending a failed check again.');

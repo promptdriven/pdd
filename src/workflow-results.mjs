@@ -78,6 +78,18 @@ function runtimeEvidence(batch, summary) {
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
 // runtime state folder, for this worktree, made at or after the run started) and the run's `pdd workflow prove` record.
 // It reads files only. It never runs a test, calls the interpreter or changes a file.
+function bindingPathsFor(rows) {
+  const paths = new Set();
+  const visit = (value, key = '') => {
+    if (typeof value === 'string' && !value.startsWith('-') && !isAbsolute(value) && !value.split(/[\\/]/).includes('..')
+      && (/\.prompt\.md$/.test(value) || /prompt|interface|contract/i.test(key) && /\.(?:json|md|ya?ml)$/.test(value))) paths.add(value);
+    else if (Array.isArray(value)) value.forEach(item => visit(item, key));
+    else if (value && typeof value === 'object') Object.entries(value).forEach(([name, item]) => visit(item, name));
+  };
+  for (const row of rows) if (['binding-missing','missing-binding'].includes(row.reason?.code)
+    || (Array.isArray(row.refusals) ? row.refusals : []).some(r => ['binding-missing','missing-binding'].includes(r.code)) || row.compatibility?.state === 'missing-binding') visit(row);
+  return paths.size ? {bindingPaths: [...paths].sort()} : {};
+}
 export function readRunResults({ root, runDir = null, runId = null, since = 0, baseBranch = null }, { env = process.env, capture = captureSource, git = gitLine, workspace, ...nativePorts } = {}) {
   const results = [], wanted = real(root);
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
@@ -136,7 +148,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       const owners=batch.rows.filter(saved=>story && storyName(saved.story)===story && (!row?.test || saved.test===row.test));
       return owners.length>0 && owners.every(saved=>resultOutcome(saved).state==='passed'&&!saved.not_checked?.length);
     }).map(row=>text(row.summary_line)))];
-    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, ...(batch.source_selection ? {sourceTests,excludeFixtureProjects:selection.excludeFixtureProjects} : {}), ...(batch.native_source ? {nativeSource:batch.native_source} : {}), ...runtimeEvidence(batch,summary), requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
+    results.push({ ...bindingPathsFor(batch.rows), kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, ...(batch.source_selection ? {sourceTests,excludeFixtureProjects:selection.excludeFixtureProjects} : {}), ...(batch.native_source ? {nativeSource:batch.native_source} : {}), ...runtimeEvidence(batch,summary), requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
         stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),

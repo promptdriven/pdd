@@ -823,7 +823,9 @@ allows and resume the failed step using existing evidence. Never restart complet
 work, approve a gate, answer a question or bypass a repair ceiling. The runner
 owns continuation checks and the worker delivery effect.
 
-### Interpreter outage (#3039)
+### Pre-dispatch interpreter outage (#3039)
+
+These rules apply only to legacy/pre-dispatch waits without a saved Runtime failure. Automatic batch failures use Runtime failure incidents below.
 
 A worker whose `pdd test` has no verdict for an interpreter cause parks its own run
 with `pdd workflow park --interpreter` ([workflow runner](workflow-runner.prompt.md)):
@@ -1262,11 +1264,11 @@ When supplying workflow parking ports, set `autopilotStateFile` to this coordina
 
 Packet `parking` is `{working,parked,blockers,wakePending,limit}`; blockers maps display names to counts, and wakePending lists ready run numbers awaiting capacity in oldest-first order. Include the same local counts and interpreter test-mode streak in status without GitHub calls. Defer fresh issues while a ready wake remains pending. Issues in a saved #3053 group with a parked member go to its existing run via the request journal; do not offer a second run. Do not restrict different issues merely because their files overlap. Existing check slots, pane budget, area PR, daily cost, account, trust and ownership gates still apply. A parked run's claim receives heartbeats until release; the four-hour stuck rule must not expire it. Save parking/interpreter observations on all tick exit paths. Renew the existing interpreter queue test-mode lease through configureInterpreterTestMode; a terminal verdict removes that restriction immediately. No AI call in this tick work.
 
-## Lost-verdict decision after recovery (#3097)
+## Runtime failure incidents (#3147)
 
-When the free health read is healthy, gather all current unknown-outcome waits into one lost-verdict decision alert. List run numbers, batch identifiers and saved earlier call costs in compact rows (unknown remains unknown). For a recorded resend of the current wait batch, follow its saved newBatch and later recorded replacements as the current recovery batch, with cycle protection. A verdict receipt is ready for an ordinary capacity-limited read-only wake; tell the worker to read that batch and continue from its verdict without sending another check. A new no-verdict receipt remains unknown and needs a separate decision. A sending or uncertain resend without a new receipt remains held, never an automatic wake. Native waits include cost read with workflow-results savedLostCheck; injected waits may supply cost or omit it. Ask for one decision for the group using `pdd workflow resend N... --said -`. Ordinary auto setup/start does not authorize this paid resend. Send no check from the tick.
+The [Runtime incident owner](autopilot-runtime.prompt.md) supersedes the lost-verdict person-decision policy for automatic runs with saved batch failures. Reconcile incidents before parking and legacy interpreter recovery. A Runtime failure never authorizes a prompt, Story or expected value. The Runtime check stays required. Do not prevent other runs from checking after one failure. Configure the existing machine interpreter queue for one-at-a-time checks only after three observations of one cause within 30 minutes. Keep legacy pre-dispatch interpreter waits on their existing path; incident-backed waits use runtime blockers and never ask for a paid-resend decision. Persist runtimeIncidents through every tick exit. No issue effects on observe/local-only ticks. Reuse scanGuard and scanAction for state and external mutation custody.
 
-Persist runtime.lostDecision with the sorted number/batch identities so unchanged ticks and restarts ask only once for that group. Send one alert (kind decision, attached to the oldest run, update true) for the complete group; a failed alert remains retryable. During unavailable/access health ask nothing. Select the interpreter-access incident's first run from all current waits, including lost-verdict waits. Attach later waits to that incident even when all waits have lost verdicts; repair a saved access incident with no first run when a current wait exists. A lost-verdict wait remains parked: exclude it from retry/probe/recovered wakes and repeated-wake stuck escalation. Ordinary known-unsent/service recovery retains its current rules. Never carry a resend authorization from an earlier batch into a new no-verdict batch. Keep the decision identity while other runtime state changes, and clear it only when no lost waits remain.
+Issue-naming pdd, pdd-route, dependency and runtime blockers clear on any close of the named issue, without timeline or merged-PR proof. Local-only maintenance makes no GitHub read. Binding wake refreshes only the configured origin base ref once per full tick through injected Git execution, without changing a local branch or worktree. The refresh has a 15-second program timeout; failed refresh cannot prove a binding change. Local-only ticks use retained refs and make no remote read. Observe only the owning prompt and interface content on that base; retain the first content identity in the blocker. Extract owning prompt and interface paths from workflow-results bindingPaths and saved result evidence and the run's selected tests. Do not use the worktree HEAD as the base or let unrelated base changes wake a binding hold. Unknown observations keep it parked. Status displays every parked run's wake condition locally.
 
 ## Route question ledger
 
@@ -1342,15 +1344,11 @@ workflow operations belong to `pdd`, including when both ports are injected.
 
 ## Binding hold (#3135)
 
-Treat the binding blocker as a manual repair hold. Its clearing observation is
-the existing durably queued reply/retry for this parked wait, as for unknown.
-Interpreter availability alone cannot clear it. At a completed check's automatic
-approve-pr gate, inspect the current saved result before inferring interpreter
-unavailability. A binding-missing/missing-binding reason or refusal, or matched
-missing-binding compatibility state, parks as binding. Preserve independent
-person questions and explicit blockers.
+A binding refusal is an application hold. Detect it before interpreter failure, using current result reasons, refusals or matched missing-binding compatibility. Its wake rules belong to parking policy. Preserve independent questions and explicit unrelated blockers.
 
 ## Dependencies
+
+- [Runtime incidents](autopilot-runtime.prompt.md): required context for automatic cause classification, issue deduplication and recovery.
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
 

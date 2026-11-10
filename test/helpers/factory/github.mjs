@@ -21,8 +21,17 @@ export function factoryGithub(w) {
     if(a[0]==='api' && a[1]?.includes('/rules/branches/'))return ok([]);
     if(a[0]==='label') return ok('');
     if(a[0]==='issue') {
+      if(a[1]==='list')return ok([...f.issues.values()].filter(i=>!a.includes('--search') || i.body.includes(flag(a,'--search').split('"')[1])).map(i=>({number:i.number,url:`https://github.com/${f.repo}/issues/${i.number}`,body:i.body})));
+      if(a[1]==='create') {
+        const number=Math.max(1000,...f.issues.keys())+1;
+        f.add(number,{title:flag(a,'--title'),body:body(a,o),created:w.time,updated:w.time});
+        const issue=f.issues.get(number);issue.labels=[flag(a,'--label')];issue.assignees=a.includes('--assignee')?[flag(a,'--assignee')]:[];
+        return ok(`https://github.com/${f.repo}/issues/${number}`);
+      }
       const n=Number(a[2]);
+      if(a[1]==='reopen') {f.issues.get(n).state='open';return ok('');}
       if(a[1]==='edit') {
+        if(a.includes('--body'))f.issues.get(n).body=flag(a,'--body');
         if(a.includes('--add-label')) for(const label of flag(a,'--add-label').split(',')) if(!f.issues.get(n).labels.includes(label)) f.label(n,label);
         if(a.includes('--remove-label')) for(const label of flag(a,'--remove-label').split(',')) f.unlabel(n,label);
         return ok('');

@@ -260,8 +260,8 @@ for (const previous of ['person', 'interpreter'])
     assert.deepEqual(f.record().automaticOrigin, changed.automaticOrigin);
     assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
     assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
-    const decision=alerts.find(row=>row.kind==='decision');assert.ok(decision);
-    assert.ok(decision.text.includes(newBatch));assert.ok(!decision.text.includes(oldBatch));
+    assert.equal(alerts.some(row=>row.kind==='decision'),false, '3147: batch failures need a Runtime cause issue, not a person decision');
+    assert.ok(JSON.parse(readFileSync(stateFile)).runtimeIncidents?.causes['runner-stopped']);
     await tick(); assert.equal(deliveries(f).length, 0);
     assert.deepEqual(warnings, []);
   });
@@ -330,7 +330,10 @@ for (const change of ['batch', 'check', 'result', 'verdict'])
       assert.notEqual(parked.parking.interpreterWait.at, oldWait.at, 'changed evidence has a new wait identity');
       const wait = parked.parking.interpreterWait;
       const pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
-      assert.equal(pattern.streak, 2);
+      assert.equal(pattern.streak, 0, '3147: saved batch failures use cause-specific accounting');
+      const causes = JSON.parse(readFileSync(stateFile)).runtimeIncidents.causes;
+      const expected = change === 'check' ? 1 : 2;
+      assert.equal(Object.values(causes).reduce((n,c)=>n+Object.keys(c.failures).length,0), expected);
       if (change === 'check') {
         // Refresh a different gate at the same clock value and saved batch.
         changed.gate = {...changed.gate, at: f.clock};
@@ -353,9 +356,7 @@ for (const change of ['batch', 'check', 'result', 'verdict'])
       for (const key of ['gate', 'decisions', 'automaticOrigin']) assert.deepEqual(f.record()[key], changed[key]);
       assert.equal(f.record().chats.at(-1).session.id, held.chats.at(-1).session.id);
       assert.equal(launches(f).length, 0); assert.equal(deliveries(f).length, 0);
-      const decision=alerts.find(row=>row.kind==='decision');assert.ok(decision);
-      assert.ok(decision.text.includes(batch));
-      if (change === 'batch') assert.ok(!decision.text.includes(oldBatch));
+      assert.equal(alerts.some(row=>row.kind==='decision'),false, '3147: no person decision for Runtime batch recovery');
       await tick(); assert.equal(deliveries(f).length, 0);
     }
     assert.deepEqual(warnings, []);
@@ -695,26 +696,14 @@ test('3091 process shutdown follows saved-session custody and frees panes only a
   await tick(); assert.equal(stopped.length, run.chats.length);
 });
 
-test('3091 dependency wakes only for a closed issue with a merged closing PR', async t => {
-  const {f, tick, stateFile, ports} = await setup(t);
-  const run = f.record(); run.state = 'paused'; run.blockedOn = {kind: 'dependency', until: '2897'}; save(f, run);
-  await tick(); assert.equal(f.record().parking?.phase, 'parked');
-  fullTicks(f, stateFile, ports);
-  let closed = false, merged = false, closing = false;
-  const execute = f.ports.execFile;
-  f.ports.execFile = async (file, args, options) => {
-    const api = `https://api.github.com/repos/${run.repo}/pulls/23`;
-    if (file === 'gh' && args[0] === 'api') {
-      if (args[1] === `repos/${run.repo}/issues/2897`) return {stdout: JSON.stringify({state: closed ? 'closed' : 'open'})};
-      if (args[1].endsWith('/issues/2897/timeline?per_page=100')) return {stdout: JSON.stringify([[{event: 'cross-referenced', source: {issue: {pull_request: {url: api}}}}]])};
-      if (args[1] === api) return {stdout: JSON.stringify({merged, body: closing ? 'Fixes #2897' : 'Related to #2897'})};
-    }
-    return execute(file, args, options);
-  };
-  for (const advance of [() => {}, () => {closed = true;}, () => {merged = true;}]) {
-    advance(); await tick(); assert.equal(f.record().parking.phase, 'parked'); assert.equal(launches(f).length, 0);
-  }
-  closing = true; await tick(); assert.equal(f.record().parking, undefined); assert.equal(launches(f).length, 1);
+test('3147 dependency wakes on issue closure without a merged PR', async t => {
+  const {f,tick,stateFile,ports}=await setup(t);const run=f.record();run.state='paused';run.blockedOn={kind:'dependency',until:'2897'};save(f,run);
+  await tick();assert.equal(f.record().parking?.phase,'parked');fullTicks(f,stateFile,ports);
+  let closed=false;const execute=f.ports.execFile;
+  f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='api'&&args[1]===`repos/${run.repo}/issues/2897`
+    ? {stdout:JSON.stringify({state:closed?'closed':'open'})}:execute(file,args,options);
+  await tick();assert.equal(f.record().parking?.phase,'parked');closed=true;await tick();
+  assert.equal(f.record().parking,undefined,'3147_DEPENDENCY_CLOSE');assert.equal(launches(f).length,1);
 });
 
 for (const kind of ['ci', 'review']) test(`3091 ${kind} wake needs a completed result`, async t => {
@@ -1138,7 +1127,7 @@ for (const wait of ['stop', 'question']) test(`3091 backfill missing PR1 route $
   await tick(); assert.equal(launches(f).length, 1); assert.equal(deliveries(f).length, 1);
 });
 
-test('3091 backfill finished PR1 lost check stays parked for a person decision without approval', async t => {
+test('3147 backfill finished PR1 lost check waits for Runtime cause issue without approval', async t => {
   const {f, tick, ports, stateFile, warnings} = await setup(t);
   fullTicks(f, stateFile, ports);
   const alerts=[];ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0};};
@@ -1153,8 +1142,8 @@ test('3091 backfill finished PR1 lost check stays parked for a person decision w
   assert.deepEqual(warnings, []);assert.equal(f.record().parking.phase,'parked');
   assert.deepEqual(f.record().gate, held.gate);assert.equal(deliveries(f).length,0);
   const decisions=()=>alerts.filter(row=>row.kind==='decision');
-  assert.equal(decisions().length,1);assert.ok(decisions()[0].text.includes('20261101-120000-abcd'));
-  await tick();assert.equal(decisions().length,1);assert.equal(deliveries(f).length,0);
+  assert.equal(decisions().length,0);assert.ok(JSON.parse(readFileSync(stateFile)).runtimeIncidents?.causes['runner-stopped']);
+  await tick();assert.equal(decisions().length,0);assert.equal(deliveries(f).length,0);
 });
 
 test('3091 backfill three lost legacy verdicts enter test mode and wait for one grouped decision', async t => {

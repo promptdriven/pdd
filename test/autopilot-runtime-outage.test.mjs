@@ -99,7 +99,6 @@ for (const [name, rows, words] of [
   ['an AI-service refusal next to a failed Story', [{ state: 'refused', refusals: [{ code: 'graph-provider-failure' }] }, { state: 'failed' }], /this issue's own work/],
   ['a sign-in problem', [{ state: 'not_run', note: { code: 'blocked', message: 'Run gh auth login' } }], /access/],
   ['an interpreter 401 with another error code', [{ state: 'not_run', note: { code: 'invalid-token', message: AUTH_TEXT } }], /a person must fix the sign-in.*gh auth status/],
-  ['a step time limit', [{ state: 'refused', refusals: [{ code: 'graph-provider-failure', message: 'The AI provider failed.' }], time_limit: TIME_LIMIT, reason: { code: TIME_LIMIT.code, message: `${TIME_LIMIT.message} ${TIME_LIMIT.fix}` } }], /this issue's own work.*make the step smaller/],
   ['a passed check', [{ state: 'passed' }], /passed/],
 ]) test(`${name} is not an interpreter outage: park --interpreter refuses and changes nothing`, async t => {
   const { f, ports, root } = await automaticRun(t);
@@ -108,6 +107,13 @@ for (const [name, rows, words] of [
   const result = await parkAutomaticRun({ reason: 'no verdict', runtime: true, cwd: root }, ports());
   assert.equal(result.exitCode, 1); assert.match(result.message, words); assert.match(result.message, /Nothing was parked/);
   assert.deepEqual(f.record(), before);
+});
+
+test('3147 a Runtime timeout without a verdict parks for automatic cause handling', async t => {
+  const {f,ports,root}=await automaticRun(t);
+  savedCheck(f,[{state:'refused',refusals:[{code:'graph-provider-failure'}],time_limit:TIME_LIMIT,reason:{code:TIME_LIMIT.code,message:TIME_LIMIT.message}}]);
+  const result=await parkAutomaticRun({reason:'Runtime timeout',runtime:true,cwd:root},ports());
+  assert.equal(result.exitCode,0,'3147_RUNTIME_TIMEOUT_MUST_PARK');assert.equal(f.record().state,'paused');assert.equal(f.record().runtimeWait.batch,BATCH);
 });
 
 test('an unknown outcome waits with its cause; a plain park still records the stuck path', async t => {
@@ -705,4 +711,12 @@ for(const legacy of [false,true]) test(`3097 repair 1: all-lost waits attach an 
   assert.equal(f.sent.filter(text=>text.includes('workflow resend')).length,1);
   assert.equal(f.sent.filter(text=>text.includes('recovered: interpreter-access')).length,1);
   assert.deepEqual(kinds(f),[],'health recovery cannot wake a lost verdict automatically');
+});
+
+for(const status of [200,503])test(`3147 native health ${status} retains an offered Runtime cause`,async()=>{
+  const health=await checkRuntimeHealth({env:{PDD_RUNTIME_URL:'https://runtime.example.test'}},{
+    gh:()=>({status:0,stdout:'synthetic-token'}),now:()=>T0,sleep:async()=>{},
+    fetch:async()=>new Response(JSON.stringify({cause:{code:'provider-unavailable'}}),{status,headers:{'content-type':'application/json'}}),
+  });
+  assert.deepEqual(health.cause,{code:'provider-unavailable'},'3147_NATIVE_HEALTH_CAUSE');
 });
