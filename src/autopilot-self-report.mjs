@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { launchProfile } from './workflow-launch-profile.mjs';
+import { expandHome, homeVariable } from './workflow-chat.mjs';
 import { updateRun } from './workflow-runs.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -58,17 +59,147 @@ function publicDiagnosisLocation(value) {
   return { module, fn, line };
 }
 
-function readDiagnosisLocation(result, signature, { fs = nativeFs, packageRoot = PACKAGE_ROOT } = {}) {
-  if (!result || result.signature !== signature || !result.rootCause || typeof result.rootCause !== 'object') return null;
-  const location = publicDiagnosisLocation(result.rootCause);
-  if (!location) return null;
+function maskJavaScriptLiterals(source) {
+  const chars = String(source).split('');
+  const prefixWords = new Set(['return', 'throw', 'case', 'delete', 'void', 'typeof', 'instanceof', 'in', 'of', 'yield', 'await', 'else', 'do', 'new']);
+  const blank = (start, end) => {
+    for (let at = start; at < end; at++) if (chars[at] !== '\n' && chars[at] !== '\r') chars[at] = ' ';
+  };
+  let canStartRegex = true;
+  for (let at = 0; at < chars.length;) {
+    const ch = chars[at];
+    if (/\s/.test(ch)) { at++; continue; }
+    if (ch === '/' && chars[at + 1] === '/') {
+      let end = at + 2;
+      while (end < chars.length && chars[end] !== '\n') end++;
+      blank(at, end); at = end; continue;
+    }
+    if (ch === '/' && chars[at + 1] === '*') {
+      let end = at + 2;
+      while (end < chars.length - 1 && !(chars[end] === '*' && chars[end + 1] === '/')) end++;
+      end = Math.min(chars.length, end + 2);
+      blank(at, end); at = end; continue;
+    }
+    if (ch === '"' || ch === "'" || ch.charCodeAt(0) === 96) {
+      const quote = ch;
+      let end = at + 1;
+      while (end < chars.length) {
+        if (chars[end] === '\\') { end += 2; continue; }
+        if (chars[end] === quote) { end++; break; }
+        end++;
+      }
+      blank(at, Math.min(end, chars.length)); at = Math.min(end, chars.length); canStartRegex = false; continue;
+    }
+    if (ch === '/' && canStartRegex) {
+      let end = at + 1, inClass = false, escaped = false, closed = false;
+      while (end < chars.length) {
+        const item = chars[end++];
+        if (escaped) { escaped = false; continue; }
+        if (item === '\\') { escaped = true; continue; }
+        if (item === '[') { inClass = true; continue; }
+        if (item === ']') { inClass = false; continue; }
+        if (item === '/' && !inClass) { closed = true; break; }
+        if (item === '\n' || item === '\r') break;
+      }
+      if (closed) {
+        while (end < chars.length && /[A-Za-z]/.test(chars[end])) end++;
+        blank(at, end); at = end; canStartRegex = false; continue;
+      }
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let end = at + 1;
+      while (end < chars.length && /[A-Za-z0-9_$]/.test(chars[end])) end++;
+      canStartRegex = prefixWords.has(chars.slice(at, end).join(''));
+      at = end; continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      let end = at + 1;
+      while (end < chars.length && /[A-Za-z0-9_.]/.test(chars[end])) end++;
+      at = end; canStartRegex = false; continue;
+    }
+    if ((ch === '+' || ch === '-') && chars[at + 1] === ch) {
+      at += 2; canStartRegex = false; continue;
+    }
+    if (ch === '/') { at++; canStartRegex = true; continue; }
+    canStartRegex = /[([{,;:?=*!&|+\-*%^~<>]/.test(ch);
+    if (ch === ')' || ch === ']' || ch === '}' || ch === '.') canStartRegex = false;
+    at++;
+  }
+  return chars.join('');
+}
+
+function sourceFunctionRanges(source, name) {
+  const masked = maskJavaScriptLiterals(source);
+  const escaped = name.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&');
+  const patterns = [
+    new RegExp('\\bfunction\\s*\\*?\\s*' + escaped + '\\s*\\(', 'g'),
+    new RegExp('\\b(?:const|let|var)\\s+' + escaped + '\\s*=\\s*(?:async\\s+)?(?:function\\s*\\*?(?:\\s+' + escaped + ')?\\s*)?\\(', 'g'),
+    new RegExp('(?:^|[\\n;{}])\\s*(?:static\\s+)?(?:async\\s+)?' + escaped + '\\s*\\(', 'gm'),
+    new RegExp('\\b(?:const|let|var)\\s+' + escaped + '\\s*=\\s*(?:async\\s+)?[A-Za-z_$][\\w$]*\\s*=>', 'g'),
+  ];
+  const ranges = [];
+  const lineAt = offset => masked.slice(0, offset).split('\n').length;
+  const addBody = (bodyStart, functionStart) => {
+    if (masked[bodyStart] !== '{') return;
+    let depth = 0;
+    for (let at = bodyStart; at < masked.length; at++) {
+      if (masked[at] === '{') depth++;
+      else if (masked[at] === '}' && --depth === 0) {
+        ranges.push({ start: lineAt(functionStart), end: lineAt(at) });
+        return;
+      }
+    }
+  };
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(masked))) {
+      const start = match.index + match[0].lastIndexOf(name);
+      const arrow = match[0].includes('=>');
+      if (arrow && !match[0].includes('(')) {
+        let bodyStart = pattern.lastIndex;
+        while (/\s/.test(masked[bodyStart] ?? '')) bodyStart++;
+        addBody(bodyStart, start);
+        continue;
+      }
+      const open = match.index + match[0].lastIndexOf('(');
+      let depth = 0, close = -1;
+      for (let at = open; at < masked.length; at++) {
+        if (masked[at] === '(') depth++;
+        else if (masked[at] === ')' && --depth === 0) { close = at; break; }
+      }
+      if (close < 0) continue;
+      let bodyStart = close + 1;
+      while (/\s/.test(masked[bodyStart] ?? '')) bodyStart++;
+      if (masked.slice(bodyStart, bodyStart + 2) === '=>') {
+        bodyStart += 2;
+        while (/\s/.test(masked[bodyStart] ?? '')) bodyStart++;
+      }
+      addBody(bodyStart, start);
+    }
+  }
+  return ranges;
+}
+
+function sourceFunctionOwnsLine(source, fn, line) {
+  return sourceFunctionRanges(source, fn).some(range => line >= range.start && line <= range.end);
+}
+
+function verifiedSourceLocation(value, { fs = nativeFs, packageRoot = PACKAGE_ROOT, expected = null } = {}) {
+  const location = publicDiagnosisLocation(value);
+  if (!location || expected && (location.module !== expected.module || location.fn !== expected.fn)) return null;
   try {
-    const lineCount = fs.readFileSync(join(packageRoot, location.module), 'utf8').split(String.fromCharCode(10)).length;
-    return location.line <= lineCount ? location : null;
+    const source = fs.readFileSync(join(packageRoot, location.module), 'utf8');
+    const lineCount = source.split(String.fromCharCode(10)).length;
+    return location.line <= lineCount && sourceFunctionOwnsLine(source, location.fn, location.line) ? location : null;
   } catch { return null; }
 }
 
-function safePublicReport(report = {}) {
+function readDiagnosisLocation(result, signature, options = {}) {
+  if (!result || result.signature !== signature || !result.rootCause || typeof result.rootCause !== 'object') return null;
+  return verifiedSourceLocation(result.rootCause, options);
+}
+
+function safePublicReport(report = {}, options = {}) {
   const side = report.side === 'runtime' ? 'runtime' : 'pdd';
   const rawKind = String(report.cause ?? report.kind ?? '');
   const cause = side === 'runtime' && RUNTIME_FAILURES.has(rawKind) ? rawKind : 'no-verdict';
@@ -76,14 +207,21 @@ function safePublicReport(report = {}) {
   const code = publicCode(report.code, side, cause);
   const module = publicModule(report.module, side);
   const fn = publicFunction(report.fn, side);
-  const candidateLine = Number(report.line ?? report.rootCause?.line);
-  const line = Number.isSafeInteger(candidateLine) && candidateLine > 0 && candidateLine <= 1_000_000 ? candidateLine : 1;
-  const fileLine = side === 'runtime' ? 'Runtime service' : module + ':' + line;
-  const diagnosisLocation = side === 'pdd' ? publicDiagnosisLocation(report.diagnosisLocation) : null;
   const signature = buildSignature(code, module, fn);
+  const diagnosisLocation = side === 'pdd'
+    ? verifiedSourceLocation(report.diagnosisLocation, { ...options, expected: { module, fn } })
+    : null;
+  const line = diagnosisLocation?.line ?? null;
+  const fileLine = side === 'runtime' ? 'Runtime service' : diagnosisLocation ? module + ':' + line : null;
   const summary = side === 'runtime'
     ? 'Runtime reported a ' + cause + ' result for a PDD check.'
     : 'Autopilot recorded a ' + kind + ' failure (' + code + ') in ' + module + ' (' + fn + ').';
+  const observed = fileLine
+    ? 'Observe the saved ' + code + ' failure at ' + fileLine + '.'
+    : 'Observe the saved ' + code + ' failure in ' + module + ' (' + fn + '); no source location was verified.';
+  const evidence = fileLine
+    ? code + ' at ' + fileLine + ' (' + fn + ').'
+    : code + ' in ' + module + ' (' + fn + '); no source location was verified.';
   return {
     side, cause, kind, code, module, fn, line, fileLine, signature,
     title: side === 'runtime'
@@ -93,20 +231,20 @@ function safePublicReport(report = {}) {
     problem: summary,
     steps: side === 'runtime'
       ? ['Run the PDD check that uses Runtime.', 'Observe the saved Runtime result: ' + cause + '.']
-      : ['Run the affected PDD workflow operation in a controlled check.', 'Observe the saved ' + code + ' failure at ' + fileLine + '.'],
+      : ['Run the affected PDD workflow operation in a controlled check.', observed],
     expected: side === 'runtime'
       ? 'Runtime returns a check result or a clear service error.'
       : 'PDD completes the workflow operation or records a normal refusal.',
     actual: summary,
-    evidence: code + ' at ' + fileLine + ' (' + fn + ').',
+    evidence,
     rootCause: diagnosisLocation
       ? diagnosisLocation.module + ':' + diagnosisLocation.line + ' in ' + diagnosisLocation.fn + ' (' + code + ').'
-      : fileLine + ' in ' + fn + ' (' + code + ').',
+      : 'No verified PDD source location is available for ' + code + ' in ' + module + ' (' + fn + ').',
     diagnosisLocation,
     pddVersion: publicVersion(report.pddVersion ?? report.versions?.pdd),
     versions: {
       pdd: publicVersion(report.pddVersion ?? report.versions?.pdd),
-      agent: ['codex', 'claude'].includes(report.versions?.agent ?? report.agent) ? (report.versions?.agent ?? report.agent) : 'unknown',
+      agent: ['codex', 'claude', 'gemini', 'agy'].includes(report.versions?.agent ?? report.agent) ? (report.versions?.agent ?? report.agent) : 'unknown',
       node: process.version,
       os: process.platform + ' ' + process.arch,
     },
@@ -203,8 +341,20 @@ function normalizeSignaturePart(value, fallback) {
   return cleaned || fallback;
 }
 
+function normalizedSignatureParts(code, module, fn) {
+  return [
+    normalizeSignaturePart(code, 'ERR_PDD_INTERNAL'),
+    normalizeSignaturePart(module, 'src/workflow-runner.mjs'),
+    normalizeSignaturePart(fn, 'unknown'),
+  ];
+}
+
 export function buildSignature(code, module, fn) {
-  return `${normalizeSignaturePart(code, 'ERR_PDD_INTERNAL')}+${normalizeSignaturePart(module, 'src/workflow-runner.mjs')}+${normalizeSignaturePart(fn, 'unknown')}`;
+  return normalizedSignatureParts(code, module, fn).join(':');
+}
+
+function legacySignature(code, module, fn) {
+  return normalizedSignatureParts(code, module, fn).join('+');
 }
 
 function readSavedCrash(run, fs = nativeFs) {
@@ -658,7 +808,9 @@ export function findSourceEvidence(cause, { fs = nativeFs, packageRoot = PACKAGE
     const clamped = Math.max(1, Math.min(lineNumber, lines.length));
     return {
       module: modulePath,
+      fn: cause?.fn || frame.fn || 'unknown',
       line: clamped,
+      lineInSource: lineNumber <= lines.length,
       fileLine: modulePath + ':' + clamped,
       snippet: '',
     };
@@ -666,32 +818,28 @@ export function findSourceEvidence(cause, { fs = nativeFs, packageRoot = PACKAGE
     const clamped = Math.min(lineNumber, 1_000_000);
     return {
       module: modulePath,
+      fn: cause?.fn || frame.fn || 'unknown',
       line: clamped,
+      lineInSource: false,
       fileLine: modulePath + ':' + clamped,
       snippet: '',
     };
   }
 }
 
-const SENSITIVE_SUBAGENT_ENV = [
-  'PDD_AGENT_SESSION',
-  'PDD_AUTOPILOT_CONTEXT',
-  'CODEX_THREAD_ID',
-  'CLAUDECODE',
-  'HERDR_ENV',
-  'HERDR_PANE_ID',
-  'HERDR_SOCKET_PATH',
-  'HERDR_TAB_ID',
-  'HERDR_WORKSPACE_ID',
-];
+const SENSITIVE_SUBAGENT_ENV = ['PDD_AUTOPILOT_CONTEXT'];
+const WORKFLOW_SESSION_MARKER = /^(?:CLAUDECODE|CLAUDE_CODE_(?:CHILD_SESSION|SESSION_ID|SESSION_ATTENDED|ENTRYPOINT|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH)|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX[A-Z_]*|HERDR_[A-Z_]+|PDD_AGENT_SESSION)$/;
 
-function diagnoseEnv(baseEnv = {}, profileEnv = {}) {
-  const env = { ...baseEnv };
-  for (const key of SENSITIVE_SUBAGENT_ENV) delete env[key];
-  for (const [k, v] of Object.entries(profileEnv)) {
-    if (v === undefined) delete env[k];
-    else env[k] = v;
+function diagnoseEnv(baseEnv = {}, profileEnv = {}, profile = null, agent = profile?.agent) {
+  const env = { ...baseEnv, ...profileEnv };
+  const variable = homeVariable(agent);
+  if (variable && profile) {
+    const accountDir = expandHome(profile.configDir, env);
+    if (accountDir) env[variable] = accountDir;
+    else delete env[variable];
   }
+  for (const key of SENSITIVE_SUBAGENT_ENV) delete env[key];
+  for (const key of Object.keys(env)) if (WORKFLOW_SESSION_MARKER.test(key)) delete env[key];
   return env;
 }
 
@@ -759,8 +907,8 @@ function parseDiagnoseOutput(kind, stdout) {
   return { session, parsed };
 }
 
-export function formatSelfReportBody(report, { home, env = process.env } = {}) {
-  const r = safePublicReport(report);
+export function formatSelfReportBody(report, { home, env = process.env, fs = nativeFs, packageRoot = PACKAGE_ROOT } = {}) {
+  const r = safePublicReport(report, { fs, packageRoot });
   const marker = '<!-- pdd:self-report:' + r.signature + ' -->';
   const runtimeMarker = r.side === 'runtime'
     ? String.fromCharCode(10) + '<!-- pdd:runtime-cause:' + r.cause + ' -->'
@@ -806,12 +954,15 @@ export async function diagnosePddFailure(run = {}, cause = {}, ports = {}) {
   const home = ports.home ?? env?.HOME ?? homedir();
   const packageRoot = ports.packageRoot ?? PACKAGE_ROOT;
   const now = typeof ports.now === 'function' ? ports.now() : Date.now();
+  const profile = launchProfile(run);
+  const agentKind = ['codex', 'claude', 'gemini', 'agy'].includes(profile.agent) ? profile.agent : 'unknown';
+  const configDir = Object.hasOwn(profile, 'configDir') ? profile.configDir : null;
   const pddVersion = packageVersion(fs, packageRoot);
   const sourceInfo = findSourceEvidence(cause, { fs, packageRoot });
   const code = cause.code || 'ERR_PDD_CRASH';
   const module = sourceInfo.module || cause.module || 'src/workflow-runner.mjs';
-  const fn = cause.fn || 'unknown';
-  const signature = cause.signature || buildSignature(code, module, fn);
+  const fn = cause.fn || sourceInfo.fn || 'unknown';
+  const signature = buildSignature(code, module, fn);
 
   let brief = '';
   try { brief = fs.readFileSync(BRIEF_PATH, 'utf8'); } catch { brief = '# Autopilot Self-Report Diagnosis'; }
@@ -845,30 +996,31 @@ export async function diagnosePddFailure(run = {}, cause = {}, ports = {}) {
 
   let sessionId = null;
   let diagnosisOutput = null;
-  let agentKind = ['codex', 'claude'].includes(ports.agent ?? run.agent) ? (ports.agent ?? run.agent) : 'codex';
-  let configDir = null;
 
   if (typeof ports.diagnose === 'function') {
-    const reply = await ports.diagnose({ run, cause: taskInput.cause, brief, taskInput });
+    const reply = await ports.diagnose({ run, cause: taskInput.cause, brief, taskInput, profile: structuredClone(profile) });
     sessionId = reply?.session?.id ?? reply?.session ?? null;
     diagnosisOutput = reply?.diagnosis ?? reply;
-  } else {
+  } else if (['codex', 'claude'].includes(agentKind)) {
     try {
-      const profile = launchProfile(run);
-      configDir = profile?.configDir ?? null;
-      let command = ports.agentCommand || agentKind;
+      const savedDefinition = run.agentDefinition?.kind === agentKind ? run.agentDefinition : null;
+      let command = savedDefinition?.command || agentKind;
       let defEnv = {};
       if (ports.agentDefinitions) {
         const definitions = await ports.agentDefinitions({ cwd: run.sourceRoot || run.root || packageRoot, env });
-        const def = Array.isArray(definitions) ? definitions.find(d => d.kind === agentKind) : null;
-        if (def?.command) command = def.command;
+        const savedName = savedDefinition?.name;
+        const def = Array.isArray(definitions)
+          ? definitions.find(d => d.kind === agentKind && savedName && d.name === savedName)
+            ?? definitions.find(d => d.kind === agentKind)
+          : null;
+        if (def?.command && !savedDefinition?.command) command = def.command;
         if (def?.env) defEnv = def.env;
       }
-      const childEnv = diagnoseEnv(env, defEnv);
-      const promptText = `${brief.trim()}\n\nTask input:\n${JSON.stringify(taskInput)}`;
+      const childEnv = diagnoseEnv(env, defEnv, profile, agentKind);
+      const promptText = brief.trim() + '\n\nTask input:\n' + JSON.stringify(taskInput);
       const args = agentKind === 'claude'
-        ? ['-p', '--output-format', 'json', '--permission-mode', 'plan', ...(profile?.model ? ['--model', profile.model] : []), promptText]
-        : ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--json', '-C', run.root || packageRoot, ...(profile?.model ? ['-m', profile.model] : []), '-'];
+        ? ['-p', '--output-format', 'json', '--permission-mode', 'plan', ...(profile.model ? ['--model', profile.model] : []), promptText]
+        : ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--json', '-C', run.root || packageRoot, ...(profile.model ? ['-m', profile.model] : []), '-'];
       const exec = ports.runDiagnoseProcess ?? ports.execute ?? ports.execFile ?? ((file, a, o) => runAgentProcess(file, a, o));
       const reply = await exec(command, args, {
         cwd: run.root || packageRoot,
@@ -908,6 +1060,10 @@ export async function diagnosePddFailure(run = {}, cause = {}, ports = {}) {
     } catch { /* Non-fatal if runDir is read-only in a synthetic test. */ }
   }
 
+  const diagnosisLocation = readDiagnosisLocation(diagnosisOutput, signature, { fs, packageRoot })
+    ?? (sourceInfo.lineInSource
+      ? verifiedSourceLocation({ module, fn, line: sourceInfo.line }, { fs, packageRoot, expected: { module, fn } })
+      : null);
   const report = safePublicReport({
     side: 'pdd',
     kind: cause.kind,
@@ -917,32 +1073,67 @@ export async function diagnosePddFailure(run = {}, cause = {}, ports = {}) {
     line: sourceInfo.line,
     pddVersion,
     agent: agentKind,
-    diagnosisLocation: readDiagnosisLocation(diagnosisOutput, signature, { fs, packageRoot }),
-  });
-  report.session = typeof sessionId === 'string' ? { id: sessionId, agent: agentKind, at: now } : null;
-  report.body = formatSelfReportBody(report, { home, env });
+    diagnosisLocation,
+  }, { fs, packageRoot });
+  report.session = { id: typeof sessionId === 'string' ? sessionId : null, agent: agentKind, configDir, at: now };
+  report.body = formatSelfReportBody(report, { home, env, fs, packageRoot });
   return report;
 }
 
-function readMachineCap(stateRoot, fs = nativeFs) {
-  if (!stateRoot) return { days: {} };
+function readMachineCap(stateRoot, fs = nativeFs, fallback = null) {
+  if (!stateRoot) throw Error('Self-report machine cap has no state directory');
   try {
     const parsed = JSON.parse(fs.readFileSync(join(stateRoot, 'self-report-machine.json'), 'utf8'));
-    return parsed && typeof parsed === 'object' && parsed.days && typeof parsed.days === 'object' ? parsed : { days: {} };
-  } catch {
-    return { days: {} };
+    if (!parsed || typeof parsed !== 'object' || !parsed.days || typeof parsed.days !== 'object' || Array.isArray(parsed.days)) {
+      throw Error('Saved self-report machine cap is invalid');
+    }
+    return parsed;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      if (fallback && typeof fallback === 'object' && fallback.days && typeof fallback.days === 'object') return structuredClone(fallback);
+      return { days: {} };
+    }
+    throw Error('Could not read saved self-report machine cap');
   }
 }
 
 function writeMachineCap(stateRoot, data, fs = nativeFs) {
-  if (!stateRoot) return;
+  if (!stateRoot) return false;
   try {
     fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
     const file = join(stateRoot, 'self-report-machine.json');
     const tmp = `${file}.${randomUUID()}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
     fs.renameSync(tmp, file);
-  } catch { /* Keep in-memory state if stateRoot is unavailable. */ }
+    return true;
+  } catch { return false; }
+}
+
+async function withMachineCapLock(stateRoot, ports, fs, action) {
+  fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+  const release = ports.lockMachineCap
+    ? await ports.lockMachineCap(stateRoot)
+    : (await import('./workflow-runner.mjs')).acquireRunLock(stateRoot, 'self-report-machine.lock');
+  try { return await action(); }
+  finally { release?.(); }
+}
+
+function machineRows(data, day) {
+  data.days ??= {};
+  return Array.isArray(data.days[day]) ? data.days[day] : (data.days[day] = []);
+}
+
+function findMachineReservation(data, id) {
+  for (const [day, rows] of Object.entries(data.days ?? {})) {
+    if (!Array.isArray(rows)) continue;
+    const index = rows.findIndex(row => row?.reservationId === id);
+    if (index >= 0) return { day, index, row: rows[index] };
+  }
+  return null;
+}
+
+function reportReservationId(run, signature, targetRepo) {
+  return createHash('sha256').update(String(run?.runId ?? 'run') + ':' + signature + ':' + targetRepo).digest('hex').slice(0, 24);
 }
 
 function ensureCounters(holder) {
@@ -1027,15 +1218,16 @@ export async function fileSelfReport(input = {}, ports = {}) {
     throw Error('PDD self-reports must target ' + SELF_REPORT_REPO + '.');
   }
   let targetRepo = SELF_REPORT_REPO;
-  const publicReport = safePublicReport(input);
+  const packageRoot = ports.packageRoot ?? PACKAGE_ROOT;
+  const publicReport = safePublicReport(input, { fs, packageRoot });
   const { code, module, fn, signature } = publicReport;
   const marker = '<!-- pdd:self-report:' + signature + ' -->';
+  const oldMarker = '<!-- pdd:self-report:' + legacySignature(code, module, fn) + ' -->';
+  const markers = [...new Set([marker, oldMarker])];
   const runtimeMarker = side === 'runtime' ? '<!-- pdd:runtime-cause:' + publicReport.cause + ' -->' : null;
-
   const counters = ensureCounters(state);
 
-  // Check consent when not already resolved:
-  if (input.checkConsent !== false && (workingRepo || config?.selfReport || state?.selfReportConsent)) {
+  if (input.checkConsent !== false) {
     const consent = await resolveSelfReportConsent({
       repo: workingRepo,
       config,
@@ -1051,31 +1243,53 @@ export async function fileSelfReport(input = {}, ports = {}) {
   }
 
   targetRepo = side === 'runtime' && await hasRuntimeWriteAccess(ports) ? FORBIDDEN_RUNTIME_REPO : SELF_REPORT_REPO;
-  const detectedVersion = packageVersion(fs, ports.packageRoot ?? PACKAGE_ROOT);
+  const detectedVersion = packageVersion(fs, packageRoot);
   const pddVersion = publicVersion(input.pddVersion) === 'unknown' ? publicVersion(detectedVersion) : publicVersion(input.pddVersion);
   const title = publicReport.side === 'runtime'
     ? 'Runtime report: ' + publicReport.cause
     : 'PDD ' + publicReport.kind + ': ' + publicReport.code + ' in ' + publicReport.module + ' (' + publicReport.fn + ')';
+  const stateRoot = ports.stateRoot
+    ?? (typeof state.stateFile === 'string' ? dirname(state.stateFile) : join(home, '.local', 'state', 'pdd', 'autopilot'));
+  const today = utcDay(now);
+  const reservationId = reportReservationId(run, signature, targetRepo);
+  const labels = side === 'runtime'
+    ? (targetRepo === SELF_REPORT_REPO ? ['pdd:self-report', 'pdd:runtime-report'] : [])
+    : ['pdd:self-report'];
+  const rawMaintainer = targetRepo === FORBIDDEN_RUNTIME_REPO
+    ? input.runtimeOwner ?? config?.runtimeOwner ?? null
+    : input.maintainer ?? config?.maintainer ?? config?.pddMaintainer ?? config?.selfReportMaintainer ?? null;
+  const assignee = validLogin(rawMaintainer) ? rawMaintainer.trim() : null;
 
-  const searchIssues = ports.searchIssues ?? (async () => {
+  const searchIssues = async searchMarker => {
+    if (typeof ports.searchIssues === 'function') {
+      return (await ports.searchIssues(searchMarker, { targetRepo, signature, runtimeMarker })) || [];
+    }
     const exec = ports.execute ?? ports.execFile;
     if (!exec) return [];
     const r = await exec('gh', [
       'issue', 'list', '--repo', targetRepo, '--state', 'all',
-      '--search', `"${marker}" in:body`, '--limit', '100',
+      '--search', '"' + searchMarker + '" in:body', '--limit', '100',
       '--json', 'number,url,state,body,title,closedAt,updatedAt',
     ], { purpose: 'self-report' });
     if (r.code !== undefined && r.code !== 0) throw Error(r.stderr || 'Self-report issue search failed');
     return JSON.parse(r.stdout || '[]');
-  });
+  };
 
-  const allMatches = (await searchIssues(marker, { targetRepo, signature, runtimeMarker })) || [];
+  const allMatches = [];
+  for (const searchMarker of markers) {
+    for (const row of await searchIssues(searchMarker)) {
+      const id = String(row?.number ?? '');
+      if (!allMatches.some(saved => String(saved?.number ?? '') === id)) allMatches.push(row);
+    }
+  }
+  const exactMatching = allMatches.filter(row => markers.some(value => String(row?.body ?? '').includes(value)));
   const matching = allMatches.filter(row => {
-    const b = String(row?.body ?? '');
-    return b.includes(marker) || (runtimeMarker && b.includes(runtimeMarker));
+    const body = String(row?.body ?? '');
+    return markers.some(value => body.includes(value)) || (runtimeMarker && body.includes(runtimeMarker));
   });
   const openMatch = matching.find(row => String(row?.state ?? 'open').toLowerCase() === 'open');
   const closedMatch = !openMatch ? matching.find(row => String(row?.state ?? '').toLowerCase() === 'closed') : null;
+  const exactExistingIssue = exactMatching.find(row => ['open', 'closed'].includes(String(row?.state ?? '').toLowerCase()));
 
   const occurrenceComment = redactSelfReport([
     'New occurrence of ' + signature + ':',
@@ -1087,51 +1301,123 @@ export async function fileSelfReport(input = {}, ports = {}) {
   const commentOnIssue = async issue => {
     if (typeof ports.commentIssue === 'function') {
       await ports.commentIssue({ repo: targetRepo, number: issue.number, body: occurrenceComment, signature });
-    } else {
-      const exec = ports.execute ?? ports.execFile;
-      if (exec) {
-        const r = await exec('gh', ['issue', 'comment', String(issue.number), '--repo', targetRepo, '--body', occurrenceComment], { purpose: 'self-report' });
-        if (r.code !== undefined && r.code !== 0) throw Error(r.stderr || 'Self-report comment failed');
-      }
+      return;
     }
+    const exec = ports.execute ?? ports.execFile;
+    if (!exec) throw Error('No GitHub comment writer available for self-report filing');
+    const r = await exec('gh', ['issue', 'comment', String(issue.number), '--repo', targetRepo, '--body', occurrenceComment], { purpose: 'self-report' });
+    if (r.code !== undefined && r.code !== 0) throw Error(r.stderr || 'Self-report comment failed');
   };
 
-  // 1. Same cause signature open -> add one comment, no new issue.
-  if (openMatch) {
-    const issue = {
-      number: Number(openMatch.number),
-      url: openMatch.url || `https://github.com/${targetRepo}/issues/${openMatch.number}`,
+  const issueValue = row => {
+    const number = Number(row?.number);
+    if (!Number.isSafeInteger(number) || number < 1) throw Error('Self-report issue number unavailable');
+    return {
+      number,
+      url: row.url || 'https://github.com/' + targetRepo + '/issues/' + number,
     };
-    await commentOnIssue(issue);
-    counters.commented++;
-    const blocker = side === 'runtime'
-      ? { kind: 'runtime', until: String(issue.number), cause: publicReport.cause, batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
-      : { kind: 'pdd', until: `#${issue.number}` };
-    const entry = { id: nextSelfReportEntryId(run, signature, 'commented', now), at: now, action: 'commented', side, signature, issue, blocker, parkReason: `Blocked on ${SELF_REPORT_REPO}#${issue.number} (${signature})` };
+  };
+  const blockerFor = issue => side === 'runtime'
+    ? { kind: 'runtime', until: String(issue.number), cause: publicReport.cause, batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
+    : { kind: 'pdd', until: '#' + issue.number };
+  const recordFiled = issue => {
+    counters.filed++;
+    const blocker = blockerFor(issue);
+    const entry = {
+      id: nextSelfReportEntryId(run, signature, 'filed', now),
+      at: now,
+      action: 'filed',
+      side,
+      signature,
+      issue,
+      labels,
+      assignee,
+      blocker,
+      parkReason: 'Blocked on ' + SELF_REPORT_REPO + '#' + issue.number + ' (' + signature + ')',
+    };
     recordRunSelfReport(run, entry, ports);
-    return { action: 'commented', issue, signature, targetRepo, blocker };
+    return { action: 'filed', issue, signature, labels, assignee, targetRepo, blocker };
+  };
+  const recordComment = (issue, capped = false) => {
+    counters.commented++;
+    const blocker = blockerFor(issue);
+    const entry = {
+      id: nextSelfReportEntryId(run, signature, 'commented', now),
+      at: now,
+      action: 'commented',
+      ...(capped ? { capped: true } : {}),
+      side,
+      signature,
+      issue,
+      blocker,
+      parkReason: 'Blocked on ' + SELF_REPORT_REPO + '#' + issue.number + ' (' + signature + ')',
+    };
+    recordRunSelfReport(run, entry, ports);
+    return { action: 'commented', ...(capped ? { capped: true } : {}), issue, signature, targetRepo, blocker };
+  };
+
+  const loaded = await withMachineCapLock(stateRoot, ports, fs, async () => {
+    const data = readMachineCap(stateRoot, fs, state.selfReportMachine);
+    state.selfReportMachine = data;
+    return { data, found: findMachineReservation(data, reservationId) };
+  });
+  let reservation = loaded.found?.row ?? null;
+  if (reservation?.status === 'reserved' && reservation.issue) return recordFiled(issueValue(reservation.issue));
+  if (reservation?.status === 'filed' && reservation.issue && !exactExistingIssue) return recordFiled(issueValue(reservation.issue));
+  if (reservation?.status === 'reserved' && exactExistingIssue) {
+    const issue = issueValue(exactExistingIssue);
+    await withMachineCapLock(stateRoot, ports, fs, async () => {
+      const data = readMachineCap(stateRoot, fs, state.selfReportMachine);
+      const found = findMachineReservation(data, reservationId);
+      if (found) {
+        found.row.status = 'filed';
+        found.row.issue = issue;
+        found.row.reconciledAt = now;
+      }
+      writeMachineCap(stateRoot, data, fs);
+      state.selfReportMachine = data;
+    });
+    return recordFiled(issue);
   }
 
-  // 2. Check daily machine cap (at most 5 new self-reports per machine per UTC day; more occurrences only comment).
-  const stateRoot = ports.stateRoot ?? (typeof state.stateFile === 'string' ? dirname(state.stateFile) : null);
-  const capData = state.selfReportMachine ?? readMachineCap(stateRoot, fs);
-  const today = utcDay(now);
-  capData.days ??= {};
-  const createdToday = Array.isArray(capData.days[today]) ? capData.days[today] : (capData.days[today] = []);
+  if (openMatch) {
+    const issue = issueValue(openMatch);
+    await commentOnIssue(issue);
+    return recordComment(issue);
+  }
 
-  if (createdToday.length >= DAILY_SELF_REPORT_CAP) {
-    const fallbackIssue = closedMatch
-      ? { number: Number(closedMatch.number), url: closedMatch.url || `https://github.com/${targetRepo}/issues/${closedMatch.number}` }
-      : createdToday.at(-1)?.issue ?? null;
-    if (fallbackIssue) {
-      await commentOnIssue(fallbackIssue);
-      counters.commented++;
-      const blocker = side === 'runtime'
-        ? { kind: 'runtime', until: String(fallbackIssue.number), cause: publicReport.cause, batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
-        : { kind: 'pdd', until: `#${fallbackIssue.number}` };
-      const entry = { id: nextSelfReportEntryId(run, signature, 'commented', now), at: now, action: 'commented', capped: true, side, signature, issue: fallbackIssue, blocker, parkReason: `Blocked on ${SELF_REPORT_REPO}#${fallbackIssue.number} (${signature})` };
-      recordRunSelfReport(run, entry, ports);
-      return { action: 'commented', capped: true, issue: fallbackIssue, signature, targetRepo, blocker };
+  const capData = state.selfReportMachine ?? loaded.data;
+  const body = formatSelfReportBody({
+    ...publicReport,
+    pddVersion,
+    closedMatch,
+  }, { home, env, fs, packageRoot });
+  const reservationResult = await withMachineCapLock(stateRoot, ports, fs, async () => {
+    const data = readMachineCap(stateRoot, fs, capData);
+    const found = findMachineReservation(data, reservationId);
+    if (found) return { kind: found.row.issue ? 'filed' : 'pending', data, row: found.row };
+    const rows = machineRows(data, today);
+    if (rows.length >= DAILY_SELF_REPORT_CAP) return { kind: 'capped', data, rows };
+    const row = { reservationId, at: now, runId: run?.runId ?? null, signature, side, status: 'reserved', targetRepo };
+    rows.push(row);
+    if (!writeMachineCap(stateRoot, data, fs)) throw Error('Could not reserve daily self-report capacity');
+    state.selfReportMachine = data;
+    return { kind: 'reserved', data, row };
+  });
+
+  if (reservationResult.kind === 'filed') {
+    const issue = issueValue(reservationResult.row.issue);
+    return recordFiled(issue);
+  }
+  if (reservationResult.kind === 'pending') {
+    throw Error('Self-report create outcome is uncertain; its daily capacity reservation remains held');
+  }
+  if (reservationResult.kind === 'capped') {
+    const lastIssue = [...reservationResult.rows].reverse().find(row => row?.issue)?.issue ?? null;
+    const fallback = closedMatch ? issueValue(closedMatch) : lastIssue ? issueValue(lastIssue) : null;
+    if (fallback) {
+      await commentOnIssue(fallback);
+      return recordComment(fallback, true);
     }
     counters.skipped++;
     const entry = { id: nextSelfReportEntryId(run, signature, 'skipped', now), at: now, action: 'skipped', capped: true, reason: 'daily-cap', side, signature, issue: null };
@@ -1139,76 +1425,67 @@ export async function fileSelfReport(input = {}, ports = {}) {
     return { action: 'skipped', capped: true, reason: 'daily-cap', issue: null, signature, targetRepo };
   }
 
-  // 3. File one new issue in the selected target repository:
-  const labels = side === 'runtime'
-    ? (targetRepo === SELF_REPORT_REPO ? ['pdd:self-report', 'pdd:runtime-report'] : [])
-    : ['pdd:self-report'];
-  const rawMaintainer = targetRepo === FORBIDDEN_RUNTIME_REPO
-    ? input.runtimeOwner ?? config?.runtimeOwner ?? null
-    : input.maintainer ?? config?.maintainer ?? config?.pddMaintainer ?? config?.selfReportMaintainer ?? null;
-  const assignee = validLogin(rawMaintainer) ? rawMaintainer.trim() : null;
-  const body = formatSelfReportBody({
-    ...publicReport,
-    pddVersion,
-    closedMatch,
-  }, { home, env });
-
-  let createdIssue;
-  if (typeof ports.createIssue === 'function') {
-    createdIssue = await ports.createIssue({
-      repo: targetRepo,
-      title,
-      body,
-      labels,
-      assignee,
-      signature,
-      side,
-    });
-  } else {
-    const exec = ports.execute ?? ports.execFile;
-    if (!exec) throw Error('No GitHub execution port available for self-report filing');
-    for (const label of labels) {
-      const color = label === 'pdd:runtime-report' ? 'B60205' : 'D93F0B';
-      const desc = label === 'pdd:runtime-report' ? 'Automatic Runtime self-report' : 'Automatic PDD/Autopilot self-report';
-      await exec('gh', ['label', 'create', label, '--repo', targetRepo, '--color', color, '--description', desc, '--force'], { purpose: 'self-report' });
+  let createdIssue, createStarted = false;
+  try {
+    if (typeof ports.createIssue === 'function') {
+      createStarted = true;
+      createdIssue = await ports.createIssue({
+        repo: targetRepo,
+        title,
+        body,
+        labels,
+        assignee,
+        signature,
+        side,
+      });
+    } else {
+      const exec = ports.execute ?? ports.execFile;
+      if (!exec) throw Error('No GitHub execution port available for self-report filing');
+      for (const label of labels) {
+        const color = label === 'pdd:runtime-report' ? 'B60205' : 'D93F0B';
+        const desc = label === 'pdd:runtime-report' ? 'Automatic Runtime self-report' : 'Automatic PDD/Autopilot self-report';
+        await exec('gh', ['label', 'create', label, '--repo', targetRepo, '--color', color, '--description', desc, '--force'], { purpose: 'self-report' });
+      }
+      const args = ['issue', 'create', '--repo', targetRepo, '--title', title, '--body', body];
+      for (const label of labels) args.push('--label', label);
+      if (assignee) args.push('--assignee', assignee);
+      createStarted = true;
+      const r = await exec('gh', args, { purpose: 'self-report' });
+      if (r.code !== undefined && r.code !== 0) throw Error(r.stderr || 'Self-report issue creation failed');
+      const url = String(r.stdout ?? '').trim();
+      const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(url)?.[1]);
+      if (!number) throw Error('Self-report issue number unavailable');
+      createdIssue = { number, url: 'https://github.com/' + targetRepo + '/issues/' + number };
     }
-    const args = ['issue', 'create', '--repo', targetRepo, '--title', title, '--body', body];
-    for (const label of labels) args.push('--label', label);
-    if (assignee) args.push('--assignee', assignee);
-    const r = await exec('gh', args, { purpose: 'self-report' });
-    if (r.code !== undefined && r.code !== 0) throw Error(r.stderr || 'Self-report issue creation failed');
-    const url = String(r.stdout ?? '').trim();
-    const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(url)?.[1]);
-    if (!number) throw Error('Self-report issue number unavailable');
-    createdIssue = { number, url: `https://github.com/${targetRepo}/issues/${number}` };
+  } catch (error) {
+    if (!createStarted) {
+      try {
+        await withMachineCapLock(stateRoot, ports, fs, async () => {
+          const data = readMachineCap(stateRoot, fs, state.selfReportMachine);
+          const found = findMachineReservation(data, reservationId);
+          if (found?.row?.status === 'reserved' && !found.row.issue) {
+            data.days[found.day].splice(found.index, 1);
+            writeMachineCap(stateRoot, data, fs);
+            state.selfReportMachine = data;
+          }
+        });
+      } catch { /* Keep the reservation if its safe release cannot be saved. */ }
+    }
+    throw error;
   }
-
-  const issue = {
-    number: Number(createdIssue.number),
-    url: createdIssue.url || `https://github.com/${targetRepo}/issues/${createdIssue.number}`,
-  };
-  createdToday.push({ at: now, signature, side, issue });
-  state.selfReportMachine = capData;
-  writeMachineCap(stateRoot, capData, fs);
-
-  counters.filed++;
-  const blocker = side === 'runtime'
-    ? { kind: 'runtime', until: String(issue.number), cause: publicReport.cause, batch: input.batch ?? null, checkKind: 'pdd test', evidence: run ? runtimeEvidence(run) : null }
-    : { kind: 'pdd', until: `#${issue.number}` };
-  const entry = {
-    id: nextSelfReportEntryId(run, signature, 'filed', now),
-    at: now,
-    action: 'filed',
-    side,
-    signature,
-    issue,
-    labels,
-    assignee,
-    blocker,
-    parkReason: `Blocked on ${SELF_REPORT_REPO}#${issue.number} (${signature})`,
-  };
-  recordRunSelfReport(run, entry, ports);
-  return { action: 'filed', issue, signature, labels, assignee, targetRepo, blocker };
+  const issue = issueValue(createdIssue);
+  await withMachineCapLock(stateRoot, ports, fs, async () => {
+    const data = readMachineCap(stateRoot, fs, state.selfReportMachine);
+    const found = findMachineReservation(data, reservationId);
+    if (!found) throw Error('Reserved daily self-report capacity is missing');
+    found.row.status = 'filed';
+    found.row.targetRepo = targetRepo;
+    found.row.issue = issue;
+    found.row.filedAt = now;
+    writeMachineCap(stateRoot, data, fs);
+    state.selfReportMachine = data;
+  });
+  return recordFiled(issue);
 }
 
 export function recordCommandCrash({ cwd, ref, command, error, run: providedRun } = {}, ports = {}) {
@@ -1307,11 +1584,12 @@ export async function reconcileSelfReports(state, ports = {}, config = {}, runs 
     let check = null;
     try { check = await ports.readCheck?.(run); } catch {}
     const cause = classifyFailureCause(run, { check, fs: ports.fs ?? nativeFs });
+    const oldSignature = cause.reportable ? legacySignature(cause.code, cause.module, cause.fn) : null;
     if (!cause.reportable || (cause.side === 'runtime' && !includeRuntime)) continue;
 
     const prior = run.parking?.blocker ?? run.blockedOn;
     const existingEntry = Array.isArray(run.selfReports)
-      ? run.selfReports.find(row => row?.signature === cause.signature && row?.issue?.number)
+      ? run.selfReports.find(row => [cause.signature, oldSignature].includes(row?.signature) && row?.issue?.number)
       : null;
     if (existingEntry?.issue?.number) {
       const blocker = cause.side === 'runtime'
@@ -1330,7 +1608,12 @@ export async function reconcileSelfReports(state, ports = {}, config = {}, runs 
     }
 
     const key = String(run.runId ?? run.number) + ':' + cause.signature;
-    let custody = ledger.seen[key] ?? { signature: cause.signature, filingAttempts: 0 };
+    const oldKey = String(run.runId ?? run.number) + ':' + oldSignature;
+    let custody = ledger.seen[key] ?? ledger.seen[oldKey] ?? { signature: cause.signature, filingAttempts: 0 };
+    if (oldKey !== key && ledger.seen[oldKey] && !ledger.seen[key]) {
+      ledger.seen[key] = custody;
+      delete ledger.seen[oldKey];
+    }
     if (custody.issue?.number) {
       const blocker = cause.side === 'runtime'
         ? { kind: 'runtime', until: String(custody.issue.number), cause: cause.kind, batch: cause.batch ?? null, checkKind: 'pdd test', evidence: runtimeEvidence(run) }
@@ -1368,7 +1651,7 @@ export async function reconcileSelfReports(state, ports = {}, config = {}, runs 
     }
 
     const savedDiagnosis = Array.isArray(run.selfReports)
-      ? run.selfReports.find(row => row?.action === 'diagnosed' && row?.signature === cause.signature && row?.result)
+      ? run.selfReports.find(row => row?.action === 'diagnosed' && [cause.signature, oldSignature].includes(row?.signature) && row?.result)
       : null;
     let report = custody.diagnosisResult
       ? safePublicReport(custody.diagnosisResult)
@@ -1450,11 +1733,15 @@ export async function reconcileSelfReports(state, ports = {}, config = {}, runs 
         signature: cause.signature,
         issue: null,
         result: report,
-        ...(diagnosisSession?.id ? {
+        ...(cause.side === 'pdd' ? {
           session: {
-            id: diagnosisSession.id,
-            agent: diagnosisSession.agent ?? run.agent ?? 'codex',
-            at: Number(diagnosisSession.at) || startedAt,
+            id: diagnosisSession?.id ?? null,
+            agent: diagnosisSession?.agent ?? run.launchProfile?.agent ?? run.agent ?? 'unknown',
+            configDir: Object.hasOwn(diagnosisSession ?? {}, 'configDir')
+              ? diagnosisSession.configDir
+              : Object.hasOwn(run.launchProfile ?? {}, 'configDir') ? run.launchProfile.configDir
+                : Object.hasOwn(run, 'configDir') ? run.configDir : null,
+            at: Number(diagnosisSession?.at) || startedAt,
           },
         } : {}),
       }, ports);

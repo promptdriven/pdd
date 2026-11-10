@@ -1352,7 +1352,7 @@ person questions and explicit blockers.
 
 ## Dependencies
 
-- [Self-report filing](autopilot-self-report.prompt.md): required native generation and verification context for PDD/Autopilot and Runtime failure classification, read-only subagent diagnosis, deduplicated filing in `promptdriven/pdd`, consent, parking/wake on issue closure, and status self-report counts.
+- [Self-report filing](autopilot-self-report.prompt.md): required generation and verification context for PDD/Autopilot failure classification, read-only diagnosis, deduplicated PDD filing, consent, parking/wake on issue closure and status counts. Runtime classification and the shared filing helper exist, but automatic Runtime filing and wake are not wired through this launcher.
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
 

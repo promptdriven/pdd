@@ -195,7 +195,7 @@ test('cause classification table separates PDD/Autopilot, Runtime service, user 
     assert.equal(actual.reportable, row.expect.reportable, `${row.name}: reportable`);
     if (row.expect.module) assert.equal(actual.module, row.expect.module, `${row.name}: module`);
     if (row.expect.fn) assert.equal(actual.fn, row.expect.fn, `${row.name}: fn`);
-    if (actual.reportable) assert.match(actual.signature, /^[^:]+\+[^:]+\+[^:]+$/, `${row.name}: signature format`);
+    if (actual.reportable) assert.match(actual.signature, /^[^:]+:[^:]+:[^:]+$/, `${row.name}: signature format`);
   }
 
   assert.equal(classifyRuntimeFailure({ states: [{ state: 'passed' }] }), null);
@@ -209,6 +209,9 @@ test('diagnose subagent runs one read-only session with the brief and formats do
     runId: 'run-17',
     number: 17,
     repo: 'promptdriven/pdd',
+    agent: 'claude',
+    launchProfile: { agent: 'codex', configDir: '/saved/codex-account', model: 'saved-model' },
+    agentDefinition: { kind: 'claude', name: 'wrong-agent', command: 'wrong-agent' },
     state: 'stuck',
     area: 0,
     areas: [{ name: 'code', steps: ['change', 'verify'] }],
@@ -232,7 +235,8 @@ test('diagnose subagent runs one read-only session with the brief and formats do
   const execCalls = [];
   const report = await diagnosePddFailure(run, cause, {
     home: '/home/alice',
-    env: { HOME: '/home/alice', GITHUB_TOKEN: 'ghp_superSecretTokenValue123456' },
+    env: { HOME: '/home/alice', GITHUB_TOKEN: 'ghp_superSecretTokenValue123456', CODEX_HOME: '/decoy/codex', CLAUDE_CONFIG_DIR: '/decoy/claude', CLAUDECODE: 'parent', CLAUDE_CODE_SESSION_ID: 'parent', CODEX_THREAD_ID: 'parent', HERDR_SESSION: 'parent', PDD_AGENT_SESSION: 'parent', PDD_AUTOPILOT_CONTEXT: 'parent' },
+    agentDefinitions: async () => [{ kind: 'codex', name: 'saved', env: { CODEX_HOME: '/profile/decoy', CODEX_THREAD_ID: 'profile', HERDR_PROFILE: 'profile', PDD_AUTOPILOT_CONTEXT: 'profile' } }],
     execute: async (file, args, options) => {
       execCalls.push({ file, args, options });
       const sessionId = '11111111-2222-7333-8444-555555555555';
@@ -250,7 +254,7 @@ test('diagnose subagent runs one read-only session with the brief and formats do
           fileLine: 'src/autopilot-self-report.mjs:50',
           explanation: 'PRIVATE_ROOT_CAUSE_PROSE_MARKER',
         },
-        signature: 'TypeError+src/workflow-runner.mjs+stepDoneCommand',
+        signature: 'TypeError:src/workflow-runner.mjs:stepDoneCommand',
       };
       return {
         code: 0,
@@ -267,10 +271,20 @@ test('diagnose subagent runs one read-only session with the brief and formats do
   assert.equal(execCalls[0].file, 'codex');
   assert.ok(execCalls[0].args.includes('read-only'), 'subagent session must be read-only');
   assert.match(execCalls[0].options.input, /# Autopilot PDD Self-Report Diagnose Brief/);
-  assert.equal(report.signature, 'TypeError+src/workflow-runner.mjs+stepDoneCommand');
-  assert.equal(report.fileLine, 'src/workflow-runner.mjs:3120');
-  assert.deepEqual(report.diagnosisLocation, { module: 'src/autopilot-self-report.mjs', fn: 'safePublicReport', line: 50 });
-  assert.match(report.body, /src\/autopilot-self-report\.mjs:50 in safePublicReport/);
+  assert.equal(report.signature, 'TypeError:src/workflow-runner.mjs:stepDoneCommand');
+  assert.equal(report.fileLine, null, 'a diagnosis location must belong to the failing function');
+  assert.equal(report.diagnosisLocation, null);
+  assert.match(report.body, /no source location was verified/);
+  assert.equal(report.session.agent, 'codex', 'saved launch profile selects the diagnose agent');
+  assert.equal(report.session.configDir, '/saved/codex-account', 'saved account is recorded');
+  assert.equal(execCalls[0].options.env.CODEX_HOME, '/saved/codex-account');
+  for (const marker of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'HERDR_SESSION', 'HERDR_PROFILE', 'PDD_AGENT_SESSION', 'PDD_AUTOPILOT_CONTEXT']) {
+    assert.equal(Object.hasOwn(execCalls[0].options.env, marker), false, marker + ' must be removed after env sources merge');
+  }
+  assert.equal(execCalls[0].options.env.CLAUDE_CONFIG_DIR, '/decoy/claude', 'the saved Codex profile does not rewrite another agent account');
+  const savedChat = JSON.parse(fs.readFileSync(join(root, 'self-reports', fs.readdirSync(join(root, 'self-reports'))[0]), 'utf8')).chat;
+  assert.equal(savedChat.agent, 'codex');
+  assert.equal(savedChat.configDir, '/saved/codex-account');
   assert.equal(report.session.id, '11111111-2222-7333-8444-555555555555');
   assert.match(report.body, /## Problem/);
   assert.match(report.body, /## Steps to reproduce/);
@@ -278,11 +292,43 @@ test('diagnose subagent runs one read-only session with the brief and formats do
   assert.match(report.body, /## Evidence/);
   assert.match(report.body, /## Versions/);
   assert.match(report.body, /## Suspected root cause/);
-  assert.match(report.body, /<!-- pdd:self-report:TypeError\+src\/workflow-runner\.mjs\+stepDoneCommand -->/);
+  assert.match(report.body, /<!-- pdd:self-report:TypeError:src\/workflow-runner\.mjs:stepDoneCommand -->/);
   // The public report uses structured local facts and excludes every free-form diagnosis field.
   for (const privateValue of ['PRIVATE_SOURCE_MARKER', 'PRIVATE_STEP_SOURCE_MARKER', 'PRIVATE_RUN_ID_9a6c-marker', 'PRIVATE_BATCH_20301231_MARKER', 'PRIVATE_RESPONSE_MARKER', 'PRIVATE_ROOT_CAUSE_PROSE_MARKER', 'run-17', '/home/alice']) {
     assert.ok(!report.body.includes(privateValue), 'public report must omit ' + privateValue);
   }
+});
+
+
+test('diagnosis keeps a location only when it belongs to the classified function', async t => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-owned-location-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = fs.readFileSync(new URL('../src/autopilot-self-report.mjs', import.meta.url), 'utf8');
+  const line = source.split('\n').findIndex(value => value.includes("const code = cause.code || 'ERR_PDD_CRASH'")) + 1;
+  assert.ok(line > 0);
+  const run = { runId: 'owned-location', root, runDir: root, launchProfile: { agent: 'codex', configDir: null, model: null } };
+  const cause = {
+    side: 'pdd', kind: 'command-crash', code: 'TypeError',
+    module: 'src/autopilot-self-report.mjs', fn: 'diagnosePddFailure', line,
+    evidence: 'at diagnosePddFailure (src/autopilot-self-report.mjs:' + line + ':1)',
+  };
+  const signature = 'TypeError:src/autopilot-self-report.mjs:diagnosePddFailure';
+  const report = await diagnosePddFailure(run, cause, {
+    home: root,
+    env: { HOME: root },
+    execute: async () => ({
+      code: 0,
+      stdout: [
+        JSON.stringify({ type: 'thread.started', thread_id: '11111111-2222-7333-8444-555555555555' }),
+        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({
+          signature,
+          rootCause: { module: cause.module, fn: cause.fn, line },
+        }) } }),
+      ].join('\n'),
+    }),
+  });
+  assert.deepEqual(report.diagnosisLocation, { module: cause.module, fn: cause.fn, line });
+  assert.equal(report.fileLine, cause.module + ':' + line);
 });
 
 test('dedupe adds one comment on open issue, cap limits new issues to 5 per machine per day, and PDD target is guarded', async t => {
@@ -361,7 +407,7 @@ test('dedupe adds one comment on open issue, cap limits new issues to 5 per mach
   assert.equal(comments.length, 1, 'dedupe must add one comment');
   const outcomeCost = captureCosts(null, occurrenceRun, { now: () => now });
   assert.deepEqual(outcomeCost.selfReports, { filed: 1, commented: 1, skipped: 0 }, 'file and comment remain separate cost outcomes');
-  assert.match(comments[0].body, /New occurrence of ERR_1\+src\/workflow-runner\.mjs\+fn1/);
+  assert.match(comments[0].body, /New occurrence of ERR_1:src\/workflow-runner\.mjs:fn1/);
 
   // File 4 more distinct signatures (2..5) to reach the daily cap of 5:
   for (let i = 2; i <= DAILY_SELF_REPORT_CAP; i++) {
@@ -400,6 +446,97 @@ test('dedupe adds one comment on open issue, cap limits new issues to 5 per mach
   assert.deepEqual(state.selfReports, { filed: 5, commented: 2, skipped: 0 });
 });
 
+
+
+test('missing repo context asks for consent and stops before issue reads or writes', async () => {
+  const asked = [], calls = [];
+  const state = {};
+  const result = await fileSelfReport({
+    code: 'ERR_NO_REPO', module: 'src/workflow-runner.mjs', fn: 'runPdd',
+    state, config: {},
+  }, {
+    askConsent: async prompt => { asked.push(prompt); return 'off'; },
+    searchIssues: async () => { calls.push('search'); return []; },
+    createIssue: async () => { calls.push('create'); return { number: 1 }; },
+  });
+  assert.deepEqual(asked, [CONSENT_PROMPT]);
+  assert.equal(result.action, 'skipped');
+  assert.equal(result.reason, 'consent-declined');
+  assert.deepEqual(calls, []);
+  assert.equal(state.selfReports.skipped, 1);
+});
+
+test('a lost create response keeps a reserved cap slot and retry reconciles the issue as filed', async t => {
+  const stateRoot = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-reservation-'));
+  t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-10T12:00:00Z');
+  const issues = [], comments = [];
+  let creates = 0;
+  const run = { runId: 'uncertain-create', repo: 'promptdriven/pdd', selfReports: [] };
+  const state = { repo: 'promptdriven/pdd' };
+  const input = {
+    code: 'ERR_UNCERTAIN', module: 'src/workflow-runner.mjs', fn: 'runPdd',
+    run, state, config: { selfReport: 'auto' },
+  };
+  const ports = {
+    stateRoot, now: () => now,
+    searchIssues: async () => issues,
+    createIssue: async value => {
+      creates++;
+      issues.push({ number: 701, url: 'https://github.com/promptdriven/pdd/issues/701', state: 'open', body: value.body });
+      throw Error('synthetic lost create response');
+    },
+    commentIssue: async value => comments.push(value),
+  };
+  await assert.rejects(fileSelfReport(input, ports), /synthetic lost create response/);
+  let cap = JSON.parse(fs.readFileSync(join(stateRoot, 'self-report-machine.json'), 'utf8'));
+  assert.equal(cap.days['2026-11-10'].length, 1);
+  assert.equal(cap.days['2026-11-10'][0].status, 'reserved');
+  const retry = await fileSelfReport(input, ports);
+  assert.equal(retry.action, 'filed');
+  assert.equal(retry.issue.number, 701);
+  assert.equal(creates, 1, 'retry must find the uncertain create before attempting another create');
+  assert.deepEqual(comments, [], 'reconciliation must not report a new occurrence as a comment');
+  assert.equal(state.selfReports.filed, 1);
+  assert.equal(state.selfReports.commented, 0);
+  cap = JSON.parse(fs.readFileSync(join(stateRoot, 'self-report-machine.json'), 'utf8'));
+  assert.equal(cap.days['2026-11-10'][0].status, 'filed');
+  assert.equal(cap.days['2026-11-10'][0].issue.number, 701);
+});
+
+test('legacy plus signatures still dedupe and missing comment writer does not claim success', async t => {
+  const stateRoot = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-legacy-marker-'));
+  t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
+  const state = { repo: 'promptdriven/pdd' };
+  const oldIssue = {
+    number: 702, state: 'open',
+    body: '<!-- pdd:self-report:ERR_LEGACY+src/workflow-runner.mjs+legacyFn -->',
+  };
+  const comments = [];
+  const ports = {
+    stateRoot,
+    searchIssues: async () => [oldIssue],
+    commentIssue: async value => comments.push(value),
+  };
+  const legacy = await fileSelfReport({
+    code: 'ERR_LEGACY', module: 'src/workflow-runner.mjs', fn: 'legacyFn',
+    repo: 'promptdriven/pdd', state, config: { selfReport: 'auto' },
+  }, ports);
+  assert.equal(legacy.action, 'commented');
+  assert.equal(comments.length, 1);
+  assert.match(comments[0].body, /ERR_LEGACY:src\/workflow-runner\.mjs:legacyFn/);
+
+  const noWriterState = { repo: 'promptdriven/pdd' };
+  const report = { code: 'ERR_COMMENT', module: 'src/workflow-runner.mjs', fn: 'commentFn' };
+  const marker = '<!-- pdd:self-report:ERR_COMMENT:src/workflow-runner.mjs:commentFn -->';
+  await assert.rejects(fileSelfReport({
+    ...report, repo: 'promptdriven/pdd', state: noWriterState, config: { selfReport: 'auto' },
+  }, {
+    stateRoot,
+    searchIssues: async () => [{ number: 703, state: 'open', body: marker }],
+  }), /No GitHub comment writer/);
+  assert.deepEqual(noWriterState.selfReports, { filed: 0, commented: 0, skipped: 0 });
+});
 
 test('Runtime target follows private write permission and public reports omit run, batch and free-form text', async t => {
   const stateRoot = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-target-'));
@@ -481,7 +618,8 @@ test('filing retries reuse the saved diagnosis twice and attach its actual sessi
   const home = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-cost-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const sessionDate = new Date(at);
-  const sessionDir = join(home, '.codex', 'sessions', String(sessionDate.getUTCFullYear()), String(sessionDate.getUTCMonth() + 1).padStart(2, '0'), String(sessionDate.getUTCDate()).padStart(2, '0'));
+  const savedConfigDir = join(home, 'saved-codex-account');
+  const sessionDir = join(savedConfigDir, 'sessions', String(sessionDate.getUTCFullYear()), String(sessionDate.getUTCMonth() + 1).padStart(2, '0'), String(sessionDate.getUTCDate()).padStart(2, '0'));
   fs.mkdirSync(sessionDir, { recursive: true });
   fs.writeFileSync(join(sessionDir, 'rollout-test-' + sessionId + '.jsonl'), JSON.stringify({
     type: 'event_msg',
@@ -491,6 +629,8 @@ test('filing retries reuse the saved diagnosis twice and attach its actual sessi
     runId: 'run-private-1',
     number: 71,
     repo: 'promptdriven/pdd',
+    agent: 'claude',
+    launchProfile: { agent: 'codex', configDir: savedConfigDir, model: null },
     state: 'stuck',
     root: '/tmp',
     commandFailure: {
@@ -522,7 +662,7 @@ test('filing retries reuse the saved diagnosis twice and attach its actual sessi
   await reconcileSelfReports(state, ports, { selfReport: 'auto' }, [run]);
 
   assert.equal(diagnosisCalls, 1, 'filing retry must reuse the diagnosis result');
-  assert.equal(searchCalls, 2, 'filing must stop after two attempts');
+  assert.equal(searchCalls, 2, 'a failed canonical search stops each of the two bounded filing attempts');
   const custody = Object.values(state.selfReportLedger.seen)[0];
   assert.equal(custody.diagnosisAttempted, true);
   assert.equal(custody.diagnosisStatus, 'complete');
@@ -533,9 +673,30 @@ test('filing retries reuse the saved diagnosis twice and attach its actual sessi
 
   const diagnosisEntry = run.selfReports.find(row => row.action === 'diagnosed');
   assert.equal(diagnosisEntry.session.id, sessionId);
-  const cost = captureCosts(null, run, { now: () => at, env: { HOME: home } });
+  assert.equal(diagnosisEntry.session.agent, 'codex');
+  assert.equal(diagnosisEntry.session.configDir, savedConfigDir);
+  const cost = captureCosts(null, run, { now: () => at, env: { HOME: home, CODEX_HOME: join(home, 'decoy-codex-account') } });
   assert.deepEqual(cost.selfReports, { filed: 0, commented: 0, skipped: 0 });
-  assert.equal(cost.tokens[0].total, 168, 'the diagnose session usage must reach the cost ledger');
+  assert.equal(cost.tokens[0].total, 168, 'the saved account usage must reach the cost ledger');
+  assert.ok(!cost.coverage.includes('self-report-usage-unavailable'));
+});
+
+
+test('missing diagnose usage remains unknown in cost coverage', () => {
+  const home = fs.mkdtempSync(join(tmpdir(), 'pdd-self-report-usage-missing-'));
+  try {
+    const run = {
+      runId: 'missing-diagnose-usage', root: home, runDir: home,
+      launchProfile: { agent: 'codex', configDir: null, model: null },
+      selfReports: [{
+        id: 'diagnosed-without-session', action: 'diagnosed', side: 'pdd', signature: 'ERR:src/x.mjs:fn',
+        session: { id: null, agent: 'codex', configDir: null, at: Date.parse('2026-11-10T12:00:00Z') },
+      }],
+    };
+    const cost = captureCosts(null, run, { env: { HOME: home, CODEX_HOME: join(home, 'decoy') } });
+    assert.ok(cost.coverage.includes('self-report-usage-unavailable'));
+    assert.deepEqual(cost.tokens, []);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 test('redaction removes secrets, tokens, request/response prose, user source code and home paths except PDD state paths', () => {

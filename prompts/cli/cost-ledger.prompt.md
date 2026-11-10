@@ -26,9 +26,9 @@ Events have `at`, `metric`, `value`, and optional `account` and `agent`; metric 
 `ciMinutes`, `githubCalls`, `questions`, `answers`, `approvals`, `waitingMinutes`,
 or `activeMinutes`. Zero measurements also create events so measured zero differs from unknown. Keep no message text, paths or environment values in cost data.
 
-Read every saved current chat, abandoned chat and replacement-original or replacement session once by kind/config/id, including custody from before and after the current mutation. Use each chat's saved agent, config directory and session id. Moving a chat into abandoned custody or replacing the replacement envelope must preserve its deduplication identity and forward-read checkpoint, so bounded transcript backlogs can finish on later captures.
+Read every saved current chat, abandoned chat, replacement-original or replacement session, and self-report diagnose session once by kind/config/id, including custody from before and after the current mutation. Use each session's actual saved agent, config directory and session id. A saved `configDir: null` means the agent's default profile folder; do not substitute the current coordinator environment override. Carry the diagnose session's actual agent and `configDir` from `run.selfReports` into this inventory. Moving a chat into abandoned custody or replacing the replacement envelope must preserve its deduplication identity and forward-read checkpoint, so bounded transcript backlogs can finish on later captures.
 Deduplicate resumed sessions. Resolve only the saved valid UUID, in the saved
-config directory (else the environment default). Codex searches the date folders
+config directory. A saved null directory selects the agent default profile folder; use the environment default only when no directory was saved. Codex searches the date folders
 within 31 days, as chat health does; consume the newest cumulative `token_count`
 `info.total_token_usage`, never sum repeated cumulative counts. Claude sums
 assistant `message.usage`, deduplicating streaming rows by message id (or uuid),
@@ -38,7 +38,7 @@ fstat, positioned read and close. Codex reads the tail. Claude reads forward fro
 a retained byte offset so large transcripts can catch up over successive captures.
 Only complete newline-terminated JSON rows count. Skip corrupt rows. Keep prior
 measurements if a file vanishes. Truncation or backlog is visible in coverage.
-Missing, unsupported or unreadable sessions are unknown, never free usage.
+Missing, unsupported or unreadable sessions are unknown, never free usage. A diagnose attempt without a valid accepted session ID, or with no readable usage, adds `self-report-usage-unavailable` coverage; it never implies zero use.
 
 Capture each question identity and each gate identity when shown. A recorded answer
 ends its question wait; an actual approval ends its gate wait. Replacing or clearing

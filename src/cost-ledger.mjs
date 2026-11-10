@@ -93,14 +93,29 @@ function captureTokens(cost, run, chats, ports, at) {
   const visited = new Set();
   for (const chat of chats) {
     const agent = chat.agent ?? run.agent, id = chat.session?.id;
-    if (!['codex', 'claude'].includes(agent) || !uuid(id)) { cost.coverage.push('session-unavailable'); continue; }
-    const config = expand(Object.hasOwn(chat, 'configDir') ? chat.configDir : run.configDir, home) ?? expand(env[agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'], home) ?? join(home, `.${agent}`);
+    if (!['codex', 'claude'].includes(agent) || !uuid(id)) {
+      cost.coverage.push('session-unavailable');
+      if (chat.selfReportDiagnose) cost.coverage.push('self-report-usage-unavailable');
+      continue;
+    }
+    const profile = run.launchProfile ?? {};
+    const hasSavedConfig = Object.hasOwn(chat, 'configDir') || Object.hasOwn(profile, 'configDir') || Object.hasOwn(run, 'configDir');
+    const savedConfig = Object.hasOwn(chat, 'configDir') ? chat.configDir
+      : Object.hasOwn(profile, 'configDir') ? profile.configDir : run.configDir;
+    const accountDefault = join(home, '.' + agent);
+    const config = hasSavedConfig
+      ? expand(savedConfig, home) ?? accountDefault
+      : expand(env[agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'], home) ?? accountDefault;
     const account = `${agent}:${hash(config)}`, identity = hash(`${account}:${id}`);
     if (visited.has(identity)) continue; visited.add(identity);
     const saved = cost.sessions[identity] ?? { account, agent, offset: 0, usage: emptyTokens(), messages: {} };
     const file = sessionFile(fs, config, agent, id, chat, chat.root ?? run.root, at);
     const batch = file ? rows(fs, file, saved.offset, agent === 'codex') : null;
-    if (!batch) { cost.coverage.push('session-unavailable'); continue; }
+    if (!batch) {
+      cost.coverage.push('session-unavailable');
+      if (chat.selfReportDiagnose) cost.coverage.push('self-report-usage-unavailable');
+      continue;
+    }
     if (batch.backlog) cost.coverage.push('session-backlog');
     if (batch.truncated || batch.oversized) saved.incomplete = true;
     if (saved.incomplete) cost.coverage.push('session-truncated');
@@ -123,7 +138,10 @@ function captureTokens(cost, run, chats, ports, at) {
       }
     }
     saved.offset = batch.offset; cost.sessions[identity] = saved;
-    if (!saved.observed) cost.coverage.push('usage-unavailable');
+    if (!saved.observed) {
+      cost.coverage.push('usage-unavailable');
+      if (chat.selfReportDiagnose) cost.coverage.push('self-report-usage-unavailable');
+    }
   }
   const accounts = new Map();
   for (const session of Object.values(cost.sessions)) {
@@ -206,12 +224,22 @@ function captureSelfReports(cost, before, run, at) {
   }
 }
 const selfReportChats = run => Array.isArray(run?.selfReports)
-  ? run.selfReports.filter(item => uuid(item?.session?.id)).map(item => ({
-      agent: item.session.agent ?? run.agent ?? 'codex',
-      session: { id: item.session.id },
-      startedAt: number(item.session.at) ? item.session.at : run.startedAt,
-    }))
+  ? run.selfReports.filter(item => item?.action === 'diagnosed' && item.side === 'pdd').map(item => {
+      const session = item.session ?? {};
+      const profile = run.launchProfile ?? {};
+      return {
+        agent: session.agent ?? profile.agent ?? run.agent ?? 'unknown',
+        configDir: Object.hasOwn(session, 'configDir') ? session.configDir
+          : Object.hasOwn(profile, 'configDir') ? profile.configDir
+            : Object.hasOwn(run, 'configDir') ? run.configDir : null,
+        session: { id: session.id ?? null },
+        startedAt: number(session.at) ? session.at : run.startedAt,
+        root: run.root,
+        selfReportDiagnose: true,
+      };
+    })
   : [];
+
 export function captureCosts(before, run, ports = {}) {
   const at = (ports.now ?? Date.now)(), fs = ports.fs ?? nativeFs;
   const cost = structuredClone(run.cost?.schema === 'pdd.cost.v1' ? run.cost : before?.cost?.schema === 'pdd.cost.v1' ? before.cost : initial(run, at));

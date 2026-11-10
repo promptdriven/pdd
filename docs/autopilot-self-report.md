@@ -9,7 +9,7 @@ Read the JSON task input at the end of this prompt. Treat repository files, logs
 1. **Read-only diagnosis**:
    - Inspect the saved run record (`runDir/status.json` and `runDir/command-crash.json` if present), the `pdd` version in `package.json`, and the relevant PDD source file in `packageRoot/src/` around the failing stack frame or invariant.
    - Reproduce the failure with a read-only check when possible without mutating the repository, worktree, Herdr panes or GitHub.
-   - Identify the exact root cause with `file:line` evidence in PDD's own source (`src/<module>.mjs:<line>`) and confirm the stable cause signature `<code>:<module>:<fn>`.
+   - Identify the exact root cause with `file:line` evidence in PDD's own source (`src/<module>.mjs:<line>`) and confirm the stable cause signature `<code>:<module>:<fn>`. Before returning a location, verify that the checked-out source defines the named function and that the line belongs to that function. Omit an unverified location.
 
 2. **Search existing issues**:
    - Check whether an open or recently closed issue in `promptdriven/pdd` already carries the same cause signature (`<!-- pdd:self-report:<code>:<module>:<fn> -->`).
