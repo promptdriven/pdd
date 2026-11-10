@@ -340,27 +340,300 @@ Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopi
 Register autopilot.doctor, prefix autopilot doctor, local autopilot-doctor, no operands or options. Advertise `pdd autopilot doctor` as read-only first-start diagnostics with no AI call. Preserve other forms.
 Completion offers `doctor` only after `autopilot`. The top-level `doctor` command remains unsupported, including its help forms.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-This data-only module has no callable export. Its immutable constants remain required consumer context. The full draft records the missing constant-observation binding as a question and claims no executable entry.
+Runtime transport: in Runtime checks, each exported constant is observed through a pure entry of the same name without adding native callable exports: `NAMES({key?})` returns `{test, lint, simulate, run, requestUptake}` (raising `unknown-command-name` when `key` is provided and not one of the five keys); `BUNDLED_WORKFLOW_NAMES({name?})` returns `{names}` (raising `unknown-workflow-name` when `name` is provided and not in `names`); `PUBLIC_HELP_TEXT({section?})` returns `{heading, closingLines, learnLines, promptingLines}` (raising `unknown-help-section` when `section` is provided and not one of those four fields); `PUBLIC_COMMAND_IDS({id})` returns `{hasId: true}` when `id` is a cataloged route id and raises `unknown-route-id` otherwise; `PUBLIC_COMMAND_ROUTES({id})` returns `{id, prefix, local, operands, options}` for the route matching `id` and raises `unknown-route-id` when absent; `PUBLIC_COMMAND_MANIFEST({form})` returns `{form, description}` for the manifest entry matching `form` and raises `unknown-help-form` when absent.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "0cade527400f6ae2f27692435811040f00a6ac86d173dbd0ec4910a94c2a8317",
-  "entries": [],
+  "prose_sha256": "a417dd4b675c0e38865318f12e229a87abf533366996a633c44d2ca21d8a43c9",
+  "entries": [
+    {
+      "operation": "NAMES",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "test": {
+            "type": "string"
+          },
+          "lint": {
+            "type": "string"
+          },
+          "simulate": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          },
+          "requestUptake": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "test",
+          "lint",
+          "simulate",
+          "run",
+          "requestUptake"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "unknown-command-name"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "BUNDLED_WORKFLOW_NAMES",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "names"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "unknown-workflow-name"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "PUBLIC_HELP_TEXT",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "heading": {
+            "type": "string"
+          },
+          "closingLines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "learnLines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "promptingLines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "heading",
+          "closingLines",
+          "learnLines",
+          "promptingLines"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "unknown-help-section"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "PUBLIC_COMMAND_IDS",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "hasId": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hasId"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "unknown-route-id"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "PUBLIC_COMMAND_ROUTES",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "local": {
+            "type": "string"
+          },
+          "operands": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "variadic": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "prefix",
+          "local",
+          "operands",
+          "options"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "unknown-route-id"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "PUBLIC_COMMAND_MANIFEST",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "form": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "form"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "form": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "form",
+          "description"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "unknown-help-form"
+      ],
+      "resource_operations": []
+    }
+  ],
   "calls": [],
   "resources": [],
   "limits": {
-    "max_steps": 64,
-    "max_model_calls": 16
+    "max_steps": 24,
+    "max_model_calls": 12
   },
-  "conventions": [],
-  "draft_gaps": [
-    "The public module exports immutable constants only. Which supported Runtime binding observes those exports without inventing a callable public operation? No constant-reader operation is declared."
-  ]
+  "conventions": []
 }
 ```
 </details>

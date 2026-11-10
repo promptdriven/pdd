@@ -1,0 +1,174 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/svg-layout-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A prompt whose controls, labels and layout regions match its linked `.ui.svg` drawing produces no warnings."
+    },
+    {
+      "id": "AC2",
+      "text": "Disagreements between a prompt and its linked `.ui.svg` drawing report missing controls, unmentioned drawing labels and unspecified drawing regions in deterministic order."
+    },
+    {
+      "id": "AC3",
+      "text": "A prompt linking to a missing `.ui.svg` drawing reports a drawing warning, and an invalid `pdd-workspace.json` fails with `workspace-config-invalid`."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/prompts/screen/clean.prompt.md": {
+        "content": "# Clean screen\n\nShow the BOARD region and a button with id=\"start-game\" labeled \"Start\".\n\n## Appearance\n\n![Clean screen](clean.ui.svg)\n\nUse `board` and `start-game`.\n",
+        "is_symlink": false
+      },
+      "/repo/prompts/screen/clean.ui.svg": {
+        "content": "<svg viewBox=\"0 0 200 100\"><g id=\"board\"><text>BOARD</text></g><g id=\"start-game\"><text>Start</text></g></svg>\n",
+        "is_symlink": false
+      },
+      "/repo/prompts/screen/mismatch.prompt.md": {
+        "content": "# Mismatch screen\n\nProvide a button with id=\"reset-btn\" and show the current score.\n\n![Mismatch screen](mismatch.ui.svg)\n",
+        "is_symlink": false
+      },
+      "/repo/prompts/screen/mismatch.ui.svg": {
+        "content": "<svg viewBox=\"0 0 200 100\"><g id=\"score\"><text>SCORE</text><text>READY</text></g></svg>\n",
+        "is_symlink": false
+      },
+      "/repo/prompts/screen/missing.prompt.md": {
+        "content": "# Missing drawing\n\n![Missing](absent.ui.svg)\n",
+        "is_symlink": false
+      },
+      "/bad-repo/pdd-workspace.json": {
+        "content": "{\"allowed_paths\":[\"../escape\"]}\n",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "lint-clean",
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "/repo",
+        "files": [
+          "prompts/screen/clean.prompt.md",
+          "prompts/screen/clean.ui.svg"
+        ],
+        "promptPaths": [
+          "prompts/screen/clean.prompt.md"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "lint-disagreements",
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "/repo",
+        "files": [
+          "prompts/screen/mismatch.prompt.md",
+          "prompts/screen/mismatch.ui.svg"
+        ],
+        "promptPaths": [
+          "prompts/screen/mismatch.prompt.md"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout prompts/screen/mismatch.prompt.md -> prompts/screen/mismatch.ui.svg: control \"reset-btn\": prompt control absent from drawing.",
+            "Warning: SVG layout prompts/screen/mismatch.prompt.md -> prompts/screen/mismatch.ui.svg: label \"READY\": drawing label absent from prompt.",
+            "Warning: SVG layout prompts/screen/mismatch.prompt.md -> prompts/screen/mismatch.ui.svg: region #score: drawing region layout unspecified in prompt."
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "lint-missing-drawing",
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "/repo",
+        "files": [
+          "prompts/screen/missing.prompt.md"
+        ],
+        "promptPaths": [
+          "prompts/screen/missing.prompt.md"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/warnings/0",
+          "op": "equals",
+          "value": "Warning: SVG layout prompts/screen/missing.prompt.md -> prompts/screen/absent.ui.svg: drawing: not a regular file."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "lint-invalid-workspace",
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "/bad-repo",
+        "files": [
+          "pdd-workspace.json",
+          "prompts/screen/clean.prompt.md"
+        ]
+      },
+      "expected_error": "workspace-config-invalid",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workspace-config-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

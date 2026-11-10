@@ -1,0 +1,291 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/runtime-bindings-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Inspecting a repository without `pdd-bindings.json` returns `available: false` with null counts and an empty module list."
+    },
+    {
+      "id": "AC2",
+      "text": "Inspecting a valid `pdd-bindings.json` reports bound and unbound modules intersecting selected Stories in declaration order."
+    },
+    {
+      "id": "AC3",
+      "text": "A malformed `pdd-bindings.json` declaration fails with `PreflightError`."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/pdd-bindings.json": {
+        "content": "{\"schema_version\":\"pdd.bindings.v1\",\"modules\":[{\"module\":\"src/hello.mjs\",\"stories\":[\"user_stories/hello.md\"],\"prompt\":\"prompts/hello.prompt.md\"},{\"module\":\"src/native.mjs\",\"stories\":[\"user_stories/hello.md\"],\"reason\":\"Uses OS kernel sockets\",\"port_attempt\":\"Socket lifecycle stays native\"}]}\n",
+        "is_symlink": false
+      },
+      "/repo/src/hello.mjs": {
+        "content": "export const sayHello = () => ({ ok: true });\n",
+        "is_symlink": false
+      },
+      "/repo/src/native.mjs": {
+        "content": "export const nativeSocket = () => null;\n",
+        "is_symlink": false
+      },
+      "/repo/user_stories/hello.md": {
+        "content": "# Hello\n\n## Acceptance criteria\n\n1. Greets the caller.\n",
+        "is_symlink": false
+      },
+      "/repo/prompts/hello.prompt.md": {
+        "content": "# Hello\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"709a72ce9a5337da7e65a2abca6ed2ed7a31db4d22e9cf11ca95ac43a813d673\",\"entries\":[{\"operation\":\"sayHello\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":8,\"max_model_calls\":4},\"conventions\":[]}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/bad-repo/pdd-bindings.json": {
+        "content": "{\"schema_version\":\"pdd.bindings.v1\",\"modules\":[{\"module\":\"src/hello.mjs\",\"stories\":[\"user_stories/missing.md\"],\"prompt\":\"prompts/hello.prompt.md\"}]}\n",
+        "is_symlink": false
+      },
+      "/bad-repo/src/hello.mjs": {
+        "content": "export const sayHello = () => ({ ok: true });\n",
+        "is_symlink": false
+      }
+    },
+    "git_files": [
+      {
+        "root": "/empty-repo",
+        "reply": {
+          "status": 0,
+          "files": [
+            "user_stories/hello.md"
+          ]
+        }
+      },
+      {
+        "root": "/repo",
+        "reply": {
+          "status": 0,
+          "files": [
+            "pdd-bindings.json",
+            "prompts/hello.prompt.md",
+            "src/hello.mjs",
+            "src/native.mjs",
+            "user_stories/hello.md"
+          ]
+        }
+      },
+      {
+        "root": "/bad-repo",
+        "reply": {
+          "status": 0,
+          "files": [
+            "pdd-bindings.json",
+            "src/hello.mjs"
+          ]
+        }
+      }
+    ]
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "git.listFiles": {
+      "action": "collection.get",
+      "world_pointer": "/git_files",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/root",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "files": []
+      },
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "absent-inventory",
+      "entry_path": "prompts/cli/runtime-bindings.prompt.md",
+      "operation": "bindingCoverage",
+      "input": {
+        "root": "/empty-repo",
+        "found": {
+          "visible": [
+            "user_stories/hello.md"
+          ],
+          "stories": [
+            {
+              "path": "user_stories/hello.md"
+            }
+          ]
+        },
+        "selected": [
+          {
+            "storyPath": "user_stories/hello.md",
+            "doc": {
+              "steps": [
+                {
+                  "entry_path": "prompts/hello.prompt.md"
+                }
+              ]
+            }
+          }
+        ],
+        "includeRuntime": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/bound",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/modules",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "valid-inventory",
+      "entry_path": "prompts/cli/runtime-bindings.prompt.md",
+      "operation": "bindingCoverage",
+      "input": {
+        "root": "/repo",
+        "found": {
+          "visible": [
+            "pdd-bindings.json",
+            "prompts/hello.prompt.md",
+            "src/hello.mjs",
+            "src/native.mjs",
+            "user_stories/hello.md"
+          ],
+          "stories": [
+            {
+              "path": "user_stories/hello.md"
+            }
+          ]
+        },
+        "selected": [
+          {
+            "storyPath": "user_stories/hello.md",
+            "doc": {
+              "steps": [
+                {
+                  "entry_path": "prompts/hello.prompt.md"
+                }
+              ]
+            }
+          }
+        ],
+        "includeRuntime": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/bound",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/modules",
+          "op": "equals",
+          "value": [
+            {
+              "path": "src/hello.mjs",
+              "state": "bound"
+            },
+            {
+              "path": "src/native.mjs",
+              "state": "unbound",
+              "reason": "Uses OS kernel sockets",
+              "port_attempt": "Socket lifecycle stays native"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "malformed-inventory",
+      "entry_path": "prompts/cli/runtime-bindings.prompt.md",
+      "operation": "bindingCoverage",
+      "input": {
+        "root": "/bad-repo",
+        "found": {
+          "visible": [
+            "pdd-bindings.json",
+            "src/hello.mjs"
+          ],
+          "stories": []
+        },
+        "selected": [],
+        "includeRuntime": false
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

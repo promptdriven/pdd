@@ -43,14 +43,903 @@ Native test commands for automatic approval are `node --test TEST...`, `npm test
 
 Use “Runtime interface” when naming the declaration in user messages, including its global approval status.
 
+In Runtime checks, `git.topLevel({cwd})` and `git.listFiles({root})` supply repository roots and Git-visible relative paths (a nonzero `git.listFiles` status or empty `root` raises `source-unavailable` on `missingInterfaces`, `interfaceFindings`, `cliInterfaceFindings` and `runtimeCoverage`), `files.stat({path})`, `files.read({path})` and `files.write({path, content})` inspect and update blobs under `<root>/<path>`, and `compute.hash_utf8({text})` computes `prose_sha256` digests. `contractCoverage({root, path})` raises `prompt-unreadable` when `<root>/<path>` is missing and returns `{sentences, questions}`; `coverageView({coverage})` raises `invalid-coverage-report` when `coverage.sentences` is null and returns `{lines, needsReview}`. `runInterfaceDraft({words, all, json, cwd, contract, extend, refresh})` raises `invalid-draft-cwd` when `cwd` is empty, writes output via `output.stdout({text})` and `output.stderr({text})`, and returns `{exitCode}`. `runAutomaticApproval({path, root, tests})` runs committed tests via `execution.runNativeTests({root, command})` and prompt checks via `execution.runPromptChecks({root, path})`, records approval via `approvals.recordAutomaticApproval({root, path, route})`, updates `<root>/<path>` via `files.write`, and returns `{approved, route}` (raising `automatic-approval-refused` when coverage needs review, tests or checks fail, or provenance is missing). Native TAP stream parsing and rollback across journal errors stay in `test/interface-draft.test.mjs` and `test/interface-drafting-route.test.mjs`.
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "be123042379062d6353601315fcd5fbb5ad1737574cf2a3c4c597a16e06f6108",
-  "reason": "Drafting and approval provenance require real Git-visible files, exact byte-preserving edits and native test subprocess evidence. Supplied port replies cannot prove those writes or source identities. Native evidence owners: test/interface-draft-completeness.test.mjs, test/interface-draft-diagnostics.test.mjs, test/interface-draft.test.mjs, test/interface-drafting-route.test.mjs."
+  "prose_sha256": "ffcde8b717bfa48f5d2669091f23b604bb50a2b8b75f062316faf0da7efe67d5",
+  "entries": [
+    {
+      "operation": "missingInterfaces",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "source-unavailable"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "interfaceFindings",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "path",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "findings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "source-unavailable"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "cliInterfaceFindings",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "path",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "findings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "source-unavailable"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "runtimeCoverage",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "checkable": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "native_only": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "checkable",
+          "total",
+          "native_only"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "source-unavailable"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "contractCoverage",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "sentences": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sentence": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "mapped",
+                    "unmapped",
+                    "conflicting"
+                  ]
+                },
+                "pointers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "sentence",
+                "status",
+                "pointers"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "pointer": {
+                  "type": "string"
+                },
+                "question": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pointer",
+                "question"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "sentences",
+          "questions"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "prompt-unreadable"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "coverageView",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "coverage": {
+            "type": "object",
+            "properties": {
+              "sentences": {
+                "oneOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "sentence": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "pointers": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "sentence",
+                        "status",
+                        "pointers"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "sentences"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "coverage"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "needsReview": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "lines",
+          "needsReview"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-coverage-report"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "runInterfaceDraft",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "all": {
+            "type": "boolean"
+          },
+          "json": {
+            "type": "boolean"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "contract": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extend": {
+            "type": "boolean"
+          },
+          "refresh": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "words",
+          "all",
+          "json",
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exitCode"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-draft-cwd"
+      ],
+      "resource_operations": [
+        "git.topLevel",
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write",
+        "compute.hash_utf8",
+        "output.stdout",
+        "output.stderr"
+      ]
+    },
+    {
+      "operation": "runAutomaticApproval",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "tests": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "root",
+          "tests"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "approved": {
+            "type": "boolean"
+          },
+          "route": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "approved",
+          "route"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "automatic-approval-refused"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "files.write",
+        "execution.runNativeTests",
+        "execution.runPromptChecks",
+        "approvals.recordAutomaticApproval"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "name": "stat"
+        },
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "name": "read"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "name": "write"
+        }
+      ]
+    },
+    {
+      "name": "git",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "root": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "root",
+              "stderr"
+            ],
+            "additionalProperties": false
+          },
+          "name": "topLevel"
+        },
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "status",
+              "files"
+            ],
+            "additionalProperties": false
+          },
+          "name": "listFiles"
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "name": "hash_utf8"
+        }
+      ]
+    },
+    {
+      "name": "execution",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "command"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "passed": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exitCode",
+              "passed",
+              "failed"
+            ],
+            "additionalProperties": false
+          },
+          "name": "runNativeTests"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "passed": {
+                "type": "boolean"
+              },
+              "stories": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "passed",
+              "stories"
+            ],
+            "additionalProperties": false
+          },
+          "name": "runPromptChecks"
+        }
+      ]
+    },
+    {
+      "name": "approvals",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "route": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "path",
+              "route"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "recordAutomaticApproval"
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "stdout"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "stderr"
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 28,
+    "max_model_calls": 14
+  },
+  "conventions": []
 }
 ```
 </details>

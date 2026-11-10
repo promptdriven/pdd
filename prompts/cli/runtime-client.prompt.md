@@ -1232,14 +1232,2114 @@ When a generic refusal does not identify a field, explain that the PDD interpret
 
 Every Git-visible, workspace-eligible `prompts/cli/*.prompt.md` must have one recognized Runtime interface declaration, including when lint selects a named Story. Before authentication or upload, both local and server lint refuse missing, duplicate, malformed JSON or unsupported-kind declarations with their existing interface codes and the draft recovery command. Full (including implicit full), partial and native-only declarations are admitted by this presence gate; native-only still requires its reason and remains not run. The workspace-wide gate checks declaration presence and kind only for unselected CLI prompts; preserve lazy semantic/hash/schema validation outside the selected closure. Default lint retains its complete workspace interface checks. Repository PR checks apply the same declaration requirement to every CLI prompt, so a newly added or changed undeclared prompt cannot pass. This local preparation is not a hosted lint pass.
 
+In Runtime checks, `git` (`topLevel`, `listFiles`) resolves repository roots and Git-visible paths; `files` (`stat`, `read`, `write`) accesses repository files, saved batches, Try records and case-import receipts; `gh.exec` runs `gh auth token` and `gh api user`; `http.request` executes `/v1/capacity`, `/v1/lint`, `/v1/check`, `/v1/runs/<id>` and `/v1/try` requests; `clock.now` supplies epoch milliseconds; `output` (`stdout`, `stderr`) records CLI output while `runCheck` and `runTry` return `{exitCode}`; `evidence_readers` (`store`, `load`) backs `SavedStoryEvidenceReader` handles returned by `createSavedStoryEvidenceReader` and invoked through `readSavedStoryEvidence`; `batch_locks` (`store`, `load`) backs `RuntimeBatchLock` handles returned by `acquireRuntimeBatchLock` and released through `releaseBatchLock`; and `write_ownership` (`store`, `load`) backs `CaseWriteOwnership` handles returned by `acquireCaseWriteOwnership` and released through `release`. Blank or invalid required inputs and unrecoverable lock/door/owner states raise the declared entry error (`invalid-runtime-input`, `invalid-health-input`, `invalid-history-input`, `invalid-evidence-input`, `invalid-reader-input`, `batch-lock-busy`, `batch-lock-invalid`, `ownership-unavailable`, `invalid-ownership-input`, `invalid-case-input`, `invalid-pending-input`, `door-call-refused`, `door-call-unknown`, `invalid-door-input`, `try-owner-unavailable`, or `invalid-owner-input`). Live HTTP sockets, `gh` subprocesses, OS signal handlers (`SIGINT`, `SIGHUP`, `SIGTERM`), exclusive `WX` lockfile `linkSync`/`fsync` atomicity, and browser/door process launchers stay in `test/runtime-client-leadfix.test.mjs` and `test/runtime-client-pause-stop.test.mjs`.
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
+  "schema_version": "prompt-runtime.interface.v2",
   "status": "draft",
-  "prose_sha256": "311636293d453060b29ba645b5c7324185dce122d8b62210bf1386cea83522e8",
-  "reason": "Live HTTP, credentials, cancellation, evidence persistence and sockets need native evidence first. Native evidence owners: test/runtime-client-leadfix.test.mjs, test/runtime-client-pause-stop.test.mjs."
+  "prose_sha256": "4c97bdf10cfd6fa44657ded7841520900781403e0ed799a5f895046585c6f4e7",
+  "instance_types": [
+    {
+      "name": "SavedStoryEvidenceReader",
+      "resource": "evidence_readers"
+    },
+    {
+      "name": "RuntimeBatchLock",
+      "resource": "batch_locks"
+    },
+    {
+      "name": "CaseWriteOwnership",
+      "resource": "write_ownership"
+    }
+  ],
+  "entries": [
+    {
+      "operation": "runCheck",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "--lint": {
+                "type": "boolean"
+              },
+              "--local": {
+                "type": "boolean"
+              },
+              "--json": {
+                "type": "boolean"
+              },
+              "--files": {
+                "type": "boolean"
+              },
+              "--fill-hash": {
+                "type": "boolean"
+              },
+              "--compact": {
+                "type": "boolean"
+              },
+              "--read": {
+                "type": "string"
+              },
+              "--max-calls": {
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cache": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exitCode"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-runtime-input"
+      ],
+      "resource_operations": [
+        "git.topLevel",
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write",
+        "gh.exec",
+        "http.request",
+        "clock.now",
+        "output.stdout",
+        "output.stderr",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "runTry",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "--new": {
+                "type": "boolean"
+              },
+              "--stop": {
+                "type": "boolean"
+              },
+              "--no-open": {
+                "type": "boolean"
+              },
+              "--no-wait": {
+                "type": "boolean"
+              },
+              "--max-calls": {
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exitCode"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-runtime-input"
+      ],
+      "resource_operations": [
+        "git.topLevel",
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write",
+        "gh.exec",
+        "http.request",
+        "clock.now",
+        "output.stdout",
+        "output.stderr",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "checkRuntimeHealth",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "PDD_RUNTIME_URL": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "unavailable",
+              "access"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "fix": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "detail"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-health-input"
+      ],
+      "resource_operations": [
+        "gh.exec",
+        "http.request",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "readContractHistory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stateDir": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "story_path": {
+                  "type": "string"
+                },
+                "baseline": {
+                  "type": "string",
+                  "enum": [
+                    "checked",
+                    "not-checked",
+                    "unavailable"
+                  ]
+                },
+                "checked_at": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "result_state": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "passed",
+                        "failed"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "sha256": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "sha256"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "references": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "consumer": {
+                        "type": "string"
+                      },
+                      "source_pointer": {
+                        "type": "string"
+                      },
+                      "target": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "value_json": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "consumer",
+                      "source_pointer",
+                      "target",
+                      "kind",
+                      "value_json"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "story_path",
+                "baseline",
+                "checked_at",
+                "result_state",
+                "files",
+                "references"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "stories",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-history-input"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "savedStoryEvidence",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "comparisonRoot": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stateDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "story": {
+                  "type": "string"
+                },
+                "pass": {
+                  "type": "boolean"
+                },
+                "current": {
+                  "type": "boolean"
+                },
+                "result": {
+                  "type": "string",
+                  "enum": [
+                    "✓",
+                    "no verdict"
+                  ]
+                },
+                "at": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "story",
+                "pass",
+                "current",
+                "result",
+                "at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "stories",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-evidence-input"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "createSavedStoryEvidenceReader",
+      "instance": {
+        "kind": "factory",
+        "type": "SavedStoryEvidenceReader",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "stateDir": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "stateDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-reader-input"
+      ],
+      "resource_operations": [
+        "evidence_readers.store"
+      ]
+    },
+    {
+      "operation": "readSavedStoryEvidence",
+      "instance": {
+        "kind": "method",
+        "type": "SavedStoryEvidenceReader",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "comparisonRoot": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "handle",
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "story": {
+                  "type": "string"
+                },
+                "pass": {
+                  "type": "boolean"
+                },
+                "current": {
+                  "type": "boolean"
+                },
+                "result": {
+                  "type": "string",
+                  "enum": [
+                    "✓",
+                    "no verdict"
+                  ]
+                },
+                "at": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "story",
+                "pass",
+                "current",
+                "result",
+                "at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "stories",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-evidence-input"
+      ],
+      "resource_operations": [
+        "evidence_readers.load",
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "acquireRuntimeBatchLock",
+      "instance": {
+        "kind": "factory",
+        "type": "RuntimeBatchLock",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "folder": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "batch-lock-busy",
+        "batch-lock-invalid"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "files.write",
+        "clock.now",
+        "batch_locks.store"
+      ]
+    },
+    {
+      "operation": "releaseBatchLock",
+      "instance": {
+        "kind": "method",
+        "type": "RuntimeBatchLock",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "released": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "released"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "batch-lock-invalid"
+      ],
+      "resource_operations": [
+        "batch_locks.load",
+        "batch_locks.store"
+      ]
+    },
+    {
+      "operation": "acquireCaseWriteOwnership",
+      "instance": {
+        "kind": "factory",
+        "type": "CaseWriteOwnership",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "testPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "handoff": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "root",
+          "testPath",
+          "handoff"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "ownership-unavailable",
+        "invalid-ownership-input"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "write_ownership.store"
+      ]
+    },
+    {
+      "operation": "release",
+      "instance": {
+        "kind": "method",
+        "type": "CaseWriteOwnership",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "released": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "released"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-ownership-input"
+      ],
+      "resource_operations": [
+        "write_ownership.load",
+        "write_ownership.store"
+      ]
+    },
+    {
+      "operation": "saveDoorCase",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "saved": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "test_path": {
+                "type": "string"
+              },
+              "step_id": {
+                "type": "string"
+              },
+              "entry_path": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "test_path",
+              "step_id",
+              "entry_path",
+              "operation"
+            ],
+            "additionalProperties": false
+          },
+          "isolated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "root",
+          "saved"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-case-input"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "saveDoorCaseResult",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "saved": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "test_path": {
+                "type": "string"
+              },
+              "step_id": {
+                "type": "string"
+              },
+              "entry_path": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "test_path",
+              "step_id",
+              "entry_path",
+              "operation"
+            ],
+            "additionalProperties": false
+          },
+          "isolated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "root",
+          "saved"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "case",
+              "failure"
+            ]
+          },
+          "state": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "conflict",
+                  "committed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-case-input"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "applyPendingCase",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pendingId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "writeOwnership": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "pendingId"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "conflict",
+              "committed"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "pendingId": {
+            "type": "string"
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recoveryPath": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "path",
+          "pendingId",
+          "reason",
+          "recoveryPath"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-pending-input"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write",
+        "write_ownership.load"
+      ]
+    },
+    {
+      "operation": "applyPendingCaseWithHandoff",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pendingId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "handoff": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "cwd",
+          "pendingId",
+          "handoff"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "case",
+              "failure"
+            ]
+          },
+          "state": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "conflict",
+                  "committed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "coverage": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "type": "string"
+                  },
+                  "covered": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "total": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "scope",
+                  "covered",
+                  "total"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "message",
+          "coverage"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-pending-input"
+      ],
+      "resource_operations": [
+        "git.topLevel",
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "runDoorCall",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "descriptor": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "login": {
+                "type": "string"
+              },
+              "promptPath": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "sessionId",
+              "origin",
+              "login",
+              "promptPath",
+              "operation"
+            ],
+            "additionalProperties": false
+          },
+          "input": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "descriptor",
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "program_result": {
+            "type": "string"
+          },
+          "calls": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "remaining_calls": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "program_result",
+          "calls",
+          "remaining_calls"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "door-call-refused",
+        "door-call-unknown",
+        "invalid-door-input"
+      ],
+      "resource_operations": [
+        "files.write",
+        "gh.exec",
+        "http.request",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "readTryOwner",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "story": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          },
+          "data_json": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data_error": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "root",
+          "test",
+          "sessionId",
+          "login",
+          "data_json",
+          "data_error"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "try-owner-unavailable",
+        "invalid-owner-input"
+      ],
+      "resource_operations": [
+        "git.topLevel",
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "gh.exec",
+        "http.request"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "evidence_readers",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "record": {
+                "type": "object",
+                "properties": {
+                  "stateDir": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stateDir"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "record"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "stateDir": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "stateDir"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "stateDir": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "stateDir"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "batch_locks",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "record": {
+                "type": "object",
+                "properties": {
+                  "folder": {
+                    "type": "string"
+                  },
+                  "active": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "folder",
+                  "active"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "record"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "folder": {
+                        "type": "string"
+                      },
+                      "active": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "folder",
+                      "active"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "folder": {
+                        "type": "string"
+                      },
+                      "active": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "folder",
+                      "active"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "write_ownership",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "record": {
+                "type": "object",
+                "properties": {
+                  "root": {
+                    "type": "string"
+                  },
+                  "testPath": {
+                    "type": "string"
+                  },
+                  "handoff": {
+                    "type": "string"
+                  },
+                  "active": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "root",
+                  "testPath",
+                  "handoff",
+                  "active"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "record"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "root": {
+                        "type": "string"
+                      },
+                      "testPath": {
+                        "type": "string"
+                      },
+                      "handoff": {
+                        "type": "string"
+                      },
+                      "active": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "root",
+                      "testPath",
+                      "handoff",
+                      "active"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "root": {
+                        "type": "string"
+                      },
+                      "testPath": {
+                        "type": "string"
+                      },
+                      "handoff": {
+                        "type": "string"
+                      },
+                      "active": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "root",
+                      "testPath",
+                      "handoff",
+                      "active"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "name": "stat"
+        },
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "name": "read"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "write"
+        }
+      ]
+    },
+    {
+      "name": "git",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "root": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "root",
+              "stderr"
+            ],
+            "additionalProperties": false
+          },
+          "name": "topLevel"
+        },
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "files",
+              "stderr"
+            ],
+            "additionalProperties": false
+          },
+          "name": "listFiles"
+        }
+      ]
+    },
+    {
+      "name": "gh",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "stdout",
+              "stderr"
+            ],
+            "additionalProperties": false
+          },
+          "name": "exec"
+        }
+      ]
+    },
+    {
+      "name": "http",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "method",
+              "url"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "body": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "body"
+            ],
+            "additionalProperties": false
+          },
+          "name": "request"
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "now",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "now": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "now"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "stdout"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "stderr"
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 16
+  },
+  "conventions": [
+    {
+      "path": "/entries/5/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/6/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/7/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/8/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/9/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/10/input_schema/properties/handle",
+      "convention": "handle"
+    }
+  ]
 }
 ```
 </details>

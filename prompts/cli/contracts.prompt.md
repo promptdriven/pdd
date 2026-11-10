@@ -102,18 +102,409 @@ write happens while merely listing or previewing.
   all bound-method inputs/results, and safe native reads.
 - [Runtime client](runtime-client.prompt.md#shared-contract-check-history):
   required generation and verification context for the local history API only.
-
-The native discovery/history/write effects are not bound by the expansion
-Runtime entry. Supplied blob replies do not prove host-file or history safety.
+- In Runtime checks, `runContracts({words, options, cwd})` raises `invalid-contracts-input` when `cwd` is empty, resolves the repository root via `git.topLevel({cwd})` and Git-visible paths via `git.listFiles({root})`, reads and writes `<root>/<path>` blobs via `files.stat({path})`, `files.read({path})` and `files.write({path, content})`, reads Check baselines via `history.contractHistory({root})`, writes lines (each ending with `\n`) via `output.stdout({text})` (`<target>  owner: <path>  users: <users|none>  Stories: <stories|none>`, `<target>: changed since the last check (<story>)`, `<story>: stale: needs a new check (last check <state>, <checked_at>)` or `current` or `not checked`, and for `sync`: `<path> <pointer> -> <target>; exact copy`, `Preview: <N> files. Use --write to apply.` or `Updated <path>` and `Sync: <changed> files updated, <failures> refused.`) and `output.stderr({text})`, and returns `{exitCode}`. Physical descriptor-level atomic rename and symlink-race checks stay in `test/contracts-verification.test.mjs`, `test/shared-contracts-native.test.mjs` and `test/shared-contracts.formal.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "61cef977ce95c9b8dcd7ce1dad57e1a879352fcbb41990582b345aa2857a7c8b",
-  "reason": "Strict source capture and write-time physical identity/migration need native evidence first. Native evidence owners: test/contracts-verification.test.mjs, test/shared-contracts-native.test.mjs, test/shared-contracts.formal.test.mjs."
+  "prose_sha256": "08a761ef159ce6a8a7c20dc7ab4e93467a7add58dd542a70fbce7eed36d0bf06",
+  "entries": [
+    {
+      "operation": "runContracts",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "--write": {
+                "type": "boolean"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "words",
+          "options",
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exitCode"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-contracts-input"
+      ],
+      "resource_operations": [
+        "git.topLevel",
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write",
+        "history.contractHistory",
+        "output.stdout",
+        "output.stderr"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "name": "stat"
+        },
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "name": "read"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "name": "write"
+        }
+      ]
+    },
+    {
+      "name": "git",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "root": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "root",
+              "stderr"
+            ],
+            "additionalProperties": false
+          },
+          "name": "topLevel"
+        },
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "status",
+              "files"
+            ],
+            "additionalProperties": false
+          },
+          "name": "listFiles"
+        }
+      ]
+    },
+    {
+      "name": "history",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "stories": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "story_path": {
+                      "type": "string"
+                    },
+                    "baseline": {
+                      "type": "string"
+                    },
+                    "result_state": {
+                      "type": "string"
+                    },
+                    "checked_at": {
+                      "type": "string"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "references": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "target": {
+                            "type": "string"
+                          },
+                          "value_json": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "target",
+                          "value_json"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "story_path",
+                    "baseline"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "stories",
+              "warnings"
+            ],
+            "additionalProperties": false
+          },
+          "name": "contractHistory"
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "stdout"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "stderr"
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 20,
+    "max_model_calls": 10
+  },
+  "conventions": []
 }
 ```
 </details>

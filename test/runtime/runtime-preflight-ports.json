@@ -1,0 +1,1156 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/runtime-preflight-ports.md",
+  "criteria": [
+    {
+      "id": "ac-1",
+      "text": "`storyCriteria`, `expectedTestPath`, `matchTests`, `discoveryRefusal`, `scenarioShapeRefusal`, `checkInput`, `interfaceKindProblems` and `interfaceSchemaProblems` parse Acceptance headings, pair Story and test paths by the test name rule, detect scenario and input problems, and validate Runtime interface kind, limits and schema rules."
+    },
+    {
+      "id": "ac-2",
+      "text": "`findTests`, `readPrompt`, `promptRefusal`, `promptSchemaRefusals`, `preflight` and `fillHashes` read Git-visible files through `git.listFiles` and `files`, compute SHA-256 prose hashes through `compute.hash_utf8`, report stale or invalid declarations and unchecked criteria, and update draft `prose_sha256` values through `files.write`."
+    },
+    {
+      "id": "ac-3",
+      "text": "`sourceFilePort` (`portStat`, `portRead`), `captureSource`, and `createStrictSourceAccess` (`strictSourceFilePort`, `strictFindTests`, `strictCaptureSource`) read bounded repository source, compute `raw_file_hashes` and `source_sha256`, and enforce the strict no-symlink rule on symlinked paths."
+    },
+    {
+      "id": "ac-4",
+      "text": "Invalid inputs, nonzero `git.listFiles` replies, secret paths, and strict symlink accesses raise the declared entry error (`invalid-story-source`, `invalid-story-path`, `invalid-match-input`, `invalid-test-descriptor`, `invalid-scenario-path`, `invalid-check-input`, `invalid-interface-input`, `invalid-prompt-descriptor`, or `PreflightError`)."
+    }
+  ],
+  "initial_world": {
+    "git_lists": [
+      {
+        "root": "/work/repo",
+        "reply": {
+          "status": 0,
+          "files": [
+            "prompts/order.prompt.md",
+            "test/runtime/place-order.json",
+            "user_stories/place-order.md"
+          ],
+          "stderr": ""
+        }
+      },
+      {
+        "root": "/work/broken-git",
+        "reply": {
+          "status": 128,
+          "files": [],
+          "stderr": "fatal: not a git repository"
+        }
+      }
+    ],
+    "source_ports": [],
+    "strict_access": [],
+    "files": {
+      "/work/repo/prompts/order.prompt.md": {
+        "content": "# Place order\n\nOwn `src/order.mjs`.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"77e767a2cb3701ff6670c8242837f11de9bc822d29b0f2484cbd24733d311d52\",\"entries\":[{\"operation\":\"placeOrder\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"sku\"],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"],\"additionalProperties\":false},\"errors\":[\"invalid-sku\"],\"resource_operations\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":4,\"max_model_calls\":2}}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/work/repo/prompts/stale.prompt.md": {
+        "content": "# Place order\n\nOwn `src/order.mjs`.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"entries\":[{\"operation\":\"placeOrder\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"sku\"],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"],\"additionalProperties\":false},\"errors\":[\"invalid-sku\"],\"resource_operations\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":4,\"max_model_calls\":2}}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/work/repo/user_stories/place-order.md": {
+        "content": "# Place an order\n\n## Acceptance criteria\n\n1. A valid SKU creates an order.\n2. An empty SKU is refused.\n",
+        "is_symlink": false
+      },
+      "/work/repo/test/runtime/place-order.json": {
+        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/place-order.md\",\"criteria\":[{\"id\":\"ac-1\",\"text\":\"A valid SKU creates an order.\"},{\"id\":\"ac-2\",\"text\":\"An empty SKU is refused.\"}],\"initial_world\":{},\"steps\":[{\"step_id\":\"place-valid\",\"entry_path\":\"prompts/order.prompt.md\",\"operation\":\"placeOrder\",\"input\":{\"sku\":\"BOOK-1\"},\"checks\":[{\"criterion_id\":\"ac-1\",\"target\":\"result\",\"path\":\"/orderId\",\"op\":\"equals\",\"value\":\"ORD-1\"}]},{\"step_id\":\"place-empty\",\"entry_path\":\"prompts/order.prompt.md\",\"operation\":\"placeOrder\",\"input\":{\"sku\":\"X\"},\"expected_error\":\"invalid-sku\",\"checks\":[{\"criterion_id\":\"ac-2\",\"target\":\"error\",\"path\":\"/code\",\"op\":\"equals\",\"value\":\"invalid-sku\"}]}]}",
+        "is_symlink": false
+      },
+      "/work/repo/prompts/linked.prompt.md": {
+        "content": "# Linked prompt\n",
+        "is_symlink": true
+      }
+    }
+  },
+  "simulation": {
+    "git.listFiles": {
+      "action": "collection.get",
+      "world_pointer": "/git_lists",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/root",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "files": [],
+        "stderr": "fatal: not a git repository"
+      },
+      "result_value_pointer": ""
+    },
+    "source_ports.store": {
+      "action": "collection.merge",
+      "world_pointer": "/source_ports",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/record",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "source_ports.load": {
+      "action": "collection.get",
+      "world_pointer": "/source_ports",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "strict_access.store": {
+      "action": "collection.merge",
+      "world_pointer": "/strict_access",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/record",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "strict_access.load": {
+      "action": "collection.get",
+      "world_pointer": "/strict_access",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "steps": [
+    {
+      "step_id": "story-criteria-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "storyCriteria",
+      "input": {
+        "source": "# Place an order\n\n## Acceptance criteria\n\n1. A valid SKU creates an order.\n2. An empty SKU is refused.\n"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/criteria",
+          "op": "equals",
+          "value": [
+            "A valid SKU creates an order.",
+            "An empty SKU is refused."
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "expected-test-path-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "expectedTestPath",
+      "input": {
+        "storyPath": "user_stories/place-order.md"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/path",
+          "op": "equals",
+          "value": "tests/place-order.json"
+        }
+      ]
+    },
+    {
+      "step_id": "match-tests-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "matchTests",
+      "input": {
+        "storyPaths": [
+          "user_stories/place-order.md",
+          "user_stories/refund.md"
+        ],
+        "files": [
+          "test/runtime/place-order.json",
+          "test/runtime/orphan.json"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/tests/0/path",
+          "op": "equals",
+          "value": "test/runtime/place-order.json"
+        },
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/untested/0/storyPath",
+          "op": "equals",
+          "value": "user_stories/refund.md"
+        },
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/orphans/0/path",
+          "op": "equals",
+          "value": "test/runtime/orphan.json"
+        }
+      ]
+    },
+    {
+      "step_id": "discovery-refusal-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "discoveryRefusal",
+      "input": {
+        "test": {
+          "path": "test/runtime/place-order.json",
+          "story": "place-order",
+          "storyPath": "user_stories/place-order.md",
+          "error": null,
+          "story_path": "user_stories/other.md"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/refusal/code",
+          "op": "equals",
+          "value": "pdd-story-mismatch"
+        }
+      ]
+    },
+    {
+      "step_id": "scenario-shape-refusal-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "scenarioShapeRefusal",
+      "input": {
+        "doc": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/place-order.md\",\"criteria\":[{\"id\":\"ac-1\",\"text\":\"A valid SKU creates an order.\"}],\"initial_world\":{},\"steps\":[]}",
+        "path": "test/runtime/place-order.json"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/refusal/code",
+          "op": "equals",
+          "value": "missing-steps"
+        }
+      ]
+    },
+    {
+      "step_id": "check-input-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "checkInput",
+      "input": {
+        "input": "{\"quantity\":0}",
+        "schema": "{\"type\":\"object\",\"properties\":{\"quantity\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20}},\"required\":[\"quantity\"],\"additionalProperties\":false}",
+        "index": 0
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/problems/0/code",
+          "op": "equals",
+          "value": "invalid-input"
+        }
+      ]
+    },
+    {
+      "step_id": "interface-kind-problems-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "interfaceKindProblems",
+      "input": {
+        "iface": "{\"kind\":\"native-only\",\"status\":\"draft\",\"prose_sha256\":\"\",\"reason\":\"\"}"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/problems/0/section",
+          "op": "equals",
+          "value": "/reason"
+        }
+      ]
+    },
+    {
+      "step_id": "interface-schema-problems-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "interfaceSchemaProblems",
+      "input": {
+        "iface": "{\"status\":\"draft\",\"prose_sha256\":\"\",\"entries\":[{\"operation\":\"run\",\"input_schema\":{\"type\":\"object\",\"properties\":{}},\"result_schema\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"errors\":[],\"resource_operations\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1}}"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/problems/0/code",
+          "op": "equals",
+          "value": "graph-schema-open-object"
+        }
+      ]
+    },
+    {
+      "step_id": "find-tests-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "findTests",
+      "input": {
+        "root": "/work/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/tests/0/path",
+          "op": "equals",
+          "value": "test/runtime/place-order.json"
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/stories/0/title",
+          "op": "equals",
+          "value": "Place an order"
+        }
+      ]
+    },
+    {
+      "step_id": "read-prompt-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "readPrompt",
+      "input": {
+        "root": "/work/repo",
+        "visible": [
+          "prompts/order.prompt.md"
+        ],
+        "path": "prompts/order.prompt.md"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/hash",
+          "op": "equals",
+          "value": "77e767a2cb3701ff6670c8242837f11de9bc822d29b0f2484cbd24733d311d52"
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/status",
+          "op": "equals",
+          "value": "draft"
+        }
+      ]
+    },
+    {
+      "step_id": "prompt-refusal-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "promptRefusal",
+      "input": {
+        "path": "prompts/stale.prompt.md",
+        "blockCount": 1,
+        "status": "draft",
+        "prose_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "hash": "77e767a2cb3701ff6670c8242837f11de9bc822d29b0f2484cbd24733d311d52",
+        "parseError": null,
+        "section": "steps[0].entry_path"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/refusal/code",
+          "op": "equals",
+          "value": "interface-stale"
+        }
+      ]
+    },
+    {
+      "step_id": "prompt-schema-refusals-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "promptSchemaRefusals",
+      "input": {
+        "root": "/work/repo",
+        "visible": [
+          "prompts/order.prompt.md"
+        ],
+        "path": "prompts/order.prompt.md"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/problems",
+          "op": "equals",
+          "value": []
+        }
+      ]
+    },
+    {
+      "step_id": "preflight-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "preflight",
+      "input": {
+        "root": "/work/repo",
+        "selected": [
+          "test/runtime/place-order.json"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/rows/0/status",
+          "op": "equals",
+          "value": "ready"
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/rows/0/draft",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/rows/0/criteria_total",
+          "op": "equals",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "step_id": "fill-hashes-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "fillHashes",
+      "input": {
+        "root": "/work/repo",
+        "files": [
+          "prompts/stale.prompt.md"
+        ],
+        "compact": false
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/filled",
+          "op": "equals",
+          "value": [
+            {
+              "path": "prompts/stale.prompt.md"
+            }
+          ]
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "world",
+          "path": "/files/~1work~1repo~1prompts~1stale.prompt.md/content",
+          "op": "contains",
+          "value": "77e767a2cb3701ff6670c8242837f11de9bc822d29b0f2484cbd24733d311d52"
+        }
+      ]
+    },
+    {
+      "step_id": "source-file-port-create",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "sourceFilePort",
+      "input": {
+        "root": "/work/repo",
+        "visible": [
+          "prompts/order.prompt.md",
+          "user_stories/place-order.md"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "world",
+          "path": "/source_ports/0/record/root",
+          "op": "equals",
+          "value": "/work/repo"
+        }
+      ]
+    },
+    {
+      "step_id": "source-file-port-stat",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "portStat",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "source-file-port-create",
+            "path": "/handle"
+          }
+        },
+        "path": "user_stories/place-order.md"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/exists",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/size",
+          "op": "equals",
+          "value": 103
+        }
+      ]
+    },
+    {
+      "step_id": "source-file-port-read",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "portRead",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "source-file-port-create",
+            "path": "/handle"
+          }
+        },
+        "path": "user_stories/place-order.md"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/content",
+          "op": "equals",
+          "value": "# Place an order\n\n## Acceptance criteria\n\n1. A valid SKU creates an order.\n2. An empty SKU is refused.\n"
+        }
+      ]
+    },
+    {
+      "step_id": "capture-source-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "captureSource",
+      "input": {
+        "root": "/work/repo",
+        "tests": [
+          "test/runtime/place-order.json"
+        ],
+        "appMap": null,
+        "attempts": 1
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/files/0/path",
+          "op": "equals",
+          "value": "prompts/order.prompt.md"
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/bytes",
+          "op": "equals",
+          "value": 1435
+        }
+      ]
+    },
+    {
+      "step_id": "strict-access-create",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "createStrictSourceAccess",
+      "input": {
+        "root": "/work/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "world",
+          "path": "/strict_access/0/record/strict",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "strict-source-file-port-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "strictSourceFilePort",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "strict-access-create",
+            "path": "/handle"
+          }
+        },
+        "visible": [
+          "prompts/order.prompt.md",
+          "prompts/linked.prompt.md"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/strict",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "strict-find-tests-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "strictFindTests",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "strict-access-create",
+            "path": "/handle"
+          }
+        },
+        "files": [
+          "prompts/order.prompt.md",
+          "test/runtime/place-order.json",
+          "user_stories/place-order.md"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/tests/0/path",
+          "op": "equals",
+          "value": "test/runtime/place-order.json"
+        }
+      ]
+    },
+    {
+      "step_id": "strict-capture-source-ok",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "strictCaptureSource",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "strict-access-create",
+            "path": "/handle"
+          }
+        },
+        "tests": [
+          "test/runtime/place-order.json"
+        ],
+        "appMap": null,
+        "attempts": 1
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/bytes",
+          "op": "equals",
+          "value": 1435
+        }
+      ]
+    },
+    {
+      "step_id": "story-criteria-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "storyCriteria",
+      "input": {
+        "source": "   "
+      },
+      "expected_error": "invalid-story-source",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-story-source"
+        }
+      ]
+    },
+    {
+      "step_id": "expected-test-path-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "expectedTestPath",
+      "input": {
+        "storyPath": "   "
+      },
+      "expected_error": "invalid-story-path",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-story-path"
+        }
+      ]
+    },
+    {
+      "step_id": "match-tests-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "matchTests",
+      "input": {
+        "storyPaths": [
+          ""
+        ],
+        "files": []
+      },
+      "expected_error": "invalid-match-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-match-input"
+        }
+      ]
+    },
+    {
+      "step_id": "discovery-refusal-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "discoveryRefusal",
+      "input": {
+        "test": {
+          "path": "",
+          "story": "place-order",
+          "storyPath": "user_stories/place-order.md"
+        }
+      },
+      "expected_error": "invalid-test-descriptor",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-test-descriptor"
+        }
+      ]
+    },
+    {
+      "step_id": "scenario-shape-refusal-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "scenarioShapeRefusal",
+      "input": {
+        "doc": "{}",
+        "path": "   "
+      },
+      "expected_error": "invalid-scenario-path",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-scenario-path"
+        }
+      ]
+    },
+    {
+      "step_id": "check-input-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "checkInput",
+      "input": {
+        "input": "{invalid",
+        "schema": "{}"
+      },
+      "expected_error": "invalid-check-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-check-input"
+        }
+      ]
+    },
+    {
+      "step_id": "interface-kind-problems-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "interfaceKindProblems",
+      "input": {
+        "iface": "{invalid"
+      },
+      "expected_error": "invalid-interface-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-interface-input"
+        }
+      ]
+    },
+    {
+      "step_id": "interface-schema-problems-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "interfaceSchemaProblems",
+      "input": {
+        "iface": "{invalid"
+      },
+      "expected_error": "invalid-interface-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-interface-input"
+        }
+      ]
+    },
+    {
+      "step_id": "find-tests-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "findTests",
+      "input": {
+        "root": "/work/broken-git"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "read-prompt-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "readPrompt",
+      "input": {
+        "root": "/work/repo",
+        "visible": [
+          "prompts/order.prompt.md"
+        ],
+        "path": ".env"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "prompt-refusal-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "promptRefusal",
+      "input": {
+        "path": "   ",
+        "blockCount": 1,
+        "hash": "77e767a2cb3701ff6670c8242837f11de9bc822d29b0f2484cbd24733d311d52",
+        "section": "steps[0].entry_path"
+      },
+      "expected_error": "invalid-prompt-descriptor",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-prompt-descriptor"
+        }
+      ]
+    },
+    {
+      "step_id": "prompt-schema-refusals-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "promptSchemaRefusals",
+      "input": {
+        "root": "/work/repo",
+        "visible": [
+          "prompts/order.prompt.md"
+        ],
+        "path": ".env"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "preflight-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "preflight",
+      "input": {
+        "root": "/work/broken-git"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "fill-hashes-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "fillHashes",
+      "input": {
+        "root": "/work/broken-git"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "source-file-port-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "sourceFilePort",
+      "input": {
+        "root": "/work/broken-git"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "source-file-port-stat-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "portStat",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "source-file-port-create",
+            "path": "/handle"
+          }
+        },
+        "path": ".env"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "source-file-port-read-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "portRead",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "source-file-port-create",
+            "path": "/handle"
+          }
+        },
+        "path": "missing.md"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "capture-source-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "captureSource",
+      "input": {
+        "root": "/work/broken-git"
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "strict-access-create-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "createStrictSourceAccess",
+      "input": {
+        "root": "   "
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "strict-source-file-port-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "strictSourceFilePort",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "strict-access-create",
+            "path": "/handle"
+          }
+        },
+        "visible": [
+          ".env"
+        ]
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "strict-find-tests-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "strictFindTests",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "strict-access-create",
+            "path": "/handle"
+          }
+        },
+        "files": [
+          ".env"
+        ]
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    },
+    {
+      "step_id": "strict-capture-source-error",
+      "entry_path": "prompts/cli/runtime-preflight.prompt.md",
+      "operation": "strictCaptureSource",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "strict-access-create",
+            "path": "/handle"
+          }
+        },
+        "tests": [
+          "prompts/linked.prompt.md"
+        ]
+      },
+      "expected_error": "PreflightError",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "PreflightError"
+        }
+      ]
+    }
+  ]
+}

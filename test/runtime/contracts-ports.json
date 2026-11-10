@@ -1,0 +1,356 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/contracts-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Running `pdd contracts` lists shared contract records, their prompt users and Stories, and reports Stories whose baseline reference snapshot changed as `stale: needs a new check`."
+    },
+    {
+      "id": "AC2",
+      "text": "Running `pdd contracts sync` previews matching schema copies without modifying files, and `pdd contracts sync --write` writes the updated prompt and reports the updated count."
+    },
+    {
+      "id": "AC3",
+      "text": "Invalid command syntax or running outside a Git repository writes a diagnostic to stderr and exits 2, and an empty `cwd` fails with `invalid-contracts-input`."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/contracts/order.md": {
+        "content": "### Order\n\n```json\n{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"},\"totalCents\":{\"type\":\"integer\"},\"currency\":{\"type\":\"string\"}},\"required\":[\"orderId\",\"totalCents\",\"currency\"],\"additionalProperties\":false}\n```\n",
+        "is_symlink": false
+      },
+      "/repo/prompts/order.prompt.md": {
+        "content": "# Order\n\n## Dependencies\n\n- [Order contract](../contracts/order.md)\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"2c64112c2635d73eb68a63f0796d83cd87fb03a8f15c83cb60e7fc9ff7e7f933\",\"entries\":[{\"operation\":\"placeOrder\",\"input_schema\":{\"$contract\":\"contracts/order.md#Order\"},\"result_schema\":{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":8,\"max_model_calls\":4},\"conventions\":[]}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/repo/prompts/copy.prompt.md": {
+        "content": "# Copy\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"4f4e45605ff9810cd85051f8c4ab478a20b56d8450d3411dfeb75303b14d9f16\",\"entries\":[{\"operation\":\"copyOrder\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"},\"totalCents\":{\"type\":\"integer\"},\"currency\":{\"type\":\"string\"}},\"required\":[\"orderId\",\"totalCents\",\"currency\"],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":8,\"max_model_calls\":4},\"conventions\":[]}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/repo/user_stories/order.md": {
+        "content": "# Place an order\n\n## Acceptance criteria\n\n1. Places the order.\n",
+        "is_symlink": false
+      },
+      "/repo/test/runtime/order.json": {
+        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/order.md\",\"criteria\":[{\"id\":\"AC1\",\"text\":\"Places the order.\"}],\"initial_world\":{},\"simulation\":{},\"context\":[],\"steps\":[{\"step_id\":\"place\",\"entry_path\":\"prompts/order.prompt.md\",\"operation\":\"placeOrder\",\"input\":{\"orderId\":\"ord-1\",\"totalCents\":500,\"currency\":\"USD\"},\"checks\":[{\"criterion_id\":\"AC1\",\"target\":\"result\",\"path\":\"/ok\",\"op\":\"equals\",\"value\":true}],\"model\":\"gpt-6.1-sol\"}]}\n",
+        "is_symlink": false
+      }
+    },
+    "git_top": [
+      {
+        "cwd": "/repo",
+        "reply": {
+          "status": 0,
+          "root": "/repo",
+          "stderr": ""
+        }
+      },
+      {
+        "cwd": "/outside",
+        "reply": {
+          "status": 128,
+          "root": "",
+          "stderr": "fatal: not a git repository"
+        }
+      }
+    ],
+    "git_files": [
+      {
+        "root": "/repo",
+        "reply": {
+          "status": 0,
+          "files": [
+            "contracts/order.md",
+            "prompts/copy.prompt.md",
+            "prompts/order.prompt.md",
+            "test/runtime/order.json",
+            "user_stories/order.md"
+          ]
+        }
+      }
+    ],
+    "history_by_root": [
+      {
+        "root": "/repo",
+        "reply": {
+          "stories": [
+            {
+              "story_path": "user_stories/order.md",
+              "baseline": "checked",
+              "result_state": "passed",
+              "checked_at": "2026-11-10T00:00:00Z",
+              "files": [
+                "contracts/order.md",
+                "prompts/order.prompt.md",
+                "test/runtime/order.json",
+                "user_stories/order.md"
+              ],
+              "references": [
+                {
+                  "kind": "contract",
+                  "target": "contracts/order.md#Order",
+                  "value_json": "{\"additionalProperties\":false,\"properties\":{\"orderId\":{\"type\":\"string\"},\"totalCents\":{\"type\":\"integer\"}},\"required\":[\"orderId\",\"totalCents\"],\"type\":\"object\"}"
+                }
+              ]
+            }
+          ],
+          "warnings": []
+        }
+      }
+    ],
+    "stdout": [],
+    "stderr": []
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {
+        "size": 0
+      },
+      "result_value_pointer": "/size"
+    },
+    "git.topLevel": {
+      "action": "collection.get",
+      "world_pointer": "/git_top",
+      "key_argument_pointer": "/cwd",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/cwd",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "root": "",
+        "stderr": ""
+      },
+      "result_value_pointer": ""
+    },
+    "git.listFiles": {
+      "action": "collection.get",
+      "world_pointer": "/git_files",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/root",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "files": []
+      },
+      "result_value_pointer": ""
+    },
+    "history.contractHistory": {
+      "action": "collection.get",
+      "world_pointer": "/history_by_root",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/root",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "stories": [],
+        "warnings": []
+      },
+      "result_value_pointer": ""
+    },
+    "output.stdout": {
+      "action": "port.write",
+      "world_pointer": "/stdout",
+      "result_template": {}
+    },
+    "output.stderr": {
+      "action": "port.write",
+      "world_pointer": "/stderr",
+      "result_template": {}
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "list-contracts",
+      "entry_path": "prompts/cli/contracts.prompt.md",
+      "operation": "runContracts",
+      "input": {
+        "words": [],
+        "options": {},
+        "cwd": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/stdout/0/text",
+          "op": "equals",
+          "value": "contracts/order.md#Order  owner: contracts/order.md  users: prompts/order.prompt.md  Stories: user_stories/order.md\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/stdout/1/text",
+          "op": "equals",
+          "value": "contracts/order.md#Order: changed since the last check (user_stories/order.md)\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/stdout/2/text",
+          "op": "equals",
+          "value": "user_stories/order.md: stale: needs a new check (last check passed, 2026-11-10T00:00:00Z)\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "sync-preview",
+      "entry_path": "prompts/cli/contracts.prompt.md",
+      "operation": "runContracts",
+      "input": {
+        "words": [
+          "sync"
+        ],
+        "options": {},
+        "cwd": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/stdout/3/text",
+          "op": "equals",
+          "value": "prompts/copy.prompt.md /entries/0/input_schema -> contracts/order.md#Order; exact copy\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/stdout/4/text",
+          "op": "equals",
+          "value": "Preview: 1 files. Use --write to apply.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "sync-write",
+      "entry_path": "prompts/cli/contracts.prompt.md",
+      "operation": "runContracts",
+      "input": {
+        "words": [
+          "sync"
+        ],
+        "options": {
+          "--write": true
+        },
+        "cwd": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/~1repo~1prompts~1copy.prompt.md/content",
+          "op": "contains",
+          "value": "\"$contract\":\"contracts/order.md#Order\""
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/stdout/7/text",
+          "op": "equals",
+          "value": "Sync: 1 files updated, 0 refused.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "outside-git",
+      "entry_path": "prompts/cli/contracts.prompt.md",
+      "operation": "runContracts",
+      "input": {
+        "words": [],
+        "options": {},
+        "cwd": "/outside"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/stderr/0/text",
+          "op": "equals",
+          "value": "pdd contracts works in a Git repository.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "invalid-cwd-error",
+      "entry_path": "prompts/cli/contracts.prompt.md",
+      "operation": "runContracts",
+      "input": {
+        "words": [],
+        "options": {},
+        "cwd": ""
+      },
+      "expected_error": "invalid-contracts-input",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-contracts-input"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

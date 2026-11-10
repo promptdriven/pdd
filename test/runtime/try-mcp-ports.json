@@ -1,0 +1,541 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/try-mcp-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`createTryTools` stores initial session state and `call` inspects, runs, checks and saves confirmed runs and retained pending cases through the client port."
+    },
+    {
+      "id": "AC2",
+      "text": "`runMcp` processes stdio JSON-RPC `initialize` and `ping` requests and writes newline-delimited responses to stdout."
+    },
+    {
+      "id": "AC3",
+      "text": "Empty working directories or invalid tool invocations fail with `invalid-try-tools-cwd`, `invalid-tool-call` and `invalid-mcp-cwd`."
+    }
+  ],
+  "initial_world": {
+    "instances": [],
+    "fixture_counters": {
+      "readTryOwner": 0,
+      "runDoorCall": 0,
+      "saveDoorCase": 0,
+      "applyPendingCaseWithHandoff": 0,
+      "readLines": 0
+    },
+    "stdout": [],
+    "stderr": []
+  },
+  "simulation": {
+    "instances.store": {
+      "action": "collection.merge",
+      "world_pointer": "/instances",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/state",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/state",
+      "result_template": {
+        "state": null
+      },
+      "result_value_pointer": "/state"
+    },
+    "instances.load": {
+      "action": "collection.get",
+      "world_pointer": "/instances",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/state",
+      "result_template": {
+        "state": null
+      },
+      "result_value_pointer": "/state"
+    },
+    "client.ownerRead": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/readTryOwner",
+      "cases": [
+        {
+          "args": {
+            "cwd": "/repo",
+            "story": "place-order"
+          },
+          "call_index": 1,
+          "result": {
+            "root": "/repo",
+            "tryId": "try-101",
+            "story": "Place an order",
+            "storyPath": "user_stories/place-order.md",
+            "testPath": "tests/place-order.json",
+            "criteria": [
+              {
+                "id": "AC1",
+                "text": "Places the order."
+              }
+            ],
+            "entries": [
+              "prompts/order.prompt.md#placeOrder"
+            ],
+            "world": {
+              "orders": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/repo",
+            "story": "place-order"
+          },
+          "call_index": 2,
+          "result": {
+            "root": "/repo",
+            "tryId": "try-101",
+            "story": "Place an order",
+            "storyPath": "user_stories/place-order.md",
+            "testPath": "tests/place-order.json",
+            "criteria": [
+              {
+                "id": "AC1",
+                "text": "Places the order."
+              }
+            ],
+            "entries": [
+              "prompts/order.prompt.md#placeOrder"
+            ],
+            "world": {
+              "orders": []
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/repo",
+            "story": "place-order"
+          },
+          "call_index": 3,
+          "result": {
+            "root": "/repo",
+            "tryId": "try-101",
+            "story": "Place an order",
+            "storyPath": "user_stories/place-order.md",
+            "testPath": "tests/place-order.json",
+            "criteria": [
+              {
+                "id": "AC1",
+                "text": "Places the order."
+              }
+            ],
+            "entries": [
+              "prompts/order.prompt.md#placeOrder"
+            ],
+            "world": {
+              "orders": [
+                "ord-1"
+              ]
+            }
+          }
+        },
+        {
+          "args": {
+            "cwd": "/repo",
+            "story": "place-order"
+          },
+          "call_index": 4,
+          "result": {
+            "root": "/repo",
+            "tryId": "try-101",
+            "story": "Place an order",
+            "storyPath": "user_stories/place-order.md",
+            "testPath": "tests/place-order.json",
+            "criteria": [
+              {
+                "id": "AC1",
+                "text": "Places the order."
+              }
+            ],
+            "entries": [
+              "prompts/order.prompt.md#placeOrder"
+            ],
+            "world": {
+              "orders": [
+                "ord-1"
+              ]
+            }
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "client.doorCall": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/runDoorCall",
+      "cases": [
+        {
+          "args": {
+            "sessionId": "try-101",
+            "entry": "prompts/order.prompt.md#placeOrder",
+            "input": {
+              "orderId": "ord-1"
+            }
+          },
+          "call_index": 1,
+          "result": {
+            "id": "run-1",
+            "result": {
+              "ok": true
+            },
+            "inputWorld": {
+              "orders": []
+            },
+            "world": {
+              "orders": [
+                "ord-1"
+              ]
+            }
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "client.caseSave": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/saveDoorCase",
+      "cases": [
+        {
+          "args": {
+            "root": "/repo",
+            "runId": "run-1",
+            "criterionId": "AC1"
+          },
+          "call_index": 1,
+          "result": {
+            "saved": "added tests/place-order.try-run-1.json"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "client.pendingApply": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/applyPendingCaseWithHandoff",
+      "cases": [
+        {
+          "args": {
+            "cwd": "/repo",
+            "pendingId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "testPath": "tests/place-order.json"
+          },
+          "call_index": 1,
+          "result": {
+            "committed": true,
+            "message": "applied tests/place-order.json",
+            "covered": 1,
+            "total": 1
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "stdio.readLines": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/readLines",
+      "cases": [
+        {
+          "args": {
+            "cwd": "/repo"
+          },
+          "call_index": 1,
+          "result": {
+            "lines": [
+              "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}",
+              "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}"
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "stdio.stdout": {
+      "action": "port.write",
+      "world_pointer": "/stdout",
+      "result_template": {}
+    },
+    "stdio.stderr": {
+      "action": "port.write",
+      "world_pointer": "/stderr",
+      "result_template": {}
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "create-tools",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "createTryTools",
+      "input": {
+        "cwd": "/repo",
+        "words": [
+          "place-order"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/instances/0/state/cwd",
+          "op": "equals",
+          "value": "/repo"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "call-state",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "call",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "create-tools",
+            "path": "/handle"
+          }
+        },
+        "name": "try_state",
+        "args": {
+          "story": "place-order"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/result/try_id",
+          "op": "equals",
+          "value": "try-101"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/fixture_counters/readTryOwner",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "call-run",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "call",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "create-tools",
+            "path": "/handle"
+          }
+        },
+        "name": "try_run",
+        "args": {
+          "story": "place-order",
+          "entry": "prompts/order.prompt.md#placeOrder",
+          "input": {
+            "orderId": "ord-1"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/result/run_id",
+          "op": "equals",
+          "value": "run-1"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/fixture_counters/runDoorCall",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "call-save",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "call",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "create-tools",
+            "path": "/handle"
+          }
+        },
+        "name": "try_save_case",
+        "args": {
+          "story": "place-order",
+          "run_id": "run-1",
+          "criterion_id": "AC1"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/result/saved",
+          "op": "equals",
+          "value": "added tests/place-order.try-run-1.json"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/fixture_counters/saveDoorCase",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "call-apply-pending",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "call",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "create-tools",
+            "path": "/handle"
+          }
+        },
+        "name": "try_save_case",
+        "args": {
+          "pending_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "closed_editor_for": "tests/place-order.json"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/result/message",
+          "op": "equals",
+          "value": "applied tests/place-order.json"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/fixture_counters/applyPendingCaseWithHandoff",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-mcp-ok",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "runMcp",
+      "input": {
+        "cwd": "/repo",
+        "words": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/stdout/0/text",
+          "op": "contains",
+          "value": "\"protocolVersion\":\"2025-06-18\""
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/stdout/1/text",
+          "op": "contains",
+          "value": "\"id\":2"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "create-tools-error",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "createTryTools",
+      "input": {
+        "cwd": "",
+        "words": []
+      },
+      "expected_error": "invalid-try-tools-cwd",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-try-tools-cwd"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "call-error",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "call",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "create-tools",
+            "path": "/handle"
+          }
+        },
+        "name": "unknown_tool",
+        "args": {}
+      },
+      "expected_error": "invalid-tool-call",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-tool-call"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-mcp-error",
+      "entry_path": "prompts/cli/try-mcp.prompt.md",
+      "operation": "runMcp",
+      "input": {
+        "cwd": "",
+        "words": []
+      },
+      "expected_error": "invalid-mcp-cwd",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-mcp-cwd"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

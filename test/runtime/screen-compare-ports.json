@@ -1,0 +1,392 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/screen-compare-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Comparing a rendered page whose visible ids, labels, regions and spatial order match its `.ui.svg` reference passes every required row."
+    },
+    {
+      "id": "AC2",
+      "text": "Comparing a rendered page with a misplaced region and a missing scoped label reports `region` and `missing` rows and sets `passed` to false."
+    },
+    {
+      "id": "AC3",
+      "text": "Unsafe `.ui.svg` reference markup fails with `unsafe-reference-svg`, and an invalid comparison report fails formatting with `invalid-comparison-report`."
+    },
+    {
+      "id": "AC4",
+      "text": "Formatting a comparison report produces a Markdown `Screen vs drawing` table that escapes special characters in labels."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/prompts/screen/board.ui.svg": {
+        "content": "<svg viewBox=\"0 0 200 100\"><g id=\"score-box\"><text>SCORE</text></g></svg>\n",
+        "is_symlink": false
+      },
+      "/repo/prompts/screen/unsafe.ui.svg": {
+        "content": "<svg viewBox=\"0 0 200 100\"><script>alert(1)</script><g id=\"score-box\"><text>SCORE</text></g></svg>\n",
+        "is_symlink": false
+      }
+    },
+    "fixture_counters": {
+      "render": 0
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "browser.render": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/render",
+      "cases": [
+        {
+          "args": {
+            "url": "http://127.0.0.1:4173/pass",
+            "drawing": "/repo/prompts/screen/board.ui.svg",
+            "chromePath": "/usr/bin/chromium"
+          },
+          "call_index": 1,
+          "result": {
+            "viewport": {
+              "width": 200,
+              "height": 100
+            },
+            "reference": [
+              {
+                "kind": "id",
+                "value": "score-box",
+                "visible": true,
+                "ownerId": null,
+                "bounds": {
+                  "x": 20,
+                  "y": 10,
+                  "width": 60,
+                  "height": 40
+                }
+              },
+              {
+                "kind": "text",
+                "value": "SCORE",
+                "visible": true,
+                "ownerId": "score-box",
+                "bounds": {
+                  "x": 30,
+                  "y": 20,
+                  "width": 40,
+                  "height": 20
+                }
+              }
+            ],
+            "actual": [
+              {
+                "kind": "id",
+                "value": "score-box",
+                "visible": true,
+                "ownerId": null,
+                "bounds": {
+                  "x": 20,
+                  "y": 10,
+                  "width": 60,
+                  "height": 40
+                }
+              },
+              {
+                "kind": "text",
+                "value": "SCORE",
+                "visible": true,
+                "ownerId": "score-box",
+                "bounds": {
+                  "x": 30,
+                  "y": 20,
+                  "width": 40,
+                  "height": 20
+                }
+              }
+            ]
+          }
+        },
+        {
+          "args": {
+            "url": "http://127.0.0.1:4173/mismatch",
+            "drawing": "/repo/prompts/screen/board.ui.svg",
+            "chromePath": "/usr/bin/chromium"
+          },
+          "call_index": 2,
+          "result": {
+            "viewport": {
+              "width": 200,
+              "height": 100
+            },
+            "reference": [
+              {
+                "kind": "id",
+                "value": "score-box",
+                "visible": true,
+                "ownerId": null,
+                "bounds": {
+                  "x": 20,
+                  "y": 10,
+                  "width": 60,
+                  "height": 40
+                }
+              },
+              {
+                "kind": "text",
+                "value": "SCORE",
+                "visible": true,
+                "ownerId": "score-box",
+                "bounds": {
+                  "x": 30,
+                  "y": 20,
+                  "width": 40,
+                  "height": 20
+                }
+              }
+            ],
+            "actual": [
+              {
+                "kind": "id",
+                "value": "score-box",
+                "visible": true,
+                "ownerId": null,
+                "bounds": {
+                  "x": 140,
+                  "y": 10,
+                  "width": 40,
+                  "height": 40
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "compare-pass",
+      "entry_path": "prompts/cli/screen-compare.prompt.md",
+      "operation": "compareScreen",
+      "input": {
+        "url": "http://127.0.0.1:4173/pass",
+        "drawingPath": "prompts/screen/board.ui.svg",
+        "cwd": "/repo",
+        "chromePath": "/usr/bin/chromium"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/passed",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/rows",
+          "op": "equals",
+          "value": [
+            {
+              "part": "#score-box",
+              "kind": "id",
+              "expected": "#score-box (0.25, 0.30)",
+              "actual": "#score-box at (0.25, 0.30)",
+              "status": "pass"
+            },
+            {
+              "part": "\"SCORE\"",
+              "kind": "text",
+              "expected": "\"SCORE\" (0.25, 0.30)",
+              "actual": "\"SCORE\" at (0.25, 0.30)",
+              "status": "pass"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/fixture_counters/render",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "compare-failures",
+      "entry_path": "prompts/cli/screen-compare.prompt.md",
+      "operation": "compareScreen",
+      "input": {
+        "url": "http://127.0.0.1:4173/mismatch",
+        "drawingPath": "prompts/screen/board.ui.svg",
+        "cwd": "/repo",
+        "chromePath": "/usr/bin/chromium"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/passed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/rows/0",
+          "op": "equals",
+          "value": {
+            "part": "#score-box",
+            "kind": "id",
+            "expected": "#score-box (0.25, 0.30)",
+            "actual": "#score-box at (0.80, 0.30)",
+            "status": "region"
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/rows/1",
+          "op": "equals",
+          "value": {
+            "part": "\"SCORE\"",
+            "kind": "text",
+            "expected": "\"SCORE\" (0.25, 0.30)",
+            "actual": "not found",
+            "status": "missing"
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/fixture_counters/render",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "compare-unsafe-svg",
+      "entry_path": "prompts/cli/screen-compare.prompt.md",
+      "operation": "compareScreen",
+      "input": {
+        "url": "http://127.0.0.1:4173/pass",
+        "drawingPath": "prompts/screen/unsafe.ui.svg",
+        "cwd": "/repo",
+        "chromePath": "/usr/bin/chromium"
+      },
+      "expected_error": "unsafe-reference-svg",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "unsafe-reference-svg"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "format-table",
+      "entry_path": "prompts/cli/screen-compare.prompt.md",
+      "operation": "formatScreenComparison",
+      "input": {
+        "report": {
+          "drawing": "/repo/prompts/screen/board.ui.svg",
+          "url": "http://127.0.0.1:4173/pass",
+          "viewport": {
+            "width": 200,
+            "height": 100
+          },
+          "rows": [
+            {
+              "part": "\"SCORE | <100>\"",
+              "kind": "text",
+              "expected": "\"SCORE | <100>\" (0.25, 0.30)",
+              "actual": "\"SCORE | <100>\" at (0.25, 0.30)",
+              "status": "pass"
+            }
+          ],
+          "passed": true
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/markdown",
+          "op": "not_equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/markdown",
+          "op": "contains",
+          "value": "- Verdict: PASS"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/markdown",
+          "op": "contains",
+          "value": "| \"SCORE \\| &lt;100&gt;\" | text |"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "format-invalid-report",
+      "entry_path": "prompts/cli/screen-compare.prompt.md",
+      "operation": "formatScreenComparison",
+      "input": {
+        "report": {
+          "drawing": "/repo/prompts/screen/board.ui.svg",
+          "url": "http://127.0.0.1:4173/pass",
+          "viewport": null,
+          "rows": null,
+          "passed": false
+        }
+      },
+      "expected_error": "invalid-comparison-report",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-comparison-report"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

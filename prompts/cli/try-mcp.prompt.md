@@ -83,16 +83,14 @@ Preserve the current isolated observed-world save operation. It still uses the n
 - [Agent judge](agent-judge.prompt.md): required generation/runtime context for per-run comparison and progress.
 - [Prompting guide](../../docs/prompting-guide.md): required authoring context.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-The factory stores its captured configuration and cumulative state in instances using the executor-issued handle. Methods load that state; mutating methods store the updated state under the same handle. The handle is only the transport identity of the existing closure, not a new native argument. Only createTryTools and call("try_open"/"try_state", args) are declared. The actual readTryOwner dependency supplies the owner result; createRunJudge and its bindings/snapshot methods supply local judgment context. Calls use the judge’s opaque factory handle. All try_run/try_check/try_save_case behavior, stdio framing, authentic owner custody, live HTTP/budget effects and filesystem transactions remain native. No callback reply establishes a live effect or closed-editor confirmation. Native evidence owners: test/try-mcp.test.mjs.
+Runtime transport: in Runtime checks, `createTryTools({cwd, words})` is a `prompt-runtime.interface.v2` `TryTools` factory (raising `invalid-try-tools-cwd` when `cwd` is empty) that stores `{cwd, words, runs: [], unknown: false}` via `instances.store({handle, state})` under the executor-issued `instance_handle` and returns `{handle}`. Instance method `call({handle, name, args})` loads state via `instances.load({handle})`, validates `name` and `args` (raising `invalid-tool-call` on unknown tools, invalid arguments, unknown entries, blocked `unknown` sessions, missing runs or failed pending application), delegates `try_save_case` with `pending_id` and `closed_editor_for` to `client.pendingApply({cwd, pendingId, testPath})`, otherwise reads the Try owner via `client.ownerRead({cwd, story})`, dispatches `try_run` via `client.doorCall({sessionId, entry, input})`, saves confirmed runs via `client.caseSave({root, runId, criterionId})`, updates instance state via `instances.store({handle, state})`, and returns `{result}` containing the tool response object. `runMcp({cwd, words})` raises `invalid-mcp-cwd` when `cwd` is empty, reads JSON-RPC input lines via `stdio.readLines({cwd})`, writes JSON-RPC responses (each ending with `\n`) via `stdio.stdout({text})` and progress/diagnostics via `stdio.stderr({text})`, and returns `{exitCode: 0}`. Native readline stream lifecycle and interval timers stay in `test/try-mcp.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "7db4b6932adb58da54ed341f52541f35078ea84ac8ccc721514241bed5ad3a09",
+  "prose_sha256": "11884aa5769f109307178e3186512c58ce118705cddec07554dadf00c13590aa",
   "entries": [
     {
       "operation": "createTryTools",
@@ -107,13 +105,12 @@ The factory stores its captured configuration and cumulative state in instances 
             "items": {
               "type": "string"
             }
-          },
-          "env": {
-            "type": "string",
-            "description": "JSON text encoding of the environment. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
           }
         },
-        "required": [],
+        "required": [
+          "cwd",
+          "words"
+        ],
         "additionalProperties": false
       },
       "result_schema": {
@@ -128,7 +125,9 @@ The factory stores its captured configuration and cumulative state in instances 
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid-try-tools-cwd"
+      ],
       "instance": {
         "kind": "factory",
         "type": "TryTools",
@@ -147,16 +146,46 @@ The factory stores its captured configuration and cumulative state in instances 
             "type": "string"
           },
           "name": {
-            "type": "string",
-            "enum": [
-              "try_open",
-              "try_state"
-            ]
+            "type": "string"
           },
           "args": {
             "type": "object",
             "properties": {
               "story": {
+                "type": "string"
+              },
+              "entry": {
+                "type": "string"
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "orderId": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "argv": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "criterion_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "pending_id": {
+                "type": "string"
+              },
+              "closed_editor_for": {
                 "type": "string"
               }
             },
@@ -174,17 +203,55 @@ The factory stores its captured configuration and cumulative state in instances 
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the MCP tool result. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          "result": {
+            "type": "object",
+            "properties": {
+              "try_id": {
+                "type": "string"
+              },
+              "story": {
+                "type": "string"
+              },
+              "story_path": {
+                "type": "string"
+              },
+              "test_path": {
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "passed": {
+                "type": "boolean"
+              },
+              "saved": {
+                "type": "string"
+              },
+              "committed": {
+                "type": "boolean"
+              },
+              "message": {
+                "type": "string"
+              },
+              "covered": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
           }
         },
         "required": [
-          "value"
+          "result"
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid-tool-call"
+      ],
       "instance": {
         "kind": "method",
         "type": "TryTools",
@@ -193,30 +260,56 @@ The factory stores its captured configuration and cumulative state in instances 
       "resource_operations": [
         "instances.load",
         "instances.store",
-        "client.readTryOwner"
+        "client.ownerRead",
+        "client.doorCall",
+        "client.caseSave",
+        "client.pendingApply"
+      ]
+    },
+    {
+      "operation": "runMcp",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "cwd",
+          "words"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exitCode"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-mcp-cwd"
+      ],
+      "resource_operations": [
+        "stdio.readLines",
+        "stdio.stdout",
+        "stdio.stderr"
       ]
     }
   ],
-  "calls": [
-    {
-      "operation": "createRunJudge",
-      "target": "prompts/cli/agent-judge.prompt.md",
-      "target_operation": "createRunJudge",
-      "max_calls": 16
-    },
-    {
-      "operation": "bindings",
-      "target": "prompts/cli/agent-judge.prompt.md",
-      "target_operation": "bindings",
-      "max_calls": 16
-    },
-    {
-      "operation": "snapshot",
-      "target": "prompts/cli/agent-judge.prompt.md",
-      "target_operation": "snapshot",
-      "max_calls": 16
-    }
-  ],
+  "calls": [],
   "resources": [
     {
       "name": "instances",
@@ -224,7 +317,6 @@ The factory stores its captured configuration and cumulative state in instances 
       "access": "write",
       "operations": [
         {
-          "name": "store",
           "access": "write",
           "arguments_schema": {
             "type": "object",
@@ -232,51 +324,71 @@ The factory stores its captured configuration and cumulative state in instances 
               "handle": {
                 "type": "string"
               },
-              "config": {
+              "state": {
                 "type": "object",
                 "properties": {
-                  "state": {
-                    "type": "string",
-                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "words": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "runs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {},
+                      "required": []
+                    }
+                  },
+                  "unknown": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
-                  "state"
+                  "cwd",
+                  "words",
+                  "runs",
+                  "unknown"
                 ],
                 "additionalProperties": false
               }
             },
             "required": [
               "handle",
-              "config"
+              "state"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "config": {
-                "type": "object",
-                "properties": {
-                  "state": {
-                    "type": "string",
-                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "state": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
                   }
-                },
-                "required": [
-                  "state"
-                ],
-                "additionalProperties": false
+                ]
               }
             },
             "required": [
-              "config"
+              "state"
             ],
             "additionalProperties": false
-          }
+          },
+          "name": "store"
         },
         {
-          "name": "load",
           "access": "read",
           "arguments_schema": {
             "type": "object",
@@ -293,36 +405,63 @@ The factory stores its captured configuration and cumulative state in instances 
           "result_schema": {
             "type": "object",
             "properties": {
-              "config": {
-                "type": "object",
-                "properties": {
-                  "state": {
-                    "type": "string",
-                    "description": "JSON text encoding of the factory configuration and cumulative private instance state. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "state": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "cwd": {
+                        "type": "string"
+                      },
+                      "words": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "runs": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {},
+                          "required": []
+                        }
+                      },
+                      "unknown": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "cwd",
+                      "words",
+                      "runs",
+                      "unknown"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
                   }
-                },
-                "required": [
-                  "state"
-                ],
-                "additionalProperties": false
+                ]
               }
             },
             "required": [
-              "config"
+              "state"
             ],
             "additionalProperties": false
-          }
+          },
+          "name": "load"
         }
       ]
     },
     {
       "name": "client",
       "kind": "port",
-      "access": "read",
+      "access": "write",
       "operations": [
         {
-          "name": "readTryOwner",
-          "access": "read",
+          "access": "write",
           "arguments_schema": {
             "type": "object",
             "properties": {
@@ -334,6 +473,265 @@ The factory stores its captured configuration and cumulative state in instances 
               }
             },
             "required": [
+              "cwd",
+              "story"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "tryId": {
+                "type": "string"
+              },
+              "story": {
+                "type": "string"
+              },
+              "storyPath": {
+                "type": "string"
+              },
+              "testPath": {
+                "type": "string"
+              },
+              "criteria": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "world": {
+                "type": "object",
+                "properties": {
+                  "orders": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "root",
+              "tryId",
+              "story",
+              "storyPath",
+              "testPath",
+              "criteria",
+              "entries",
+              "world"
+            ],
+            "additionalProperties": false
+          },
+          "name": "ownerRead"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string"
+              },
+              "entry": {
+                "type": "string"
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "orderId": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "sessionId",
+              "entry",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "result": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "inputWorld": {
+                "type": "object",
+                "properties": {
+                  "orders": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "world": {
+                "type": "object",
+                "properties": {
+                  "orders": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "result",
+              "inputWorld",
+              "world"
+            ],
+            "additionalProperties": false
+          },
+          "name": "doorCall"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "runId": {
+                "type": "string"
+              },
+              "criterionId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "runId",
+              "criterionId"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "saved": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "saved"
+            ],
+            "additionalProperties": false
+          },
+          "name": "caseSave"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "pendingId": {
+                "type": "string"
+              },
+              "testPath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "pendingId",
+              "testPath"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "committed": {
+                "type": "boolean"
+              },
+              "message": {
+                "type": "string"
+              },
+              "covered": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "committed",
+              "message",
+              "covered",
+              "total"
+            ],
+            "additionalProperties": false
+          },
+          "name": "pendingApply"
+        }
+      ]
+    },
+    {
+      "name": "stdio",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
               "cwd"
             ],
             "additionalProperties": false
@@ -341,34 +739,70 @@ The factory stores its captured configuration and cumulative state in instances 
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the existing owner reply including root, record, test, model, data, data_error and actions. Decode the complete public value before use."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "lines": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [
-              "value",
-              "error"
+              "lines"
             ],
             "additionalProperties": false
-          }
+          },
+          "name": "readLines"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "stdout"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "stderr"
         }
       ]
     }
   ],
   "limits": {
-    "max_steps": 64,
-    "max_model_calls": 16
+    "max_steps": 24,
+    "max_model_calls": 12
   },
   "conventions": [
     {
@@ -386,8 +820,7 @@ The factory stores its captured configuration and cumulative state in instances 
       "name": "TryTools",
       "resource": "instances"
     }
-  ],
-  "kind": "partial"
+  ]
 }
 ```
 </details>

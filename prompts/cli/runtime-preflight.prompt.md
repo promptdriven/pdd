@@ -443,29 +443,394 @@ The root inventory is an explicit exception to source-link acceptance: keep `pdd
 
 Binding-boundary repair messages call the declaration a Runtime interface boundary. Keep the service name PDD interpreter and preserve machine-read refusal codes.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-Only JSON/schema/kind decisions and text criterion parsing are declared. Discovery, safe source reads, hash filling, tar capture, physical path/workspace identity and CLI preparation remain native. Native evidence owners: test/agent-project.test.mjs, test/agent-waits-in-one-call.test.mjs, test/approval-chat.test.mjs, test/approval-hash-only.test.mjs, test/approval-lead-fixes.test.mjs, test/autopilot-factory.e2e.test.mjs, test/autopilot-pr1-gate.test.mjs, test/bounded-authored-source.vectors.test.mjs.
+In Runtime checks, `git.listFiles({root})` supplies Git-visible repository-relative paths (a nonzero status raises `PreflightError`); `files` (`stat`, `read`, `write`) accesses repository files under `<root>/<path>`; `compute.hash_utf8` computes SHA-256 digests (`prose_sha256`, `raw_file_hashes` as `{path, sha256}` rows, and `source_sha256`); `source_ports` (`store`, `load`) holds `SourceFilePort` handles returned by `sourceFilePort` for its `portStat` and `portRead` methods; and `strict_access` (`store`, `load`) holds `StrictSourceAccess` handles returned by `createStrictSourceAccess` for its bound `strictSourceFilePort`, `strictFindTests` and `strictCaptureSource` methods (`strict` mode refuses any path where `files.stat` reports `is_symlink: true` with `PreflightError`). Blank or invalid required inputs raise the entry's declared error (`invalid-story-source`, `invalid-story-path`, `invalid-match-input`, `invalid-test-descriptor`, `invalid-scenario-path`, `invalid-check-input`, `invalid-interface-input`, `invalid-prompt-descriptor`, or `PreflightError`). Physical symlink ancestor races, file-descriptor `fstat` identity binding, and binary ustar/PAX tar encoding stay in `test/bounded-authored-source.vectors.test.mjs` and `test/runtime-source-markdown-code.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
+  "schema_version": "prompt-runtime.interface.v2",
   "status": "draft",
-  "prose_sha256": "53a08edc005779bd278346c36bc261d1e69800788d2905db2521cb85ebe6d5c5",
+  "prose_sha256": "0e94240d2569fb7e38f736ea3a129e209c17e7699f419498d50295c4e6da357a",
+  "instance_types": [
+    {
+      "name": "SourceFilePort",
+      "resource": "source_ports"
+    },
+    {
+      "name": "StrictSourceAccess",
+      "resource": "strict_access"
+    }
+  ],
   "entries": [
+    {
+      "operation": "storyCriteria",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "criteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "criteria"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-story-source"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "expectedTestPath",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "storyPath": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "storyPath"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-story-path"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "matchTests",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "storyPaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "storyPaths",
+          "files"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "story": {
+                  "type": "string"
+                },
+                "storyPath": {
+                  "type": "string"
+                },
+                "storyPaths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "problem": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "files",
+                "story",
+                "storyPath",
+                "storyPaths",
+                "problem"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "untested": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "story": {
+                  "type": "string"
+                },
+                "storyPath": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "story",
+                "storyPath",
+                "line"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "orphans": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "line"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "tests",
+          "untested",
+          "orphans"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-match-input"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "discoveryRefusal",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "test": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "story": {
+                "type": "string"
+              },
+              "storyPath": {
+                "type": "string"
+              },
+              "error": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "story_path": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "story",
+              "storyPath"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "test"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "refusal": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "section": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "section",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "refusal"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-test-descriptor"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "scenarioShapeRefusal",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "refusal": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "section": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": "string"
+                  },
+                  "step": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "code",
+                  "section",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "refusal"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-scenario-path"
+      ],
+      "resource_operations": []
+    },
     {
       "operation": "checkInput",
       "input_schema": {
         "type": "object",
         "properties": {
           "input": {
-            "type": "string",
-            "description": "JSON text encoding of the supplied JSON input. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "string"
           },
           "schema": {
-            "type": "string",
-            "description": "JSON text encoding of the declared schema. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "string"
           },
           "index": {
             "type": "integer"
@@ -480,48 +845,49 @@ Only JSON/schema/kind decisions and text criterion parsing are declared. Discove
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the input-validation refusals and warnings. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "section": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "step": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "code",
+                "section",
+                "message",
+                "step"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
-          "value"
+          "problems",
+          "warnings"
         ],
         "additionalProperties": false
       },
-      "errors": [],
-      "resource_operations": []
-    },
-    {
-      "operation": "interfaceSchemaProblems",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "iface": {
-            "type": "string",
-            "description": "JSON text encoding of the supplied interface. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-          }
-        },
-        "required": [
-          "iface"
-        ],
-        "additionalProperties": false
-      },
-      "result_schema": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the ordered schema problems. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-          }
-        },
-        "required": [
-          "value"
-        ],
-        "additionalProperties": false
-      },
-      "errors": [],
+      "errors": [
+        "invalid-check-input"
+      ],
       "resource_operations": []
     },
     {
@@ -530,8 +896,7 @@ Only JSON/schema/kind decisions and text criterion parsing are declared. Discove
         "type": "object",
         "properties": {
           "iface": {
-            "type": "string",
-            "description": "JSON text encoding of the supplied interface. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "string"
           }
         },
         "required": [
@@ -542,58 +907,1963 @@ Only JSON/schema/kind decisions and text criterion parsing are declared. Discove
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the kind problems. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "section": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "section",
+                "message"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
-          "value"
+          "problems"
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid-interface-input"
+      ],
       "resource_operations": []
     },
     {
-      "operation": "storyCriteria",
+      "operation": "interfaceSchemaProblems",
       "input_schema": {
         "type": "object",
         "properties": {
-          "source": {
+          "iface": {
             "type": "string"
           }
         },
         "required": [
-          "source"
+          "iface"
         ],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the authored criteria. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "section": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "section",
+                "message"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
-          "value"
+          "problems"
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "invalid-interface-input"
+      ],
       "resource_operations": []
+    },
+    {
+      "operation": "findTests",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "excludeFixtureProjects": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "visible": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "story": {
+                  "type": "string"
+                },
+                "storyPath": {
+                  "type": "string"
+                },
+                "storyPaths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "title": {
+                  "type": "string"
+                },
+                "error": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "files",
+                "story",
+                "storyPath",
+                "storyPaths",
+                "title",
+                "error"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "story": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "story",
+                "path",
+                "title"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "untested": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "story": {
+                  "type": "string"
+                },
+                "storyPath": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "story",
+                "storyPath",
+                "line"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "orphans": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "line"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "excludedFixtureProjects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "visible",
+          "tests",
+          "stories",
+          "warnings",
+          "untested",
+          "orphans",
+          "excludedFixtureProjects"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "readPrompt",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "visible": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "root",
+          "visible",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "rawText": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "blockCount": {
+            "type": "integer"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prose_sha256": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parseError": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "rawText",
+          "text",
+          "blockCount",
+          "hash",
+          "status",
+          "prose_sha256",
+          "parseError"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "promptRefusal",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blockCount": {
+            "type": "integer"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prose_sha256": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hash": {
+            "type": "string"
+          },
+          "parseError": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "section": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "path",
+          "blockCount",
+          "hash",
+          "section"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "refusal": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "section": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "section",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "refusal"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-prompt-descriptor"
+      ],
+      "resource_operations": []
+    },
+    {
+      "operation": "promptSchemaRefusals",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "visible": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "root",
+          "visible",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "section": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "code",
+                "section",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "problems"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "preflight",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "selected": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "story": {
+                  "type": "string"
+                },
+                "storyPath": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "draft": {
+                  "type": "boolean"
+                },
+                "criteria_total": {
+                  "type": "integer"
+                },
+                "max_calls": {
+                  "type": "integer"
+                },
+                "not_checked": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "criterion_id": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "criterion_id",
+                      "text",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "refusal": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "section": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "hint": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "section",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "story",
+                "storyPath",
+                "title",
+                "status",
+                "draft",
+                "criteria_total",
+                "max_calls",
+                "not_checked",
+                "refusal"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "rows",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "fillHashes",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "compact": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "filled": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "current": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "refused": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "stale": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "compacted": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "filled",
+          "current",
+          "refused",
+          "stale",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "files.write",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "sourceFilePort",
+      "instance": {
+        "kind": "factory",
+        "type": "SourceFilePort",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "visible": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "source_ports.store"
+      ]
+    },
+    {
+      "operation": "portStat",
+      "instance": {
+        "kind": "method",
+        "type": "SourceFilePort",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "handle",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exists": {
+            "type": "boolean"
+          },
+          "is_symlink": {
+            "type": "boolean"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exists",
+          "is_symlink",
+          "size"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "source_ports.load",
+        "files.stat"
+      ]
+    },
+    {
+      "operation": "portRead",
+      "instance": {
+        "kind": "method",
+        "type": "SourceFilePort",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "handle",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "source_ports.load",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "captureSource",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "appMap": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "path",
+                "size"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "reads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "roles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "path",
+                "roles"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "source_sha256": {
+            "type": "string"
+          },
+          "raw_file_hashes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "files",
+          "reads",
+          "bytes",
+          "source_sha256",
+          "raw_file_hashes",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8"
+      ]
+    },
+    {
+      "operation": "createStrictSourceAccess",
+      "instance": {
+        "kind": "factory",
+        "type": "StrictSourceAccess",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "files.stat",
+        "files.read",
+        "strict_access.store"
+      ]
+    },
+    {
+      "operation": "strictSourceFilePort",
+      "instance": {
+        "kind": "method",
+        "type": "StrictSourceAccess",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "port_handle": {
+            "type": "string"
+          },
+          "strict": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "port_handle",
+          "strict"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "strict_access.load",
+        "git.listFiles",
+        "source_ports.store"
+      ]
+    },
+    {
+      "operation": "strictFindTests",
+      "instance": {
+        "kind": "method",
+        "type": "StrictSourceAccess",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "visible": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "story": {
+                  "type": "string"
+                },
+                "storyPath": {
+                  "type": "string"
+                },
+                "storyPaths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "title": {
+                  "type": "string"
+                },
+                "error": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "files",
+                "story",
+                "storyPath",
+                "storyPaths",
+                "title",
+                "error"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "story": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "story",
+                "path",
+                "title"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "visible",
+          "tests",
+          "stories",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "strict_access.load",
+        "git.listFiles",
+        "files.stat",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "strictCaptureSource",
+      "instance": {
+        "kind": "method",
+        "type": "StrictSourceAccess",
+        "path": "/handle"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "appMap": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "path",
+                "size"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "reads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "roles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "path",
+                "roles"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "source_sha256": {
+            "type": "string"
+          },
+          "raw_file_hashes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "files",
+          "reads",
+          "bytes",
+          "source_sha256",
+          "raw_file_hashes",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "PreflightError"
+      ],
+      "resource_operations": [
+        "strict_access.load",
+        "git.listFiles",
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8"
+      ]
     }
   ],
   "calls": [],
-  "resources": [],
+  "resources": [
+    {
+      "name": "source_ports",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "record": {
+                "type": "object",
+                "properties": {
+                  "root": {
+                    "type": "string"
+                  },
+                  "visible": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "strict": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "root",
+                  "visible",
+                  "strict"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "record"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "root": {
+                        "type": "string"
+                      },
+                      "visible": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "strict": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "root",
+                      "visible",
+                      "strict"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "root": {
+                        "type": "string"
+                      },
+                      "visible": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "strict": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "root",
+                      "visible",
+                      "strict"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict_access",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "record": {
+                "type": "object",
+                "properties": {
+                  "root": {
+                    "type": "string"
+                  },
+                  "strict": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "root",
+                  "strict"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "record"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "root": {
+                        "type": "string"
+                      },
+                      "strict": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "root",
+                      "strict"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "root": {
+                        "type": "string"
+                      },
+                      "strict": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "root",
+                      "strict"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "record"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "name": "stat"
+        },
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "name": "read"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "write"
+        }
+      ]
+    },
+    {
+      "name": "git",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "files",
+              "stderr"
+            ],
+            "additionalProperties": false
+          },
+          "name": "listFiles"
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
   "limits": {
     "max_steps": 64,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": [
+    {
+      "path": "/entries/14/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/15/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/16/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/18/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/19/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/20/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/21/input_schema/properties/handle",
+      "convention": "handle"
+    }
+  ]
 }
 ```
 </details>

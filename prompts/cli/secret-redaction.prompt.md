@@ -54,15 +54,591 @@ newly learned values before emitting output that can contain them.
 ## Dependencies
 
 - Native JavaScript strings, regular expressions and URL parsing.
+- In Runtime checks, `memory.load({id})` and `memory.save({id, state})` under `id: "global"` persist the remembered `{secrets}` list across calls (`rememberSecrets({values})` raises `empty-secret-values` when `values` is empty, appends nonempty string values in insertion order without duplicates, and returns `{rememberedCount}`; `knownSecretValues({env, secrets})` raises `invalid-secret-env` when `env` is null and returns `{secrets}` combining remembered values, explicit `secrets`, and matching `env` entries in deduplicated order). `redactingValues({secrets})` is a `prompt-runtime.interface.v2` `RedactingStream` factory (raising `invalid-stream-secrets` when `secrets` is null) that stores `{secrets, pending: "", closed: false}` via `streams.store({handle, state})` under the executor-issued `instance_handle` and returns `{handle}`. Instance methods `write({handle, text})` and `end({handle})` load state via `streams.load({handle})` (raising `stream-closed` when missing or already closed), emit releasable substrings and `[redacted]` replacements via `output.emit({text, original})` while holding back `overlap = max(0, maxSecretLength - 1)` trailing characters until `end`, update state via `streams.store({handle, state})`, and return `{bufferedLength}` and `{flushed}` respectively. `redactSecrets({value, secrets})` raises `invalid-redact-target` when `value` is null and returns `{text}` after exact known-secret replacement and pattern sanitization. Native process environment access stays in `test/validation-evidence.test.mjs` and `test/validation-receipts.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "49b010d4fa545b1630e06b479bc54032d2a2bca6a4b5cd05b587c1619dddf301",
-  "reason": "Process-wide memory-only credential registration and streaming emit callbacks, including withholding undecided chunks, require native JavaScript stream tests; a whole JSON result cannot prove that no intermediate emission leaked a secret. Native evidence owners: test/validation-evidence.test.mjs, test/validation-receipts.test.mjs."
+  "prose_sha256": "730c045cdc8e209f9683838c4c8f957419e78070bbcc2fbcb7ae96bc6aad49bc",
+  "entries": [
+    {
+      "operation": "rememberSecrets",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "rememberedCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "rememberedCount"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "empty-secret-values"
+      ],
+      "resource_operations": [
+        "memory.load",
+        "memory.save"
+      ]
+    },
+    {
+      "operation": "knownSecretValues",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "GH_TOKEN": {
+                    "type": "string"
+                  },
+                  "GITHUB_TOKEN": {
+                    "type": "string"
+                  },
+                  "PDD_RUNTIME_TOKEN": {
+                    "type": "string"
+                  },
+                  "HOME": {
+                    "type": "string"
+                  }
+                },
+                "required": []
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "secrets"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-secret-env"
+      ],
+      "resource_operations": [
+        "memory.load"
+      ]
+    },
+    {
+      "operation": "redactingValues",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "secrets": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "secrets"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-stream-secrets"
+      ],
+      "instance": {
+        "kind": "factory",
+        "type": "RedactingStream",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "streams.store"
+      ]
+    },
+    {
+      "operation": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "bufferedLength": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "bufferedLength"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "stream-closed"
+      ],
+      "instance": {
+        "kind": "method",
+        "type": "RedactingStream",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "streams.load",
+        "streams.store",
+        "output.emit"
+      ]
+    },
+    {
+      "operation": "end",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "flushed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flushed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "stream-closed"
+      ],
+      "instance": {
+        "kind": "method",
+        "type": "RedactingStream",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "streams.load",
+        "streams.store",
+        "output.emit"
+      ]
+    },
+    {
+      "operation": "redactSecrets",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-redact-target"
+      ],
+      "resource_operations": [
+        "memory.load"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "memory",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "secrets": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "secrets"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "name": "load"
+        },
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "state": {
+                "type": "object",
+                "properties": {
+                  "secrets": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "secrets"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "name": "save"
+        }
+      ]
+    },
+    {
+      "name": "streams",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "state": {
+                "type": "object",
+                "properties": {
+                  "secrets": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "pending": {
+                    "type": "string"
+                  },
+                  "closed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "secrets",
+                  "pending",
+                  "closed"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "name": "store"
+        },
+        {
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "secrets": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "pending": {
+                        "type": "string"
+                      },
+                      "closed": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "secrets",
+                      "pending",
+                      "closed"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "name": "load"
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "original": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "original"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "name": "emit"
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 28,
+    "max_model_calls": 14
+  },
+  "conventions": [
+    {
+      "path": "/entries/2/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/3/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/4/input_schema/properties/handle",
+      "convention": "handle"
+    }
+  ],
+  "schema_version": "prompt-runtime.interface.v2",
+  "instance_types": [
+    {
+      "name": "RedactingStream",
+      "resource": "streams"
+    }
+  ]
 }
 ```
 </details>

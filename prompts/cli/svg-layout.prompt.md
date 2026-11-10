@@ -23,28 +23,24 @@ Report all three kinds of disagreement, identifying the prompt, drawing and part
 
 Explicit prose such as `region score`, `id="score"`, or “score box” acknowledges the corresponding named region. A backticked id within `## Appearance` also acknowledges it. Do not count an interface schema property or a general state-field declaration as a layout mapping. Retain explicit behavioral control-id declarations anywhere in the prose. Matching is conservative local advice: name uncertain/unmatched parts; do not infer a semantic equivalence or change the prompt/drawing automatically. Report source-read/parse limitations as warnings. This is a vocabulary and part check, not an AI assessment of meaning or a geometry check.
 
-Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt path, drawing path and part. A 2048-like screen with four direction buttons only in prose and SCORE/SEED boxes and a READY bar only in the drawing must warn about directions, READY and the unspecified score/seed layout regions, even when prose mentions score and seed data.
+Warnings have the exact shape `Warning: SVG layout <prompt> -> <drawing>: <part>: <reason>.` where `<part>` is `control "<control>"` (`reason`: `prompt control absent from drawing`), `label "<label>"` (`reason`: `drawing label absent from prompt`), `region #<id>` (`reason`: `drawing region layout unspecified in prompt`), `drawing` (for missing, symlink or malformed drawings; a missing file uses reason `not a regular file`), or `source` (with `<drawing>` set to `(unread)` when the prompt itself cannot be read), deduplicated and ordered by prompt path, drawing path, part and reason. A 2048-like screen with four direction buttons only in prose and SCORE/SEED boxes and a READY bar only in the drawing must warn about directions, READY and the unspecified score/seed layout regions, even when prose mentions score and seed data.
 
 ## Dependencies
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
-
 - [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): authoring and verification context.
+- In Runtime checks, `files.stat({path})` and `files.read({path})` inspect blobs under `<root>/<path>`, starting with `<root>/pdd-workspace.json` when present (raising `workspace-config-unsafe` for a symlink or oversized policy and `workspace-config-invalid` for invalid JSON or `allowed_paths`), and `lintSvgLayouts` returns `{warnings}`. Native no-link traversal and rendered geometry stay in `test/svg-layout.test.mjs`.
 
 ## Caller navigation
 
 The CLI exposes this advisory through [Check](runtime-client.prompt.md).
-
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
-
-The files resource binds read-only Node filesystem observations used for warnings. Physical safe no-link/workspace reads and actual rendered geometry remain native. Warnings remain advice, not admission. Native evidence owners: test/svg-layout.test.mjs.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "54580067beadb16d2af001d18232c9e8274abde9e9badd07a8f80bfb86cd49b8",
+  "prose_sha256": "e5d3fa68d7ebc905abbe0aa19b7a363700f5d7d2628cb254c0978154541e3967",
   "entries": [
     {
       "operation": "lintSvgLayouts",
@@ -88,14 +84,13 @@ The files resource binds read-only Node filesystem observations used for warning
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": [
+        "workspace-config-invalid",
+        "workspace-config-unsafe"
+      ],
       "resource_operations": [
-        "files.readFileSync",
-        "files.lstatSync",
-        "files.openSync",
-        "files.fstatSync",
-        "files.readSync",
-        "files.closeSync"
+        "files.stat",
+        "files.read"
       ]
     }
   ],
@@ -103,264 +98,82 @@ The files resource binds read-only Node filesystem observations used for warning
   "resources": [
     {
       "name": "files",
-      "kind": "port",
+      "kind": "blob",
       "access": "read",
       "operations": [
         {
-          "name": "readFileSync",
           "access": "read",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.readFileSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "path": {
+                "type": "string"
               }
             },
             "required": [
-              "args"
+              "path"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "exists": {
+                "type": "boolean"
               },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
               }
             },
             "required": [
-              "value",
-              "error"
+              "exists",
+              "is_symlink",
+              "size"
             ],
             "additionalProperties": false
-          }
+          },
+          "name": "stat"
         },
         {
-          "name": "lstatSync",
           "access": "read",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.lstatSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "path": {
+                "type": "string"
               }
             },
             "required": [
-              "args"
+              "path"
             ],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "content": {
+                "type": "string"
               }
             },
             "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "openSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.openSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
+              "content"
             ],
             "additionalProperties": false
           },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "fstatSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.fstatSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "readSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.readSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "closeSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.closeSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
+          "name": "read"
         }
       ]
     }
   ],
   "limits": {
-    "max_steps": 64,
-    "max_model_calls": 16
+    "max_steps": 16,
+    "max_model_calls": 8
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

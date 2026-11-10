@@ -1,0 +1,266 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/command-catalog-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`NAMES`, `BUNDLED_WORKFLOW_NAMES` and `PUBLIC_HELP_TEXT` return the canonical command words, bundled workflow list and help text templates."
+    },
+    {
+      "id": "AC2",
+      "text": "`PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_ROUTES` and `PUBLIC_COMMAND_MANIFEST` return route membership, route specifications and help form descriptions for cataloged commands."
+    },
+    {
+      "id": "AC3",
+      "text": "Unknown keys, workflow names, help sections, route ids and help forms fail with `unknown-command-name`, `unknown-workflow-name`, `unknown-help-section`, `unknown-route-id` and `unknown-help-form`."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "names-ok",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "NAMES",
+      "input": {},
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "test": "test",
+            "lint": "lint",
+            "simulate": "simulate",
+            "run": "run",
+            "requestUptake": "ack"
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "workflows-ok",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "BUNDLED_WORKFLOW_NAMES",
+      "input": {},
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/names",
+          "op": "equals",
+          "value": [
+            "feature",
+            "bug",
+            "small-change",
+            "product"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "help-text-ok",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "PUBLIC_HELP_TEXT",
+      "input": {},
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/heading",
+          "op": "equals",
+          "value": "PDD: prompt-driven development for your coding agent."
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/learnLines/1",
+          "op": "equals",
+          "value": "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "route-id-ok",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "PUBLIC_COMMAND_IDS",
+      "input": {
+        "id": "files"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/hasId",
+          "op": "equals",
+          "value": true
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "route-spec-ok",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "PUBLIC_COMMAND_ROUTES",
+      "input": {
+        "id": "files"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/prefix",
+          "op": "equals",
+          "value": [
+            "files"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/local",
+          "op": "equals",
+          "value": "project-files"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "manifest-form-ok",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "PUBLIC_COMMAND_MANIFEST",
+      "input": {
+        "form": "pdd files [--json]"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/description",
+          "op": "equals",
+          "value": "List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "names-error",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "NAMES",
+      "input": {
+        "key": "unknown"
+      },
+      "expected_error": "unknown-command-name",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "unknown-command-name"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "workflows-error",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "BUNDLED_WORKFLOW_NAMES",
+      "input": {
+        "name": "unknown"
+      },
+      "expected_error": "unknown-workflow-name",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "unknown-workflow-name"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "help-text-error",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "PUBLIC_HELP_TEXT",
+      "input": {
+        "section": "unknown"
+      },
+      "expected_error": "unknown-help-section",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "unknown-help-section"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "route-id-error",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "PUBLIC_COMMAND_IDS",
+      "input": {
+        "id": "unknown.route"
+      },
+      "expected_error": "unknown-route-id",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "unknown-route-id"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "route-spec-error",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "PUBLIC_COMMAND_ROUTES",
+      "input": {
+        "id": "unknown.route"
+      },
+      "expected_error": "unknown-route-id",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "unknown-route-id"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "manifest-form-error",
+      "entry_path": "prompts/cli/command-catalog.prompt.md",
+      "operation": "PUBLIC_COMMAND_MANIFEST",
+      "input": {
+        "form": "pdd unknown"
+      },
+      "expected_error": "unknown-help-form",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "unknown-help-form"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

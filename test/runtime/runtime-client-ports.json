@@ -1,0 +1,1242 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/runtime-client-ports.md",
+  "criteria": [
+    {
+      "id": "ac-1",
+      "text": "`runCheck`, `runTry` and `checkRuntimeHealth` resolve the repository root and files through `git` and `files`, authenticate with `gh.exec`, call the PDD interpreter through `http.request`, emit CLI output through `output.stdout` and `output.stderr`, and return `{exitCode}` or `{state, detail, fix}`."
+    },
+    {
+      "id": "ac-2",
+      "text": "`readContractHistory`, `savedStoryEvidence`, `createSavedStoryEvidenceReader` (`readSavedStoryEvidence`) and `acquireRuntimeBatchLock` (`releaseBatchLock`) read saved batches and contract snapshots from `files` and manage `SavedStoryEvidenceReader` and `RuntimeBatchLock` handles."
+    },
+    {
+      "id": "ac-3",
+      "text": "`acquireCaseWriteOwnership` (`release`), `saveDoorCase`, `saveDoorCaseResult`, `applyPendingCase`, `applyPendingCaseWithHandoff`, `runDoorCall` and `readTryOwner` manage `CaseWriteOwnership` handles, record and apply received Try cases, execute authenticated door calls, and read Try owner metadata."
+    },
+    {
+      "id": "ac-4",
+      "text": "Invalid inputs, busy batch locks, unavailable write ownership, and refused door or owner calls raise the declared entry error (`invalid-runtime-input`, `invalid-health-input`, `invalid-history-input`, `invalid-evidence-input`, `invalid-reader-input`, `batch-lock-busy`, `batch-lock-invalid`, `ownership-unavailable`, `invalid-ownership-input`, `invalid-case-input`, `invalid-pending-input`, `door-call-refused`, `door-call-unknown`, `invalid-door-input`, `try-owner-unavailable`, or `invalid-owner-input`)."
+    }
+  ],
+  "initial_world": {
+    "git_roots": [
+      {
+        "cwd": "/work/repo",
+        "reply": {
+          "status": 0,
+          "root": "/work/repo",
+          "stderr": ""
+        }
+      }
+    ],
+    "git_lists": [
+      {
+        "root": "/work/repo",
+        "reply": {
+          "status": 0,
+          "files": [
+            "prompts/order.prompt.md",
+            "test/runtime/place-order.json",
+            "user_stories/place-order.md"
+          ],
+          "stderr": ""
+        }
+      }
+    ],
+    "evidence_readers": [],
+    "batch_locks": [],
+    "write_ownership": [],
+    "gh_calls": 0,
+    "http_calls": 0,
+    "stdout": [],
+    "stderr": [],
+    "files": {
+      "/work/repo/prompts/order.prompt.md": {
+        "content": "# Place order\n\nOwn `src/order.mjs`.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"77e767a2cb3701ff6670c8242837f11de9bc822d29b0f2484cbd24733d311d52\",\"entries\":[{\"operation\":\"placeOrder\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"sku\"],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"],\"additionalProperties\":false},\"errors\":[\"invalid-sku\"],\"resource_operations\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":4,\"max_model_calls\":2}}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/work/repo/user_stories/place-order.md": {
+        "content": "# Place an order\n\n## Acceptance criteria\n\n1. A valid SKU creates an order.\n",
+        "is_symlink": false
+      },
+      "/work/repo/test/runtime/place-order.json": {
+        "content": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"story_path\":\"user_stories/place-order.md\",\"criteria\":[{\"id\":\"ac-1\",\"text\":\"A valid SKU creates an order.\"}],\"initial_world\":{},\"steps\":[{\"step_id\":\"place-valid\",\"entry_path\":\"prompts/order.prompt.md\",\"operation\":\"placeOrder\",\"input\":{\"sku\":\"BOOK-1\"},\"checks\":[{\"criterion_id\":\"ac-1\",\"target\":\"result\",\"path\":\"/orderId\",\"op\":\"equals\",\"value\":\"ORD-1\"}]}]}",
+        "is_symlink": false
+      },
+      "/state/runtime/repos/repo-key.json": {
+        "content": "{\"last_batch\":\"20261110-010000-abcd\",\"tries\":{\"test/runtime/place-order.json\":{\"id\":\"try-101\",\"origin\":\"https://runtime.promptdriven.ai\",\"login\":\"ada\",\"test_path\":\"test/runtime/place-order.json\",\"story_path\":\"user_stories/place-order.md\"}}}",
+        "is_symlink": false
+      },
+      "/state/runtime/batches/20261110-010000-abcd/batch.json": {
+        "content": "{\"batch\":\"20261110-010000-abcd\",\"intent\":\"check\",\"root\":\"/work/repo\",\"origin\":\"https://runtime.promptdriven.ai\",\"login\":\"ada\",\"created_at\":\"2026-11-10T01:00:00Z\",\"source_sha256\":\"af5de7abaf2e2482cad94af77cbd2336ee2c4a85fcadaf61ecaa28a0ff412981\",\"rows\":[{\"path\":\"test/runtime/place-order.json\",\"story\":\"place-order\",\"storyPath\":\"user_stories/place-order.md\",\"state\":\"passed\",\"request_ids\":[\"req-check-1\"],\"at\":1762736400000,\"files\":[{\"path\":\"prompts/order.prompt.md\",\"sha256\":\"85bb0e5e41381a5c7300fc36a47eedcad0e4722cca7078b164c362a0c6ccd883\"}],\"references\":[]}]}",
+        "is_symlink": false
+      },
+      "/state/runtime/batches/busy-batch/lock.json": {
+        "content": "{\"pid\":4242,\"host\":\"build-vm\",\"started_at\":1762736400000,\"live\":true}",
+        "is_symlink": false
+      },
+      "/state/runtime/case-import/pend-1.json": {
+        "content": "{\"pendingId\":\"pend-1\",\"root\":\"/work/repo\",\"path\":\"test/runtime/place-order.json\",\"storyPath\":\"user_stories/place-order.md\",\"state\":\"committed\",\"criteria\":[\"ac-1\"],\"covered\":[\"ac-1\"]}",
+        "is_symlink": false
+      }
+    },
+    "clock_calls": []
+  },
+  "simulation": {
+    "git.topLevel": {
+      "action": "collection.get",
+      "world_pointer": "/git_roots",
+      "key_argument_pointer": "/cwd",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/cwd",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "root": "",
+        "stderr": "fatal: not a git repository"
+      },
+      "result_value_pointer": ""
+    },
+    "git.listFiles": {
+      "action": "collection.get",
+      "world_pointer": "/git_lists",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/root",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "files": [],
+        "stderr": "fatal: not a git repository"
+      },
+      "result_value_pointer": ""
+    },
+    "evidence_readers.store": {
+      "action": "collection.merge",
+      "world_pointer": "/evidence_readers",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/record",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "evidence_readers.load": {
+      "action": "collection.get",
+      "world_pointer": "/evidence_readers",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "batch_locks.store": {
+      "action": "collection.merge",
+      "world_pointer": "/batch_locks",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/record",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "batch_locks.load": {
+      "action": "collection.get",
+      "world_pointer": "/batch_locks",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "write_ownership.store": {
+      "action": "collection.merge",
+      "world_pointer": "/write_ownership",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/record",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "write_ownership.load": {
+      "action": "collection.get",
+      "world_pointer": "/write_ownership",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/record",
+      "result_template": {
+        "record": null
+      },
+      "result_value_pointer": "/record"
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "clock.now": {
+      "action": "port.write",
+      "world_pointer": "/clock_calls",
+      "result_template": {
+        "now": 1762736400000
+      }
+    },
+    "gh.exec": {
+      "action": "fixture.lookup",
+      "world_pointer": "/gh_calls",
+      "cases": [
+        {
+          "args": {
+            "args": [
+              "auth",
+              "token"
+            ]
+          },
+          "call_index": 1,
+          "result": {
+            "status": 0,
+            "stdout": "gho_test_token_1\n",
+            "stderr": ""
+          }
+        },
+        {
+          "args": {
+            "args": [
+              "api",
+              "user",
+              "--jq",
+              ".login + \" \" + (.id|tostring)"
+            ]
+          },
+          "call_index": 2,
+          "result": {
+            "status": 0,
+            "stdout": "ada 101\n",
+            "stderr": ""
+          }
+        },
+        {
+          "args": {
+            "args": [
+              "auth",
+              "token"
+            ]
+          },
+          "call_index": 3,
+          "result": {
+            "status": 0,
+            "stdout": "gho_test_token_1\n",
+            "stderr": ""
+          }
+        },
+        {
+          "args": {
+            "args": [
+              "auth",
+              "token"
+            ]
+          },
+          "call_index": 4,
+          "result": {
+            "status": 0,
+            "stdout": "gho_test_token_1\n",
+            "stderr": ""
+          }
+        },
+        {
+          "args": {
+            "args": [
+              "api",
+              "user",
+              "--jq",
+              ".login + \" \" + (.id|tostring)"
+            ]
+          },
+          "call_index": 5,
+          "result": {
+            "status": 0,
+            "stdout": "ada 101\n",
+            "stderr": ""
+          }
+        },
+        {
+          "args": {
+            "args": [
+              "auth",
+              "token"
+            ]
+          },
+          "call_index": 6,
+          "result": {
+            "status": 0,
+            "stdout": "gho_test_token_1\n",
+            "stderr": ""
+          }
+        },
+        {
+          "args": {
+            "args": [
+              "api",
+              "user",
+              "--jq",
+              ".login + \" \" + (.id|tostring)"
+            ]
+          },
+          "call_index": 7,
+          "result": {
+            "status": 0,
+            "stdout": "ada 101\n",
+            "stderr": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "http.request": {
+      "action": "fixture.lookup",
+      "world_pointer": "/http_calls",
+      "cases": [
+        {
+          "args": {
+            "method": "POST",
+            "url": "https://runtime.promptdriven.ai/v1/try/try-101/reopen"
+          },
+          "call_index": 1,
+          "result": {
+            "status": 200,
+            "body": "{\"state\":\"passed\",\"result\":{\"url\":\"https://runtime.promptdriven.ai/s/try-token/\",\"session\":{\"state\":\"running\",\"max_calls\":400,\"remaining_calls\":398}}}"
+          }
+        },
+        {
+          "args": {
+            "method": "GET",
+            "url": "https://runtime.promptdriven.ai/v1/capacity"
+          },
+          "call_index": 2,
+          "result": {
+            "status": 200,
+            "body": "{\"features\":[\"lint-tests\"],\"maintenance\":null}"
+          }
+        },
+        {
+          "args": {
+            "method": "POST",
+            "url": "https://runtime.promptdriven.ai/v1/try/try-101/calls"
+          },
+          "call_index": 3,
+          "result": {
+            "status": 200,
+            "body": "{\"id\":\"call-1\",\"command\":\"call\",\"state\":\"passed\",\"usage\":{\"calls\":1},\"result\":{\"program_result\":{\"orderId\":\"ORD-1\"},\"report\":{\"remaining_calls\":397}}}"
+          }
+        },
+        {
+          "args": {
+            "method": "GET",
+            "url": "https://runtime.promptdriven.ai/v1/try/try-101/model"
+          },
+          "call_index": 4,
+          "result": {
+            "status": 200,
+            "body": "{\"operations\":[\"placeOrder\"]}"
+          }
+        },
+        {
+          "args": {
+            "method": "GET",
+            "url": "https://runtime.promptdriven.ai/v1/try/try-101/state"
+          },
+          "call_index": 5,
+          "result": {
+            "status": 200,
+            "body": "{\"world\":{\"orders\":[\"ORD-1\"]},\"actions\":[]}"
+          }
+        },
+        {
+          "args": {
+            "method": "POST",
+            "url": "https://runtime.promptdriven.ai/v1/try/try-refused/calls"
+          },
+          "call_index": 6,
+          "result": {
+            "status": 422,
+            "body": "{\"error\":{\"code\":\"invalid-input\",\"message\":\"SKU is required.\"}}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "output.stdout": {
+      "action": "port.write",
+      "world_pointer": "/stdout",
+      "result_template": {}
+    },
+    "output.stderr": {
+      "action": "port.write",
+      "world_pointer": "/stderr",
+      "result_template": {}
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "steps": [
+    {
+      "step_id": "run-check-files-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runCheck",
+      "input": {
+        "cwd": "/work/repo",
+        "words": [
+          "place-order"
+        ],
+        "options": {
+          "--files": true
+        },
+        "cache": false
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "ac-1",
+          "target": "world",
+          "path": "/stdout/0/text",
+          "op": "contains",
+          "value": "place-order"
+        }
+      ]
+    },
+    {
+      "step_id": "run-try-reopen-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runTry",
+      "input": {
+        "cwd": "/work/repo",
+        "words": [
+          "place-order"
+        ],
+        "options": {
+          "--no-open": true,
+          "--no-wait": true
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "ac-1",
+          "target": "world",
+          "path": "/http_calls",
+          "op": "equals",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "step_id": "check-runtime-health-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "checkRuntimeHealth",
+      "input": {
+        "env": {
+          "PDD_RUNTIME_URL": "https://runtime.promptdriven.ai"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-1",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "healthy"
+        }
+      ]
+    },
+    {
+      "step_id": "read-contract-history-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "readContractHistory",
+      "input": {
+        "root": "/work/repo",
+        "stateDir": "/state/runtime"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/stories/0/story_path",
+          "op": "equals",
+          "value": "user_stories/place-order.md"
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/stories/0/baseline",
+          "op": "equals",
+          "value": "checked"
+        }
+      ]
+    },
+    {
+      "step_id": "saved-story-evidence-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "savedStoryEvidence",
+      "input": {
+        "root": "/work/repo",
+        "comparisonRoot": "/work/repo",
+        "stateDir": "/state/runtime"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/stories/0/story",
+          "op": "equals",
+          "value": "user_stories/place-order.md"
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/stories/0/pass",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/stories/0/result",
+          "op": "equals",
+          "value": "✓"
+        }
+      ]
+    },
+    {
+      "step_id": "create-evidence-reader-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "createSavedStoryEvidenceReader",
+      "input": {
+        "stateDir": "/state/runtime"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "world",
+          "path": "/evidence_readers/0/record/stateDir",
+          "op": "equals",
+          "value": "/state/runtime"
+        }
+      ]
+    },
+    {
+      "step_id": "read-saved-story-evidence-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "readSavedStoryEvidence",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "create-evidence-reader-ok",
+            "path": "/handle"
+          }
+        },
+        "root": "/work/repo",
+        "comparisonRoot": "/work/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/stories/0/result",
+          "op": "equals",
+          "value": "✓"
+        }
+      ]
+    },
+    {
+      "step_id": "acquire-batch-lock-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "acquireRuntimeBatchLock",
+      "input": {
+        "folder": "/state/runtime/batches/20261110-010000-abcd"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "world",
+          "path": "/batch_locks/0/record/active",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "release-batch-lock-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "releaseBatchLock",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "acquire-batch-lock-ok",
+            "path": "/handle"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-2",
+          "target": "result",
+          "path": "/released",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "ac-2",
+          "target": "world",
+          "path": "/batch_locks/0/record/active",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "acquire-write-ownership-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "acquireCaseWriteOwnership",
+      "input": {
+        "root": "/work/repo",
+        "testPath": "test/runtime/place-order.json",
+        "handoff": "person-closed-editor"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "world",
+          "path": "/write_ownership/0/record/active",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "release-write-ownership-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "release",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "acquire-write-ownership-ok",
+            "path": "/handle"
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/released",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "world",
+          "path": "/write_ownership/0/record/active",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    },
+    {
+      "step_id": "save-door-case-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "saveDoorCase",
+      "input": {
+        "root": "/work/repo",
+        "saved": {
+          "id": "case-1",
+          "test_path": "test/runtime/place-order.json",
+          "step_id": "place-2",
+          "entry_path": "prompts/order.prompt.md",
+          "operation": "placeOrder"
+        },
+        "isolated": true
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "added to tests/place-order.try-case-1.json"
+        }
+      ]
+    },
+    {
+      "step_id": "save-door-case-result-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "saveDoorCaseResult",
+      "input": {
+        "root": "/work/repo",
+        "saved": {
+          "id": "case-1",
+          "test_path": "test/runtime/place-order.json",
+          "step_id": "place-2",
+          "entry_path": "prompts/order.prompt.md",
+          "operation": "placeOrder"
+        },
+        "isolated": true
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "case"
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "committed"
+        }
+      ]
+    },
+    {
+      "step_id": "apply-pending-case-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "applyPendingCase",
+      "input": {
+        "root": "/work/repo",
+        "pendingId": "pend-1"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "committed"
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/path",
+          "op": "equals",
+          "value": "test/runtime/place-order.json"
+        }
+      ]
+    },
+    {
+      "step_id": "apply-pending-case-handoff-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "applyPendingCaseWithHandoff",
+      "input": {
+        "cwd": "/work/repo",
+        "pendingId": "pend-1",
+        "handoff": "test/runtime/place-order.json"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "case"
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/coverage/scope",
+          "op": "equals",
+          "value": "retained-scenario"
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/coverage/covered",
+          "op": "equals",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "step_id": "run-door-call-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runDoorCall",
+      "input": {
+        "descriptor": {
+          "root": "/work/repo",
+          "sessionId": "try-101",
+          "origin": "https://runtime.promptdriven.ai",
+          "login": "ada",
+          "promptPath": "prompts/order.prompt.md",
+          "operation": "placeOrder"
+        },
+        "input": "{\"sku\":\"BOOK-1\"}"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/program_result",
+          "op": "equals",
+          "value": "{\"orderId\":\"ORD-1\"}"
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/calls",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/remaining_calls",
+          "op": "equals",
+          "value": 397
+        }
+      ]
+    },
+    {
+      "step_id": "read-try-owner-ok",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "readTryOwner",
+      "input": {
+        "cwd": "/work/repo",
+        "story": "place-order"
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/sessionId",
+          "op": "equals",
+          "value": "try-101"
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/login",
+          "op": "equals",
+          "value": "ada"
+        },
+        {
+          "criterion_id": "ac-3",
+          "target": "result",
+          "path": "/data_json",
+          "op": "equals",
+          "value": "{\"orders\":[\"ORD-1\"]}"
+        }
+      ]
+    },
+    {
+      "step_id": "run-check-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runCheck",
+      "input": {
+        "cwd": "   "
+      },
+      "expected_error": "invalid-runtime-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-runtime-input"
+        }
+      ]
+    },
+    {
+      "step_id": "run-try-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runTry",
+      "input": {
+        "cwd": "   "
+      },
+      "expected_error": "invalid-runtime-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-runtime-input"
+        }
+      ]
+    },
+    {
+      "step_id": "check-runtime-health-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "checkRuntimeHealth",
+      "input": {
+        "env": {
+          "PDD_RUNTIME_URL": "   "
+        }
+      },
+      "expected_error": "invalid-health-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-health-input"
+        }
+      ]
+    },
+    {
+      "step_id": "read-contract-history-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "readContractHistory",
+      "input": {
+        "root": "   "
+      },
+      "expected_error": "invalid-history-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-history-input"
+        }
+      ]
+    },
+    {
+      "step_id": "saved-story-evidence-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "savedStoryEvidence",
+      "input": {
+        "root": "   "
+      },
+      "expected_error": "invalid-evidence-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-evidence-input"
+        }
+      ]
+    },
+    {
+      "step_id": "create-evidence-reader-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "createSavedStoryEvidenceReader",
+      "input": {
+        "stateDir": "   "
+      },
+      "expected_error": "invalid-reader-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-reader-input"
+        }
+      ]
+    },
+    {
+      "step_id": "read-saved-story-evidence-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "readSavedStoryEvidence",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "create-evidence-reader-ok",
+            "path": "/handle"
+          }
+        },
+        "root": "   "
+      },
+      "expected_error": "invalid-evidence-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-evidence-input"
+        }
+      ]
+    },
+    {
+      "step_id": "acquire-batch-lock-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "acquireRuntimeBatchLock",
+      "input": {
+        "folder": "/state/runtime/batches/busy-batch"
+      },
+      "expected_error": "batch-lock-busy",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "batch-lock-busy"
+        }
+      ]
+    },
+    {
+      "step_id": "release-batch-lock-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "releaseBatchLock",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "acquire-batch-lock-ok",
+            "path": "/handle"
+          }
+        }
+      },
+      "expected_error": "batch-lock-invalid",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "batch-lock-invalid"
+        }
+      ]
+    },
+    {
+      "step_id": "acquire-write-ownership-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "acquireCaseWriteOwnership",
+      "input": {
+        "root": "/work/repo",
+        "testPath": "test/runtime/place-order.json",
+        "handoff": "   "
+      },
+      "expected_error": "invalid-ownership-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-ownership-input"
+        }
+      ]
+    },
+    {
+      "step_id": "release-write-ownership-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "release",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "acquire-write-ownership-ok",
+            "path": "/handle"
+          }
+        }
+      },
+      "expected_error": "invalid-ownership-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-ownership-input"
+        }
+      ]
+    },
+    {
+      "step_id": "save-door-case-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "saveDoorCase",
+      "input": {
+        "root": "   ",
+        "saved": {
+          "id": "case-1",
+          "test_path": "test/runtime/place-order.json",
+          "step_id": "place-2",
+          "entry_path": "prompts/order.prompt.md",
+          "operation": "placeOrder"
+        }
+      },
+      "expected_error": "invalid-case-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-case-input"
+        }
+      ]
+    },
+    {
+      "step_id": "save-door-case-result-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "saveDoorCaseResult",
+      "input": {
+        "root": "   ",
+        "saved": {
+          "id": "case-1",
+          "test_path": "test/runtime/place-order.json",
+          "step_id": "place-2",
+          "entry_path": "prompts/order.prompt.md",
+          "operation": "placeOrder"
+        }
+      },
+      "expected_error": "invalid-case-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-case-input"
+        }
+      ]
+    },
+    {
+      "step_id": "apply-pending-case-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "applyPendingCase",
+      "input": {
+        "root": "   ",
+        "pendingId": "pend-1"
+      },
+      "expected_error": "invalid-pending-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-pending-input"
+        }
+      ]
+    },
+    {
+      "step_id": "apply-pending-case-handoff-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "applyPendingCaseWithHandoff",
+      "input": {
+        "cwd": "   ",
+        "pendingId": "pend-1",
+        "handoff": "test/runtime/place-order.json"
+      },
+      "expected_error": "invalid-pending-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-pending-input"
+        }
+      ]
+    },
+    {
+      "step_id": "run-door-call-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runDoorCall",
+      "input": {
+        "descriptor": {
+          "root": "/work/repo",
+          "sessionId": "try-refused",
+          "origin": "https://runtime.promptdriven.ai",
+          "login": "ada",
+          "promptPath": "prompts/order.prompt.md",
+          "operation": "placeOrder"
+        },
+        "input": "{\"sku\":\"\"}"
+      },
+      "expected_error": "door-call-refused",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "door-call-refused"
+        }
+      ]
+    },
+    {
+      "step_id": "read-try-owner-error",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "readTryOwner",
+      "input": {
+        "cwd": "   ",
+        "story": null
+      },
+      "expected_error": "invalid-owner-input",
+      "checks": [
+        {
+          "criterion_id": "ac-4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-owner-input"
+        }
+      ]
+    }
+  ]
+}
