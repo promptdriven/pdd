@@ -2980,3 +2980,34 @@ test('interpreter queue position is visible in detailed and JSON workflow status
   assert.equal(f.record().state, before.state, 'status must not advance workflow state');
   assert.equal(f.record().updatedAt, before.updatedAt);
 });
+
+test('3155: manual workflow start assigns the issue to the signed-in user and warns when Autopilot holds a live claim', async t => {
+  const f = await fixture(t), original = f.ports.execFile, assigned = [], warnings = [];
+  let labels = ['pdd:working'], assignees = [];
+  f.ports.warn = text => warnings.push(text);
+  f.ports.execFile = async (file, args, opts) => {
+    if (file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/17') {
+      return { stdout: JSON.stringify({ number: 17, html_url: issueUrl, title: 'Use value two', body: 'Value must be two.',
+        labels: labels.map(name => ({ name })), assignees: assignees.map(login => ({ login })) }) };
+    }
+    if (file === 'gh' && args[0] === 'api' && args[1] === 'user') return { stdout: 'person-login\n' };
+    if (file === 'gh' && args[0] === 'issue' && args[1] === 'edit') {
+      assigned.push(args);
+      assignees = ['person-login'];
+      return { stdout: '' };
+    }
+    return original(file, args, opts);
+  };
+  const started = await f.run();
+  assert.equal(started.exitCode, 0, started.message);
+  assert.match(started.message, /warning: Issue #17 has a live Autopilot claim.*Assigning the issue to a person takes it back.*gh issue edit 17 --repo example\/project --add-assignee @me/);
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(assigned, [['issue', 'edit', '17', '--repo', 'example/project', '--add-assignee', 'person-login']]);
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  // Already assigned to the signed-in user: no duplicate gh issue edit call.
+  labels = [];
+  const again = await f.run();
+  assert.equal(again.exitCode, 0, again.message);
+  assert.doesNotMatch(again.message, /has a live Autopilot claim/);
+  assert.equal(assigned.length, 1, 'already assigned issue must not call gh issue edit again');
+});

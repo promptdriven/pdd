@@ -694,3 +694,56 @@ test('factory 3125: a full workflow session admits healthy coordinator reuse in 
   assert.ok(w.herdr.panes.some(p=>p.pane_id===personal.result.root_pane.pane_id));
   assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });
+
+test('factory 3155: manual workflow start assigns the issue to the signed-in user and warns when Autopilot holds a live claim',async t=>{
+  const w=await factoryWorld(t);await w.begin();
+  assert.deepEqual(w.github.issues.get(17).assignees,[]);
+  const manual=await w.command(['workflow','run','small-change','17','--agent','codex'],{actor:'person'});
+  assert.match(manual.stdout,/warning: Issue #17 has a live Autopilot claim.*Assigning the issue to a person takes it back.*gh issue edit 17 --repo example\/project --add-assignee @me/);
+  assert.deepEqual(w.github.issues.get(17).assignees,['example']);
+  assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3155: assigning a claimed issue lets the active step finish, releases the claim keeping run folder, branch and PRs, and does not take it again while assigned',async t=>{
+  const w=await factoryWorld(t,{workflow:'feature'});await w.begin();
+  const a=scriptedAgent(w);await a.until(r=>Boolean(r.done.build));
+  const run=w.record();
+  assert.equal(run.pr?.length,1);
+  w.github.assign(17,'alice');
+  const pane=w.herdr.panes.find(p=>p.pane_id===run.chats.at(-1).paneId);assert.ok(pane);
+  pane.agent.agent_status='working';
+  await w.tick();
+  assert.equal(w.record().state,'running','active step must finish before parking and releasing');
+  assert.equal(w.record().parking,undefined);
+  assert.ok(w.github.issues.get(17).labels.includes('pdd:working'));
+  // w.command in w.tick() calls w.herdr.idle() on completion, so the next tick sees the finished step and releases.
+  await w.reviewDependencies();
+  await w.tick();
+  assert.equal(w.record().state,'cancelled');
+  assert.deepEqual(w.record().parking?.blocker,{kind:'assigned',until:null});
+  assert.equal(w.github.issues.get(17).labels.includes('pdd:working'),false,'claim label is removed');
+  assert.ok(existsSync(run.root),'run folder is kept');
+  assert.ok(w.git(w.cwd,'rev-parse','--verify',run.branch),'branch is kept');
+  assert.equal(w.record().pr?.length,1,'PR record is kept');
+  assert.equal(w.github.prs[0]?.state,'OPEN','PR is kept open');
+  const packetsBefore=w.packets.length;
+  await w.tick();w.messages();
+  assert.equal(w.packets.slice(packetsBefore).some(p=>p.issues?.some(i=>i.number===17&&i.eligible)),false,'assigned issue is not taken again');
+  assert.deepEqual(w.leadActions,[]);
+});
+
+test('factory 3155: status shows skipped assigned count and 7-day inactive assignments, and doctor states the person-assignment rule',async t=>{
+  const w=await factoryWorld(t);
+  const day=24*60*60*1000;
+  w.github.assign(17,'bob');
+  w.github.add(18,{title:'Stale assigned issue',body:'Needs person work.',assignees:['alice'],created:w.time-9*day,updated:w.time-8*day});
+  const doctor=await w.command(['autopilot','doctor'],{actor:'operator'});
+  assert.match(doctor.stdout,/Assign an issue to keep it for a person; unassign it to give it to Autopilot\./);
+  await w.start();await w.reviewDependencies();
+  w.time+=8*day;
+  w.github.comment(17,'Still working on #17.');
+  await w.tick();
+  const status=await w.command(['autopilot','status'],{actor:'operator'});
+  assert.match(status.stdout,/Issues: skipped: assigned to a person \(2\); no activity for 7 days: #18 \(@alice, 8d\)/);
+  assert.deepEqual(w.leadActions,[]);
+});

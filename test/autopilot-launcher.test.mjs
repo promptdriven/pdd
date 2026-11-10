@@ -2493,3 +2493,21 @@ test('start: guarded cleanup reclaims a finished workflow shell after its chat h
   assert.equal(w.herdr.panes.length,paneCount-1);
   assert.ok(!w.herdr.paneOf(run.layout));
 });
+
+test('3155: status shows skipped assigned issues with count and lists assignments with no activity for 7 days', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const now = f.ports.now();
+  const day = 24 * 60 * 60 * 1000;
+  const saved = f.state();
+  saved.cachedIssues = [
+    { number: 11, state: 'open', assignees: [{ login: 'carol' }], updated_at: new Date(now - 2 * day).toISOString() },
+    { number: 15, state: 'open', assignees: [{ login: 'bob' }], updated_at: new Date(now - 10 * day).toISOString() },
+    { number: 12, state: 'open', assignees: [{ login: 'alice' }], updated_at: new Date(now - 8 * day).toISOString() },
+    { number: 19, state: 'closed', assignees: [{ login: 'dave' }], updated_at: new Date(now - 14 * day).toISOString() },
+  ];
+  writeFileSync(f.stateFile(), JSON.stringify(saved, null, 2));
+  const status = await f.invoke('status');
+  assert.equal(status.exitCode, 0, status.message);
+  assert.match(status.message, /Issues: skipped: assigned to a person \(3\); no activity for 7 days: #12 \(@alice, 8d\), #15 \(@bob, 10d\)/);
+});

@@ -1399,3 +1399,40 @@ for(const facts of [{reason:{code:'binding-missing'}},{refusals:[{code:'binding-
     await tick();assert.equal(f.record().parking?.blocker.kind,'binding','3135_SAVED_RESULT_BINDING');
     f.tick();await tick();assert.equal(f.record().parking?.blocker.kind,'binding');
   });
+
+test('3155: assigning a claimed issue lets a working step finish, then parks and releases the claim while keeping the run folder, branch and PRs', async t => {
+  const {f, tick, stateFile, ports, warnings} = await setup(t);
+  fullTicks(f, stateFile, ports);
+  const run = f.record();
+  run.pr = [{number: 23, url: 'https://github.com/example/project/pull/23', branch: run.branch, base: 'main', stage: 'plan'}];
+  save(f, run);
+  const assignedIssue = {number: 17, html_url: run.issue.url, title: run.issue.title, body: 'Value must be two.', state: 'open',
+    labels: ['pdd:working'], assignees: [{login: 'alice'}], user: {login: 'example'}, comments: 0, updated_at: new Date(f.clock).toISOString()};
+  ports.queryIssues = async () => ({status: 200, issues: [assignedIssue]});
+  ports.reconcileDependencyIntake = async () => ({eligible: [], claims: [{issue: run.issue.url, active: true, owner: 'park-owner', coordinatorId: 'park-owner', machine: 'park-machine', commentId: '11', labelEventId: '12'}], groups: [], queued: [], skipped: [{issue: run.issue.url, reasons: ['assigned']}]});
+  ports.refreshClaimHeartbeat = async () => ({state: 'refreshed'});
+  let releases = 0;
+  ports.releaseParkedClaim = async input => {releases++; assert.equal(input.branch, run.branch); return {state: 'released'};};
+  // While the current chat is actively working, Autopilot lets the current step finish before parking and releasing.
+  const pane = f.herdr.paneOf(run.chats.at(-1));
+  pane.agent.agent_status = 'working';
+  await tick();
+  assert.equal(releases, 0, 'working step must finish before release');
+  assert.equal(f.record().parking, undefined);
+  assert.equal(f.record().state, 'running');
+  // Once the step finishes (agent idle), Autopilot parks and releases the claim while keeping the run folder, branch and PRs.
+  f.herdr.idle();
+  await tick();
+  assert.equal(releases, 1, 'assigning a claimed issue must park and release the claim once the active step finishes');
+  assert.equal(f.record().state, 'cancelled');
+  assert.deepEqual(f.record().parking?.blocker, {kind: 'assigned', until: null});
+  assert.ok(existsSync(run.root), 'run folder is kept');
+  assert.ok(f.git(f.source, 'rev-parse', '--verify', run.branch), 'branch is kept');
+  assert.equal(f.record().pr.length, 1, 'PRs are kept');
+  assert.equal(existsSync(join(run.commonDir, 'pdd/worktree-assignments/issues/17.json')), false, 'local worktree claim is released');
+  // Subsequent ticks do not release again or offer the assigned issue as fresh work.
+  await tick();
+  assert.equal(releases, 1);
+  const state = JSON.parse(readFileSync(stateFile));
+  assert.deepEqual(state.seen['17']?.selectionReasons, ['assigned']);
+});

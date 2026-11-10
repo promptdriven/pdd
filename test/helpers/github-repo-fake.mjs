@@ -17,7 +17,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   f.add = (n, extra = {}) => {
     const at = f.now() - (issues - n + 10) * 60 * 1000;
     const issue = { id: String(5000000 + n), number: n, title: `Issue ${n}`, body: `Make part ${n} work.`, state: 'open', state_reason: null, user: owner,
-      labels: [], created: at, updated: at, comments: [], blockedBy: [], timeline: [], deleted: false, movedTo: null, ...extra };
+      labels: [], assignees: [], created: at, updated: at, comments: [], blockedBy: [], timeline: [], deleted: false, movedTo: null, ...extra };
     f.issues.set(n, issue);
     return issue;
   };
@@ -29,7 +29,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   };
   const row = issue => ({ id: Number(issue.id), node_id: `I_${issue.id}`, number: issue.number, html_url: issue.movedTo ? `https://github.com/${issue.movedTo}/issues/${issue.number}` : url(issue.number),
     title: issue.title, body: issue.body, state: issue.state, state_reason: issue.state_reason, user: { login: issue.user }, labels: issue.labels.map(name => ({ name })),
-    assignees: [], assignee: null, comments: issue.comments.length, created_at: iso(issue.created), updated_at: iso(issue.updated), closed_at: null,
+    assignees: (issue.assignees ?? []).map(login => ({ login })), assignee: issue.assignees?.[0] ? { login: issue.assignees[0] } : null, comments: issue.comments.length, created_at: iso(issue.created), updated_at: iso(issue.updated), closed_at: null,
     author_association: 'OWNER', issue_dependencies_summary: summary(issue) });
   const comment = (issue, c) => ({ id: Number(c.id), html_url: `${url(issue.number)}#issuecomment-${c.id}`, body: c.body, user: { login: c.user }, created_at: iso(c.created), updated_at: iso(c.updated), author_association: 'OWNER' });
   const events = issue => [...issue.timeline.map(e => ({ id: Number(e.id), event: e.event, actor: { login: e.actor }, created_at: iso(e.created), ...(e.label ? { label: { name: e.label } } : {}) })),
@@ -40,6 +40,8 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   f.editComment = (n, id, body) => { const issue = f.issues.get(n), c = issue.comments.find(x => x.id === String(id)); c.body = body; c.updated = f.now(); touch(issue); };
   f.label = (n, name, actor = owner) => { const issue = f.issues.get(n); issue.labels.push(name); const e = { id: String(f.nextEvent++), event: 'labeled', label: name, actor, created: f.now() }; issue.timeline.push(e); touch(issue); return e; };
   f.unlabel = (n, name, actor = owner) => { const issue = f.issues.get(n); issue.labels = issue.labels.filter(x => x !== name); issue.timeline.push({ id: String(f.nextEvent++), event: 'unlabeled', label: name, actor, created: f.now() }); touch(issue); };
+  f.assign = (n, login = owner) => { const issue = f.issues.get(n); issue.assignees = [...new Set([...(issue.assignees ?? []), login])]; touch(issue); };
+  f.unassign = (n, login) => { const issue = f.issues.get(n); issue.assignees = login ? (issue.assignees ?? []).filter(x => x !== login) : []; touch(issue); };
   f.link = (dependent, blocker) => { const issue = f.issues.get(dependent); issue.blockedBy.push(blocker); if (f.linkBumpsUpdate) touch(issue); };
   f.close = n => { const issue = f.issues.get(n); issue.state = 'closed'; issue.state_reason = 'completed'; touch(issue); };
   f.edit = (n, body) => { const issue = f.issues.get(n); issue.body = body; touch(issue); };
@@ -71,6 +73,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   };
   function rest(method, endpoint, input) {
     const [path, query = ''] = endpoint.split('?'), params = new URLSearchParams(query);
+    if (path === 'user' && method === 'GET') return { status: 200, body: { login: owner } };
     const route = path.startsWith(`repos/${repo}`) ? path.slice(`repos/${repo}`.length) : null;
     if (route === null) return { status: 404, body: { message: 'Not Found' } };
     if (route === '' && method === 'GET') return { status: 200, body: { full_name: repo, owner: { login: owner } } };
@@ -120,7 +123,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
       if (!issue || issue.deleted || issue.movedTo) { data[`i${m[1]}`] = null; continue; }
       const done = nodes => ({ nodes, pageInfo: { hasNextPage: false } });
       data[`i${m[1]}`] = { url: url(issue.number), number: issue.number, fullDatabaseId: issue.id, title: issue.title, body: issue.body, state: issue.state === 'open' ? 'OPEN' : 'CLOSED', stateReason: null,
-        author: { login: issue.user }, labels: done(issue.labels.map(name => ({ name }))), assignees: done([]),
+        author: { login: issue.user }, labels: done(issue.labels.map(name => ({ name }))), assignees: done((issue.assignees ?? []).map(login => ({ login }))),
         comments: done(issue.comments.map(c => ({ fullDatabaseId: c.id, body: c.body, createdAt: iso(c.created), updatedAt: iso(c.updated), author: { login: c.user } }))),
         blockedBy: done(issue.blockedBy.map(n => ({ url: url(n) }))), blocking: done(live().filter(other => other.blockedBy.includes(issue.number)).map(other => ({ url: url(other.number) }))),
         timelineItems: done([]) };
@@ -131,6 +134,14 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   f.gh = async (args, options = {}) => {
     if (args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: repo, url: `https://github.com/${repo}`, defaultBranchRef: { name: 'main' }, owner: { login: owner } }), stderr: '' };
+    if (args[0] === 'issue' && args[1] === 'edit') {
+      const n = Number(args[2]);
+      if (args.includes('--add-label')) for (const label of args[args.indexOf('--add-label') + 1].split(',').filter(Boolean)) if (!f.issues.get(n)?.labels.includes(label)) f.label(n, label);
+      if (args.includes('--remove-label')) for (const label of args[args.indexOf('--remove-label') + 1].split(',').filter(Boolean)) f.unlabel(n, label);
+      if (args.includes('--add-assignee')) for (const login of args[args.indexOf('--add-assignee') + 1].split(',').filter(Boolean)) f.assign(n, login === '@me' ? owner : login);
+      if (args.includes('--remove-assignee')) for (const login of args[args.indexOf('--remove-assignee') + 1].split(',').filter(Boolean)) f.unassign(n, login === '@me' ? owner : login);
+      return { code: 0, stdout: '', stderr: '' };
+    }
     if (args[0] !== 'api') return { code: 1, stdout: '', stderr: `unsupported gh ${args[0]}` };
     const endpoint = endpointOf(args), method = (args.includes('--method') ? args[args.indexOf('--method') + 1] : args.includes('--input') || args.includes('-f') ? 'POST' : 'GET').toUpperCase();
     const sent = args.find(word => /^If-None-Match: /.test(word))?.slice(15);

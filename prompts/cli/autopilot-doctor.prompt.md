@@ -82,8 +82,8 @@ Check these boundaries in order and continue after failures:
 - Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all ten skill
   entrypoints in one selected provider's supported project/user skill root,
   and valid pdd.json autopilot mode/trust. Off warns; native start owns mode admission. Describe observe versus auto
-  authority, owner/write-access trust even with [], explicit trusted users and
-  strict approvals in plain words. Never change mode or trust.
+  authority, owner/write-access trust even with [], explicit trusted users,
+  strict approvals and the person-assignment rule (`Assign an issue to keep it for a person; unassign it to give it to Autopilot.`) in plain words. Never change mode or trust.
 - Enumerate tracked *.prompt.md and report draft/missing interfaces as advisory
   paths that may need approval on first check. Malformed or unreadable prompts
   warn. Never approve them or block doctor solely for drafts.
@@ -131,8 +131,8 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 ```json
 {
   "kind": "partial",
-  "status": "approved",
-  "prose_sha256": "7fc0ee92e59718fc535ceb4e43dddefd02ba88d2d7190b86720db8e56fa91b2e",
+  "status": "draft",
+  "prose_sha256": "055acb5ad39b769a778d7964addb280167f9ae9d78875dffe8c2f68be698aa0e",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

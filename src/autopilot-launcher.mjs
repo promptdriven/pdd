@@ -349,6 +349,48 @@ async function trusted(row, state, config, p) {
 // A trusted claim comment that carries a lastSeen heartbeat.
 const heartbeat = row => typeof row?.body === 'string' && withoutClaimHeartbeat(row.body) !== row.body;
 const latestTime = values => values.map(value => Date.parse(value)).filter(Number.isFinite).reduce((last, at) => Math.max(last, at), -Infinity);
+const STALE_ASSIGNMENT_MS = 7 * 24 * 60 * 60 * 1000;
+const issueAssignees = issue => [
+  ...(Array.isArray(issue?.assignees) ? issue.assignees : []),
+  ...(issue?.assignee ? [issue.assignee] : []),
+].map(a => typeof a === 'string' ? a : a?.login).filter(name => typeof name === 'string' && name.trim());
+function isIssueAssigned(state, p, number) {
+  const cached = (Array.isArray(state?.cachedIssues) ? state.cachedIssues : []).find(row => !row?.pull_request && row?.number === number);
+  if (cached) return issueAssignees(cached).length > 0;
+  const rawSnapshot = p?.dependencySnapshot?.issues;
+  const snapshotIssues = Array.isArray(rawSnapshot)
+    ? rawSnapshot
+    : rawSnapshot && typeof rawSnapshot === 'object'
+      ? Object.entries(rawSnapshot).map(([key, value]) => ({ key, ...(value && typeof value === 'object' ? value : {}) }))
+      : [];
+  const snapshotIssue = snapshotIssues.find(row => row?.number === number || Number(/\/issues\/([1-9][0-9]*)$/.exec(row?.key)?.[1]) === number);
+  if (snapshotIssue) return issueAssignees(snapshotIssue).length > 0;
+  return false;
+}
+function assignedStatusSummary(state, now = Date.now()) {
+  const openAssigned = (state?.cachedIssues ?? []).filter(issue => !issue.pull_request && issue.state === 'open' && issueAssignees(issue).length > 0);
+  const stale = [];
+  for (const issue of openAssigned) {
+    const assignees = [...new Set(issueAssignees(issue))];
+    const rows = state?.commentCache?.[issue.number]?.rows ?? [];
+    const heartbeatEdit = latestTime(rows.filter(heartbeat).map(row => row.updated_at));
+    const issueUpdate = Date.parse(issue.updated_at ?? issue.updatedAt ?? issue.created_at);
+    const lastActivity = latestTime([
+      ...(issueUpdate > heartbeatEdit + HEARTBEAT_SLACK ? [issue.updated_at ?? issue.updatedAt ?? issue.created_at] : [issue.created_at]),
+      ...rows.flatMap(row => heartbeat(row) ? [row.created_at] : [row.created_at, row.updated_at]),
+    ]);
+    const idleMs = Number.isFinite(lastActivity) ? now - lastActivity : Number.isFinite(issueUpdate) ? now - issueUpdate : NaN;
+    if (Number.isFinite(idleMs) && idleMs >= STALE_ASSIGNMENT_MS) {
+      stale.push({ number: issue.number, assignees, days: Math.floor(idleMs / (24 * 60 * 60 * 1000)) });
+    }
+  }
+  stale.sort((a, b) => a.number - b.number);
+  return { count: openAssigned.length, stale };
+}
+function assignedStatusLine(state, now = Date.now()) {
+  const { count, stale } = assignedStatusSummary(state, now);
+  return `Issues: skipped: assigned to a person (${count}); no activity for 7 days: ${stale.length ? stale.map(item => `#${item.number} (@${item.assignees.join(', @')}, ${item.days}d)`).join(', ') : 'none'}`;
+}
 function parkingPorts(state, p, {localOnly = false} = {}) {
   const worker = {...workflowCleanupPorts(p,p), autopilotStateFile: state.stateFile, isTTY: false, execFile: p.execFile ?? (async (file, args, options) => {
     const result = await p.execute(file, args, options);
@@ -367,8 +409,9 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       const chat = currentChat(run), live = chat ? await chatSession(chat, {...worker, run}) : null;
       return Boolean(live?.alive && !['idle', 'done'].includes(live.status));
     },
-    observeBlocker: async run => {
-      if (run.blockedOn) return null;
+    observeBlocker: async (run, {assignedOnly = false} = {}) => {
+      if (!localOnly && isIssueAssigned(state, p, run.number)) return {kind: 'assigned', until: null};
+      if (assignedOnly || run.blockedOn) return null;
       if (run.state === 'waiting' && run.gate?.kind === 'approve-pr' && !run.question && run.done?.check) {
         let checks;
         try {checks = (p.readRunResults ?? readRunResults)({root: run.root, runDir: run.runDir, runId: run.runId, since: run.startedAt ?? 0}, {env: p.env});}
@@ -408,6 +451,7 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       {...worker, parkingBlockerCleared: fresh => parking.blockerCleared(fresh, rule)})),
     blockerCleared: async (run, rule) => {
       const blocker = run.parking.blocker;
+      if (blocker.kind === 'assigned') return !localOnly && !isIssueAssigned(state, p, run.number);
       if (['interpreter', 'environment'].includes(blocker.kind)) return Boolean(rule);
       if (blocker.kind === 'person') return Boolean(run.parking.personWait) && (hasParkedReply(run, worker) || !run.gate && (!run.question || Boolean(run.question.answeredAt)));
       if (['unknown','binding'].includes(blocker.kind)) return hasParkedReply(run, worker);
@@ -530,7 +574,8 @@ async function advanceWaitingPr1Gates(state, p, numbers = null) {
   for (const run of runs) {
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
       || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine
-      || run.state !== 'waiting' || run.gate?.kind !== 'approve-pr' || numbers && !numbers.has(run.number)) continue;
+      || run.state !== 'waiting' || run.gate?.kind !== 'approve-pr' || numbers && !numbers.has(run.number)
+      || isIssueAssigned(state, p, run.number)) continue;
     if (run.parking && (run.parking.phase !== 'parked' || run.parking.blocker?.kind !== 'person')) reconsider.add(run.number);
     try {
       const result = await p.scanAction(() => advanceAutomaticPr1({ref: String(run.number), cwd: state.cwd,
@@ -554,7 +599,8 @@ async function resumeStoppedWorkers(state, p, recoveredRuns = null) {
   for (const run of runs) {
     if (recoveredRuns && !recoveredRuns.has(run.runDir)) continue;
     if (run.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(run.sourceRoot, state.cwd)
-      || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine) continue;
+      || run.automaticOrigin?.coordinatorId !== state.coordinatorId || run.automaticOrigin?.machine !== state.machine
+      || isIssueAssigned(state, p, run.number)) continue;
     if (run.parking) continue;
     try {
       const result = await p.scanAction(() => resumeStoppedRun({ref: String(run.number), cwd: state.cwd,
@@ -1788,7 +1834,7 @@ async function runTick(stateFile, ports, completion) {
     }
     for (const claim of ownClaims) {
       const number = Number(/\/issues\/([1-9][0-9]*)$/.exec(claim.issue)?.[1]), key = `stuck:${number}`;
-      if (!state.parkedNumbers?.includes(number) && !environmentNumbers.has(number) && Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
+      if (!isIssueAssigned(state, p, number) && !state.parkedNumbers?.includes(number) && !environmentNumbers.has(number) && Number.isSafeInteger(number) && stuckFor(claim) >= STUCK_CLAIM_AFTER && state.timeSeen[key] !== claim.stuckSince) {
         // After a ceiling (the repair limit of this checkout's run, or the takeover limit), a
         // retry is refused or not allowed: the rule asks for no retry and no further comment.
         // Both ceilings can hold at once: name each one, and the cancel step whenever this checkout's run has the repair limit.
@@ -1809,7 +1855,7 @@ async function runTick(stateFile, ports, completion) {
     const longRunning = [];
     for (const claim of ownClaims) {
       const number = issueNumber(claim), key = `long:${number}`, since = Date.parse(claim.claimedAt);
-      if (openIssues.has(claim.issue.toLowerCase()) && Number.isFinite(since) && p.now() - since >= LONG_RUNNING_AFTER && state.timeSeen[key] === undefined
+      if (!isIssueAssigned(state, p, number) && openIssues.has(claim.issue.toLowerCase()) && Number.isFinite(since) && p.now() - since >= LONG_RUNNING_AFTER && state.timeSeen[key] === undefined
         && claim.longRunningAlertedAt === undefined && claim.stuckSince === undefined) {
         timeRules.push({ kind: 'long-running', number, reason: `Issue #${number} was claimed 24 hours ago and has no merge yet. Send one informational alert for it, then keep working; this is not a stop.` });
         pendingTimes[key] = claim.claimedAt; longRunning.push(claim);
@@ -1824,7 +1870,7 @@ async function runTick(stateFile, ports, completion) {
     for (const claim of limitedClaims.values()) {
       const number = issueNumber(claim), key = `takeover:${number}`, issue = openIssues.get(claim.issue.toLowerCase());
       const stuck = issue?.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'pdd:stuck');
-      if (issue && !stuck && actsOnLimit(claim) && state.timeSeen[key] === undefined) {
+      if (issue && !isIssueAssigned(state, p, number) && !stuck && actsOnLimit(claim) && state.timeSeen[key] === undefined) {
         timeRules.push({ kind: 'takeover-limit', number, reason: `Issue #${number} has been taken over ${claim.takeovers} times. Do not take it over again: take the stuck path (pdd:stuck, one comment with the cause, one stuck alert) and keep its claim and progress. Read the issue again first and skip it if it already has pdd:stuck. A person removes pdd:stuck to reset the count.` });
         pendingTimes[key] = claim.takeovers;
       }
@@ -1832,6 +1878,7 @@ async function runTick(stateFile, ports, completion) {
     const runProgress = await (p.readRunProgress ?? readRunProgress)(state, p);
     const suiteByNumber = new Map(runProgress.filter(row => row.suite).map(row => [row.number, row.suite]));
     for (const { number, changedAt, suite, interpreter } of runProgress) {
+      if (isIssueAssigned(state, p, number)) continue;
       if (suite?.state === 'unavailable') continue;
       if (suite && (suite.state !== 'finished' || suite.reason)) {
         const key = `suite:${number}:${suite.ticket ?? suite.queuedAt}`;
@@ -1853,7 +1900,29 @@ async function runTick(stateFile, ports, completion) {
     if (!state.health.paused) {
       await environmentTick(state, p, environmentWaits, timeRules, pendingTimes, dirname(stateFile));
       await runtimeTick(state, p, completion, timeRules, pendingTimes, dirname(stateFile));
-      if (config.mode === 'auto') await parkingTick(state, p, config, {wake: true, wakeRules: timeRules});
+    }
+    if (config.mode === 'auto') await parkingTick(state, p, config, {wake: !state.health.paused, wakeRules: timeRules});
+    for (const claim of [...ownClaims]) {
+      const number = issueNumber(claim);
+      if (!Number.isSafeInteger(number) || !isIssueAssigned(state, p, number)) continue;
+      const localRuns = await (p.listRuns ?? listRuns)({ cwd: state.cwd, cancelled: true }, workflowCleanupPorts(p, ports));
+      const matchingRuns = localRuns.filter(run => run.number === number && run.repo?.toLowerCase() === state.repo.toLowerCase()
+        && samePath(run.sourceRoot, state.cwd) && run.automaticOrigin?.coordinatorId === state.coordinatorId && run.automaticOrigin?.machine === state.machine);
+      if (matchingRuns.some(run => !['completed', 'cancelled'].includes(run.state))) continue;
+      const releasedByPark = matchingRuns.some(run => run.state === 'cancelled' && run.parking?.phase === 'releasing');
+      if (!releasedByPark) {
+        const lastRun = matchingRuns.at(-1);
+        try {
+          await p.scanAction(() => (p.releaseParkedClaim ?? releaseParkedClaim)({
+            cwd: state.cwd, repository: state.repo, claim, coordinatorId: state.coordinatorId, machine: state.machine,
+            runId: lastRun?.runId ?? `assigned-${claim.commentId}`, branch: lastRun?.branch ?? state.baseBranch ?? state.defaultBranch ?? 'main',
+          }, { ...workflowCleanupPorts(p, ports), execFile: async (file, args, options) => p.execute(file, args, { ...options, purpose: 'claims' }) }));
+        } catch (error) { p.warn(`Assigned claim release deferred for ${claim.issue}: ${line(error.message)}`); continue; }
+      }
+      claim.active = false;
+      ownClaims.splice(ownClaims.indexOf(claim), 1);
+      const cached = (state.cachedIssues ?? []).find(row => !row.pull_request && row.number === number);
+      if (Array.isArray(cached?.labels)) cached.labels = cached.labels.filter(l => (typeof l === 'string' ? l : l?.name) !== 'pdd:working');
     }
     for (const issue of state.cachedIssues ?? []) {
       const labels = issue.labels?.map(x => typeof x === 'string' ? x : x.name) ?? [];
@@ -1870,7 +1939,8 @@ async function runTick(stateFile, ports, completion) {
         }
         const related = Object.values(state.pullCache).filter(pull => pull.refs.includes(issue.number)).sort((a, b) => a.row.number - b.row.number);
         for (const pull of related) await reviewSubmissions(pull, state, p);
-        const source = digest({ issue: [issue.title, issue.body, issue.updated_at, issue.comments, [...labels].sort()], comments: rows.map(row => [row.id, row.updated_at, row.user?.login, row.body]), pulls: related.map(pull => [pull.row.number, pull.present, pull.row.updated_at, pull.row.comments, pull.row.title, pull.row.body, Object.values(pull.reviews ?? {})]) });
+        const assignees = issueAssignees(issue).sort();
+        const source = digest({ issue: [issue.title, issue.body, issue.updated_at, issue.comments, [...labels].sort(), ...(assignees.length ? [assignees] : [])], comments: rows.map(row => [row.id, row.updated_at, row.user?.login, row.body]), pulls: related.map(pull => [pull.row.number, pull.present, pull.row.updated_at, pull.row.comments, pull.row.title, pull.row.body, Object.values(pull.reviews ?? {})]) });
         const previous = state.seen[issue.number];
         const stuck = labels.includes('pdd:stuck');
         const wasStuck = previous?.stuck ?? previous?.selectionReasons?.includes('pdd:stuck') ?? false;
@@ -1894,7 +1964,13 @@ async function runTick(stateFile, ports, completion) {
         const claimKey = `claim:${issue.number}`;
         const claimDue = !suiteHolds && labels.includes('pdd:working') && !expiredClaim && limitedClaim?.expired !== true && Number.isFinite(claimActivity) && p.now() - claimActivity >= CLAIM_IDLE_AFTER && state.timeSeen[claimKey] !== claimActivity;
         const recheckReadyBaseline = previous?.waiting === true && graphEligible === true && !blocked;
-        const unassigned = !issue.assignee && (!Array.isArray(issue.assignees) || issue.assignees.length === 0);
+        const unassigned = assignees.length === 0;
+        if (!unassigned) {
+          selection.state = 'waiting';
+          selection.reasons = ['assigned'];
+          state.seen[issue.number] = { ...(previous ?? {}), source, stuck, mode: config.mode, waiting: true, blocked: true, selectionState: 'waiting', selectionReasons: ['assigned'], ...(graphEligible === undefined ? {} : { graphEligible }) };
+          continue;
+        }
         const reconsiderReady = config.mode === 'auto' && graphEligible === true && !blocked && unassigned;
         const sameLimit = Boolean(previous?.selectionReasons?.includes('takeover-limit')) === limited;
         if (previous?.source === source && previous.mode === config.mode && sameLimit && !becameGraphEligible && !claimDue && !recheckReadyBaseline && !reconsiderReady) {
@@ -2379,7 +2455,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const local = parkingPorts(state, p);
       const runs = (await local.list()).filter(run => run.automaticOrigin?.coordinatorId === state.coordinatorId);
       const observed = await Promise.all(runs.map(async run => ({...run, checkHeld: await local.checkProgress(run)})));
-      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1, p.now()), state.interpreterPattern);
+      const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1, p.now()), state.interpreterPattern) + '\n' + assignedStatusLine(state, p.now());
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; Herdr ${serverRunning ? 'running' : 'unavailable'}; coordinator ${coordinatorState}: ${state.repo ? `${state.repo} in ${state.cwd}` : state.cwd} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · ${state.agent?.id ?? 'no agent'} · next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}${workflows}\n${capacityLine}${relaunch}\n${healthLine(state.health)}${alerts ? `\n${alerts}` : ''}${github ? `\n${github}` : ''}${costs}${groups ? `\n${groups}` : ''}${auditHoldLines(state) ? `\n${auditHoldLines(state)}` : ''}`);
     }

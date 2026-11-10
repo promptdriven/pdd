@@ -25,6 +25,8 @@ export function factoryGithub(w) {
       if(a[1]==='edit') {
         if(a.includes('--add-label')) for(const label of flag(a,'--add-label').split(',')) if(!f.issues.get(n).labels.includes(label)) f.label(n,label);
         if(a.includes('--remove-label')) for(const label of flag(a,'--remove-label').split(',')) f.unlabel(n,label);
+        if(a.includes('--add-assignee')) for(const login of flag(a,'--add-assignee').split(',')) f.assign(n,login==='@me'?f.owner:login);
+        if(a.includes('--remove-assignee')) for(const login of flag(a,'--remove-assignee').split(',')) f.unassign(n,login==='@me'?f.owner:login);
         return ok('');
       }
       if(a[1]==='comment') {f.comment(n,body(a,o));return ok('');}

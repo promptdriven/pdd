@@ -176,7 +176,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   add('setup-skills',complete?'pass':'fail',`${kind} PDD skill bundle`,'npx skills add promptdriven/pdd -g');
   const config = json(read(join(cwd,'pdd.json'))), auto = config?.autopilot;
   const valid = auto && ['auto','observe'].includes(auto.mode) && (auto.trust===undefined || Array.isArray(auto.trust)&&auto.trust.every(x=>typeof x==='string'&&x.trim()));
-  add('setup-mode',valid?'pass':'fail',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode and trust in pdd setup; off does not start work','pdd setup');
+  add('setup-mode',valid?'pass':'fail',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}. Assign an issue to keep it for a person; unassign it to give it to Autopilot.`:'Choose mode and trust in pdd setup; off does not start work. Assign an issue to keep it for a person; unassign it to give it to Autopilot.','pdd setup');
   const tracked = await run('git',['ls-files','-z','--','*.prompt.md']);
   const drafts = [], unreadable = [];
   for (const path of ready(tracked)?tracked.stdout.split('\0').filter(Boolean):[]) {

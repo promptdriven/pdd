@@ -127,7 +127,11 @@ export async function resolveWorkflowIssue(input, ports = {}) {
     || !canonicalUrl(actual.html_url, repo.repository, 'issues', selected.number)
     || typeof actual.title !== 'string' || !(actual.body === null || typeof actual.body === 'string'))
     fail('workflow_github_issue_mismatch');
-  return { ...repo, issue: { number: actual.number, url: actual.html_url, title: actual.title, body: actual.body ?? '' } };
+  const labels = Array.isArray(actual.labels) ? actual.labels.map(l => typeof l === 'string' ? l : l?.name).filter(Boolean) : undefined;
+  const assignees = Array.isArray(actual.assignees) || actual.assignee?.login
+    ? (Array.isArray(actual.assignees) ? actual.assignees : [actual.assignee]).map(a => typeof a === 'string' ? a : a?.login).filter(Boolean) : undefined;
+  return { ...repo, issue: { number: actual.number, url: actual.html_url, title: actual.title, body: actual.body ?? '',
+    ...(labels ? { labels } : {}), ...(assignees ? { assignees } : {}) } };
 }
 
 function markerBody(body, marker) {

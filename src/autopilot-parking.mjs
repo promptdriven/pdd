@@ -127,17 +127,18 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
   let runs = await list();
   for (const run of runs) {
     if (['waking', 'releasing'].includes(run.parking?.phase)) continue;
-    const chat = [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
-    if (!run.parking && ['area-end', 'run-end', 'budget', 'cancel'].includes(chat?.closed?.reason)) continue;
     // Classify current facts before consulting the park's cached inference.
     // A finished check can change its saved result at an unchanged gate.
     const saved = blockerFor({...run, parking: undefined});
-    // Native check/limit evidence can refine a generic gate; explicit named waits win.
-    const observed = !saved || saved.kind === 'person' ? await ports.observeBlocker?.(run) : null;
+    // Native check/limit evidence can refine a generic gate; explicit named waits win, except person assignment.
+    const rawObserved = await ports.observeBlocker?.(run, {assignedOnly: Boolean(saved && saved.kind !== 'person')});
+    const observed = rawObserved?.kind === 'assigned' || !saved || saved.kind === 'person' ? rawObserved : null;
+    const chat = [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
+    if (!run.parking && observed?.kind !== 'assigned' && ['area-end', 'run-end', 'budget', 'cancel'].includes(chat?.closed?.reason)) continue;
     // Unclassified stops also release native resources after a short grace.
     // Their original recovery counters and alert custody survive the park.
     const graceHold = needsGrace(run);
-    if (closingHold(run, ports.now(), observed ?? saved)) continue;
+    if (observed?.kind !== 'assigned' && closingHold(run, ports.now(), observed ?? saved)) continue;
     const blocker = observed ?? saved ?? run.parking?.blocker
       ?? (stopped(run) && !graceHold ? {kind: 'unknown', until: null} : idleParkingBlocker(run, ports.now()));
     if (!blocker && !run.parking) continue;
@@ -171,15 +172,18 @@ export async function reconcileParking(state, ports, {wakeRules = [], wake = fal
     occupancy = (await summarize(await list())).working;
   }
   // Wake-up wins at the timeout boundary. Failed cleanup/resume retains its slot.
-  if (wake && release) {
+  if (release) {
     const hours = Number.isFinite(policy.hours) && policy.hours > 0 ? policy.hours : 48;
     const maxParked = Number.isSafeInteger(policy.maxParked) && policy.maxParked > 0 ? policy.maxParked : 2 * limit;
     const parked = (await list()).filter(run => ['parked', 'releasing'].includes(run.parking?.phase) && !run.parking.checkHeld).sort((a, b) => a.parking.at - b.parking.at || a.number - b.number);
     let excess = Math.max(0, parked.length - maxParked);
-    for (const run of parked) if (run.parking.phase === 'releasing' || ports.now() - run.parking.at >= hours * 3600000 || excess > 0) {
-      if (await ports.checkProgress(run)) continue;
-      const released = await ports.release(run);
-      if (released) excess = Math.max(0, excess - 1);
+    for (const run of parked) {
+      const assigned = run.parking.blocker?.kind === 'assigned';
+      if (assigned || wake && (run.parking.phase === 'releasing' || ports.now() - run.parking.at >= hours * 3600000 || excess > 0)) {
+        if (await ports.checkProgress(run)) continue;
+        const released = await ports.release(run);
+        if (released && !assigned) excess = Math.max(0, excess - 1);
+      }
     }
   }
   const final = await summarize(await list());

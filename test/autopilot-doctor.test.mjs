@@ -204,3 +204,11 @@ for (const fault of ['full panes','invalid budget','unreadable inventory','agent
   assert.match(line.fix,fault==='invalid budget'?/unset PDD_HERDR_PANE_BUDGET/:id==='herdr-room'?/pdd workflow tidy/:/autopilot doctor/);
   assert.ok(f.calls.every(c=>!c.args||!c.args.some(arg=>['close','start','exec'].includes(arg))));
 });
+
+test('3155: doctor setup-mode states the person-assignment rule', async () => {
+  const f = doctorFixture();
+  const report = await runAutopilotDoctor(f.input, f.ports);
+  const mode = report.checks.find(c => c.id === 'setup-mode');
+  assert.ok(mode);
+  assert.match(mode.detail, /Assign an issue to keep it for a person; unassign it to give it to Autopilot\./);
+});

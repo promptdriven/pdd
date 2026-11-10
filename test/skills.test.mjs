@@ -917,3 +917,17 @@ test('AUTOPILOT19: ceilings count only real loops, ask for no retry after the li
     'Only a person lets Autopilot try again. After the repair limit, they remove `pdd:stuck` and `pdd:working`, then run `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.',
     'The tick records it in your claim comment, so a later owner of the issue does not send it again.');
 });
+
+test('3155: manual skills, pdd-autopilot, README and docs/cli.md state the person-assignment rule', () => {
+  const rule = 'Assign an issue to keep it for a person; unassign it to give it to Autopilot.';
+  for (const file of ['pdd-small-change/SKILL.md', 'pdd-bug/SKILL.md', 'pdd-feature/SKILL.md', 'pdd-autopilot/SKILL.md']) {
+    assert.ok(read(file).includes(rule), file);
+  }
+  for (const step of ['pdd-small-change/steps/scope.md', 'pdd-bug/steps/reproduce.md', 'pdd-feature/steps/understand.md']) {
+    const text = read(step);
+    assert.match(text, /gh issue edit N --add-assignee @me/, step);
+    assert.match(text, /pdd:working[\s\S]*warn.*assigning takes it back/i, step);
+  }
+  assert.ok(readFileSync(join(root, 'README.md'), 'utf8').includes(rule), 'README.md');
+  assert.ok(readFileSync(join(root, 'docs/cli.md'), 'utf8').includes(rule), 'docs/cli.md');
+});

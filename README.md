@@ -81,6 +81,7 @@ if you need your own write access.
    An empty `trust: []` still trusts the owner and users with write access.
    Explicit trust names add users. Observe mode reports eligible work.
    Strict approvals and required human reviews still need a person.
+   Assign an issue to keep it for a person; unassign it to give it to Autopilot.
 
 4. Sign in to an agent, review doctor warnings, then start and inspect the run:
 

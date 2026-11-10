@@ -14,9 +14,9 @@ Briefs: `steps/` (`?` optional).
 2. prompt-pr: check, try? → approve, then gate: pr, then ask
 3. code: build, verify, formal, review → gate: pr
 
-- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
+- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first. Assign an issue to keep it for a person; unassign it to give it to Autopilot.
 - Main chat coordinates; no code or checks.
-- Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Briefs: call this chat "the run's main chat" in briefs/notes; keep actual actors and root paths. Wait one long time-out; no small follow-ups. Read §11 once; pdd-prompting RUNBOOK "Bounded handoffs".
+- Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Wait one long time-out; no small follow-ups. Read §11 once; pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.

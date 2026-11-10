@@ -59,6 +59,7 @@ the same merge.
 | Base integration | A clean base merge uses the separate bounded integration counter, retains failed evidence and needs fresh validation before merge. |
 | PR 1 re-entry | The corrected prompt survives code entry and merge; expected values stay fixed. |
 | Run serialization compatibility | Without Story coverage or its recorded contract and path inventory, publication waits for a supported gate; prior decisions survive and the run reaches merge. |
+| Person assignment | Manual workflow start assigns the issue to the signed-in user and warns when Autopilot holds a live claim. Assigning a claimed issue lets the active step finish, parks and releases the claim (keeping the run folder, branch and PRs), and keeps Autopilot from taking the issue again while assigned. Status shows `skipped: assigned to a person` with the count and lists assignments with no activity for 7 days. Doctor states the rule. |
 
 Synthetic operator and person actions apply only to disposable fixtures. The test
 never approves a prompt in the source checkout. The command transcript records

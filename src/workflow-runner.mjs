@@ -922,6 +922,24 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   }
   const productMarkers = [...new Set(String(binding.issue.body ?? '').match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? [])];
   if (productMarkers.length > 1) warnings.push('Warning: The issue has multiple planned-run markers; its product association is unverified.');
+  if (!automatic) {
+    if (binding.issue.labels?.includes('pdd:working')) {
+      let claim = null;
+      try {
+        const { json } = await createDependencyReadPorts({ cwd: context.toplevel }, p).owners.read({ repository: binding.repository, issues: [binding.issue.url] });
+        claim = JSON.parse(json)?.claims?.find(c => c?.issue?.toLowerCase() === binding.issue.url.toLowerCase() && c.active === true) ?? null;
+      } catch {}
+      const claimText = claim?.coordinatorId && claim?.machine ? ` (${claim.coordinatorId} on ${claim.machine})` : '';
+      const claimWarning = `warning: Issue #${number} has a live Autopilot claim${claimText}. Assigning the issue to a person takes it back: Autopilot finishes or saves its current step, releases its claim (keeping the run folder, branch and PRs), and does not take the issue again while it is assigned (gh issue edit ${number} --repo ${binding.repository} --add-assignee @me).`;
+      warnings.push(claimWarning);
+      p.warn(claimWarning);
+    }
+    const login = await githubLogin({ root: context.toplevel }, p);
+    if (login && !binding.issue.assignees?.some(a => a.toLowerCase() === login.toLowerCase())) {
+      try { await p.execFile('gh', ['issue', 'edit', String(number), '--repo', binding.repository, '--add-assignee', login], { cwd: context.toplevel }); }
+      catch {}
+    }
+  }
   const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
     ...(productMarkers.length === 1 ? { productMarker: productMarkers[0] } : {}),
     issue: { number, title: binding.issue.title, url: binding.issue.url, ...(String(binding.issue.body ?? '').trim() ? { asked: String(binding.issue.body).slice(0, 4000) } : {}) }, number, root: a.worktreePath, branch: a.branch,
@@ -1552,7 +1570,9 @@ async function githubLogin(run, p) {
   if (p.githubLogin !== undefined) return p.githubLogin;
   try {
     const reply = await p.execFile('gh', ['api', 'user', '--jq', '.login'], { cwd: run.root });
-    const login = reply.code === undefined || reply.code === 0 ? String(reply.stdout ?? '').trim() : '';
+    let login = reply.code === undefined || reply.code === 0 ? String(reply.stdout ?? '').trim() : '';
+    if (login.startsWith('{')) try { login = String(JSON.parse(login)?.login ?? '').trim(); } catch {}
+    else login = login.split(/\s+/)[0] ?? '';
     // One read per command: the pending and final descriptions name the same person.
     return p.githubLogin = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login) ? login : null;
   } catch { return p.githubLogin = null; }
@@ -5159,7 +5179,7 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
   if (!run || ended(run) || !validSavedAutomaticOrigin(run)
     || run.automaticOrigin.machine !== input.machine
     || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || ['waking', 'releasing'].includes(run.parking?.phase)) return skipped();
-  if (['area-end', 'run-end', 'budget', 'cancel'].includes(currentChat(run)?.closed?.reason)) return skipped();
+  if (input.blocker?.kind !== 'assigned' && ['area-end', 'run-end', 'budget', 'cancel'].includes(currentChat(run)?.closed?.reason)) return skipped();
   if (!run.layout?.workspaceId) return skipped('not-pdd-created');
   if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'stuckCause', 'environmentRetry', 'automaticOrigin', 'progressAt', 'updatedAt', 'chatIdleLimit', 'chatResumeLimit']
     .some(key => !sameFact(run[key], input.expected[key]))) return skipped();

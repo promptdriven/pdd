@@ -1,6 +1,6 @@
 # scope
 
-- Read the repo instructions and the code and prompts that the request touches.
+- Read the repo instructions and the code and prompts that the request touches. Outside a run on issue N, assign yourself (`gh issue edit N --add-assignee @me`); if `pdd:working` is set, warn that assigning takes it back.
 - In scope.md, list every issue request and trusted follow-up as a checklist. Save the same items in `small-change-checklist.json` (RUNBOOK §15). Keep pending items visible; exclusions need a reason quoted from the issue, not the plan.
 - State the result, the files it touches, why it is small and how to undo it.
 - If behavior changes, write the expected output or error now, before the code changes.

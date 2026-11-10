@@ -17,7 +17,7 @@ Each area is one main chat. Step briefs are in `steps/`.
 
 ## Rules
 
-- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
+- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first. Assign an issue to keep it for a person; unassign it to give it to Autopilot.
 - The main chat coordinates and talks with the person; no code or checks.
 - Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Every brief requires "the run's main chat" for the chat in briefs/notes; keep actual actors and root paths. Wait once: long time-out; no small follow-ups. Read §11 once. See pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.

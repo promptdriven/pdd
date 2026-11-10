@@ -60,6 +60,10 @@ blockedOn or current unanswered person question. This is an application binding
 hold, with no timed retry. Retain it until a bound explicit reply/retry arrives;
 never wake it through interpreter health alone. Display binding in summaries.
 
+## Person assignment release (#3155)
+
+When `observeBlocker` returns `{kind:"assigned",until:null}`, it overrides any saved or parked blocker and bypasses `closingHold`. While `checkProgress` is true (active agent turn or check), defer parking so the current step finishes or saves its work. Once parked with `blocker.kind === "assigned"`, release the run immediately through `ports.release(run)` in the release pass without waiting for `hours` or `maxParked`, keeping the run folder, branch and PRs.
+
 ## Dependencies
 
 - [Environment causes](autopilot-environment.prompt.md): required generation/runtime/testing context for eligible environmentRetry and its bounded backoff. No other dependency policy is copied here.
@@ -67,6 +71,6 @@ never wake it through interpreter health alone. Display binding in summaries.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"5f077470122348a7186a0a2156007cf556d8501fccfae45a3919112c5a8d69e0","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"348ec3723fcdf4511528af30d0aefaf9da1bc009f79c0441b1dcd4e26ef8a299","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

@@ -1,6 +1,6 @@
 # reproduce
 
-- Read the issue, repo instructions and the prompt that owns the behavior.
+- Read the issue, repo instructions and the prompt that owns the behavior. Outside a run on issue N, assign yourself (`gh issue edit N --add-assignee @me`); if `pdd:working` is set, warn that assigning takes it back.
 - Find the smallest safe input that shows the bug. Write down the setup, input, command, expected and actual result.
 - If a prompt owns this behavior, follow section 14 of RUNBOOK.md (pdd-prompting skill): write a test from the issue and run `pdd test` on the CURRENT prompt. Report ✗ or ✓, and put its `Prompt tests` line(s) and the report link(s) in your `done` summary as the "before" report.
 - If no prompt exists, say so plainly, in the words of section 14.

@@ -154,6 +154,10 @@ Add a fresh-repository first-start scenario using the factory Git, GitHub, Herdr
 
 The parent alert adapter gives the real alert owner the same injected GitHub execution transport as native factory commands. Keep private state and fake HTTP delivery, including failed and uncertain replies.
 
+## Person assignment (#3155)
+
+Exercise manual `pdd workflow start` assigning the issue to the signed-in GitHub user and warning when Autopilot holds a live claim. Exercise assigning an Autopilot-claimed issue so Autopilot finishes or saves its current step, releases its claim through the normal release path (keeping the run folder, branch and PRs), and does not take the issue again while it is assigned. Exercise `pdd autopilot status` reporting `skipped: assigned to a person` with a count and listing assignments with no activity for 7 days, and `pdd autopilot doctor` stating the person-assignment rule.
+
 ## Dependencies
 
 - [Launcher](../cli/autopilot-launcher.prompt.md): native tick and recovery boundary.

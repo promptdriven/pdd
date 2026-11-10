@@ -588,7 +588,7 @@ owner such as `Serhan-Asad` works like a lowercase owner. A value that is not a
 GitHub issue URL compares as its exact string. A missing, false or unavailable
 eligibility result waits. The shared graph owns current dependency readiness,
 trust, GitHub Assignees and claim checks; missing assignment data does not prove
-that an issue is unassigned. A related PR or saved run alone does not exclude an
+that an issue is unassigned. Include sorted assignee logins in the issue source digest. When an open issue is assigned to a person, `runTick` sets its selection to `waiting` with reason `assigned`, never offers it in `work` or `timeRules`, skips it in `advanceWaitingPr1Gates` and `resumeStoppedWorkers`, returns `{kind:"assigned",until:null}` from `parkingPorts.observeBlocker` (when not `localOnly`) so an active run finishes or saves its current step and releases its claim through the normal release path, and releases any remaining own claim on that assigned issue once no unfinished local run remains. `pdd autopilot status` reports `skipped: assigned to a person (<count>)` from the saved open issues and lists any assigned issues with no activity for 7 days (`#N (@login, Xd)`). A related PR or saved run alone does not exclude an
 otherwise eligible issue. `add` accepts numbers and references to this repository
 only, comparing repository names ignoring case. Validate every reference before
 any label mutation; a foreign reference returns exit 2 with one clear line and
