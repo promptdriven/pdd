@@ -70,7 +70,7 @@ function identity(rows) {
 export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
 function runtimeCost(batch, summary) {
-  const saved = [batch?.cost, summary?.cost].filter(value => value !== undefined && value !== null);
+  const saved = [batch?.cost, summary?.cost].filter(value => value !== undefined);
   if (!saved.length) return null;
   const valid = saved.map(value => object(value) && Number.isSafeInteger(value.max_calls) && value.max_calls >= 1
     && Number.isSafeInteger(value.max_live_calls) && value.max_live_calls >= 1

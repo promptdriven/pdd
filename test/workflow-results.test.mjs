@@ -64,6 +64,18 @@ test('workflow results retain validated saved live cost and do not invent it for
     { summary_line: 'Prompt tests: ✓ 1 of 1 criteria' });
   const [malformedResult] = readRunResults({ root: malformed.root, since }, { env: malformed.env, capture: () => { throw Error('no capture'); } });
   assert.equal(Object.hasOwn(malformedResult, 'cost'), false, 'invalid caps are not normalized or inferred');
+
+  const nullBatch = folders(t);
+  nullBatch.batch('20261103-120000-ffff', { intent: 'check', created_at: '2026-11-03T12:00:00Z', cost: null },
+    { summary_line: 'Prompt tests: ✓ 1 of 1 criteria', cost });
+  const [nullBatchResult] = readRunResults({ root: nullBatch.root, since }, { env: nullBatch.env, capture: () => { throw Error('no capture'); } });
+  assert.equal(Object.hasOwn(nullBatchResult, 'cost'), false, 'a present null batch copy is malformed');
+
+  const nullSummary = folders(t);
+  nullSummary.batch('20261103-120000-gggg', { intent: 'check', created_at: '2026-11-03T12:00:00Z', cost },
+    { summary_line: 'Prompt tests: ✓ 1 of 1 criteria', cost: null });
+  const [nullSummaryResult] = readRunResults({ root: nullSummary.root, since }, { env: nullSummary.env, capture: () => { throw Error('no capture'); } });
+  assert.equal(Object.hasOwn(nullSummaryResult, 'cost'), false, 'a present null summary copy is malformed');
 });
 
 const phase = extra => ({ exitCode: null, signal: '', timedOut: false, outputLimited: false, stdoutTail: [], stderrTail: [], expectedFound: false, error: '', setupError: '', observedError: '', ...extra });
