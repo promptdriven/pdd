@@ -62,7 +62,9 @@ oversized intermediates. Ordinary schema nodes after a reference do not trigger
 repeated full-subtree size walks. A deeply nested fitting schema remains eligible;
 its depth alone must not multiply full-size accounting. Cached targets, exact
 numbers, key order and errors retain their existing meaning; this adds no timing
-threshold or input restriction.
+threshold or input restriction. Recording source spans takes time linear in the
+source length. A valid JSON string of any length within the limit, including one
+dense with escapes, keeps its exact span instead of failing as invalid.
 
 <details>
 <summary>Record selection, pointers and cycles</summary>
@@ -229,7 +231,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "ec8727b4eed27d825ee6d453147d5d25d1c0c3f8b6dbf6c8b6f4ff66048d5979",
+  "status": "draft", "prose_sha256": "93315993835b6cf6162ff96fe134a1950ebf792790258848a08422c696adfb4d",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
