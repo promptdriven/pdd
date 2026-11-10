@@ -8,7 +8,7 @@ import {fixture, packageRoot} from "./helpers/workflow-runner-fixture.mjs";
 import {healthyMachine} from "./helpers/healthy-machine.mjs";
 import {isolatedCheckCapacity} from "./helpers/check-machine.mjs";
 import {createGithubRepoFake} from "./helpers/github-repo-fake.mjs";
-import {runAutopilotLauncher} from "../src/autopilot-launcher.mjs";
+import {runAutopilotLauncher, tickAutopilot} from "../src/autopilot-launcher.mjs";
 
 const repo = "example/project", coordinatorId = "park-owner", machine = "park-machine";
 function addClaimEra(github, at) {
@@ -143,4 +143,74 @@ test("3157: public release keeps a concurrent stop and fresh replacement cache",
     [[String(replacement.commentId), String(replacement.eventId)]], "a fresh replacement cache is not pruned by issue number");
   assert.deepEqual(latest.parkedNumbers, [17, 99], "number-only reservations stay for ordinary reconciliation");
   assert.deepEqual(github.issues.get(17).labels, ["pdd:working", "pdd:stuck"], "the replacement era remains remote");
+});
+
+
+for (const [name, emptyLatestCache] of [["the exact cached era", false], ["an empty latest cache", true]]) test("3157: public release blocks an older tick from restoring " + name, async t => {
+  const f = await fixture(t, {agent:"codex"});
+  const now = () => f.clock;
+  const github = createGithubRepoFake({repository:repo, owner:"example", issues:18, now});
+  const first = addClaimEra(github, f.clock);
+  github.label(17, "pdd:stuck");
+  const stateFolder = join(f.ports.env.HOME, ".local", "state", "pdd", "autopilot");
+  mkdirSync(stateFolder, {recursive:true});
+  const root = realpathSync(f.source), id = createHash("sha256").update(root).digest("hex").slice(0,20);
+  const stateFile = join(stateFolder, id + ".json");
+  const issue = "https://github.com/" + repo + "/issues/17";
+  const cached = {issue, owner:coordinatorId, coordinatorId, machine, active:false,
+    commentId:String(first.commentId), labelEventId:String(first.eventId)};
+  writeFileSync(join(f.source, "pdd.json"), JSON.stringify({autopilot:{mode:"observe",trust:[]}}));
+  writeFileSync(stateFile, JSON.stringify({enabled:true, defaultBranch:"main", baseBranch:"main", stateFile,
+    cwd:f.source, repo, packageRoot, runs:1, coordinatorId, machine, controlRevision:"before-release", activatedAt:1,
+    agent:{id:"codex",kind:"codex",command:"codex"}, environment:f.ports.env, recipeDelivered:true,
+    githubIntake:{at:f.clock,eligible:[],groups:[],claims:[cached]}, parkedNumbers:[17,99]}));
+  let tickReached, continueTick, emptied = false;
+  const tickAtIntake = new Promise(resolve => { tickReached = resolve; });
+  const tickMayFinish = new Promise(resolve => { continueTick = resolve; });
+  const originalExec = f.ports.execFile;
+  const fakeExec = async (file, args, options={}) => {
+    if (file === "gh" && args[0] === "api") {
+      const result = await github.gh(args, options);
+      const endpoint = args.find(value => /^repos\//.test(value));
+      const method = args.includes("--method") ? args[args.indexOf("--method") + 1] : "GET";
+      if (emptyLatestCache && !emptied && method === "DELETE" && endpoint?.endsWith("/labels/pdd%3Aworking")) {
+        emptied = true;
+        const latest = JSON.parse(readFileSync(stateFile, "utf8"));
+        latest.githubIntake = {...latest.githubIntake, claims:[]};
+        writeFileSync(stateFile, JSON.stringify(latest));
+      }
+      return result;
+    }
+    return originalExec(file, args, options);
+  };
+  const ports = {...healthyMachine, ...f.ports, checkCapacityPorts:isolatedCheckCapacity(f.base),
+    authority:{read:async()=>({authority:"trusted"})}, execFile:fakeExec,
+    run:async (file,args,options={}) => {
+      if (file === "gh" && args[0] === "api") return fakeExec(file, args, options);
+      if (file === "gh" && args[0] === "repo") return {code:0, stdout:JSON.stringify({nameWithOwner:repo,url:"https://github.com/" + repo,defaultBranchRef:{name:"main"}}), stderr:""};
+      return {code:0,...await f.ports.execFile(file,args,options)};
+    },
+    tidyRuns:async()=>{}, listRuns:async()=>[], readRunProgress:async()=>[], readEnvironmentWaits:async()=>[],
+    reconcileDependencyIntake:async()=>{
+      tickReached();
+      await tickMayFinish;
+      return {eligible:[],claims:[cached],groups:[],queued:[],skipped:[]};
+    },
+    queryIssues:async()=>({status:304}), sendDigest:async()=>({exitCode:0}), sendAlert:async()=>({exitCode:0}),
+    readAttention:async()=>[], warn:()=>{},
+  };
+  const ticking = tickAutopilot(stateFile, ports);
+  await tickAtIntake;
+  const released = await runAutopilotLauncher({command:"release", cwd:f.source, env:f.ports.env, issues:["17"]}, ports);
+  assert.equal(released.exitCode, 0, released.message);
+  assert.equal(emptied, emptyLatestCache, "the controlled cache transition ran only for the empty-cache ordering");
+  const releasedState = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.deepEqual(releasedState.githubIntake.claims, [], "release keeps the current cache clear before the held tick continues");
+  assert.notEqual(releasedState.controlRevision, "before-release", "the successful release invalidates an older tick control snapshot");
+  continueTick();
+  await ticking;
+  const latest = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.equal(latest.controlRevision, releasedState.controlRevision, "the older tick cannot replace the released control revision");
+  assert.deepEqual(latest.githubIntake.claims, [], "an older tick must not restore the released cache");
+  assert.deepEqual(latest.parkedNumbers, [17,99], "the release does not replace unrelated cached reservations");
 });

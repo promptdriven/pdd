@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: e6d053941ea4a44e300cf255e81635fc2e9aa76a677e329d2eb932c9b1fb0b85).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 72a0d9907aaaf18f244b67cbc5f937a68f56f37e159cf032898ace42dc74f847).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -2531,18 +2531,18 @@ export async function runAutopilotLauncher(input, ports = {}) {
         const ownClaim = claim => claim?.owner === state.coordinatorId && claim?.coordinatorId === state.coordinatorId && claim?.machine === state.machine;
         const releasedClaim = Array.isArray(state.githubIntake?.claims)
           ? state.githubIntake.claims.find(claim => sameIssue(claim) && ownClaim(claim) && completeClaimEra(claim)) : null;
+        const releaseRevision = previous.controlRevision ?? null;
         if (releasedClaim) {
           let releaseAdmission;
           try {
             releaseAdmission = await claimAdmission(state, p);
             const latest = releaseAdmission && read(stateFile);
-            if (latest?.repo?.toLowerCase() === result.repo?.toLowerCase() && Array.isArray(latest.githubIntake?.claims)) {
-              const claims = latest.githubIntake.claims;
+            if (latest?.repo?.toLowerCase() === result.repo?.toLowerCase() && (latest.controlRevision ?? null) === releaseRevision) {
+              const claims = Array.isArray(latest.githubIntake?.claims) ? latest.githubIntake.claims : [];
               const kept = claims.filter(claim => !sameIssue(claim) || !ownClaim(claim) || !sameClaimEra(claim, releasedClaim));
-              if (kept.length !== claims.length) {
-                latest.githubIntake = { ...latest.githubIntake, claims: kept };
-                save(stateFile, latest);
-              }
+              if (kept.length !== claims.length) latest.githubIntake = { ...latest.githubIntake, claims: kept };
+              latest.controlRevision = randomUUID();
+              save(stateFile, latest);
             }
           } catch { /* A completed remote release never writes stale local state. */ }
           finally { releaseAdmission?.(); }
