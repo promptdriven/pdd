@@ -130,6 +130,7 @@ export function sortPlan({ snapshot }) {
   for (const route of routes) if (route.action === 'work' && synthetic(snapshot.issues.find(x => x.key === route.issue)) && !groups.some(g => g.umbrella === route.issue)) { route.action = 'hold'; route.workflow = ''; route.reason = 'orphan-group-umbrella'; }
   // Keep the merge boundary until all previous heads have been superseded.
   for (const group of saved.filter(x => x.merged)) groups.push(group);
+  for (const route of routes) if (route.action !== 'work') route.workflow = '';
   return { queued, routes, groups };
 }
 export function projectSortGraph(snapshot, graph) {

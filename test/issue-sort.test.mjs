@@ -144,13 +144,30 @@ for (const owned of ['person','claim','unknown-assignees']) for (const action of
   assert.equal(w.writes.length, 0);
 });
 
+test('a live claim holds work and clears the route workflow', async () => {
+  const w = fixture();
+  const changeScope = { kind: 'tests-only', evidence: ['The issue requests a test-only change.', 'The current behavior contract remains unchanged.'] };
+  w.save(w.record(1, { changeScope, paths: ['test/words.vectors.test.mjs'] })); w.review(1);
+  w.issues[0].labels.push('pdd:working');
+  w.claims.push({ issue: key(1), active: true, owner: 'another-coordinator' });
+  const route = sortPlan({ snapshot: await read(w) }).routes.find(x => x.issue === key(1));
+  assert.equal(route?.action, 'hold');
+  assert.equal(route?.reason, 'owned');
+  assert.equal(route?.workflow, '');
+  assert.equal((await node(w)).sort?.workflow, '');
+});
+
 test('three issues with one cause wait for a dedicated umbrella', async () => {
-  const w = fixture([3,2,1]); for (const n of [1,2,3]) { w.save(w.record(n)); w.review(n); }
-  const result = await graph(w);
+  const w = fixture([3,2,1]);
+  const changeScope = { kind: 'tests-only', evidence: ['The issue requests a test-only change.', 'The current behavior contract remains unchanged.'] };
+  for (const n of [1,2,3]) { w.save(w.record(n, { changeScope, paths: ['test/words.vectors.test.mjs'] })); w.review(n); }
+  const snapshot = await read(w), result = projectIssueGraph({ snapshot }), plan = sortPlan({ snapshot });
   assert.deepEqual(result.nodes.filter(x => x.eligible).map(x => x.key), []);
   assert.equal(result.groups.length, 1);
   assert.equal(result.groups[0].umbrella, '');
   assert.deepEqual(result.nodes.find(x => x.key === key(1)).sort?.members, [key(1),key(2),key(3)]);
+  assert.ok(plan.routes.every(x => x.action === 'hold' && x.workflow === ''));
+  assert.ok(result.nodes.every(x => x.sort?.workflow === ''));
   assert.equal((await prepareDependencyIntake({ repository }, w.ports)).queued.length, 0);
 });
 
