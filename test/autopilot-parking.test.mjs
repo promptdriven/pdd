@@ -1623,3 +1623,191 @@ test('3157: lost working label retries leftover stuck-label cleanup after a defe
   assert.equal(f.record().claimRelease,undefined);assert.deepEqual(github.issues.get(17).labels,[]);
   assert.equal(calls,2);
 });
+
+function wireClaimGithub(f, ports, github) {
+  const originalRun = ports.run, originalExec = f.ports.execFile;
+  ports.authority = {read: async () => ({authority: 'trusted'})};
+  ports.run = async (file, args, options) => file === 'gh' && args[0] === 'api' ? github.gh(args, options) : originalRun(file, args, options);
+  ports.execFile = f.ports.execFile = async (file, args, options) => file === 'gh' && args[0] === 'api' ? github.gh(args, options) : originalExec(file, args, options);
+}
+
+function installClaimEra(github, run, {coordinatorId = run.automaticOrigin.coordinatorId,
+  machine = run.automaticOrigin.machine, lastSeen = new Date(github.now()).toISOString()} = {}) {
+  const comment = github.claim(17, {coordinatorId, machine});
+  const eventId = github.issues.get(17).timeline.filter(event => event.label === 'pdd:working').at(-1).id;
+  github.editComment(17, comment.id, `Autopilot claim.\n\n\`\`\`json\n${JSON.stringify({
+    repository: run.repo, coordinatorId, machine, labelEventId: eventId, lastSeen,
+  })}\n\`\`\``);
+  run.automaticOrigin.claim = {commentId: comment.id, labelEventId: eventId};
+  return {comment, eventId, coordinatorId, machine};
+}
+
+for (const loss of ['expired', 'lost']) for (const status of ['working', 'unknown'])
+  test(`3157: ${loss} claim keeps allocation and labels while worker status is ${status}`, async t => {
+    const {f, tick, stateFile, ports} = await setup(t);
+    fullTicks(f, stateFile, ports);
+    const run = f.record(), worker = f.herdr.paneOf(run.chats.at(-1));
+    worker.agent.agent_status = status === 'working' ? 'working' : undefined;
+    const github = (await import('./helpers/github-repo-fake.mjs')).createGithubRepoFake({
+      repository: run.repo, owner: 'example', issues: 18, now: () => f.clock,
+    });
+    const installed = installClaimEra(github, run);
+    save(f, run);
+    github.label(17, 'pdd:stuck');
+    const claim = {issue: run.issue.url, active: true, owner: installed.coordinatorId,
+      coordinatorId: installed.coordinatorId, machine: installed.machine,
+      commentId: installed.comment.id, labelEventId: installed.eventId};
+    ports.reconcileDependencyIntake = async () => ({eligible: [], claims: [claim], groups: [], queued: [], skipped: []});
+    wireClaimGithub(f, ports, github);
+    await tick();
+    assert.equal(f.herdr.paneOf(run.chats.at(-1)), worker, 'the test keeps the original worker alive');
+    f.tick(5 * 3600000);
+    ports.owners = {read: async () => ({json: JSON.stringify({localOwner: installed.coordinatorId, claims: []})})};
+    ports.reconcileDependencyIntake = async () => ({eligible: [], claims: loss === 'expired'
+      ? [{...claim, active: false, expired: true, lastSeen: new Date(f.clock - 5 * 3600000).toISOString()}]
+      : [], groups: [], queued: [], skipped: []});
+    await tick();
+    const allocation = join(run.commonDir, 'pdd/worktree-assignments/issues/17.json');
+    assert.ok(existsSync(allocation), 'local issue ownership stays allocated');
+    assert.equal(JSON.parse(readFileSync(allocation, 'utf8')).runId, run.runId);
+    assert.deepEqual(github.issues.get(17).labels.sort(), ['pdd:stuck', 'pdd:working']);
+    assert.equal(f.herdr.paneOf(run.chats.at(-1)), worker, 'the worker stays in its saved pane');
+    assert.equal(worker.agent.agent_status ?? null, status === 'working' ? 'working' : null);
+  });
+
+for (const checkState of ['running', 'unavailable'])
+  test(`3157: manual cancel retains local and remote ownership when a check is ${checkState}`, async t => {
+    const {cancelRun} = await import('../src/workflow-runner.mjs');
+    const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+    const {f, ports} = await setup(t);
+    const run = f.record(), github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+    installClaimEra(github, run); save(f, run); github.label(17, 'pdd:stuck');
+    ports.readSuiteProgress = () => ({state: checkState});
+    wireClaimGithub(f, ports, github);
+    await cancelRun({ref: '17', cwd: f.source}, ports);
+    const allocation = join(run.commonDir, 'pdd/worktree-assignments/issues/17.json');
+    assert.ok(existsSync(allocation), 'local issue ownership stays allocated');
+    assert.equal(JSON.parse(readFileSync(allocation, 'utf8')).runId, run.runId);
+    assert.deepEqual(github.issues.get(17).labels.sort(), ['pdd:stuck', 'pdd:working']);
+    assert.equal(f.record().claimRelease?.state, 'pending');
+  });
+
+test('3157: manual cancel retains ownership when Herdr keeps a chat', async t => {
+  const {cancelRun} = await import('../src/workflow-runner.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, ports} = await setup(t), run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  installClaimEra(github, run); save(f, run); github.label(17, 'pdd:stuck');
+  const herdr = ports.herdr;
+  ports.herdr = async args => {
+    if (args[0] === 'workspace' && args[1] === 'list') throw Object.assign(Error('controlled inventory outage'), {code: 'inventory_unavailable'});
+    return herdr(args);
+  };
+  wireClaimGithub(f, ports, github);
+  await cancelRun({ref: '17', cwd: f.source}, ports);
+  const allocation = join(run.commonDir, 'pdd/worktree-assignments/issues/17.json');
+  assert.ok(existsSync(allocation), 'local issue ownership stays allocated');
+  assert.equal(JSON.parse(readFileSync(allocation, 'utf8')).runId, run.runId);
+  assert.deepEqual(github.issues.get(17).labels.sort(), ['pdd:stuck', 'pdd:working']);
+  assert.equal(f.record().claimRelease?.state, 'pending');
+  assert.ok(f.herdr.paneOf(run.chats.at(-1)), 'the retained chat remains in Herdr');
+});
+
+test('3157: explicit release retains ownership after idle preflight when Herdr inventory fails', async t => {
+  const {releaseRunClaim} = await import('../src/workflow-runner.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, ports} = await setup(t), run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  installClaimEra(github, run); save(f, run); github.label(17, 'pdd:stuck');
+  ports.readSuiteProgress = () => ({state: 'idle'});
+  ports.readInterpreterProgress = () => ({state: 'idle'});
+  let inventoryAttempts = 0;
+  const herdr = ports.herdr;
+  ports.herdr = async args => {
+    if (args[0] === 'workspace' && args[1] === 'list') {inventoryAttempts++; throw Object.assign(Error('controlled inventory outage'), {code: 'inventory_unavailable'});}
+    return herdr(args);
+  };
+  wireClaimGithub(f, ports, github);
+  await releaseRunClaim({ref: '17', cwd: f.source}, ports);
+  assert.equal(inventoryAttempts, 1, 'the idle preflight passes before the cleanup inventory failure');
+  const allocation = join(run.commonDir, 'pdd/worktree-assignments/issues/17.json');
+  assert.ok(existsSync(allocation), 'local issue ownership stays allocated');
+  assert.equal(JSON.parse(readFileSync(allocation, 'utf8')).runId, run.runId);
+  assert.deepEqual(github.issues.get(17).labels.sort(), ['pdd:stuck', 'pdd:working']);
+  assert.equal(f.record().claimRelease?.state, 'pending');
+  assert.ok(f.herdr.paneOf(run.chats.at(-1)), 'idle preflight does not erase Herdr custody after inventory fails');
+});
+
+test('3157: explicit release of saved claim era A preserves same-machine replacement era B', async t => {
+  const {releaseRunClaim} = await import('../src/workflow-runner.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, ports} = await setup(t), run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  const eraA = installClaimEra(github, run);
+  github.unlabel(17, 'pdd:working');
+  const savedEraA = {commentId: eraA.comment.id, labelEventId: eraA.eventId};
+  installClaimEra(github, run, {coordinatorId: 'replacement-coordinator', machine: 'park-machine'});
+  github.label(17, 'pdd:stuck');
+  run.automaticOrigin.claim = savedEraA;
+  save(f, run);
+  wireClaimGithub(f, ports, github);
+  await releaseRunClaim({ref: '17', cwd: f.source}, ports);
+  assert.deepEqual(github.issues.get(17).labels.sort(), ['pdd:stuck', 'pdd:working']);
+});
+
+test('3157: cancel keeps retry state when local allocation is unreadable even after remote labels clear', async t => {
+  const {cancelRun} = await import('../src/workflow-runner.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {renameSync, rmSync, mkdirSync} = await import('node:fs');
+  const {f, ports} = await setup(t), run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  installClaimEra(github, run); save(f, run); github.label(17, 'pdd:stuck');
+  wireClaimGithub(f, ports, github);
+  const allocation = join(run.commonDir, 'pdd/worktree-assignments/issues/17.json'), unreadable = `${allocation}.unreadable`;
+  renameSync(allocation, unreadable);
+  mkdirSync(allocation);
+  try {
+    await cancelRun({ref: '17', cwd: f.source}, ports);
+    assert.equal(JSON.parse(readFileSync(unreadable, 'utf8')).runId, run.runId, 'the saved local allocation remains available for recovery');
+    assert.deepEqual(github.issues.get(17).labels, [], 'remote cleanup can complete while local cleanup is unreadable');
+    assert.equal(f.record().claimRelease?.state, 'pending');
+  } finally {
+    rmSync(allocation, {recursive: true, force: true});
+    renameSync(unreadable, allocation);
+  }
+});
+
+test('3157: parked release retries partial label removal and verifies both labels before freeing allocation', async t => {
+  const {releaseParkedRun} = await import('../src/workflow-runner.mjs');
+  const {releaseParkedClaim} = await import('../src/issue-dependencies-github.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, tick, ports} = await setup(t), run = f.record();
+  run.state = 'paused'; run.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, run);
+  await tick();
+  const parked = f.record(), github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  installClaimEra(github, parked); save(f, parked); github.label(17, 'pdd:stuck');
+  wireClaimGithub(f, ports, github);
+  let failStuckRemoval = true;
+  const execute = ports.execFile;
+  ports.execFile = f.ports.execFile = async (file, args, options) => {
+    const deletingStuck = file === 'gh' && args.includes('--method')
+      && args[args.indexOf('--method') + 1] === 'DELETE'
+      && args.some(arg => arg.includes('/labels/pdd%3Astuck'));
+    if (deletingStuck && failStuckRemoval) {failStuckRemoval = false; throw Error('controlled stuck-label deletion failure');}
+    return execute(file, args, options);
+  };
+  ports.releaseParkedClaim = fresh => releaseParkedClaim({cwd: f.source, repository: fresh.repo,
+    claim: {...fresh.automaticOrigin.claim, issue: fresh.issue.url, coordinatorId: fresh.automaticOrigin.coordinatorId, machine: fresh.automaticOrigin.machine},
+    coordinatorId: fresh.automaticOrigin.coordinatorId, machine: fresh.automaticOrigin.machine, runId: fresh.runId, branch: fresh.branch}, ports);
+  const release = () => releaseParkedRun({ref: '17', cwd: f.source, runId: parked.runId, at: parked.parking.at,
+    coordinatorId: parked.automaticOrigin.coordinatorId, machine: parked.automaticOrigin.machine}, ports);
+  let first;
+  try { first = await release(); } catch (error) { first = {threw: error.message}; }
+  assert.equal(failStuckRemoval, false, 'the injected failure reaches the stuck-label deletion');
+  assert.deepEqual(github.issues.get(17).labels, ['pdd:stuck']);
+  const allocation = join(run.commonDir, 'pdd/worktree-assignments/issues/17.json');
+  assert.ok(existsSync(allocation), 'a partial remote release cannot free local ownership');
+  await release();
+  assert.deepEqual(github.issues.get(17).labels, []);
+  assert.equal(existsSync(allocation), false, 'the local allocation is released after both labels are confirmed absent');
+});
