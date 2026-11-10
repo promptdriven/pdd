@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCodeowners, resolveArea, resolveAreas } from '../src/autopilot-areas.mjs';
+import { parseCodeowners, resolveArea, resolveAreas, canonicalModule, owningModule, isRuntimeOwned } from '../src/autopilot-areas.mjs';
 
 const areasFor = pattern => [{ name: 'literal', owner: 'literal-owner', match: { paths: [pattern] } }];
 const resolve = (pattern, path) => resolveArea({ areas: areasFor(pattern), evidence: { paths: [path] } });
@@ -38,4 +38,26 @@ test('literal encoding preserves wildcard, directory and anchor behavior', () =>
     ['/src/a+b/', 'src/a+b/deep/file', true], ['/src/a+b/', 'src/ab/deep/file', false],
   ];
   for (const [pattern, path, matches] of cases) assert.equal(resolve(pattern, path).state === 'resolved', matches);
+});
+
+test('canonicalModule and owningModule normalize prompt/src pairs and exclude shared routing/doc/test files', () => {
+  assert.equal(canonicalModule('prompts/cli/issue-sort.prompt.md'), 'src/issue-sort.mjs');
+  assert.equal(canonicalModule('src/issue-sort.mjs'), 'src/issue-sort.mjs');
+  assert.equal(canonicalModule('skills/pdd-autopilot/steps/sort.md'), 'skills/pdd-autopilot/SKILL.md');
+  assert.equal(canonicalModule('skills/pdd-check/SKILL.md'), 'skills/pdd-check/SKILL.md');
+  for (const nonOwning of ['src/command-catalog.mjs', 'prompts/cli/command-catalog.prompt.md', 'bin/pdd.mjs', 'docs/cli.md', 'README.md', 'package.json', 'test/issue-sort.test.mjs']) {
+    assert.equal(canonicalModule(nonOwning), '');
+  }
+  assert.equal(owningModule({ paths: ['docs/cli.md', 'src/command-catalog.mjs', 'prompts/cli/try-doors.prompt.md'] }), 'src/try-doors.mjs');
+  assert.equal(owningModule({ owningModule: 'prompts/cli/workflow-runner.prompt.md', paths: ['src/command-catalog.mjs'] }), 'src/workflow-runner.mjs');
+  assert.equal(owningModule({ paths: ['docs/cli.md', 'src/command-catalog.mjs'] }), '');
+});
+
+test('isRuntimeOwned identifies Runtime-owned issues by path, area, owner or label', () => {
+  assert.equal(isRuntimeOwned({ record: { paths: ['src/runtime-client.mjs'], belongs: { kind: 'area', area: 'cli', repository: '' } } }), true);
+  assert.equal(isRuntimeOwned({ record: { paths: ['prompts/cli/runtime-preflight.prompt.md'], belongs: { kind: 'area', area: 'cli', repository: '' } } }), true);
+  assert.equal(isRuntimeOwned({ record: { paths: ['src/cli.mjs'], belongs: { kind: 'area', area: 'runtime', repository: '' } } }), true);
+  assert.equal(isRuntimeOwned({ issue: { labels: ['runtime'] }, record: { paths: ['src/cli.mjs'] } }), true);
+  assert.equal(isRuntimeOwned({ resolved: { area: 'cli', owner: 'repo:promptdriven/runtime' }, record: { paths: ['src/cli.mjs'] } }), true);
+  assert.equal(isRuntimeOwned({ issue: { labels: ['bug'] }, record: { paths: ['src/issue-sort.mjs'], belongs: { kind: 'area', area: 'cli', repository: '' } }, resolved: { area: 'cli', owner: 'autopilot' } }), false);
 });

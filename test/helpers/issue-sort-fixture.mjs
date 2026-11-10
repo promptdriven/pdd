@@ -43,6 +43,12 @@ export function fixture(numbers = [1], options = {}) {
         if (close) raw.state = 'closed';
         return { ok: true };
       },
+      removeLabel: async ({ issue, label }) => {
+        const raw = issues.find(x => x.number === issue);
+        if (raw) raw.labels = raw.labels.filter(l => l !== label);
+        writes.push({ at: now, issue, kind: 'unlabel', label });
+        return { ok: true };
+      },
       // A shared in-memory admission service. Native HTTP pacing is tested separately.
       withSortGroupAdmission: async ({ rootCause }, action) => {
         if (reservations.has(rootCause)) return '';
@@ -64,10 +70,14 @@ export function fixture(numbers = [1], options = {}) {
   const w = { issues, comments, ports, context, writes, waits, claims, files, append };
   w.record = (number, changes = {}) => {
     const issue = issues.find(x => x.number === number), contextKey = `https://github.com/${repository}#autopilot-areas`;
+    const hasExplicitSignal = ['component', 'symbol', 'errorCode', 'route', 'duplicateOf', 'unify'].some(k => Object.hasOwn(changes, k));
+    const defaultComponent = !hasExplicitSignal && /^[a-z\d]+(?:-[a-z\d]+)*$/.test(changes.rootCause ?? 'shared-context') ? (changes.rootCause ?? 'shared-context') : undefined;
     const record = { schema_version: 'pdd.issue-sort.v1', issue: key(number), base: [],
       inputs: [{ key: key(number), revision: revision(issue) }, { key: `${key(number)}#sort-labels`, revision: hash(JSON.stringify(routingLabels(issue.labels, context.areas))) }, { key: contextKey, revision: hash(JSON.stringify({ areas: context.areas, codeowners: context.codeowners, release: context.release })) }],
       belongs: { kind: 'area', area: 'cli', repository: '' }, status: { state: 'still-happens', release: context.release, fix: '', evidence: ['src/cli.mjs:12'] },
-      genuine: { kind: 'bug', duplicateOf: '', reason: '' }, paths: ['src/cli.mjs'], rootCause: 'shared-context', severity: 'medium', question: '', ...changes };
+      genuine: { kind: 'bug', duplicateOf: '', reason: '' }, paths: ['src/cli.mjs'],
+      ...(defaultComponent ? { component: defaultComponent } : {}),
+      rootCause: 'shared-context', severity: 'medium', question: '', ...changes };
     for (const path of record.paths) {
       const key = `https://github.com/${repository}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
       if (!files.has(key)) files.set(key, 'source-v1');

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: 3102ad6c7c0b32016538fd8787c44cec433150254018ad6c7368db8fb8d979b7).
+// Generated from prompts/cli/autopilot-audit.prompt.md (sha256: b990a99fd082cb1a8bd8908212e8544f00399bf51441b775b4f903c4e24dd566).
 import * as nativeFs from 'node:fs';
 import {join, dirname} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -137,7 +137,8 @@ function parseAnswer(answer, kind, sessionId) {
 function validResult(r) {
   return r && ['OK','CONCERN','BAD'].includes(r.verdict) && named(r.summary) && named(r.evidence)
     && typeof r.revert === 'boolean' && typeof r.kind === 'string'
-    && (r.verdict !== 'CONCERN' || /^[a-z][a-z0-9-]{0,79}$/.test(r.kind));
+    && (r.verdict !== 'CONCERN' || /^[a-z][a-z0-9-]{0,79}$/.test(r.kind))
+    && (r.memberVerdicts === undefined || Array.isArray(r.memberVerdicts) && r.memberVerdicts.every(m => object(m) && (Number.isSafeInteger(m.issue) && m.issue > 0 || named(m.issue)) && ['OK','CONCERN','BAD'].includes(m.verdict) && named(m.summary) && (m.evidence === undefined || named(m.evidence))));
 }
 // The alert command reports recording success separately from delivery in its message.
 function alertDeliveryState(result) {
@@ -350,8 +351,25 @@ async function auditMergeOwned({run, pr}, ports = {}) {
       audit.result=parsed.result;audit.state='recorded';audit.completedAt=now();persist();
     }
     const keepMerge=audit.result.verdict==='BAD' && !audit.result.revert;
-    if(keepMerge) await effect('reopen',()=>command('gh',['api','--method','PATCH',`repos/${run.repo}/issues/${run.number}`,'-f','state=open']));
-    await effect('comment',()=>command('gh',['api','--method','POST',`repos/${run.repo}/issues/${run.number}/comments`,'-f',`body=Audit: ${audit.result.verdict}\n\nPR #${pr}, merge ${audit.merge}\n\nRevert recommendation: ${audit.result.revert}\n\n${keepMerge?'Keep the merge and finish the rest. Missing parts and audit evidence:\n\n':''}${audit.result.summary}\n\n${audit.result.evidence}\n\n<!-- pdd:audit:${run.runId}:${pr} -->`]));
+    if(keepMerge) await effect('reopen',async()=>{
+      const badMembers = (audit.result.memberVerdicts ?? []).filter(m => m.verdict === 'BAD').map(m => Number(String(m.issue).replace(/^#/, '').split('/').pop())).filter(n => Number.isSafeInteger(n) && n > 0);
+      const targets = badMembers.length ? [...new Set(badMembers)] : [run.number];
+      let last = '';
+      for (const target of targets) {
+        last = await command('gh',['api','--method','PATCH',`repos/${run.repo}/issues/${target}`,'-f','state=open']);
+      }
+      return last;
+    });
+    await effect('comment',async()=>{
+      const body=`body=Audit: ${audit.result.verdict}\n\nPR #${pr}, merge ${audit.merge}\n\nRevert recommendation: ${audit.result.revert}\n\n${keepMerge?'Keep the merge and finish the rest. Missing parts and audit evidence:\n\n':''}${audit.result.summary}\n\n${audit.result.evidence}\n\n<!-- pdd:audit:${run.runId}:${pr} -->`;
+      const badMembers = keepMerge ? (audit.result.memberVerdicts ?? []).filter(m => m.verdict === 'BAD').map(m => Number(String(m.issue).replace(/^#/, '').split('/').pop())).filter(n => Number.isSafeInteger(n) && n > 0) : [];
+      const commentTargets = badMembers.length ? [...new Set(badMembers)] : [run.number];
+      let last = '';
+      for (const target of commentTargets) {
+        last = await command('gh',['api','--method','POST',`repos/${run.repo}/issues/${target}/comments`,'-f',body]);
+      }
+      return last;
+    });
     if(audit.result.verdict === 'BAD') {
       if(audit.result.revert) await effect('revert',async()=>{
         const checkout=join(run.runDir,'audits',`revert-${pr}`), branch=`pdd/revert-${pr}-${randomUUID()}`;

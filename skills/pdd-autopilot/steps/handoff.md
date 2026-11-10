@@ -1,7 +1,7 @@
 # PDD issue handoff
 
 Required step for pdd-autopilot. After readiness and claim, check `pdd workflow status N`.
-For a root-cause umbrella, carry all current members and their requirements in the same handoff. Never start a member separately. The umbrella code PR closes its current members.
+For a group leader (`item.group`), take and release claims (`pdd:working` and claim comments) for all group members together, and carry all current members (`2–5` issues) and their requirements in the same handoff. Never create a synthetic umbrella issue and never start a member separately while it remains in the group. Confirm the group after the `reproduce` step; if one member fails or turns out different, split it out to its own run and release its group claim while the remaining members continue. Record per-member reproduce results and passing test names in `<run folder>/member-evidence.json` so the single code PR emits `Closes #A, Closes #B ...` for each proved member.
 Reuse an active run with `pdd workflow open N`; otherwise start
 `pdd workflow run bug|feature|small-change N --agent AGENT` with the matching workflow
 and the packet's agent, or the current agent without a packet. Use the normal PDD

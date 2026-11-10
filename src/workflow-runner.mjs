@@ -9,8 +9,9 @@ import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
+import { splitSortGroupMember } from './issue-sort-github.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2a47f692dd11eae221b5f2cce66e2f7b276ca9098512e2ef5061a53fb191ba1e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 001780e28b308e1f0df35107424c6b39ca7b01706db3fb4b43497b84f1d69191).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1939,12 +1940,36 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     commitRun(run,p,latest=>{applyPublication(latest);if(last&&latest.done[last])latest.done[last].replayEvidence=evidence;});
   }
 
-  // #3053: current shared-cause members travel with the umbrella's PR pair.
+  // #3053: current shared-cause members travel with the leader's PR pair.
   if (run.automaticOrigin) {
     try {
+      let memberEvidence = run.memberEvidence ?? null;
+      if (!memberEvidence) {
+        for (const candidate of [join(run.runDir, 'member-evidence.json'), join(run.root, 'member-evidence.json')]) {
+          if (existsSync(candidate)) {
+            try { memberEvidence = JSON.parse(readFileSync(candidate, 'utf8')); break; } catch { /* ignore invalid JSON */ }
+          }
+        }
+      }
+      const leaderUrl = `https://github.com/${run.repo.toLowerCase()}/issues/${run.number}`;
+      if (memberEvidence && typeof memberEvidence === 'object') {
+        const entries = Array.isArray(memberEvidence) ? memberEvidence : Object.entries(memberEvidence).map(([issue, val]) => ({ issue, ...(val && typeof val === 'object' ? val : {}) }));
+        for (const entry of entries) {
+          if (entry && (entry.splitOut === true || entry.failed === true || entry.reproduced === false || entry.confirmed === false)) {
+            await splitSortGroupMember({ cwd: run.sourceRoot || run.root, repository: run.repo, umbrella: leaderUrl, member: entry.issue, reason: entry.reason || 'member-failed-or-diverged', coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine }, p).catch(() => {});
+          }
+        }
+      }
       const { snapshot } = await (p.readDependencySnapshot ?? readDependencySnapshot)({ cwd: run.sourceRoot || run.root, repository: run.repo }, p);
-      const references = sortClosingReferences({ snapshot, issue: `https://github.com/${run.repo.toLowerCase()}/issues/${run.number}`, code: label !== 'PR 1', graph: projectIssueGraph({ snapshot }) });
-      prepared = { ...prepared, issueReference: [prepared.issueReference, ...references].join('\n') };
+      const references = sortClosingReferences({ snapshot, issue: leaderUrl, code: label !== 'PR 1', graph: projectIssueGraph({ snapshot }), memberEvidence });
+      const closingRefs = references.filter(r => /^Closes\s+#\d+$/i.test(r));
+      const otherRefs = references.filter(r => !/^Closes\s+#\d+$/i.test(r));
+      if (closingRefs.length > 0 && /^Closes\s+#\d+$/i.test(prepared.issueReference)) {
+        const closeLine = [prepared.issueReference, ...closingRefs].join(', ');
+        prepared = { ...prepared, issueReference: [closeLine, ...otherRefs].join('\n') };
+      } else {
+        prepared = { ...prepared, issueReference: [prepared.issueReference, ...references].join('\n') };
+      }
     } catch { /* Unproved members get no closing promise. */ }
   }
   const bodyBase = run.prBase ?? run.baseBranch;

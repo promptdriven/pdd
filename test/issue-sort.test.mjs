@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { prepareDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
+import { sortPlan, confirmGroupAfterReproduce, splitGroupMember, sortClosingReferences, chunkGroupMembers } from '../src/issue-sort.mjs';
 import { fixture, complete, repository, key } from './helpers/issue-sort-fixture.mjs';
 const read = async w => (await readDependencySnapshot({ repository }, w.ports)).snapshot;
 const graph = async w => projectIssueGraph({ snapshot: await read(w) });
@@ -143,12 +144,12 @@ for (const owned of ['person','claim','unknown-assignees']) for (const action of
   assert.equal(w.writes.length, 0);
 });
 
-test('three issues with one cause wait for a dedicated umbrella', async () => {
+test('three issues with one cause select the first member as leader without a synthetic umbrella', async () => {
   const w = fixture([3,2,1]); for (const n of [1,2,3]) { w.save(w.record(n)); w.review(n); }
   const result = await graph(w);
-  assert.deepEqual(result.nodes.filter(x => x.eligible).map(x => x.key), []);
+  assert.deepEqual(result.nodes.filter(x => x.eligible).map(x => x.key), [key(1)]);
   assert.equal(result.groups.length, 1);
-  assert.equal(result.groups[0].umbrella, '');
+  assert.equal(result.groups[0].umbrella, key(1));
   assert.deepEqual(result.nodes.find(x => x.key === key(1)).sort?.members, [key(1),key(2),key(3)]);
   assert.equal((await prepareDependencyIntake({ repository }, w.ports)).queued.length, 0);
 });
@@ -161,14 +162,15 @@ test('routing writes are serial and paced across issues', async () => {
   for (let i = 1; i < effects.length; i++) assert.ok(effects[i].at - effects[i - 1].at >= 1000);
 });
 
-test('same cause in different areas waits for one global umbrella', async () => {
+test('same owningModule and component across area hints selects the first member as leader', async () => {
   const w = fixture([1,2,3], { context: { areas: [
     { name: 'cli', owner: 'autopilot', match: { paths: ['src/cli.mjs'] } },
     { name: 'docs', owner: 'autopilot', match: { paths: ['docs/**'] } },
   ] } });
-  for (const n of [1,2,3]) { w.save(w.record(n, n === 3 ? { belongs: { kind: 'area', area: 'docs', repository: '' }, paths: ['docs/guide.md'] } : {})); w.review(n); }
+  for (const n of [1,2,3]) { w.save(w.record(n, n === 3 ? { owningModule: 'src/cli.mjs', belongs: { kind: 'area', area: 'docs', repository: '' }, paths: ['docs/guide.md'] } : {})); w.review(n); }
   const g = await graph(w);
-  assert.deepEqual(g.nodes.filter(x => x.eligible).map(x => x.key), []);
+  assert.deepEqual(g.nodes.filter(x => x.eligible).map(x => x.key), [key(1)]);
+  assert.equal(g.groups[0].umbrella, key(1));
   assert.deepEqual(g.groups[0].members, [key(1),key(2),key(3)]);
 });
 
@@ -347,4 +349,179 @@ test('a confirmed expired claim does not block a fixed-issue route', async () =>
   assert.equal((await node(w)).sort?.action, 'close');
   await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
   assert.equal(w.issues[0].state, 'closed');
+});
+
+test('groups form from shared owningModule + symbol even when free-text rootCause strings differ', async () => {
+  const w = fixture([1, 2, 3]);
+  w.save(w.record(1, {
+    paths: ['prompts/cli/issue-sort.prompt.md'],
+    symbol: 'sortPlan',
+    rootCause: 'sortPlan requires exact string equality of free-form rootCause slugs',
+  }));
+  w.save(w.record(2, {
+    paths: ['src/issue-sort.mjs'],
+    symbol: 'sortPlan',
+    rootCause: 'Completely different free-text rootCause phrasing for the same function',
+  }));
+  w.save(w.record(3, {
+    paths: ['src/issue-sort.mjs'],
+    symbol: 'validSort',
+    rootCause: 'Unrelated symbol in the same module stays separate',
+  }));
+  for (const n of [1, 2, 3]) w.review(n);
+  const g = await graph(w);
+  assert.equal(g.groups.length, 1);
+  assert.equal(g.groups[0].umbrella, key(1));
+  assert.deepEqual(g.groups[0].members, [key(1), key(2)]);
+  assert.deepEqual(g.nodes.filter(x => x.eligible).map(x => x.key), [key(1), key(3)]);
+});
+
+test('free-text rootCause equality alone or shared routing/doc files never form a group', async () => {
+  const w = fixture([1, 2, 3, 4]);
+  w.save(w.record(1, {
+    paths: ['src/try-doors.mjs'],
+    component: '',
+    rootCause: 'Identical free-text description without structured signal',
+  }));
+  w.save(w.record(2, {
+    paths: ['src/try-doors.mjs'],
+    component: '',
+    rootCause: 'Identical free-text description without structured signal',
+  }));
+  w.save(w.record(3, {
+    paths: ['src/command-catalog.mjs', 'docs/cli.md'],
+    symbol: 'PUBLIC_COMMAND_ROUTES',
+    rootCause: 'Shared routing table and CLI docs touch',
+  }));
+  w.save(w.record(4, {
+    paths: ['src/command-catalog.mjs', 'docs/cli.md'],
+    symbol: 'PUBLIC_COMMAND_ROUTES',
+    rootCause: 'Shared routing table and CLI docs touch',
+  }));
+  for (const n of [1, 2, 3, 4]) w.review(n);
+  const plan = sortPlan({ snapshot: await read(w) });
+  assert.deepEqual(plan.groups, []);
+});
+
+test('duplicates join the open target issue group before claiming', async () => {
+  const w = fixture([1, 2, 3]);
+  w.save(w.record(1, { paths: ['src/workflow-chat.mjs'], symbol: 'chatCommand', rootCause: 'chatCommand drops pane custody' }));
+  w.save(w.record(2, { paths: ['src/workflow-chat.mjs'], component: '', duplicateOf: key(1), rootCause: 'Duplicate report of #1' }));
+  w.save(w.record(3, { paths: ['src/workflow-chat.mjs'], symbol: 'chatCommand', rootCause: 'Another chatCommand pane custody failure' }));
+  for (const n of [1, 2, 3]) w.review(n);
+  const plan = sortPlan({ snapshot: await read(w) });
+  assert.equal(plan.groups.length, 1);
+  assert.equal(plan.groups[0].umbrella, key(1));
+  assert.deepEqual(plan.groups[0].members, [key(1), key(2), key(3)]);
+});
+
+test('group size is capped at 2 to 5 issues and rebalances a trailing singleton', async () => {
+  assert.deepEqual(chunkGroupMembers([1, 2, 3, 4, 5, 6]), [[1, 2, 3, 4], [5, 6]]);
+  assert.deepEqual(chunkGroupMembers([1, 2, 3, 4, 5, 6, 7]), [[1, 2, 3, 4, 5], [6, 7]]);
+  const w = fixture([1, 2, 3, 4, 5, 6, 7]);
+  for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+    w.save(w.record(n, { paths: ['src/workflow-runner.mjs'], component: 'status-json', rootCause: `status json issue ${n}` }));
+    w.review(n);
+  }
+  const plan = sortPlan({ snapshot: await read(w) });
+  assert.equal(plan.groups.length, 2);
+  assert.deepEqual(plan.groups[0].members, [key(1), key(2), key(3), key(4), key(5)]);
+  assert.equal(plan.groups[0].umbrella, key(1));
+  assert.deepEqual(plan.groups[1].members, [key(6), key(7)]);
+  assert.equal(plan.groups[1].umbrella, key(6));
+});
+
+test('confirmGroupAfterReproduce and splitGroupMember split out a member that fails or turns out different', async () => {
+  const group = {
+    area: 'cli',
+    rootCause: 'src/issue-sort.mjs:sortPlan',
+    owningModule: 'src/issue-sort.mjs',
+    signal: 'symbol:sortPlan',
+    umbrella: key(1),
+    members: [key(1), key(2), key(3)],
+  };
+  const afterRepro = confirmGroupAfterReproduce({
+    group,
+    reproduceResults: {
+      [key(1)]: { confirmed: true, owningModule: 'src/issue-sort.mjs', symbol: 'sortPlan', summary: 'Reproduced in sortPlan' },
+      [key(2)]: { confirmed: true, owningModule: 'prompts/cli/issue-sort.prompt.md', symbol: 'sortPlan', summary: 'Same symbol in sortPlan' },
+      [key(3)]: { confirmed: true, owningModule: 'src/workflow-runner.mjs', symbol: 'stepDone', summary: 'Turned out to be in workflow-runner' },
+    },
+  });
+  assert.equal(afterRepro.confirmed, true);
+  assert.equal(afterRepro.umbrella, key(1));
+  assert.deepEqual(afterRepro.members, [key(1), key(2)]);
+  assert.deepEqual(afterRepro.splitOut, [key(3)]);
+  assert.equal(afterRepro.standaloneRuns.length, 1);
+  assert.equal(afterRepro.standaloneRuns[0].issue, key(3));
+
+  const splitAgain = splitGroupMember({ group: afterRepro.group, member: key(2), reason: 'verify-failed' });
+  assert.equal(splitAgain.umbrella, key(1));
+  assert.deepEqual(splitAgain.members, [key(1)]);
+  assert.deepEqual(splitAgain.splitOut, [key(3), key(2)]);
+  assert.equal(splitAgain.group, null);
+  assert.equal(splitAgain.standalone?.issue, key(2));
+});
+
+test('Assigned issues and Runtime-owned issues never join a group', async () => {
+  const w = fixture([1, 2, 3, 4]);
+  w.issues[2].assignees = [{ login: 'person' }];
+  w.save(w.record(1, { paths: ['src/cli.mjs'], symbol: 'parseArgs', rootCause: 'cli bug 1' }));
+  w.save(w.record(2, { paths: ['src/cli.mjs'], symbol: 'parseArgs', rootCause: 'cli bug 2' }));
+  w.save(w.record(3, { paths: ['src/cli.mjs'], symbol: 'parseArgs', rootCause: 'assigned cli bug 3' }));
+  w.save(w.record(4, { paths: ['src/runtime-client.mjs'], symbol: 'parseArgs', rootCause: 'runtime bug 4' }));
+  for (const n of [1, 2, 3, 4]) w.review(n);
+  const plan = sortPlan({ snapshot: await read(w) });
+  assert.equal(plan.groups.length, 1);
+  assert.deepEqual(plan.groups[0].members, [key(1), key(2)]);
+  assert.ok(!plan.groups[0].members.includes(key(3)));
+  assert.ok(!plan.groups[0].members.includes(key(4)));
+
+  const wRuntime = fixture([5, 6]);
+  for (const n of [5, 6]) {
+    wRuntime.save(wRuntime.record(n, { paths: ['src/runtime-preflight.mjs'], symbol: 'captureSource', rootCause: `runtime preflight ${n}` }));
+    wRuntime.review(n);
+  }
+  const runtimePlan = sortPlan({ snapshot: await read(wRuntime) });
+  assert.deepEqual(runtimePlan.groups, []);
+});
+
+test('per-member reproduce and test evidence are required before Closes #N is emitted', async () => {
+  const w = fixture([1, 2, 3]);
+  for (const n of [1, 2, 3]) {
+    w.save(w.record(n, { paths: ['src/issue-sort.mjs'], symbol: 'sortPlan', rootCause: `cause ${n}` }));
+    w.review(n);
+  }
+  const snapshot = await read(w);
+  const g = projectIssueGraph({ snapshot });
+  assert.deepEqual(
+    sortClosingReferences({ snapshot, issue: key(1), code: true, graph: g }),
+    [`Refs ${key(2)}`, `Refs ${key(3)}`],
+  );
+  assert.deepEqual(
+    sortClosingReferences({
+      snapshot,
+      issue: key(1),
+      code: true,
+      graph: g,
+      memberEvidence: {
+        [key(2)]: { reproduce: 'Failed before fix on sortPlan', test: 'test/issue-sort.test.mjs:groups form' },
+        [key(3)]: { reproduce: 'Failed before fix on sortPlan', test: '' },
+      },
+    }),
+    ['Closes #2'],
+  );
+  assert.deepEqual(
+    sortClosingReferences({
+      snapshot,
+      issue: key(1),
+      code: true,
+      graph: g,
+      memberEvidence: {
+        '#2': { reproduce: 'Failed before fix on #2', test: 'test/issue-sort.test.mjs:case-2' },
+        '#3': { reproduce: 'Failed before fix on #3', test: 'test/issue-sort.test.mjs:case-3' },
+      },
+    }),
+    ['Closes #2', 'Closes #3'],
+  );
 });

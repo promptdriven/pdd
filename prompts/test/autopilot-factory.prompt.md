@@ -24,6 +24,11 @@ Exercise a mixed intake batch with a trusted assigned issue and a free issue.
 The free issue must receive a saved dependency review and sort, and start in the
 same intake cycle. The assigned issue receives no sort, route, group or workflow.
 Expose synthetic assignees through both REST and GraphQL fake observations.
+Exercise a group of three issues that share an owning module and symbol with
+different free-text root-cause descriptions. Intake forms one group with the
+first issue as leader and no synthetic umbrella issue, claims all three members
+together, runs one workflow on the leader with per-member reproduce and test
+evidence, and publishes one PR that closes all three issues (`Closes #A, Closes #B, Closes #C`).
 
 Exercise these independently, with an asserted final merge or a real decision
 question and no lead repair commands:

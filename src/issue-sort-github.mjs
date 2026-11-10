@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { validSort, selectedSort, sortInputs, sortPlan, sortSourceKey } from './issue-sort.mjs';
+import { validSort, selectedSort, sortInputs, sortPlan, sortSourceKey, splitGroupMember } from './issue-sort.mjs';
 import { gitContext } from './workflow-runs.mjs';
 import { currentSplitParent, readOwnerChoice } from './issue-mixed.mjs';
 import { draftAreas } from './autopilot-areas.mjs';
@@ -256,33 +256,15 @@ export async function readSortGroups(args, ports = {}) {
   const { groups } = await groupStore(args, ports).read(args);
   const prefix = `https://github.com/${args.repository.toLowerCase()}/issues/`;
   const issue = key => typeof key === 'string' && key.startsWith(prefix) && /^[1-9]\d*$/.test(key.slice(prefix.length));
-  if (!Array.isArray(groups) || groups.some(g => !g || !/^[a-z\d]+(?:-[a-z\d]+)*$/.test(g.rootCause) || typeof g.area !== 'string'
+  if (!Array.isArray(groups) || groups.some(g => !g || typeof g.rootCause !== 'string' || !g.rootCause.trim() || typeof g.area !== 'string'
     || !Array.isArray(g.members) || g.members.some(x => !issue(x)) || new Set(g.members).size !== g.members.length || !(g.umbrella === '' || issue(g.umbrella))
     || g.merged !== undefined && !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*$/.test(g.merged)
     || g.recheck !== undefined && (!Array.isArray(g.recheck) || g.recheck.some(x => !issue(x.issue) || !Array.isArray(x.heads) || x.heads.some(h => typeof h !== 'string')))
-    || g.notified !== undefined && (!Array.isArray(g.notified) || g.notified.some(x => !issue(x))))) throw Error('sort-groups-unavailable');
+    || g.notified !== undefined && (!Array.isArray(g.notified) || g.notified.some(x => !issue(x)))
+    || g.splitOut !== undefined && (!Array.isArray(g.splitOut) || g.splitOut.some(x => !issue(x))))) throw Error('sort-groups-unavailable');
   return groups;
 }
-async function liveSortUmbrellas({ repository, rootCause }, ports) {
-  const marker = `<!-- pdd-issue-group:v1 ${rootCause} -->`, found = [], seen = new Set();
-  let cursor = '';
-  do {
-    if (seen.has(cursor)) throw Error('sort-groups-unavailable');
-    seen.add(cursor);
-    const page = parse((await ports.github.page({ repository, kind: 'issues', issue: 0, cursor })).json);
-    if (page.error || !Array.isArray(page.items) || typeof page.next !== 'string') throw Error('sort-groups-unavailable');
-    for (const issue of page.items.filter(x => !x.assignees?.length && !x.pull_request && x.state === 'open' && x.body?.includes(marker))) {
-      const authority = (await ports.authority.read({ repository, author: issue.user?.login ?? '' })).authority;
-      if (authority === 'outsider') continue;
-      if (authority !== 'trusted' || !issue.html_url?.startsWith(`https://github.com/${repository.toLowerCase()}/issues/`)
-        || !/^[1-9]\d*$/.test(issue.html_url.split('/').pop())) throw Error('sort-groups-unavailable');
-      if (!found.includes(issue.html_url)) found.push(issue.html_url);
-    }
-    cursor = page.next;
-  } while (cursor);
-  return found;
-}
-const dedicatedGroup = group => group.umbrella && !group.members.includes(group.umbrella);
+
 export async function syncSortGroups({ cwd = '', repository, snapshot, mode, failures = [] }, ports, write = pacedSortWrites(ports, { cwd, repository })) {
   if (!snapshot.sortContext || !['auto','observe'].includes(mode)) return [];
   const saved = snapshot.sortContext.groups ?? [], before = JSON.stringify(saved);
@@ -296,14 +278,14 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode, fai
     group.merged = result.url;
     group.recheck = group.members.map(issue => ({ issue, heads: (snapshot.issues.find(x => x.key === issue)?.sorts ?? []).map(x => x.id) }));
   }
-  let groups = sortPlan({ snapshot }).groups;
+  const groups = sortPlan({ snapshot }).groups;
   const current = async group => {
     if (ports.settings && (await ports.settings.read({ cwd, repository })).mode !== mode) return false;
     if (!snapshot.complete) return false;
     const plan = sortPlan({ snapshot });
-    return group.members.length > 0 && (await Promise.all(group.members.filter(issue => !(issue === group.umbrella && snapshot.issues.find(x => x.key === issue)?.execution === 'running')).map(issue => {
+    return group.members.length > 0 && (await Promise.all(group.members.filter(issue => snapshot.issues.find(x => x.key === issue)?.execution !== 'running').map(issue => {
       const route = plan.routes.find(x => x.issue === issue);
-      return route?.record && route.action === 'work' || route?.record && route.reason === 'group-umbrella-pending'
+      return route?.record && route.action === 'work'
         ? currentSortIssue({ cwd, repository, snapshot, route }, ports) : false;
     }))).every(Boolean);
   };
@@ -311,54 +293,17 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode, fai
   try {
     for (const group of groups.filter(x => !x.merged)) {
       try {
-        const needsUmbrella = group.members.length >= 3 || group.area.includes(',');
-        const workRoute = sortPlan({ snapshot }).routes.find(x => x.issue === group.umbrella);
-        const needsCreation = needsUmbrella && !dedicatedGroup(group) && workRoute?.reason !== 'owned' && mode === 'auto';
         const needsNote = group.umbrella && snapshot.issues.find(x => x.key === group.umbrella)?.execution === 'running'
           && JSON.stringify(group.notified ?? []) !== JSON.stringify(group.members);
-        if (!needsCreation && !needsNote) continue;
-        if (needsCreation && snapshot.issues.filter(x => !x.assignees?.length && x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(`<!-- pdd-issue-group:v1 ${group.rootCause} -->`)).length > 1) continue;
+        if (!needsNote) continue;
         if (++operations > 10) break;
-        if (needsCreation) {
-          const marker = `<!-- pdd-issue-group:v1 ${group.rootCause} -->`;
-          // A trusted matching issue in the observed index recovers a lost save.
-          const recovered = snapshot.issues.filter(x => !x.assignees?.length && x.authority === 'trusted' && x.state === 'open' && x.sortText?.includes(marker));
-          if (recovered.length > 1) continue;
-          if (recovered.length === 1) group.umbrella = recovered[0].key;
-          else {
-            if (!ports.github.createSortUmbrella || !ports.github.withSortGroupAdmission) continue;
-            const umbrella = await ports.github.withSortGroupAdmission({ repository, rootCause: group.rootCause, write }, async () => {
-              // A second machine may have completed after our snapshot. Recover under
-              // shared admission, before any new issue POST.
-              const live = await liveSortUmbrellas({ repository, rootCause: group.rootCause }, ports);
-              if (live.length > 1) return '';
-              if (live.length === 1) return live[0];
-              const plan = sortPlan({ snapshot });
-              const body = `Shared cause: ${group.rootCause}.\nOne fix: correct this shared cause once for all linked member requirements.\n\n${group.members.map(issue => `- ${issue}\n${(plan.routes.find(x => x.issue === issue)?.evidence ?? []).join('\n')}`).join('\n')}\n\n${marker}`;
-              const created = await write(async () => {
-                if (!await current(group)) return null;
-                return ports.github.createSortUmbrella({ repository, title: `Global fix: ${group.rootCause}`, body });
-              });
-              if (created === null) return '';
-              const value = parse(created.json);
-              if (!value?.html_url?.startsWith(`https://github.com/${repository.toLowerCase()}/issues/`) || !Number.isSafeInteger(value.number) || value.number < 1
-                || value.html_url !== `https://github.com/${repository.toLowerCase()}/issues/${value.number}`) throw Error('sort-write-pending');
-              return value.html_url;
-            });
-            if (!umbrella) continue;
-            group.umbrella = umbrella;
-          }
-          group.notified = [...group.members];
-        }
-        if (needsNote) {
-          const result = await write(async () => {
-            if (!await current(group)) throw Error('sort-owner-changed');
-            return ports.github.appendComment({ repository, issue: Number(group.umbrella.split('/').pop()),
-              body: `Group members (${group.rootCause}):\n${group.members.map(x => `- ${x}`).join('\n')}\n\n<!-- pdd-issue-route:v1 -->\n<!-- group-${hash(JSON.stringify(group.members))} -->` });
-          });
-          if (!parse(result.json).id) throw Error('sort-write-pending');
-          group.notified = [...group.members];
-        }
+        const result = await write(async () => {
+          if (!await current(group)) throw Error('sort-owner-changed');
+          return ports.github.appendComment({ repository, issue: Number(group.umbrella.split('/').pop()),
+            body: `Group members (${group.rootCause}):\n${group.members.map(x => `- ${x}`).join('\n')}\n\n<!-- pdd-issue-route:v1 -->\n<!-- group-${hash(JSON.stringify(group.members))} -->` });
+        });
+        if (!parse(result.json).id) throw Error('sort-write-pending');
+        group.notified = [...group.members];
       } catch (error) { failures.push({ issue: group.umbrella || group.members[0], reason: error.message || 'sort-write-pending' }); }
     }
   } finally {
@@ -368,4 +313,125 @@ export async function syncSortGroups({ cwd = '', repository, snapshot, mode, fai
     snapshot.sortContext.groups = groups;
   }
   return groups;
+}
+
+export async function claimSortGroup({ cwd = '', repository, group, umbrella: targetUmbrella, coordinatorId = 'coordinator', machine = 'local' }, ports = {}) {
+  if (!group && targetUmbrella && (cwd || ports.sortGroups)) {
+    const groups = await readSortGroups({ cwd, repository }, ports).catch(() => []);
+    group = groups.find(g => !g.merged && (g.umbrella === targetUmbrella || g.members.includes(targetUmbrella))) ?? null;
+  }
+  if (!group || !Array.isArray(group.members) || !group.members.length) return { ok: false, umbrella: '', members: [], claims: [] };
+  const umbrella = group.umbrella || group.members[0];
+  const ordered = [umbrella, ...group.members.filter(m => m !== umbrella)];
+  const claims = [];
+  try {
+    for (const key of ordered) {
+      const issueNum = Number(String(key).split('/').pop());
+      if (ports.github?.issue) {
+        const raw = parse((await ports.github.issue({ repository, issue: issueNum })).json);
+        if (Array.isArray(raw?.assignees) && raw.assignees.length > 0) throw Error('member-assigned');
+      } else if (ports.execFile) {
+        const raw = parse((await ports.execFile('gh', ['api', `repos/${repository}/issues/${issueNum}`], { cwd })).stdout);
+        if (Array.isArray(raw?.assignees) && raw.assignees.length > 0) throw Error('member-assigned');
+      }
+      if (ports.claimIssue) {
+        const claimed = await ports.claimIssue({ cwd, repository, issue: issueNum, key, group: { umbrella, members: group.members }, coordinatorId, machine });
+        if (!claimed || claimed.ok === false) throw Error('claim-failed');
+        claims.push({ issue: key, commentId: String(claimed.commentId ?? ''), labelEventId: String(claimed.labelEventId ?? '') });
+        continue;
+      }
+      let labelEventId = String(Date.now() + issueNum);
+      if (ports.github?.sortUpdate) {
+        const updated = await ports.github.sortUpdate({ repository, issue: issueNum, label: 'pdd:working' });
+        if (updated?.ok !== true) throw Error('claim-failed');
+        if (updated.labelEventId) labelEventId = String(updated.labelEventId);
+      } else if (ports.execFile) {
+        await ports.execFile('gh', ['issue', 'edit', String(issueNum), '--add-label', 'pdd:working'], { cwd });
+        const events = parse((await ports.execFile('gh', ['api', `repos/${repository}/issues/${issueNum}/timeline`], { cwd })).stdout);
+        const labeled = (Array.isArray(events) ? events : []).filter(e => e?.event === 'labeled' && (e?.label?.name === 'pdd:working' || e?.label === 'pdd:working')).at(-1);
+        if (labeled?.id !== undefined) labelEventId = String(labeled.id);
+      }
+      let commentId = '';
+      const payload = { repository: repository.toLowerCase(), coordinatorId, machine, labelEventId, lastSeen: '', group: { umbrella, members: group.members } };
+      const commentBody = `Autopilot claim.\n\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``;
+      if (ports.github?.appendComment) {
+        const res = parse((await ports.github.appendComment({ repository, issue: issueNum, body: commentBody })).json);
+        commentId = String(res?.id ?? '');
+      } else if (ports.execFile) {
+        const res = parse((await ports.execFile('gh', ['api', `repos/${repository}/issues/${issueNum}/comments`, '--method', 'POST', '--input', '-'], { cwd, input: JSON.stringify({ body: commentBody }) })).stdout);
+        commentId = String(res?.id ?? '');
+      }
+      claims.push({ issue: key, commentId, labelEventId, coordinatorId, machine, active: true, owner: coordinatorId });
+    }
+    return { ok: true, umbrella, members: ordered, claims };
+  } catch (error) {
+    await releaseSortGroup({ cwd, repository, group: { umbrella, members: claims.map(c => c.issue) }, claims, coordinatorId, machine }, ports);
+    return { ok: false, umbrella, members: [], claims: [], reason: error.message || 'claim-failed' };
+  }
+}
+
+export async function releaseSortGroup({ cwd = '', repository, group, umbrella: targetUmbrella, claims = [], coordinatorId = 'coordinator', machine = 'local' }, ports = {}) {
+  if (!group && targetUmbrella && (cwd || ports.sortGroups)) {
+    const groups = await readSortGroups({ cwd, repository }, ports).catch(() => []);
+    group = groups.find(g => g.umbrella === targetUmbrella || g.members.includes(targetUmbrella)) ?? { umbrella: targetUmbrella, members: [targetUmbrella] };
+  }
+  const members = [...new Set([group?.umbrella, ...(group?.members ?? []), ...claims.map(c => c.issue)].filter(Boolean))];
+  const released = [];
+  for (const key of members) {
+    const issueNum = Number(String(key).split('/').pop());
+    const claim = claims.find(c => c.issue === key || Number(String(c.issue).split('/').pop()) === issueNum) ?? null;
+    if (ports.releaseClaim) {
+      await ports.releaseClaim({
+        cwd,
+        repository,
+        issue: issueNum,
+        key,
+        coordinatorId: claim?.coordinatorId ?? coordinatorId,
+        machine: claim?.machine ?? machine,
+        commentId: claim?.commentId ?? '',
+        labelEventId: claim?.labelEventId ?? '',
+      });
+      released.push(key);
+      continue;
+    }
+    if (ports.github?.releaseSortClaim) {
+      await ports.github.releaseSortClaim({ repository, issue: issueNum, key, claim });
+      released.push(key);
+      continue;
+    }
+    if (ports.github?.removeLabel) {
+      await ports.github.removeLabel({ repository, issue: issueNum, label: 'pdd:working' });
+    } else if (ports.execFile) {
+      await ports.execFile('gh', ['issue', 'edit', String(issueNum), '--remove-label', 'pdd:working'], { cwd });
+    }
+    released.push(key);
+  }
+  return { ok: true, released };
+}
+
+export async function splitSortGroupMember({ cwd = '', repository, umbrella, member, reason = 'member-diverged', coordinatorId = 'coordinator', machine = 'local' }, ports = {}) {
+  const store = groupStore({ cwd, repository }, ports);
+  const { groups = [] } = await store.read({ cwd, repository });
+  const targetNum = String(member ?? '').replace(/^#/, '').split('/').pop();
+  const idx = groups.findIndex(g => !g.merged && (g.umbrella === umbrella || g.members.some(m => m === member || m.split('/').pop() === targetNum)));
+  if (idx < 0) return { ok: false, umbrella: '', members: [], splitOut: [], standalone: null };
+  const current = groups[idx];
+  const split = splitGroupMember({ group: current, member, reason });
+  if (split.group) {
+    groups[idx] = split.group;
+  } else {
+    groups[idx] = { ...current, umbrella: split.umbrella, members: split.members, splitOut: split.splitOut };
+  }
+  await store.save({ cwd, repository, groups });
+  if (split.splitMember) {
+    await releaseSortGroup({ cwd, repository, group: { umbrella: split.splitMember, members: [split.splitMember] }, coordinatorId, machine }, ports);
+    const issueNum = Number(split.splitMember.split('/').pop());
+    const splitBody = `Split from group ${current.umbrella}: ${reason}.\n\n<!-- pdd-issue-route:v1 -->\n<!-- split-${hash(`${current.umbrella}:${split.splitMember}:${reason}`)} -->`;
+    if (ports.github?.appendComment) {
+      await ports.github.appendComment({ repository, issue: issueNum, body: splitBody });
+    } else if (ports.execFile) {
+      await ports.execFile('gh', ['issue', 'comment', String(issueNum), '--body-file', '-'], { cwd, input: splitBody });
+    }
+  }
+  return { ok: true, ...split };
 }

@@ -57,3 +57,57 @@ export function resolveAreas(input) {
   const one = resolveArea(input);
   return one.state === 'resolved' ? [one] : [];
 }
+
+const SHARED_NON_GROUP_PATHS = new Set([
+  'src/command-catalog.mjs', 'prompts/cli/command-catalog.prompt.md',
+  'command-catalog.mjs', 'command-catalog.prompt.md',
+  'bin/pdd.mjs', 'docs/cli.md', 'README.md', 'AGENTS.md', 'CLAUDE.md',
+  'CONTRIBUTING.md', 'RUNBOOK.md', 'docs/prompting-guide.md',
+  'skills/pdd-prompting/guide.md', 'package.json', 'package-lock.json',
+]);
+
+export function canonicalModule(path) {
+  if (typeof path !== 'string') return '';
+  const clean = path.trim().replace(/^(?:\.\/|\/)+/, '').replace(/\/+$/, '');
+  if (!clean || clean.includes('..') || clean.includes('\\')) return '';
+  if (SHARED_NON_GROUP_PATHS.has(clean) || clean.startsWith('test/') || /\.test\.[cm]?js$/.test(clean)) return '';
+  let m;
+  if ((m = /^prompts\/cli\/([^/]+)\.prompt\.md$/.exec(clean))) return `src/${m[1]}.mjs`;
+  if ((m = /^prompts\/(.+)\.prompt\.md$/.exec(clean))) return `src/${m[1]}.mjs`;
+  if ((m = /^([^/]+)\.prompt\.md$/.exec(clean))) return `src/${m[1]}.mjs`;
+  if ((m = /^([^/]+)\.mjs$/.exec(clean))) return `src/${m[1]}.mjs`;
+  if ((m = /^skills\/([^/]+)(?:\/.*)?$/.exec(clean))) return `skills/${m[1]}/SKILL.md`;
+  return clean;
+}
+
+export function owningModule(input) {
+  if (typeof input === 'string') return canonicalModule(input);
+  if (Array.isArray(input)) {
+    for (const item of input) { const mod = canonicalModule(item); if (mod) return mod; }
+    return '';
+  }
+  if (input && typeof input === 'object') {
+    if (typeof input.owningModule === 'string') {
+      const mod = canonicalModule(input.owningModule);
+      if (mod) return mod;
+    }
+    if (Array.isArray(input.paths)) {
+      for (const item of input.paths) { const mod = canonicalModule(item); if (mod) return mod; }
+    }
+  }
+  return '';
+}
+
+const RUNTIME_PATH_RE = /^(?:src\/runtime-[^/]+\.mjs|prompts\/cli\/runtime-[^/]+\.prompt\.md|runtime\/.+)$/i;
+
+export function isRuntimeOwned({ issue, record, resolved } = {}) {
+  if (record?.belongs?.kind === 'repository' || (typeof record?.belongs?.repository === 'string' && record.belongs.repository.trim() !== '')) return true;
+  if (String(record?.belongs?.area ?? '').trim().toLowerCase() === 'runtime') return true;
+  if (resolved?.kind === 'repository' || String(resolved?.area ?? '').trim().toLowerCase() === 'runtime') return true;
+  if (typeof resolved?.owner === 'string' && resolved.owner.trim() !== '' && resolved.owner !== 'autopilot') return true;
+  if (Array.isArray(issue?.labels) && issue.labels.some(l => ['runtime', 'pdd:runtime', 'area:runtime'].includes(String(typeof l === 'string' ? l : l?.name ?? '').toLowerCase()))) return true;
+  if (Array.isArray(record?.touchedAreas) && record.touchedAreas.some(t => String(t?.area ?? '').trim().toLowerCase() === 'runtime')) return true;
+  const candidatePaths = [...(typeof record?.owningModule === 'string' && record.owningModule ? [record.owningModule] : []), ...(Array.isArray(record?.paths) ? record.paths : [])];
+  if (candidatePaths.some(p => typeof p === 'string' && RUNTIME_PATH_RE.test(p.trim().replace(/^\/+/, '')))) return true;
+  return false;
+}

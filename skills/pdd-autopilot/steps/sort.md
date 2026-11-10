@@ -23,6 +23,12 @@ record in analysis.sorts. It has this shape (values below are illustrative):
   "status": {"state": "still-happens", "release": "1.0.0", "fix": "", "evidence": ["src/cli.mjs:12"]},
   "genuine": {"kind": "bug", "duplicateOf": "", "reason": ""},
   "paths": ["src/cli.mjs"],
+  "owningModule": "src/cli.mjs",
+  "symbol": "parseArgs",
+  "component": "arg-parser",
+  "errorCode": "",
+  "route": "",
+  "duplicateOf": "",
   "rootCause": "missing-current-context",
   "severity": "medium",
   "question": ""
@@ -47,14 +53,18 @@ PDD routes closed proposals, external owners and questions. Do not start them.
 In auto, a close comment gives evidence and a reopen hint before closure. Observe
 keeps it open with pdd:close-proposed. Person assignees and live claims win.
 
-Read the graph again after completion. Compare each new or changed issue with all
-open saved sorts and groups in contextJson.sort. Equal causes join or form groups;
-a changed cause leaves. PDD creates one Global fix umbrella at three members or
-across locally owned areas. Keep each member's requirements and prerequisites.
-Claimed or open-PR work finishes before it can join. A running umbrella gets a
-membership note. Give its owner every member, shared cause and one fix statement.
-Both PRs reference members. After the global fix merges, sort every member again
-against the fixing PR and current release. Close only fresh fixed decisions with
-evidence; leave remaining problems open. Read status or the graph for group size,
-cause and umbrella. Claims, trust and merge rules still apply. A conflicting group
-or dependency cycle needs a question, not a guess.
+Read the graph again after completion. Group before claiming: issues form a group
+of 2 to 5 members when they share the same owning module (canonical prompt/src
+path, excluding shared routing/doc/config files like `src/command-catalog.mjs`
+and `docs/cli.md`) plus a shared `component`, `symbol`, `errorCode` or `route`
+(or when one is a `duplicateOf` an open local work issue) — never from free-text
+`rootCause` equality alone. Human-assigned issues and Runtime-owned issues never
+join a group. Larger clusters split deterministically into groups of 2 to 5
+issues. The lowest-numbered member issue is the group leader (`umbrella`); never
+create a synthetic `Global fix:` umbrella issue. Confirm or split the group
+after the `reproduce` step: if a member fails or turns out to have a different
+module or cause, split it out to its own run while the others continue. Each
+closed member in the group PR (`Closes #A, Closes #B ...`) requires its own
+reproduce result and its own passing test (`member-evidence.json`). Claims,
+trust and merge rules still apply. A conflicting group or dependency cycle needs
+a question, not a guess.

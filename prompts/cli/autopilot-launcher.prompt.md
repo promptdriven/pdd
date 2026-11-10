@@ -1366,7 +1366,7 @@ person questions and explicit blockers.
 
 - [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
 
-- [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake and display size, cause and umbrella in status without a GitHub read.
+- [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake, attach `group` metadata (`umbrella`, `members`, `rootCause`) to offered group-leader work items so the coordinator claims and releases all group members together, release group claims together when a parked group run is released, and display size, cause and leader (`umbrella`) in status without a GitHub read.
 
 - [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
 

@@ -52,7 +52,9 @@ export function factoryGithub(w) {
         w.git(peer,'fetch','-q','origin');w.git(peer,'switch','-q','-C','factory-merge',`origin/${pr.baseRefName}`);
         w.git(peer,'merge','--no-ff','--no-edit',`origin/${pr.headRefName}`);
         const sha=w.git(peer,'rev-parse','HEAD');w.git(peer,'push','-q',w.remote,`HEAD:refs/heads/${pr.baseRefName}`);
-        pr.state='MERGED';pr.mergeCommit={oid:sha};pr.mergedAt=new Date(w.time).toISOString();f.merges.push(pr.number);return ok('');
+        pr.state='MERGED';pr.mergeCommit={oid:sha};pr.mergedAt=new Date(w.time).toISOString();f.merges.push(pr.number);
+        if(pr.baseRefName==='main')for(const m of pr.body.matchAll(/\bCloses\s+#([1-9]\d*)\b/gi))if(f.issues.has(Number(m[1])))f.close(Number(m[1]));
+        return ok('');
       }
       assert.fail(`unsupported factory gh pr ${a[1]}`);
     }

@@ -33,7 +33,7 @@ async function world(t) {
     w.calls.push({file,args,options});
     if(file==='gh' && args[0]==='api') {
       const path=args.find(a=>a.startsWith('repos/'));
-      if(args.includes('PATCH') && path===`repos/${run.repo}/issues/${run.number}`) {
+      if(args.includes('PATCH') && /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(path??'')) {
         assert.ok(args.includes('state=open'));w.issueState='open';
         if(w.uncertain==='reopen')throw Error('unconfirmed issue reopen');
         return {code:0,stdout:JSON.stringify({state:w.issueState})};
@@ -554,3 +554,18 @@ for(const custody of ['local','shared']) for(const [damage,corrupt] of Object.en
     assert.deepEqual(readdirSync(join(w.concernFolder(),'..','records')).sort(),reservations);
   });
 }
+
+test('group audit BAD without revert reopens only BAD members from memberVerdicts',async t=>{
+  const w=await world(t);
+  w.answer={...result('BAD'),revert:false,memberVerdicts:[
+    {issue:17,verdict:'OK',summary:'Leader #17 reproduced and fixed.'},
+    {issue:18,verdict:'BAD',summary:'Member #18 still fails on edge case.'},
+  ]};
+  const out=await w.check();
+  assert.equal(out.code,0,out.text);
+  const patchPaths=reopens(w).map(c=>c.args.find(a=>a.startsWith('repos/')));
+  assert.deepEqual(patchPaths,[`repos/${w.run.repo}/issues/18`]);
+  const issueComments=comments(w).map(c=>c.args.find(a=>a.startsWith('repos/')));
+  assert.ok(issueComments.includes(`repos/${w.run.repo}/issues/18/comments`));
+  assert.equal(issueComments.includes(`repos/${w.run.repo}/issues/17/comments`),false);
+});

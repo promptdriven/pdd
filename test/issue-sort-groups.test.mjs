@@ -8,6 +8,7 @@ import { reconcileDependencyIntake, prepareDependencyIntake } from '../src/issue
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
 import { renderIssueGraph } from '../src/issue-dependency-graph-view.mjs';
 import { sortPlan, sortClosingReferences } from '../src/issue-sort.mjs';
+import { claimSortGroup, releaseSortGroup, splitSortGroupMember } from '../src/issue-sort-github.mjs';
 import { fixture, complete, repository, key } from './helpers/issue-sort-fixture.mjs';
 const read = async w => (await readDependencySnapshot({ repository }, w.ports)).snapshot;
 const tick = w => reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
@@ -15,7 +16,7 @@ const seed = (w, numbers) => { for (const n of numbers) { w.save(w.record(n)); w
 const groups = async w => { const saved = (await w.ports.sortGroups.read({ repository })).groups; assert.ok(saved.length > 0, 'expected durable root-cause groups'); return saved; };
 const replace = (w, n, changes = {}) => w.save(w.record(n, { base: w.comments.get(n).filter(c => c.body.includes('pdd-issue-sort:v1')).map(c => String(c.id)), ...changes }));
 
-test('saved sorts form a pair, then a third issue creates one durable global umbrella', async () => {
+test('saved sorts form a pair, then a third issue joins the leader without a synthetic umbrella', async () => {
   const w = fixture([1,2,3]); seed(w, [1,2]);
   await tick(w);
   assert.equal((await groups(w))[0].members.length, 2);
@@ -23,28 +24,24 @@ test('saved sorts form a pair, then a third issue creates one durable global umb
   seed(w, [3]); await tick(w);
   const [group] = await groups(w);
   assert.deepEqual(group.members, [key(1),key(2),key(3)]);
-  assert.ok(!group.members.includes(group.umbrella));
-  const umbrella = w.issues.find(x => x.html_url === group.umbrella);
-  assert.ok(umbrella.title.startsWith('Global fix:'));
-  assert.ok(group.members.every(x => umbrella.body.includes(x)));
-  assert.ok(umbrella.body.includes(group.rootCause));
-  assert.match(umbrella.body, /One fix:/);
-  await tick(w); assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 1);
+  assert.equal(group.umbrella, key(1));
+  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 0);
   const graph = projectIssueGraph({ snapshot: await read(w) });
-  assert.ok(graph.nodes.filter(x => group.members.includes(x.key)).every(x => !x.eligible && x.blockers.includes(group.umbrella)));
+  assert.equal(graph.nodes.find(x => x.key === key(1)).eligible, true);
+  assert.ok(graph.nodes.filter(x => [key(2), key(3)].includes(x.key)).every(x => !x.eligible && x.blockers.includes(group.umbrella)));
   assert.equal(graph.groups[0].umbrella, group.umbrella);
 });
 
-test('two issues in different locally owned areas get one global umbrella', async () => {
+test('two issues in different locally owned areas sharing an owningModule use the first member as leader', async () => {
   const w = fixture([1,2], { context: { areas: [
     { name: 'cli', owner: 'autopilot', match: { paths: ['src/**'] } },
     { name: 'docs', owner: 'autopilot', match: { paths: ['docs/**'] } },
   ] } });
-  seed(w, [1]); w.save(w.record(2, { paths: ['docs/guide.md'], belongs: { kind: 'area', area: 'docs', repository: '' } })); w.review(2);
+  seed(w, [1]); w.save(w.record(2, { owningModule: 'src/cli.mjs', paths: ['docs/guide.md'], belongs: { kind: 'area', area: 'docs', repository: '' } })); w.review(2);
   await tick(w); const [group] = await groups(w);
   assert.deepEqual(group.members, [key(1),key(2)]);
   assert.equal(group.area, 'cli,docs');
-  assert.ok(!group.members.includes(group.umbrella));
+  assert.equal(group.umbrella, key(1));
 });
 
 test('a changed cause leaves the old group and joins the matching saved group', async () => {
@@ -73,10 +70,10 @@ for (const hold of ['claim','open-pr','person']) test(`${hold} work is deferred 
   running = false; w.issues[2].labels = []; w.issues[2].assignees = []; w.claims.length = 0;
   await tick(w);
   assert.deepEqual((await groups(w))[0].members, [key(1),key(2),key(3)]);
-  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 1);
+  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 0);
 });
 
-test('an idle new member joins a running dedicated umbrella with one note', async () => {
+test('an idle new member joins a running group leader with one note', async () => {
   const w = fixture([1,2,3,4]); seed(w, [1,2,3]); await tick(w);
   const [before] = await groups(w), umbrella = w.issues.find(x => x.html_url === before.umbrella);
   umbrella.labels = ['pdd:working'];
@@ -88,52 +85,60 @@ test('an idle new member joins a running dedicated umbrella with one note', asyn
   assert.equal(notes.length, 1); assert.ok(notes[0].body.includes(key(4)));
 });
 
-test('a claim arriving during the group wait prevents umbrella creation', async () => {
-  const w = fixture([1,2,3]); seed(w, [1,2,3]);
-  const wait = w.ports.wait.sleep;
-  w.ports.wait.sleep = async args => { await wait(args); w.claims.push({ issue: key(3), active: true, owner: 'worker' }); };
-  // Share a prior paced save so creation must pass through a wait.
-  w.comments.set(3, []);
-  await complete(w, [w.record(3)]);
-  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 0);
-  w.claims.length = 0; w.ports.wait.sleep = wait; await tick(w);
-  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 1);
+test('group claims are taken and released together, and roll back if a member is assigned', async () => {
+  const w = fixture([1,2,3]); seed(w, [1,2,3]); await tick(w);
+  const [group] = await groups(w);
+  const claimed = await claimSortGroup({ repository, group, coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
+  assert.equal(claimed.ok, true);
+  assert.deepEqual(claimed.members, [key(1), key(2), key(3)]);
+  for (const n of [1, 2, 3]) assert.ok(w.issues.find(x => x.number === n).labels.includes('pdd:working'));
+
+  const released = await releaseSortGroup({ repository, group, claims: claimed.claims, coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
+  assert.equal(released.ok, true);
+  for (const n of [1, 2, 3]) assert.ok(!w.issues.find(x => x.number === n).labels.includes('pdd:working'));
+
+  // If member 3 becomes assigned before claiming finishes, already-taken claims on 1 and 2 roll back.
+  w.issues.find(x => x.number === 3).assignees = [{ login: 'person' }];
+  const aborted = await claimSortGroup({ repository, group, coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
+  assert.equal(aborted.ok, false);
+  for (const n of [1, 2, 3]) assert.ok(!w.issues.find(x => x.number === n).labels.includes('pdd:working'));
 });
 
-test('a lost local group save recovers the confirmed umbrella by cause marker', async () => {
+test('a lost local group save recovers the group from saved sorts on the next tick', async () => {
   const w = fixture([1,2,3]); seed(w, [1,2,3]);
   const save = w.ports.sortGroups.save; let lost = true;
   w.ports.sortGroups.save = args => lost ? { ok: false } : save(args);
   await tick(w); lost = false; await tick(w);
-  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 1);
+  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 0);
   assert.equal((await groups(w)).length, 1);
+  assert.equal((await groups(w))[0].umbrella, key(1));
 });
 
-test('merge requires new sorts for every member and closes only a fresh fixed member', async () => {
+test('merge of a leader requires new sorts for remaining members and closes only a fresh fixed member', async () => {
   const options = {}, w = fixture([1,2,3], options); seed(w, [1,2,3]); await tick(w);
   const [group] = await groups(w), umbrella = w.issues.find(x => x.html_url === group.umbrella);
   umbrella.state = 'closed'; options.mergedFix = 'https://github.com/example/project/pull/90';
   await tick(w);
   const prepared = await prepareDependencyIntake({ repository }, w.ports);
-  assert.deepEqual(prepared.queued.slice().sort(), [key(1),key(2),key(3)]);
-  assert.equal(w.issues.slice(0,3).filter(x => x.state === 'closed').length, 0);
+  assert.deepEqual(prepared.queued.slice().sort(), [key(2),key(3)]);
+  assert.equal(w.issues.slice(1,3).filter(x => x.state === 'closed').length, 0);
   const s = JSON.parse(prepared.request.snapshotJson);
-  assert.equal(s.sortContext.groups[0].merged, options.mergedFix);
-  const records = [1,2,3].map(n => w.record(n, { base: w.comments.get(n).filter(c => c.body.includes('pdd-issue-sort:v1')).map(c => String(c.id)),
-    ...(n === 1 ? { status: { state: 'fixed', release: '1.0.0', fix: options.mergedFix, evidence: ['src/cli.mjs:12'] } } : {}) }));
+  assert.equal(s.sortContext.groups.find(g => g.merged)?.merged, options.mergedFix);
+  const records = [2,3].map(n => w.record(n, { base: w.comments.get(n).filter(c => c.body.includes('pdd-issue-sort:v1')).map(c => String(c.id)),
+    ...(n === 2 ? { status: { state: 'fixed', release: '1.0.0', fix: options.mergedFix, evidence: ['src/cli.mjs:12'] } } : {}) }));
   assert.equal((await complete(w, records)).state, 'complete');
-  assert.equal(w.issues[0].state, 'closed');
-  assert.deepEqual(w.issues.slice(1,3).map(x => x.state), ['open','open']);
-  assert.ok(w.comments.get(1).some(x => x.body.includes(options.mergedFix) && x.body.includes('pdd-issue-route:v1')));
+  assert.equal(w.issues[1].state, 'closed');
+  assert.equal(w.issues[2].state, 'open');
+  assert.ok(w.comments.get(2).some(x => x.body.includes(options.mergedFix) && x.body.includes('pdd-issue-route:v1')));
 });
 
-test('closing an umbrella without a merged fixing PR does not queue post-merge closure', async () => {
+test('closing a leader without a merged fixing PR does not queue post-merge closure', async () => {
   const w = fixture([1,2,3]); seed(w, [1,2,3]); await tick(w);
   const [group] = await groups(w); w.issues.find(x => x.html_url === group.umbrella).state = 'closed';
   await tick(w);
   assert.equal((await groups(w))[0].merged, undefined);
-  assert.equal(w.issues.slice(0,3).filter(x => x.state === 'closed').length, 0);
-  assert.ok(projectIssueGraph({ snapshot: await read(w) }).nodes.every(x => !x.eligible));
+  assert.equal(w.issues.slice(1,3).filter(x => x.state === 'closed').length, 0);
+  assert.deepEqual((await groups(w))[0].members, [key(2), key(3)]);
 });
 
 for (const closer of [null, { __typename: 'PullRequest', merged: false, url: 'https://github.com/example/project/pull/90' }, { __typename: 'PullRequest', merged: true, url: 'https://github.com/example/project/pull/90' }]) test(`native merge evidence follows the closing event: ${closer?.merged ?? 'none'}`, async () => {
@@ -161,20 +166,39 @@ test('the factory graph shows group size, cause and a safe umbrella link', async
   assert.ok(!malicious.includes('href="javascript:'));
 });
 
-test('both group PRs reference members and leave closure to the post-merge sort', async () => {
+test('group PRs emit Refs without memberEvidence and Closes #N only when per-member reproduce and test exist', async () => {
   const w = fixture([1,2,3]); seed(w, [1,2,3]); await tick(w);
-  const [group] = await groups(w), n = Number(group.umbrella.split('/').pop()); seed(w, [n]);
+  const [group] = await groups(w);
   const s = await read(w), graph = projectIssueGraph({ snapshot: s });
-  for (const code of [false,true]) assert.deepEqual(sortClosingReferences({ snapshot: s, issue: group.umbrella, code, graph }), group.members.map(x => `Refs ${x}`));
+  for (const code of [false,true]) assert.deepEqual(sortClosingReferences({ snapshot: s, issue: group.umbrella, code, graph }), [key(2), key(3)].map(x => `Refs ${x}`));
+  assert.deepEqual(
+    sortClosingReferences({
+      snapshot: s,
+      issue: group.umbrella,
+      code: true,
+      graph,
+      memberEvidence: {
+        [key(2)]: { reproduce: 'Reproduced on #2', test: 'test/cli.test.mjs:2' },
+        [key(3)]: { reproduce: 'Reproduced on #3', test: 'test/cli.test.mjs:3' },
+      },
+    }),
+    ['Closes #2', 'Closes #3'],
+  );
 });
 
-test('bounded group plans never offer member starts before a required umbrella', async () => {
-  for (let size = 3; size <= 6; size++) {
+test('bounded group plans cap group size at 2 to 5 issues and offer only each group leader', async () => {
+  for (let size = 2; size <= 5; size++) {
     const w = fixture(Array.from({ length: size }, (_, i) => i+1)); seed(w, w.issues.map(x => x.number));
     const s = await read(w), plan = sortPlan({ snapshot: s });
     assert.equal(plan.groups.length, 1); assert.equal(plan.groups[0].members.length, size);
-    assert.equal(projectIssueGraph({ snapshot: s }).nodes.filter(x => x.eligible).length, 0);
+    assert.deepEqual(projectIssueGraph({ snapshot: s }).nodes.filter(x => x.eligible).map(x => x.key), [key(1)]);
   }
+  const w6 = fixture([1,2,3,4,5,6]); seed(w6, [1,2,3,4,5,6]);
+  const s6 = await read(w6), plan6 = sortPlan({ snapshot: s6 });
+  assert.equal(plan6.groups.length, 2);
+  assert.deepEqual(plan6.groups[0].members, [key(1), key(2), key(3), key(4)]);
+  assert.deepEqual(plan6.groups[1].members, [key(5), key(6)]);
+  assert.deepEqual(projectIssueGraph({ snapshot: s6 }).nodes.filter(x => x.eligible).map(x => x.key), [key(1), key(5)]);
 });
 
 test('an empty completed pair is removed and the next snapshot remains readable', async () => {
@@ -186,13 +210,11 @@ test('an empty completed pair is removed and the next snapshot remains readable'
   assert.equal((await read(w)).complete, true);
 });
 
-test('a later pending group advances after ten confirmed groups', async () => {
+test('eleven independent groups form without synthetic umbrella issues', async () => {
   const w = fixture(Array.from({ length: 33 }, (_, i) => i + 1));
   for (let n = 1; n <= 33; n++) { w.save(w.record(n, { rootCause: `cause-${Math.floor((n-1)/3)}` })); w.review(n); }
   await tick(w); assert.equal((await groups(w)).length, 11);
-  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 10);
-  await tick(w); assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 11);
-  await tick(w); assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 11);
+  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 0);
 });
 
 test('native group state survives a fresh read from a real Git checkout', async t => {
@@ -214,13 +236,27 @@ test('native group state survives a fresh read from a real Git checkout', async 
   assert.ok(after.issues.some(x => x.key === after.sortContext.groups[0].umbrella));
 });
 
-test('an empty dedicated umbrella stays held instead of becoming ordinary work', async () => {
+test('splitSortGroupMember splits a failing member to its own run while the others continue', async () => {
   const w = fixture([1,2,3]); seed(w, [1,2,3]); await tick(w);
-  const [group] = await groups(w), n = Number(group.umbrella.split('/').pop()); seed(w, [n]);
-  w.issues.slice(0,3).forEach(x => { x.state = 'closed'; }); await tick(w);
-  const s = await read(w), node = projectIssueGraph({ snapshot: s }).nodes.find(x => x.key === group.umbrella);
-  assert.equal(node.eligible, false);
-  assert.deepEqual(s.sortContext.groups[0].members, []);
+  const [group] = await groups(w);
+  await claimSortGroup({ repository, group, coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
+  for (const n of [1, 2, 3]) assert.ok(w.issues.find(x => x.number === n).labels.includes('pdd:working'));
+
+  const split = await splitSortGroupMember({ repository, umbrella: key(1), member: key(3), reason: 'different-module-after-reproduce', coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
+  assert.equal(split.ok, true);
+  assert.deepEqual(split.members, [key(1), key(2)]);
+  assert.deepEqual(split.splitOut, [key(3)]);
+  assert.equal(split.standalone?.issue, key(3));
+  assert.ok(w.issues.find(x => x.number === 1).labels.includes('pdd:working'));
+  assert.ok(w.issues.find(x => x.number === 2).labels.includes('pdd:working'));
+  assert.ok(!w.issues.find(x => x.number === 3).labels.includes('pdd:working'));
+
+  // On the next read, #3 stays split out and eligible for its own standalone run, while #1 and #2 stay grouped.
+  const s = await read(w), plan = sortPlan({ snapshot: s });
+  assert.equal(plan.groups.length, 1);
+  assert.deepEqual(plan.groups[0].members, [key(1), key(2)]);
+  assert.equal(plan.routes.find(r => r.issue === key(3))?.action, 'work');
+  assert.equal(plan.routes.find(r => r.issue === key(3))?.umbrella, '');
 });
 
 test('a merged pair work issue forces a fresh sort of its remaining member', async () => {
@@ -232,18 +268,6 @@ test('a merged pair work issue forces a fresh sort of its remaining member', asy
   assert.deepEqual(prepared.queued, [key(2)]);
   assert.equal((await groups(w))[0].merged, options.mergedFix);
   assert.equal(projectIssueGraph({ snapshot: await read(w) }).nodes.find(x => x.key === key(2)).eligible, false);
-});
-
-test('ambiguous cause markers cannot select a recovery umbrella', async () => {
-  const w = fixture([1,2,3,100,101]); seed(w, [1,2,3]);
-  for (const n of [100,101]) {
-    w.issues.find(x => x.number === n).body = '<!-- pdd-issue-group:v1 shared-context -->'; seed(w, [n]);
-  }
-  await tick(w);
-  const [group] = await groups(w);
-  assert.equal(group.umbrella, '');
-  assert.equal(w.writes.filter(x => x.kind === 'umbrella').length, 0);
-  assert.ok(projectIssueGraph({ snapshot: await read(w) }).nodes.every(x => !x.eligible));
 });
 
 test('a pair keeps its running work issue and no peer can start beside it', async () => {
@@ -260,12 +284,11 @@ test('a pair keeps its running work issue and no peer can start beside it', asyn
   assert.ok(w.comments.get(1).some(x => x.body.includes(key(3)) && x.body.includes('pdd-issue-route:v1')));
 });
 
-test('a duplicate marker is held even when the dedicated umbrella is already saved', async () => {
-  const w = fixture([1,2,3,100]); seed(w, [1,2,3]); await tick(w);
-  const [group] = await groups(w); seed(w, [Number(group.umbrella.split('/').pop())]);
+test('an orphan synthetic umbrella marker is held instead of becoming ordinary work', async () => {
+  const w = fixture([1,2,100]); seed(w, [1,2]);
   w.issues.find(x => x.number === 100).body = '<!-- pdd-issue-group:v1 shared-context -->'; seed(w, [100]);
   await tick(w);
   const graph = projectIssueGraph({ snapshot: await read(w) });
   assert.equal(graph.nodes.find(x => x.key === key(100)).eligible, false);
-  assert.equal(graph.nodes.filter(x => x.eligible).length, 0);
+  assert.deepEqual(graph.nodes.filter(x => x.eligible).map(x => x.key), [key(1)]);
 });

@@ -32,6 +32,62 @@ test('factory intake: a mixed assigned and free batch starts the free issue', as
   assert.deepEqual(w.leadActions, []);
 });
 
+test('factory group: a group of 3 runs as one PR that closes 3 issues', async t => {
+  const { claimSortGroup, releaseSortGroup, readSortGroups } = await import('../src/issue-sort-github.mjs');
+  const w = await factoryWorld(t);
+  w.github.add(18, { title: 'Value returns one instead of two', body: 'Calling value returns 1.', created: w.time - 900, updated: w.time - 900 });
+  w.github.add(19, { title: 'Default value export is wrong', body: 'Expected value export to be 2.', created: w.time - 800, updated: w.time - 800 });
+  await w.start();
+  const valueRevision = createHash('sha256').update(readFileSync(join(w.cwd, 'value.mjs'))).digest('hex');
+  await w.reviewDependencies({
+    sorts: sorts => sorts.map((row, idx) => ({
+      ...row,
+      inputs: [...row.inputs, { key: `https://github.com/${w.repository}/blob/HEAD/value.mjs`, revision: valueRevision }],
+      paths: ['value.mjs'],
+      owningModule: 'value.mjs',
+      symbol: 'value',
+      rootCause: `Distinct free-text description ${idx + 1} for value constant bug`,
+    })),
+  });
+  assert.equal(w.github.issues.size, 3, 'no synthetic umbrella issue is created');
+  const groups = await readSortGroups({ cwd: w.cwd, repository: w.repository });
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].umbrella, 'https://github.com/example/project/issues/17');
+  assert.deepEqual(groups[0].members, [
+    'https://github.com/example/project/issues/17',
+    'https://github.com/example/project/issues/18',
+    'https://github.com/example/project/issues/19',
+  ]);
+  const packet = [...w.packets].reverse().find(p => p.issues.some(i => i.number === 17 && i.eligible));
+  assert.ok(packet, 'GROUP_FACTORY_LEADER_NOT_ELIGIBLE');
+  const leader = packet.issues.find(i => i.number === 17);
+  assert.deepEqual(leader.group?.members, groups[0].members);
+  assert.equal(packet.issues.some(i => i.number === 18 || i.number === 19), false);
+  const state = w.state();
+  const claimed = await claimSortGroup({ cwd: w.cwd, repository: w.repository, group: groups[0], coordinatorId: state.coordinatorId, machine: state.machine }, { execFile: w.execute });
+  assert.equal(claimed.ok, true);
+  for (const n of [17, 18, 19]) assert.ok(w.github.issues.get(n).labels.includes('pdd:working'));
+  await w.command(['workflow', 'run', 'small-change', '17', '--agent', 'codex', '--origin', 'autopilot', '--decision-id', leader.decisionId, '--outcome', 'code'], { actor: 'coordinator', env: w.context() });
+  assert.equal(existsSync(join(w.commonDir, 'pdd/runs/18/status.json')), false);
+  assert.equal(existsSync(join(w.commonDir, 'pdd/runs/19/status.json')), false);
+  put(w.record(17).runDir, 'member-evidence.json', {
+    'https://github.com/example/project/issues/17': { reproduce: 'value is 1 on base for #17', test: 'test/value.test.mjs' },
+    'https://github.com/example/project/issues/18': { reproduce: 'value returns 1 on base for #18', test: 'test/value.test.mjs' },
+    'https://github.com/example/project/issues/19': { reproduce: 'default value export is 1 on base for #19', test: 'test/value.test.mjs' },
+  });
+  const a = scriptedAgent(w);
+  await a.finish();
+  assert.equal(w.github.prs.length, 1);
+  assert.match(w.github.prs[0].body, /Closes #17, Closes #18, Closes #19/);
+  await a.merge();
+  await releaseSortGroup({ cwd: w.cwd, repository: w.repository, group: groups[0], coordinatorId: state.coordinatorId, machine: state.machine }, { execFile: w.execute });
+  for (const n of [17, 18, 19]) {
+    assert.equal(w.github.issues.get(n).state, 'closed', `issue #${n} must be closed by the single group PR`);
+    assert.equal(w.github.issues.get(n).labels.includes('pdd:working'), false, `issue #${n} claim must be released`);
+  }
+  assert.deepEqual(w.leadActions, []);
+});
+
 test('factory 3139: independent scope checker rejects a dropped trusted request and shares docs exemption',async t=>{
   const {reviewSmallChangeChecklist}=await import('../src/workflow-small-change.mjs');
   const {sourceFingerprint}=await import('../src/workflow-replay.mjs');

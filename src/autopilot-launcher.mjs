@@ -461,11 +461,23 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
     },
     release: async run => p.scanAction(async () => {
       const result = await releaseParkedRun({...args(run), runId: run.runId, at: run.parking.at}, {
-        ...worker, releaseParkedClaim: fresh => {
+        ...worker, releaseParkedClaim: async fresh => {
           const claim = {...fresh.automaticOrigin.claim, issue: fresh.issue.url, coordinatorId: state.coordinatorId, machine: state.machine};
-          return (p.releaseParkedClaim ?? releaseParkedClaim)({cwd: state.cwd, repository: state.repo, claim,
+          const released = await (p.releaseParkedClaim ?? releaseParkedClaim)({cwd: state.cwd, repository: state.repo, claim,
             coordinatorId: state.coordinatorId, machine: state.machine, runId: fresh.runId, branch: fresh.branch},
             {...worker, execFile: async (file, args, options) => p.execute(file, args, {...options, purpose: 'claims'})});
+          if (released?.ok !== false) {
+            const groupMembers = fresh.automaticOrigin?.group?.members ?? (state.githubIntake?.groups ?? []).find(g => !g.merged && (issueKey(g.umbrella) ?? g.umbrella) === (issueKey(fresh.issue.url) ?? fresh.issue.url))?.members ?? [];
+            for (const memberUrl of groupMembers.filter(m => (issueKey(m) ?? m) !== (issueKey(fresh.issue.url) ?? fresh.issue.url))) {
+              const memberClaim = (fresh.automaticOrigin?.groupClaims ?? state.githubIntake?.claims ?? []).find(c => (issueKey(c.issue) ?? c.issue) === (issueKey(memberUrl) ?? memberUrl) && c.coordinatorId === state.coordinatorId && c.machine === state.machine);
+              if (memberClaim) {
+                await (p.releaseParkedClaim ?? releaseParkedClaim)({cwd: state.cwd, repository: state.repo, claim: {...memberClaim, issue: memberUrl, coordinatorId: state.coordinatorId, machine: state.machine},
+                  coordinatorId: state.coordinatorId, machine: state.machine, runId: fresh.runId, branch: fresh.branch},
+                  {...worker, execFile: async (file, args, options) => p.execute(file, args, {...options, purpose: 'claims'})}).catch(() => {});
+              }
+            }
+          }
+          return released;
         },
       });
       return result.recovery === 'released';
@@ -1929,7 +1941,8 @@ async function runTick(stateFile, ports, completion) {
           continue;
         }
         const pulls = await relatedPullRequests(issue.number, state, config, p);
-        const item = { number: issue.number, url: issue.html_url, eligible: graphEligible === true, ...(retry ? { retry } : {}), ...(labels.includes('pdd:working') ? { claimed: true } : {}), ...(expiredClaim ? { expiredClaim: { lastSeen: expiredClaim.lastSeen } } : {}), ...(authorTrusted ? { title: issue.title, body: issue.body } : {}), comments: trustedComments.map(row => ({ author: row.user.login, body: row.body })), ...(pulls.length ? { pullRequests: pulls } : {}) };
+        const activeGroup = (Array.isArray(intake?.groups) ? intake.groups : []).find(g => !g.merged && (issueKey(g.umbrella) ?? g.umbrella) === issueIdentity && Array.isArray(g.members) && g.members.length >= 2);
+        const item = { number: issue.number, url: issue.html_url, eligible: graphEligible === true, ...(activeGroup ? { group: { umbrella: activeGroup.umbrella, members: activeGroup.members, rootCause: activeGroup.rootCause } } : {}), ...(retry ? { retry } : {}), ...(labels.includes('pdd:working') ? { claimed: true } : {}), ...(expiredClaim ? { expiredClaim: { lastSeen: expiredClaim.lastSeen } } : {}), ...(authorTrusted ? { title: issue.title, body: issue.body } : {}), comments: trustedComments.map(row => ({ author: row.user.login, body: row.body })), ...(pulls.length ? { pullRequests: pulls } : {}) };
         const view = { text: authorTrusted ? { author: issue.user.login, title: item.title, body: item.body } : undefined, comments: trustedComments.map(row => heartbeat(row) ? { id: row.id, updatedAt: row.created_at, author: row.user.login, body: withoutClaimHeartbeat(row.body) } : { id: row.id, updatedAt: row.updated_at, author: row.user.login, body: row.body }), labels: labels.filter(name => !['pdd:working', 'pdd:stuck', 'pdd:code-pending'].includes(name)).sort(), ...(expiredClaim ? { expiredClaim: true } : {}), pulls: pulls.map(pull => ({ ...pull, author: state.pullCache[pull.number].row.user.login })) };
         const event = digest(view);
         const waiting = blocked || graphEligible !== true;

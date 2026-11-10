@@ -159,8 +159,16 @@ test('assigned umbrella markers are not recovered from the snapshot or live inde
 
 test('an unconfirmed group write does not prevent an independent close route', async () => {
   const w = fixture([1, 2, 3, 4]);
-  w.ports.github.createSortUmbrella = async () => { throw Error('synthetic-group-failure'); };
-  const records = [3, 2, 1].map(n => w.record(n));
+  for (const n of [1, 2]) { w.save(w.record(n)); w.review(n); }
+  await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
+  w.issues[0].labels = ['pdd:working'];
+  w.claims.push({ issue: key(1), active: true, owner: 'worker' });
+  const append = w.ports.github.appendComment;
+  w.ports.github.appendComment = async args => {
+    if (args.issue === 1 && args.body.includes('Group members')) throw Error('synthetic-group-failure');
+    return append(args);
+  };
+  const records = [w.record(3)];
   records.push(w.record(4, { rootCause: 'independent', status: { ...w.record(4).status, state: 'fixed', fix: 'https://github.com/example/project/pull/90' } }));
   const result = await complete(w, records);
   assert.equal(w.issues[3].state, 'closed', 'INTAKE_GROUP_ABORTED_ROUTE');

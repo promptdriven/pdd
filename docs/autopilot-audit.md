@@ -35,7 +35,8 @@ Return only a JSON object with these fields:
 `kind`: stable lowercase process category (required for CONCERN; empty otherwise);
 `summary`: short nonblank explanation;
 `evidence`: nonblank Markdown with the seven numbered answers and process lesson;
-`revert`: Boolean recommendation.
+`revert`: Boolean recommendation;
+`memberVerdicts`: optional array of `{ issue, verdict, summary, evidence }` for a group PR that closes multiple issues (`Closes #A, Closes #B ...`). Check each closed member issue independently for its own reproduce result and test; if some members are OK and another member is BAD without needing a revert, set `revert: false` so only the BAD member issues are reopened.
 
 OK requires the original problem solved, scope and tests sound, and real gates.
 CONCERN means an acceptable change with a named process weakness. Use CONCERN

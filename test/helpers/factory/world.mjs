@@ -208,11 +208,14 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     }
   };
   w.start=async()=>{await w.command(['autopilot','start','--runs',String(w.runLimit??2),'--checks','1'],{actor:'operator'});w.messages();};
-  w.reviewDependencies=async()=>{
+  w.reviewDependencies=async(extra={})=>{
     w.messages();
     for(let n=0;n<8;n++) {
       const request=w.dependencyRequests.shift();if(!request)break;
-      await w.command(['dependencies','complete','--input','-'],{actor:'coordinator',env:w.context(),stdin:JSON.stringify({request,analysis:analysisFor(request)})});w.messages();
+      const analysis=analysisFor(request);
+      if(extra.reviews)analysis.reviews=extra.reviews(analysis.reviews,request);
+      if(extra.sorts&&analysis.sorts)analysis.sorts=extra.sorts(analysis.sorts,request);
+      await w.command(['dependencies','complete','--input','-'],{actor:'coordinator',env:w.context(),stdin:JSON.stringify({request,analysis})});w.messages();
     }
   };
   w.begin=async({beforeRun,number=17}={})=>{
