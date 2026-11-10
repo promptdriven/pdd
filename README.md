@@ -242,10 +242,10 @@ Follow [docs/ISSUES.md](docs/ISSUES.md). Your agent can follow it too, so you ca
 
 ## Links
 
-- [Documentation](docs/index.md): the [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md) and the [Prompting guide](docs/prompting-guide.md).
+- [Documentation](docs/index.md): the [onboarding guide](docs/ONBOARDING.md), [PDD doctrine](docs/prompt-driven-development-doctrine.md), [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md) and the [Prompting guide](docs/prompting-guide.md).
 - [RUNBOOK.md](RUNBOOK.md): how to write prompts and tests that the PDD interpreter can check.
 - [The skills](skills/).
-- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.19).
+- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.26).
 - [Contributing](CONTRIBUTING.md).
 
 ## License
