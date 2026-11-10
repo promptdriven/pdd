@@ -1,0 +1,270 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/project-files-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Inspecting a repository lists its prompts, Stories, orphans, refusals and warnings in path order."
+    },
+    {
+      "id": "AC2",
+      "text": "Inspecting an unavailable repository root fails with `source-unavailable`."
+    },
+    {
+      "id": "AC3",
+      "text": "Running `pdd files --json` inside a repository writes the JSON inventory to stdout and exits 0."
+    },
+    {
+      "id": "AC4",
+      "text": "Running `pdd files` outside a Git repository writes a diagnostic to stderr and exits 2."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/prompts/cli/hello.prompt.md": {
+        "content": "# Hello prompt\n",
+        "is_symlink": false
+      },
+      "/repo/user_stories/hello.md": {
+        "content": "# Say hello\n\n## Acceptance criteria\n\n1. Greets the user.\n",
+        "is_symlink": false
+      },
+      "/repo/test/runtime/orphan.json": {
+        "content": "{}\n",
+        "is_symlink": false
+      }
+    },
+    "git_top": [
+      {
+        "cwd": "/repo",
+        "reply": {
+          "status": 0,
+          "root": "/repo",
+          "stderr": ""
+        }
+      },
+      {
+        "cwd": "/outside",
+        "reply": {
+          "status": 128,
+          "root": "",
+          "stderr": "fatal: not a git repository"
+        }
+      }
+    ],
+    "git_files": [
+      {
+        "root": "/repo",
+        "reply": {
+          "status": 0,
+          "files": [
+            "prompts/cli/hello.prompt.md",
+            "test/runtime/orphan.json",
+            "user_stories/hello.md"
+          ]
+        }
+      },
+      {
+        "root": "/missing",
+        "reply": {
+          "status": 128,
+          "files": []
+        }
+      }
+    ],
+    "stdout": [],
+    "stderr": []
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "git.topLevel": {
+      "action": "collection.get",
+      "world_pointer": "/git_top",
+      "key_argument_pointer": "/cwd",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/cwd",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "root": "",
+        "stderr": ""
+      },
+      "result_value_pointer": ""
+    },
+    "git.listFiles": {
+      "action": "collection.get",
+      "world_pointer": "/git_files",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/root",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "status": 128,
+        "files": []
+      },
+      "result_value_pointer": ""
+    },
+    "output.stdout": {
+      "action": "port.write",
+      "world_pointer": "/stdout",
+      "result_template": {}
+    },
+    "output.stderr": {
+      "action": "port.write",
+      "world_pointer": "/stderr",
+      "result_template": {}
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "inspect-repo",
+      "entry_path": "prompts/cli/files.prompt.md",
+      "operation": "inspectProjectFiles",
+      "input": {
+        "root": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/schema_version",
+          "op": "equals",
+          "value": "pdd.files.v1"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/prompts/0/path",
+          "op": "equals",
+          "value": "prompts/cli/hello.prompt.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/prompts/0/has_interface",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stories/0",
+          "op": "equals",
+          "value": {
+            "path": "user_stories/hello.md",
+            "title": "Say hello",
+            "tests": []
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/orphans/0/path",
+          "op": "equals",
+          "value": "test/runtime/orphan.json"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/refusals/0/code",
+          "op": "equals",
+          "value": "interface-missing"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "inspect-unavailable",
+      "entry_path": "prompts/cli/files.prompt.md",
+      "operation": "inspectProjectFiles",
+      "input": {
+        "root": "/missing"
+      },
+      "expected_error": "source-unavailable",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "source-unavailable"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-json",
+      "entry_path": "prompts/cli/files.prompt.md",
+      "operation": "runProjectFiles",
+      "input": {
+        "cwd": "/repo",
+        "json": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/stdout/0/text",
+          "op": "contains",
+          "value": "\"schema_version\":\"pdd.files.v1\""
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-outside-git",
+      "entry_path": "prompts/cli/files.prompt.md",
+      "operation": "runProjectFiles",
+      "input": {
+        "cwd": "/outside",
+        "json": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/files-output-stderr",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

@@ -73,15 +73,637 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
 
 - Load the complete [Prompting guide](../../docs/prompting-guide.md) for authoring/generation; it owns module contracts and preservation.
 - Runtime: Node `child_process.execFile`, `crypto.randomUUID`, `fs/promises`, `fs.constants`, `path`, `util`, and installed normal Git. Filesystem metadata creation/reads/fsync are helper-owned; execFile is the sole injected port. Tests use disposable real local repositories and injected command failures, with no live GitHub/native actions.
+- In Runtime checks, `git.execFile({file, args, cwd})` binds `ports.execFile`, and `fs` (`inspectPath`, `readRecord`, `saveClaim`, `unlinkClaim`) binds canonical path checks and durable run-index/issue-claim records; `githubOriginRepository` returns `{repository}`. Real hardlink inodes, directory fsyncs and concurrent process races stay in `test/workflow-worktree.test.mjs`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "1eb4eb0c0c5526d70df035b33b6949f9b5f5b26a4580720924e13b613d4c5b37",
-  "reason": "Real Git worktree identity, durable allocation and exclusive claims need native evidence. Native evidence owners: test/workflow-worktree.test.mjs."
+  "prose_sha256": "678cda8c43cc6a2cb855bd543016e6bcf08ef3e93c5240da36c34cfadcc4b25a",
+  "entries": [
+    {
+      "operation": "githubOriginRepository",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "remote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "remote"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "repository"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "lookupRepositoryParent",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "commonDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "repository",
+          "commonDir"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "recovery_required"
+            ]
+          },
+          "root": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bare": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "root",
+          "bare"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "git.execFile",
+        "fs.inspectPath"
+      ]
+    },
+    {
+      "operation": "allocateIssueWorktree",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "issueNumber": {
+            "type": "integer"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "workflowName": {
+            "type": "string"
+          },
+          "baseRef": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "repository",
+          "issueNumber",
+          "runId",
+          "workflowName",
+          "baseRef"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "conflict",
+              "recovery_required"
+            ]
+          },
+          "assignment": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "runId": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  },
+                  "issueNumber": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "workflowName": {
+                    "type": "string"
+                  },
+                  "commonDir": {
+                    "type": "string"
+                  },
+                  "sourceRoot": {
+                    "type": "string"
+                  },
+                  "worktreePath": {
+                    "type": "string"
+                  },
+                  "gitDir": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "baseRef": {
+                    "type": "string"
+                  },
+                  "baseSha": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "runId",
+                  "repository",
+                  "issueNumber",
+                  "workflowName",
+                  "commonDir",
+                  "sourceRoot",
+                  "worktreePath",
+                  "gitDir",
+                  "branch",
+                  "baseRef",
+                  "baseSha"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "assignment",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "git.execFile",
+        "fs.inspectPath",
+        "fs.readRecord",
+        "fs.saveClaim"
+      ]
+    },
+    {
+      "operation": "lookupIssueWorktree",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "conflict",
+              "recovery_required"
+            ]
+          },
+          "assignment": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "runId": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  },
+                  "issueNumber": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "workflowName": {
+                    "type": "string"
+                  },
+                  "commonDir": {
+                    "type": "string"
+                  },
+                  "sourceRoot": {
+                    "type": "string"
+                  },
+                  "worktreePath": {
+                    "type": "string"
+                  },
+                  "gitDir": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "baseRef": {
+                    "type": "string"
+                  },
+                  "baseSha": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "runId",
+                  "repository",
+                  "issueNumber",
+                  "workflowName",
+                  "commonDir",
+                  "sourceRoot",
+                  "worktreePath",
+                  "gitDir",
+                  "branch",
+                  "baseRef",
+                  "baseSha"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "assignment",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "git.execFile",
+        "fs.inspectPath",
+        "fs.readRecord"
+      ]
+    },
+    {
+      "operation": "releaseIssueClaim",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "issueNumber": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cwd",
+          "runId",
+          "issueNumber"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "released",
+              "conflict",
+              "recovery_required"
+            ]
+          },
+          "assignment": {
+            "type": "null"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "git.execFile",
+        "fs.inspectPath",
+        "fs.readRecord",
+        "fs.unlinkClaim"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "git",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "execFile",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file",
+              "args",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              },
+              "code": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stdout",
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "inspectPath",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "isDirectory": {
+                "type": "boolean"
+              },
+              "isFile": {
+                "type": "boolean"
+              },
+              "canonicalPath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exists",
+              "isDirectory",
+              "isFile",
+              "canonicalPath"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readRecord",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "validLink": {
+                "type": "boolean"
+              },
+              "json": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "exists",
+              "validLink",
+              "json"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "saveClaim",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runPath": {
+                "type": "string"
+              },
+              "issuePath": {
+                "type": "string"
+              },
+              "json": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runPath",
+              "issuePath",
+              "json"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "saved",
+                  "run_exists",
+                  "issue_exists",
+                  "error"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "unlinkClaim",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "issuePath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "issuePath"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "removed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "removed"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 32,
+    "max_model_calls": 12
+  },
+  "conventions": []
 }
 ```
 </details>

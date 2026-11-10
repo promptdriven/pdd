@@ -244,14 +244,2557 @@ pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)
 uses the ETag cache, the full-last-page rule and the floor guard.
 
+In Runtime checks, `ledgers`, `etag_caches` and `floor_guards` (`store`, `load`) hold the state of `GithubLedger`, `GithubEtagCache` and `GithubFloorGuard` handles; `compute.hash_utf8` hashes lowercase `owner/name`; `files` (`read`, `write`, `stat`) and `fs.readdir` bind ledger and ETag files; `exec.run` binds the wrapped subprocess runner (`countGithubCalls` and `nativeGithubCounter` raise `exec-failed` when `exec.run` returns a nonzero `exitCode` after recording the call); `clock.now` binds `now`; and `cost` (`findRun`, `recordGithub`) binds per-run cost attribution. Real atomic temp-file renames, file modes and live `gh` processes stay in `test/github-calls.test.mjs`.
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "bb6d426568a091a05fa2a946b250ee6123ff12b4059627bfb44e5b98d3d84338",
-  "reason": "Process adapter accounting and actual CLI calls need native evidence first. Native evidence owners: test/github-calls.test.mjs."
+  "prose_sha256": "9e78024c7b26e40a589d27302e03ece583f8bfb0b38bd8ba435ce1f66e910e7a",
+  "entries": [
+    {
+      "operation": "githubCall",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "api": {
+            "type": "string",
+            "enum": [
+              "rest",
+              "graphql"
+            ]
+          },
+          "method": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "conditional": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "api",
+          "method",
+          "endpoint",
+          "conditional"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubPurpose",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "dependencies",
+              "claims",
+              "issues",
+              "pulls",
+              "writes",
+              "setup",
+              "other"
+            ]
+          }
+        },
+        "required": [
+          "purpose"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubRepository",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "repository"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubReply",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "reply": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "integer"
+                  },
+                  "etag": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "link": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "rate": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "resource": {
+                            "type": "string"
+                          },
+                          "remaining": {
+                            "type": "integer"
+                          },
+                          "limit": {
+                            "type": "integer"
+                          },
+                          "resetAt": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "resource",
+                          "remaining"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "body": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "rate",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "reply"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubEntry",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outcome": {
+            "type": "object",
+            "properties": {
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "purpose": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "at": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "args",
+          "outcome",
+          "at"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "entry": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "integer"
+              },
+              "api": {
+                "type": "string",
+                "enum": [
+                  "rest",
+                  "graphql"
+                ]
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "status": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "conditional": {
+                "type": "boolean"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "remaining": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "resetAt": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at",
+              "api",
+              "purpose",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "entry"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubStateRoot",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "HOME": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "stateRoot": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "env"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubLedger",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "repository"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "factory",
+        "type": "GithubLedger",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "ledgers.store"
+      ]
+    },
+    {
+      "operation": "record",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "integer"
+              },
+              "api": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "status": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "conditional": {
+                "type": "boolean"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "remaining": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "resetAt": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at",
+              "api",
+              "purpose",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "handle",
+          "entry"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "GithubLedger",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "ledgers.load",
+        "compute.hash_utf8",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "integer"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "api": {
+                  "type": "string"
+                },
+                "purpose": {
+                  "type": "string"
+                },
+                "status": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "conditional": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "remaining": {
+                  "type": "integer"
+                },
+                "limit": {
+                  "type": "integer"
+                },
+                "resetAt": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "at",
+                "purpose"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "GithubLedger",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "ledgers.load",
+        "compute.hash_utf8",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "compact",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "now": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "handle",
+          "now"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "GithubLedger",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "ledgers.load",
+        "compute.hash_utf8",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "githubMachineEntries",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "integer"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "api": {
+                  "type": "string"
+                },
+                "purpose": {
+                  "type": "string"
+                },
+                "status": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "conditional": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "remaining": {
+                  "type": "integer"
+                },
+                "limit": {
+                  "type": "integer"
+                },
+                "resetAt": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "at",
+                "purpose"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": [
+        "fs.readdir",
+        "files.read"
+      ]
+    },
+    {
+      "operation": "countGithubCalls",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "purpose": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ledger": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file",
+                  "repository"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "exitCode": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stdout",
+          "stderr",
+          "exitCode"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "exec-failed"
+      ],
+      "resource_operations": [
+        "exec.run",
+        "clock.now",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "nativeGithubCounter",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "HOME": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "stateRoot": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "purpose": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "exitCode": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stdout",
+          "stderr",
+          "exitCode"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "exec-failed"
+      ],
+      "resource_operations": [
+        "exec.run",
+        "clock.now",
+        "compute.hash_utf8",
+        "cost.findRun",
+        "cost.recordGithub",
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    },
+    {
+      "operation": "githubUsage",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "integer"
+                },
+                "api": {
+                  "type": "string"
+                },
+                "purpose": {
+                  "type": "string"
+                },
+                "status": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "conditional": {
+                  "type": "boolean"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "remaining": {
+                  "type": "integer"
+                },
+                "limit": {
+                  "type": "integer"
+                },
+                "resetAt": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "at",
+                "purpose"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "now": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "now"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "calls": {
+            "type": "integer"
+          },
+          "rest": {
+            "type": "integer"
+          },
+          "graphql": {
+            "type": "integer"
+          },
+          "counted": {
+            "type": "integer"
+          },
+          "conditional": {
+            "type": "integer"
+          },
+          "notModified": {
+            "type": "integer"
+          },
+          "byPurpose": {
+            "type": "object",
+            "properties": {
+              "dependencies": {
+                "type": "integer"
+              },
+              "claims": {
+                "type": "integer"
+              },
+              "issues": {
+                "type": "integer"
+              },
+              "pulls": {
+                "type": "integer"
+              },
+              "writes": {
+                "type": "integer"
+              },
+              "setup": {
+                "type": "integer"
+              },
+              "other": {
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "rate": {
+            "type": "object",
+            "properties": {
+              "core": {
+                "type": "object",
+                "properties": {
+                  "remaining": {
+                    "type": "integer"
+                  },
+                  "limit": {
+                    "type": "integer"
+                  },
+                  "resetAt": {
+                    "type": "integer"
+                  },
+                  "at": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "remaining",
+                  "resetAt",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
+              "graphql": {
+                "type": "object",
+                "properties": {
+                  "remaining": {
+                    "type": "integer"
+                  },
+                  "limit": {
+                    "type": "integer"
+                  },
+                  "resetAt": {
+                    "type": "integer"
+                  },
+                  "at": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "remaining",
+                  "resetAt",
+                  "at"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "calls",
+          "rest",
+          "graphql",
+          "counted",
+          "conditional",
+          "notModified",
+          "byPurpose",
+          "rate"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubBudgetSettings",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "share": {
+                    "type": "integer"
+                  },
+                  "floor": {
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "share": {
+            "type": "integer"
+          },
+          "floor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "share",
+          "floor"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubBudget",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "usage": {
+            "type": "object",
+            "properties": {
+              "counted": {
+                "type": "integer"
+              },
+              "rate": {
+                "type": "object",
+                "properties": {
+                  "core": {
+                    "type": "object",
+                    "properties": {
+                      "remaining": {
+                        "type": "integer"
+                      },
+                      "limit": {
+                        "type": "integer"
+                      },
+                      "resetAt": {
+                        "type": "integer"
+                      },
+                      "at": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "remaining",
+                      "resetAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "graphql": {
+                    "type": "object",
+                    "properties": {
+                      "remaining": {
+                        "type": "integer"
+                      },
+                      "limit": {
+                        "type": "integer"
+                      },
+                      "resetAt": {
+                        "type": "integer"
+                      },
+                      "at": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "remaining",
+                      "resetAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "counted",
+              "rate"
+            ],
+            "additionalProperties": false
+          },
+          "share": {
+            "type": "integer"
+          },
+          "floor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "usage"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "low",
+              "reserve"
+            ]
+          },
+          "allowed": {
+            "type": "integer"
+          },
+          "used": {
+            "type": "integer"
+          },
+          "share": {
+            "type": "integer"
+          },
+          "floor": {
+            "type": "integer"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "remaining": {
+            "type": "integer"
+          },
+          "resetAt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "allowed",
+          "used",
+          "share",
+          "floor"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubStatusLine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "usage": {
+            "type": "object",
+            "properties": {
+              "calls": {
+                "type": "integer"
+              },
+              "conditional": {
+                "type": "integer"
+              },
+              "notModified": {
+                "type": "integer"
+              },
+              "byPurpose": {
+                "type": "object",
+                "properties": {
+                  "dependencies": {
+                    "type": "integer"
+                  },
+                  "claims": {
+                    "type": "integer"
+                  },
+                  "issues": {
+                    "type": "integer"
+                  },
+                  "pulls": {
+                    "type": "integer"
+                  },
+                  "writes": {
+                    "type": "integer"
+                  },
+                  "setup": {
+                    "type": "integer"
+                  },
+                  "other": {
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "rate": {
+                "type": "object",
+                "properties": {
+                  "core": {
+                    "type": "object",
+                    "properties": {
+                      "remaining": {
+                        "type": "integer"
+                      },
+                      "limit": {
+                        "type": "integer"
+                      },
+                      "resetAt": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "remaining",
+                      "resetAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "calls",
+              "conditional",
+              "notModified",
+              "byPurpose",
+              "rate"
+            ],
+            "additionalProperties": false
+          },
+          "machine": {
+            "type": "object",
+            "properties": {
+              "rate": {
+                "type": "object",
+                "properties": {
+                  "core": {
+                    "type": "object",
+                    "properties": {
+                      "remaining": {
+                        "type": "integer"
+                      },
+                      "limit": {
+                        "type": "integer"
+                      },
+                      "resetAt": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "remaining",
+                      "resetAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "rate"
+            ],
+            "additionalProperties": false
+          },
+          "budget": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string"
+              },
+              "allowed": {
+                "type": "integer"
+              },
+              "used": {
+                "type": "integer"
+              },
+              "share": {
+                "type": "integer"
+              },
+              "floor": {
+                "type": "integer"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "remaining": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "state",
+              "allowed",
+              "used",
+              "share",
+              "floor"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "usage"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "line": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "line"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    },
+    {
+      "operation": "githubEtagCache",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "repository"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "factory",
+        "type": "GithubEtagCache",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "etag_caches.store"
+      ]
+    },
+    {
+      "operation": "get",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "endpoint"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "entry": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "etag": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "next": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "etag",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entry"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "GithubEtagCache",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "etag_caches.load",
+        "etag_caches.store",
+        "compute.hash_utf8",
+        "files.read",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "set",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "object",
+            "properties": {
+              "etag": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "next": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "etag",
+              "body"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "handle",
+          "endpoint",
+          "entry"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "GithubEtagCache",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "etag_caches.load",
+        "etag_caches.store",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "save",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "GithubEtagCache",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "etag_caches.load",
+        "etag_caches.store",
+        "compute.hash_utf8",
+        "files.read",
+        "files.write",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "githubFloorGuard",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "floor": {
+            "type": "integer"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "integer"
+                },
+                "purpose": {
+                  "type": "string"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "remaining": {
+                  "type": "integer"
+                },
+                "limit": {
+                  "type": "integer"
+                },
+                "resetAt": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "at",
+                "purpose"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "now": {
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "factory",
+        "type": "GithubFloorGuard",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "floor_guards.store"
+      ]
+    },
+    {
+      "operation": "observe",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "reply": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "rate": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "resource": {
+                            "type": "string"
+                          },
+                          "remaining": {
+                            "type": "integer"
+                          },
+                          "resetAt": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "resource",
+                          "remaining"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "rate"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "handle",
+          "reply"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "stopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stopped"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "GithubFloorGuard",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "floor_guards.load",
+        "floor_guards.store"
+      ]
+    },
+    {
+      "operation": "blocked",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "blocked": {
+            "type": "boolean"
+          },
+          "stopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "blocked",
+          "stopped"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "instance": {
+        "kind": "method",
+        "type": "GithubFloorGuard",
+        "path": "/handle"
+      },
+      "resource_operations": [
+        "floor_guards.load",
+        "floor_guards.store",
+        "clock.now"
+      ]
+    },
+    {
+      "operation": "githubFullLastPage",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "next": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "items",
+          "next"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "full": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "full"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "ledgers",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "config"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "etag_caches",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "config"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "floor_guards",
+      "kind": "collection",
+      "access": "write",
+      "operations": [
+        {
+          "name": "store",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              },
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "handle",
+              "config"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "load",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "config"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "is_symlink": {
+                "type": "boolean"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "exists",
+              "is_symlink",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "fs",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readdir",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "exec",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "run",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              },
+              "exitCode": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stdout",
+              "stderr",
+              "exitCode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "now",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "milliseconds": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "milliseconds"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "cost",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "findRun",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "runDir"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "recordGithub",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              },
+              "at": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "runDir",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 64,
+    "max_model_calls": 20
+  },
+  "conventions": [
+    {
+      "path": "/entries/6/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/7/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/8/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/9/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/17/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/18/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/19/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/20/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/21/result_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/22/input_schema/properties/handle",
+      "convention": "handle"
+    },
+    {
+      "path": "/entries/23/input_schema/properties/handle",
+      "convention": "handle"
+    }
+  ],
+  "schema_version": "prompt-runtime.interface.v2",
+  "instance_types": [
+    {
+      "name": "GithubLedger",
+      "resource": "ledgers"
+    },
+    {
+      "name": "GithubEtagCache",
+      "resource": "etag_caches"
+    },
+    {
+      "name": "GithubFloorGuard",
+      "resource": "floor_guards"
+    }
+  ]
 }
 ```
 </details>

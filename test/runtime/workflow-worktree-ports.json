@@ -1,0 +1,451 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-worktree-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`githubOriginRepository` returns `promptdriven/pdd` for an ordinary GitHub SSH origin and `null` for a non-GitHub origin."
+    },
+    {
+      "id": "AC2",
+      "text": "`lookupRepositoryParent` returns `ready` with the primary checkout root when the common directory and origin match, and `recovery_required` when they do not."
+    },
+    {
+      "id": "AC3",
+      "text": "`allocateIssueWorktree` returns `ready` with the verified assignment for a valid unclaimed issue, and `conflict` when the requested repository disagrees with the checkout origin."
+    },
+    {
+      "id": "AC4",
+      "text": "`lookupIssueWorktree` returns `ready` with the saved assignment when the worktree registration matches, and `recovery_required` when the run record is missing."
+    },
+    {
+      "id": "AC5",
+      "text": "`releaseIssueClaim` returns `released` when the claim belongs to the cancelled run, and `conflict` when the claim belongs to another run."
+    }
+  ],
+  "initial_world": {
+    "git_calls": 0,
+    "paths": [
+      {
+        "path": "/work/repo",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo"
+        }
+      },
+      {
+        "path": "/work/repo/.git",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo/.git"
+        }
+      },
+      {
+        "path": "/work/repo/.git/pdd",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo/.git/pdd"
+        }
+      },
+      {
+        "path": "/work/repo/.git/pdd/worktree-assignments",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo/.git/pdd/worktree-assignments"
+        }
+      },
+      {
+        "path": "/work/repo/.git/pdd/worktree-assignments/runs",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo/.git/pdd/worktree-assignments/runs"
+        }
+      },
+      {
+        "path": "/work/repo/.git/pdd/worktree-assignments/issues",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo/.git/pdd/worktree-assignments/issues"
+        }
+      },
+      {
+        "path": "/work/repo.pdd-worktrees",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo.pdd-worktrees"
+        }
+      },
+      {
+        "path": "/work/repo.pdd-worktrees/11111111-2222-4333-8444-555555555555",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo.pdd-worktrees/11111111-2222-4333-8444-555555555555"
+        }
+      },
+      {
+        "path": "/work/repo.pdd-worktrees/11111111-2222-4333-8444-555555555555/.git",
+        "reply": {
+          "exists": true,
+          "isDirectory": false,
+          "isFile": true,
+          "canonicalPath": "/work/repo.pdd-worktrees/11111111-2222-4333-8444-555555555555/.git"
+        }
+      },
+      {
+        "path": "/work/repo/.git/worktrees",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo/.git/worktrees"
+        }
+      },
+      {
+        "path": "/work/repo/.git/worktrees/11111111-2222-4333-8444-555555555555",
+        "reply": {
+          "exists": true,
+          "isDirectory": true,
+          "isFile": false,
+          "canonicalPath": "/work/repo/.git/worktrees/11111111-2222-4333-8444-555555555555"
+        }
+      }
+    ],
+    "records": [
+      {
+        "path": "/work/repo/.git/pdd/worktree-assignments/runs/run-10.json",
+        "reply": {
+          "exists": true,
+          "validLink": true,
+          "json": "{\"version\":1,\"runId\":\"run-10\",\"repository\":\"promptdriven/pdd\",\"issueNumber\":10,\"workflowName\":\"bug\",\"commonDir\":\"/work/repo/.git\",\"sourceRoot\":\"/work/repo\",\"worktreePath\":\"/work/repo.pdd-worktrees/11111111-2222-4333-8444-555555555555\",\"gitDir\":\"/work/repo/.git/worktrees/11111111-2222-4333-8444-555555555555\",\"branch\":\"pdd/bug-10-11111111\",\"baseRef\":\"main\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+        }
+      },
+      {
+        "path": "/work/repo/.git/pdd/worktree-assignments/issues/10.json",
+        "reply": {
+          "exists": true,
+          "validLink": true,
+          "json": "{\"version\":1,\"runId\":\"run-10\",\"repository\":\"promptdriven/pdd\",\"issueNumber\":10,\"workflowName\":\"bug\",\"commonDir\":\"/work/repo/.git\",\"sourceRoot\":\"/work/repo\",\"worktreePath\":\"/work/repo.pdd-worktrees/11111111-2222-4333-8444-555555555555\",\"gitDir\":\"/work/repo/.git/worktrees/11111111-2222-4333-8444-555555555555\",\"branch\":\"pdd/bug-10-11111111\",\"baseRef\":\"main\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+        }
+      },
+      {
+        "path": "/work/repo/.git/pdd/worktree-assignments/runs/run-missing.json",
+        "reply": {
+          "exists": false,
+          "validLink": false,
+          "json": null
+        }
+      }
+    ],
+    "claims": [],
+    "unlinks": []
+  },
+  "simulation": {
+    "git.execFile": {
+      "action": "port.write",
+      "world_pointer": "/claims",
+      "result_template": {
+        "stdout": "/work/repo\n",
+        "stderr": "",
+        "code": 0
+      }
+    },
+    "fs.inspectPath": {
+      "action": "collection.get",
+      "world_pointer": "/paths",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "exists": false,
+        "isDirectory": false,
+        "isFile": false,
+        "canonicalPath": ""
+      },
+      "result_value_pointer": ""
+    },
+    "fs.readRecord": {
+      "action": "collection.get",
+      "world_pointer": "/records",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "exists": false,
+        "validLink": false,
+        "json": null
+      },
+      "result_value_pointer": ""
+    },
+    "fs.saveClaim": {
+      "action": "port.write",
+      "world_pointer": "/claims",
+      "result_template": {
+        "status": "saved"
+      }
+    },
+    "fs.unlinkClaim": {
+      "action": "port.write",
+      "world_pointer": "/unlinks",
+      "result_template": {
+        "removed": true
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "origin-ssh",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "githubOriginRepository",
+      "input": {
+        "remote": "git@github.com:promptdriven/pdd.git"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/repository",
+          "op": "equals",
+          "value": "promptdriven/pdd"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "origin-invalid",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "githubOriginRepository",
+      "input": {
+        "remote": "https://gitlab.com/promptdriven/pdd.git"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/repository",
+          "op": "equals",
+          "value": null
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "parent-ready",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "lookupRepositoryParent",
+      "input": {
+        "cwd": "/work/repo",
+        "repository": "promptdriven/pdd",
+        "commonDir": "/work/repo/.git"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "ready",
+            "root": "/work/repo",
+            "bare": false
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "parent-mismatch",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "lookupRepositoryParent",
+      "input": {
+        "cwd": "/work/repo",
+        "repository": "promptdriven/pdd",
+        "commonDir": "/work/other/.git"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "state": "recovery_required",
+            "root": null,
+            "bare": null
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "allocate-ready",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "allocateIssueWorktree",
+      "input": {
+        "cwd": "/work/repo",
+        "repository": "promptdriven/pdd",
+        "issueNumber": 10,
+        "runId": "run-10",
+        "workflowName": "bug",
+        "baseRef": "main"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "ready"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/assignment/branch",
+          "op": "equals",
+          "value": "pdd/bug-10-11111111"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "allocate-conflict",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "allocateIssueWorktree",
+      "input": {
+        "cwd": "/work/repo",
+        "repository": "other/repo",
+        "issueNumber": 10,
+        "runId": "run-10",
+        "workflowName": "bug",
+        "baseRef": "main"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "conflict"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/assignment",
+          "op": "equals",
+          "value": null
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "lookup-ready",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "lookupIssueWorktree",
+      "input": {
+        "cwd": "/work/repo",
+        "runId": "run-10"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "ready"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/assignment/runId",
+          "op": "equals",
+          "value": "run-10"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "lookup-missing",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "lookupIssueWorktree",
+      "input": {
+        "cwd": "/work/repo",
+        "runId": "run-missing"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "recovery_required"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/assignment",
+          "op": "equals",
+          "value": null
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "release-conflict",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "releaseIssueClaim",
+      "input": {
+        "cwd": "/work/repo",
+        "runId": "run-other",
+        "issueNumber": 10
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "conflict"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "release-ok",
+      "entry_path": "prompts/cli/workflow-worktree.prompt.md",
+      "operation": "releaseIssueClaim",
+      "input": {
+        "cwd": "/work/repo",
+        "runId": "run-10",
+        "issueNumber": 10
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "released"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
