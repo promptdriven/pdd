@@ -1,14 +1,18 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 6d6955d570c1554bf4393a59a8e96de43d95e7873543456bb4b457722d8c7fe5).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 60e14fc480f8132f952dcb6c1c45fce9781a9461f7d95d1697f8ef183fdf14e7).
 import * as nativeFs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand } from './agent-job.mjs';
 import { fileReport, listReportDrafts } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 
-const MIN = 60 * 1000, HOUR = 60 * MIN, CLAIM_EXPIRES = 4 * HOUR, HOLD = HOUR, STRIKES = 3, CLAIM_TRIES = 3;
+const MIN = 60 * 1000, HOUR = 60 * MIN, CLAIM_EXPIRES = 4 * HOUR, HOLD = HOUR, STRIKES = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN;
+const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
+// The fallback blocked-by record in an END comment: the report and the cause fingerprint.
+const BLOCK_MARKER = /<!-- pdd:core-blocked-by:([\w.-]+\/[\w.-]+)?#(\d+)(?::([a-z0-9.-]+))? -->/;
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const named = value => typeof value === 'string' && value.trim().length > 0;
@@ -107,12 +111,18 @@ async function blocked(ctx, row) {
     const other = await ctx.gh.ok('GET', `repos/${match[1] ?? match[2] ?? ctx.repo}/issues/${match[3]}`);
     if (other?.state === 'open') return true;
   }
+  // The latest core END comment can name the report that blocks the issue.
+  if (row.comments > 0) {
+    const last = (await ctx.gh.all(`repos/${ctx.repo}/issues/${row.number}/comments?per_page=100`)).filter(c => String(c.body ?? '').includes('<!-- pdd:autopilot-core:end:')).at(-1);
+    const match = BLOCK_MARKER.exec(last?.body ?? '');
+    if (match && (await ctx.gh.ok('GET', `repos/${match[1] ?? ctx.repo}/issues/${match[2]}`))?.state === 'open') return true;
+  }
   return false;
 }
 async function* readyRows(ctx, rows) {
   const local = new Set(readJobs(ctx.fs, ctx.root).map(job => job.issue)), self = { coordinatorId: ctx.state.coordinatorId, machine: ctx.state.machine };
   const candidates = rows.filter(row => !row.pull_request && row.state === 'open' && !row.assignees?.length && !row.assignee
-    && !labelsOf(row).includes('pdd:stuck') && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
+    && !labelsOf(row).includes('pdd:stuck') && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
     && !local.has(row.number) && !ctx.skip.has(row.number))
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
   for (const row of candidates) {
@@ -213,7 +223,7 @@ Before you exit, write this JSON file: ${result}
 
 // ---- Starting jobs --------------------------------------------------------------------------------------
 function startJob(ctx, job, role, cwd, prompt, command = null) {
-  const id = `${job.issue}-${role}-${ctx.now().toString(36)}`;
+  const id = `${job.issue}-${role}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`;
   ctx.fs.mkdirSync(ctx.dirs.logs, { recursive: true, mode: 0o700 });
   const result = join(ctx.dirs.logs, `${id}.result.json`);
   const run = command ?? agentCommand(ctx.state.agent);
@@ -239,7 +249,7 @@ async function intake(ctx, rows) {
     if (free <= 0 || tries++ >= CLAIM_TRIES) break;
     if (!agentChecked && !await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
     agentChecked = true;
-    const n = row.number, stamp = ctx.now().toString(36), branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
+    const n = row.number, stamp = `${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
     try {
       ctx.fs.mkdirSync(ctx.dirs.worktrees, { recursive: true, mode: 0o700 });
       if (ctx.fs.existsSync(worktree)) await ctx.git(['worktree', 'remove', '--force', worktree]);
@@ -249,7 +259,7 @@ async function intake(ctx, rows) {
     let claim = null;
     try { claim = await claimIssue(ctx, n); } catch (error) { ctx.warn(`Autopilot core claim of #${n} failed: ${error.message}`); }
     if (!claim) { await ctx.git(['worktree', 'remove', '--force', worktree]).catch(() => {}); await ctx.git(['branch', '-D', branch]).catch(() => {}); continue; }
-    const job = { schema: 'pdd.core-job.v1', issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
+    const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
       branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), deadline: ctx.now() + ctx.timeout };
     ctx.saveJob(job);
     try { job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result)); ctx.saveJob(job); ctx.counts.started++; free--; }
@@ -259,13 +269,15 @@ async function intake(ctx, rows) {
 }
 
 // ---- Merge check ----------------------------------------------------------------------------------------
-async function ciState(ctx, head) {
+async function ciState(ctx, head, job) {
   const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
   const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
   const checks = [...(runs?.check_runs ?? []).map(r => ({ name: r.name, done: r.status === 'completed', good: ['success', 'neutral', 'skipped'].includes(r.conclusion) })),
     ...(status?.statuses ?? []).map(s => ({ name: s.context, done: s.state !== 'pending', good: s.state === 'success' }))];
   const failed = checks.filter(c => c.done && !c.good).map(c => c.name);
-  return failed.length ? { state: 'red', failed } : !checks.length || checks.some(c => !c.done) ? { state: 'pending' } : { state: 'green' };
+  if (failed.length) return { state: 'red', failed };
+  if (!checks.length) return ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none' } : { state: 'pending' };
+  return checks.some(c => !c.done) ? { state: 'pending' } : { state: 'green', count: checks.length };
 }
 async function reviewState(ctx, job) {
   if (!job.review || job.review.head !== job.head || job.review.retry) {
@@ -322,7 +334,7 @@ async function mergeCheck(ctx, job) {
   }
   const reds = [], failLine = /^\s*Runtime:\s*FAIL\b.*$/mi.exec(pr.body ?? '');
   if (failLine || job.runtime?.state === 'fail') reds.push(`The PR body says ${failLine ? failLine[0].trim() : 'Runtime: FAIL'}; make the Runtime check pass.`);
-  const ci = reds.length ? null : await ciState(ctx, job.head);
+  const ci = reds.length ? null : await ciState(ctx, job.head, job);
   if (ci?.state === 'red') reds.push(`CI check ${ci.failed.join(', ')} failed for head ${short(job.head)}.`);
   let review, suite;
   if (!reds.length) {
@@ -339,11 +351,18 @@ async function mergeCheck(ctx, job) {
     job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
     ctx.saveJob(job); ctx.counts.repairs++; return;
   }
-  if (ci.state !== 'green' || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; ctx.saveJob(job); return; }
+  if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; ctx.saveJob(job); return; }
   const base = await (ctx.ports.checkBase ?? (input => checkAutopilotBase(input, { execFile: ctx.execFile })))({ run: { repo, baseBranch: state.baseBranch, root: state.cwd, pr: [{ number: job.pr }] }, pr: job.pr });
   if (base.exitCode !== 0) {
     if (/could not verify|unavailable|retry/i.test(base.message)) { job.lastError = oneLine(base.message); ctx.saveJob(job); return; }
     return end(ctx, job, cause('job', 'base-check', oneLine(base.message)));
+  }
+  if (job.mergeNote !== job.head) {
+    const runtimeLine = /^\s*Runtime:.*$/mi.exec(pr.body ?? '')?.[0].trim() ?? 'Runtime: no line in the PR body';
+    await gh.ok('POST', `repos/${repo}/issues/${job.pr}/comments`, { body: [`Autopilot merge check passed for head ${job.head}.`, '',
+      `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
+      '- Full test suite: pass', '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- Base: ${oneLine(base.message)}`, '', `<!-- pdd:autopilot-core:merge:${job.head} -->`].join('\n') });
+    job.mergeNote = job.head; ctx.saveJob(job);
   }
   const merged = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
   if (merged.code !== 0) { job.lastError = `gh pr merge: ${oneLine(merged.stderr || merged.stdout, 200)}`; ctx.saveJob(job); return; }
@@ -375,8 +394,21 @@ async function continueEnd(ctx, job) {
   const { gh, repo } = ctx, e = job.end, why = e.cause;
   if (e.handedOver === undefined) { const claim = await ctx.readClaim(job.issue); e.handedOver = Boolean(claim?.active && claim.coordinatorId && !ctx.ours(claim)); ctx.saveJob(job); }
   if (e.handedOver) return finishLocal(ctx, job, 'handed-over', 'another machine holds the claim now');
-  if (['runtime', 'pdd'].includes(why.kind) && !e.report) { e.report = await report(ctx, job, why, job.role); ctx.saveJob(job); }
-  const marker = `<!-- pdd:autopilot-core:end:${job.issue}:${job.started} -->`;
+  const blocking = ['runtime', 'pdd'].includes(why.kind);
+  if (blocking && !e.report) { e.report = await report(ctx, job, why, job.role); ctx.saveJob(job); }
+  const marker = `<!-- pdd:autopilot-core:end:${job.issue}:${job.id ?? job.started} -->`, fp = e.report?.fingerprint;
+  // A Runtime or PDD cause with a GitHub report waits for that report, not for a person. The same cause again after
+  // its report closed is a loop: then a person decides (pdd:stuck).
+  if (blocking && e.report?.ref && e.loop === undefined) {
+    e.loop = false;
+    for (const c of await gh.all(`repos/${repo}/issues/${job.issue}/comments?per_page=100`)) {
+      const m = BLOCK_MARKER.exec(String(c.body ?? ''));
+      if (m?.[3] === fp && (await gh.ok('GET', `repos/${m[1] ?? repo}/issues/${m[2]}`))?.state === 'closed') e.loop = true;
+    }
+    if (!e.loop && e.report.id) e.native = (await gh.call('POST', `repos/${repo}/issues/${job.issue}/dependencies/blocked_by`, { issue_id: e.report.id })).status < 300;
+    ctx.saveJob(job);
+  }
+  const waits = blocking && e.report?.ref && !e.loop;
   if (!e.comment && e.commentTried) e.comment = String((await gh.all(`repos/${repo}/issues/${job.issue}/comments?per_page=100`)).find(c => String(c.body ?? '').includes(marker))?.id ?? '') || undefined;
   if (!e.comment) {
     const ref = e.report?.ref ? (e.report.ref.toLowerCase().startsWith(`${repo.toLowerCase()}#`) ? `#${e.report.number}` : e.report.ref) : null;
@@ -384,15 +416,33 @@ async function continueEnd(ctx, job) {
     const body = [`Autopilot ended this run: ${why.text}.`, '', `- Cause: ${why.kind} / ${why.code}`, ...(log ? [`- Log on ${ctx.state.machine}: \`${log}\``] : []),
       `- Branch: \`${job.branch}\`${job.pr ? `, PR #${job.pr}` : ''}`, ...(ref ? [`- Blocked by ${ref}`] : []),
       ...(e.report?.state === 'draft' ? ['- Report: saved as a local draft on this machine; a person can send it with `pdd autopilot report`.'] : []),
-      '', 'Nothing else waits on this run. To retry, remove `pdd:stuck`; a later tick takes the issue again.', '', marker].join('\n');
+      '', waits ? `Nothing else waits on this run. This issue is ready again when ${ref} closes.`
+        : `${e.loop ? `The same cause came back after its report closed, so a person decides now. ` : ''}Nothing else waits on this run. To retry, remove \`pdd:stuck\`; a later tick takes the issue again.`,
+      '', ...(blocking && e.report?.ref ? [`<!-- pdd:core-blocked-by:${e.report.ref}:${fp} -->`] : []), marker].join('\n');
     e.commentTried = true; ctx.saveJob(job);
     e.comment = String((await gh.ok('POST', `repos/${repo}/issues/${job.issue}/comments`, { body })).id); ctx.saveJob(job);
   }
   if (!e.labels) {
-    await gh.ok('POST', `repos/${repo}/issues/${job.issue}/labels`, { labels: ['pdd:stuck'] });
+    if (!waits) await gh.ok('POST', `repos/${repo}/issues/${job.issue}/labels`, { labels: ['pdd:stuck'] });
     const removed = await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
     if (removed.status >= 300 && removed.status !== 404) throw Error(`GitHub DELETE label returned ${removed.status}`);
     e.labels = true; ctx.saveJob(job);
+  }
+  // An open PR stays open as a draft with the cause, so a person can pick it up. Three failed tries give up.
+  if (job.pr && !e.prDone) {
+    try {
+      const pr = await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`);
+      if (pr.state === 'open' && !pr.merged) {
+        const draft = await ctx.ports.gh(['pr', 'ready', String(job.pr), '--repo', repo, '--undo']);
+        if (draft.code !== 0) ctx.warn(`Autopilot core could not mark PR #${job.pr} as draft: ${oneLine(draft.stderr, 200)}`);
+        await gh.ok('POST', `repos/${repo}/issues/${job.pr}/comments`, { body: `Autopilot ended the run for issue #${job.issue}: ${why.text}.\n\nThis PR stays open as a draft. It is not merged.\n\n<!-- pdd:autopilot-core:end-pr:${job.issue}:${job.id ?? job.started} -->` });
+      }
+      e.prDone = true; ctx.saveJob(job);
+    } catch (error) {
+      e.prTries = (e.prTries ?? 0) + 1; ctx.saveJob(job);
+      if (e.prTries < 3) throw error;
+      ctx.warn(`Autopilot core gave up on the PR #${job.pr} note: ${error.message}`);
+    }
   }
   ctx.counts.ended++;
   return finishLocal(ctx, job, 'ended', why.text);
@@ -431,7 +481,7 @@ async function advance(ctx, job) {
   }
   const r = seen.result;
   if (object(r) && r.outcome === 'pr' && Number.isSafeInteger(r.pr) && /^[0-9a-f]{40}$/.test(r.head ?? '')) {
-    Object.assign(job, { phase: 'pr', pr: r.pr, head: r.head, runtime: object(r.runtime) ? r.runtime : null, deadline: ctx.now() + ctx.timeout });
+    Object.assign(job, { phase: 'pr', pr: r.pr, head: r.head, runtime: object(r.runtime) ? r.runtime : null, prAt: ctx.now(), deadline: ctx.now() + ctx.timeout });
     if (job.runtimeReport && job.runtime?.state !== 'not-run') delete job.runtimeReport;
     ctx.saveJob(job); save(ctx.fs, ctx.dirs.machine, { ...ctx.machineState(), strikes: 0 });
     return mergeCheck(ctx, job);

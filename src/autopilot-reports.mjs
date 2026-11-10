@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 5300110a7e8d33eeccd8e51fadc6caebac6d10e2b240c6c9db0a30e0d1f8c623).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 8c9d20e9aeeb9f5e65a369d28c8d804b32975c73f9e6112adf08eb31a930ad2c).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -72,16 +72,16 @@ async function sendDraft(draft, { root, machine, limit = true }, ports) {
   const ref = number => `${draft.repository}#${number}`;
   const found = await findReport(api, draft, now);
   if (found) {
-    if (now - (ledger.seen[draft.fingerprint] ?? -Infinity) < DAY) return { state: 'counted', number: found.number, ref: ref(found.number) };
+    if (now - (ledger.seen[draft.fingerprint] ?? -Infinity) < DAY) return { state: 'counted', number: found.number, id: found.id, ref: ref(found.number) };
     await api('POST', `repos/${draft.repository}/issues/${found.number}/comments`, { body: `Seen again on machine ${slug(machine) || 'unknown'} at ${new Date(now).toISOString()}.\n\n${reportMarker(draft.fingerprint)}` });
     ledger.seen[draft.fingerprint] = now; save(fs, file, ledger);
-    return { state: 'seen', number: found.number, ref: ref(found.number) };
+    return { state: 'seen', number: found.number, id: found.id, ref: ref(found.number) };
   }
   if (limit && ledger.filed.filter(row => now - row.at < DAY).length >= NEW_PER_DAY) return { state: 'limit' };
   const { value } = await api('POST', `repos/${draft.repository}/issues`, { title: draft.title, body: withCount(draft).body, labels: draft.labels, assignees: draft.assignees });
   ledger.filed = [...ledger.filed.filter(row => now - row.at < DAY), { fingerprint: draft.fingerprint, number: value.number, at: now }];
   save(fs, file, ledger);
-  return { state: 'filed', number: value.number, ref: ref(value.number) };
+  return { state: 'filed', number: value.number, id: value.id, ref: ref(value.number) };
 }
 
 function keepDraft(fs, root, draft, now) {

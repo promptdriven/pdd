@@ -34,6 +34,11 @@ function extend(f, w) {
       pr.state = 'closed'; pr.merged = true; pr.mergeSha = 'f'.repeat(40); f.merges.push(pr.number);
       return { code: 0, stdout: '', stderr: '' };
     }
+    if (args[0] === 'pr' && args[1] === 'ready') {
+      f.writes.push(['ready', ...args]);
+      const pr = f.prs.get(Number(args[2])); if (!pr || pr.state !== 'open') return { code: 1, stdout: '', stderr: 'not open' };
+      pr.draft = args.includes('--undo'); return { code: 0, stdout: '', stderr: '' };
+    }
     if (args[0] !== 'api') return original(args, options);
     const endpoint = endpointOf(args) ?? '', method = methodOf(args), input = options.input ? JSON.parse(options.input) : undefined;
     if (!endpoint.startsWith(prefix)) return original(args, options);
@@ -70,7 +75,7 @@ function extend(f, w) {
     if (route === '/issues' && method === 'POST') {
       const n = Math.max(0, ...f.issues.keys()) + 1;
       const issue = f.add(n, { title: input.title, body: input.body, labels: input.labels ?? [], assignees: input.assignees ?? [], user: f.owner, created: f.now(), updated: f.now() });
-      return ok(201, { number: n, html_url: `https://github.com/${f.repo}/issues/${n}`, title: issue.title });
+      return ok(201, { id: Number(issue.id), number: n, html_url: `https://github.com/${f.repo}/issues/${n}`, title: issue.title });
     }
     if (route === '' && method === 'GET') return ok(200, { full_name: f.repo, owner: { login: f.owner }, default_branch: 'main' });
     return original(args, options);

@@ -43,8 +43,9 @@ last 24 hours) and `seen` (fingerprint to last seen-again comment time).
 ## Public contract
 
 - `fileReport({cause, mode, root, machine, versions, step, words}, ports)` returns
-  `{state, number?, ref?, fingerprint}`. `state` is `filed` or `seen` (with the
-  issue number and `ref` `promptdriven/pdd#N`), `counted` (a match already
+  `{state, number?, id?, ref?, fingerprint}`. `state` is `filed` or `seen` (with the
+  issue number, the issue's GitHub `id` for dependency links, and `ref`
+  `promptdriven/pdd#N`), `counted` (a match already
   commented today), `draft` or `off`. Mode `file` sends; mode `draft` only keeps
   the draft; mode `off` does nothing.
 - A draft is `ROOT/drafts/FP.json` with `fingerprint`, `repository`, `title`,

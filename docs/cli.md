@@ -1400,9 +1400,16 @@ Each tick, without AI calls:
    comment, make a worktree and start one headless job. The job makes one PR with
    prompt, tests and code, and writes one `Runtime:` line in the PR body.
 
-When a job ends, the issue gets one comment with the cause and the log path, the
-label `pdd:stuck`, and loses `pdd:working`. Nothing else waits on it. To retry,
-remove `pdd:stuck`. To stop a running job, close the issue, assign it or add
+When a job ends, the issue gets one comment with the cause and the log path and
+loses `pdd:working`. Nothing else waits on it. When the agent failed the task, the
+issue gets `pdd:stuck`; to retry, remove `pdd:stuck`. When a Runtime or PDD
+problem ended it and a report was filed, the issue is blocked by that report (a
+GitHub issue dependency, or a hidden marker in the comment when the report is in
+another repository) and is ready again when the report closes. If the same
+problem comes back after its report closed, the issue gets `pdd:stuck`. An open PR
+of an ended job stays open as a draft, with the cause in a PR comment. A PR whose
+head has no CI check 10 minutes after it was opened merges on the full suite and
+the fresh review alone; its merge comment says `CI: none`. To stop a running job, close the issue, assign it or add
 `pdd:stuck`. After three jobs in a row end with no
 result, for example when the agent is signed out, intake pauses for one hour on
 this machine. `pdd autopilot status` shows the jobs, the busy slots, a pause and
@@ -1416,8 +1423,9 @@ day adds one "seen again" comment. Each machine files at most 3 new reports a da
 Reports hold versions, the step, the error code and a short redacted detail,
 never code or text from your repository. With `report` `draft` (the default) the
 report stays on this machine until you run `pdd autopilot report send
-FINGERPRINT`; with `off` nothing is saved. The ended issue's comment says
-`Blocked by` the report when it was filed. When a job's PR says
+FINGERPRINT`; with `off` nothing is saved. In both cases the ended issue gets
+`pdd:stuck`, because there is no report to wait on. Report issues themselves are
+never taken as work. When a job's PR says
 `Runtime: not run (reason)` for a Runtime cause, the PR still can merge; the tick
 files or counts the report and rewrites the line to `Runtime: not run (#N)`.
 

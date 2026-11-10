@@ -100,13 +100,17 @@ flowchart TD
 
 `readyIssues({state, settings}, ports, rows)` returns the issue numbers in intake
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
-assignee; it has no `pdd:stuck`; it has the opt-in label when `label` is set; no
+assignee; it has no `pdd:stuck`; it has neither report label (`pdd:runtime`,
+`pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
+opt-in label when `label` is set; no
 local job holds it; its author is trusted (`ports.trusted(row)`, the launcher's
 trust rule); no open issue blocks it; and it has no live `pdd:working` claim by
 anyone. Blocking means a GitHub issue dependency (`dependencies/blocked_by`, read
 only when the row's dependency summary is not zero) or a body line
 `blocked by #N`, `blocked by OWNER/REPO#N` or `blocked by` an issue URL, that
-names an open issue. A labeled issue is ready only when its winning claim, read
+names an open issue, or, for an issue with comments, the hidden marker
+`<!-- pdd:core-blocked-by:OWNER/REPO#N:FINGERPRINT -->` in its latest core END
+comment when OWNER/REPO#N is open. A labeled issue is ready only when its winning claim, read
 with the dependency reader's owners port, is expired and not takeover-limited.
 Order is oldest `created_at` first, then the lower number. A read error skips only
 that issue for this tick.
@@ -117,6 +121,9 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
 
 1. Make the job worktree first, so that a local failure touches no issue: fetch
    `origin/BASE`, then `git worktree add -b pdd/core-N-STAMP worktrees/N origin/BASE`.
+   STAMP is the time in base 36 and a short random part, so a retry of the same
+   issue never meets the kept branch of an earlier job. Each job file has a random
+   `id`; each started process has the id `N-ROLE-STAMP`.
    A worktree failure stops intake for this tick.
 2. Claim with the shared label and comment rule: read the issue again and give up
    when it is closed, stuck or assigned, or when a claim is live; remove an
@@ -192,11 +199,18 @@ error came from a GitHub or Git call, else a `job` cause `checks-timeout`. Each 
    the head, summary and must-fix list.
 4. Any red finding: stop the other checks. With repairs left, start one repair job,
    count it and give it a new deadline. Without, end `checks-red` with the findings.
-5. Wait while CI (at least one check, none pending), review or suite is not green.
+5. Wait while CI, review or suite is not green. CI is green when the head has at
+   least one check and none is pending. When the head has no check run and no
+   status 10 minutes after the job reported the PR (`prAt`, set each time a build
+   or repair job reports a head), CI is `none`: the full suite and the fresh review
+   decide alone. A pending check still waits, within the time limit.
 6. Run `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md). A
    read failure ("could not verify", "unavailable", "retry") waits; another
    refusal ends `base-check`.
-7. `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
+7. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
+   `CI: none (…)`, the suite, the review, the PR's Runtime line and the base check,
+   with the marker `<!-- pdd:autopilot-core:merge:HEAD -->`. Then
+   `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
    waits for the next tick. A confirmed merge closes the issue when it is open,
    removes `pdd:working`, cleans up locally (see END) and records `merged`.
 
@@ -211,14 +225,28 @@ task, a time limit, red checks). It stops the job's processes and saves phase
 1. Read the claim. When another machine holds it live, clean up locally only.
 2. For a `runtime` or `pdd` cause, file or count one report through the
    [report owner](autopilot-reports.prompt.md) with the repository's settings.
-3. Post one issue comment with the cause text, kind and code, the log path, the
+3. A `runtime` or `pdd` cause whose report has a GitHub reference **waits for the
+   report, not for a person**. Loop breaker first: when an earlier END comment on
+   this issue has a blocked-by marker with the same fingerprint and that report is
+   now closed, the cause came back after its fix, so a person decides. Otherwise
+   link the issue natively: `POST repos/REPO/issues/N/dependencies/blocked_by` with
+   the report's issue id. A refused link (for example across repositories) leaves
+   the hidden marker in the END comment as the only record; the ready rule reads it.
+4. Post one issue comment with the cause text, kind and code, the log path, the
    branch and PR, `Blocked by REF` when a report has a reference (`#N` in the
-   same repository), a draft note naming `pdd autopilot report`, and how to retry
-   (remove `pdd:stuck`). A hidden marker
-   `<!-- pdd:autopilot-core:end:N:STARTED -->` makes a retry after an uncertain
+   same repository), a draft note naming `pdd autopilot report`, and either "ready
+   again when REF closes" or how to retry (remove `pdd:stuck`). Every comment with a
+   report reference carries `<!-- pdd:core-blocked-by:REF:FINGERPRINT -->`. A hidden
+   marker `<!-- pdd:autopilot-core:end:N:JOB-ID -->` makes a retry after an uncertain
    post find the earlier comment instead of posting twice.
-4. Add `pdd:stuck`, remove `pdd:working` (an absent label is fine).
-5. Only then clean up locally (below). Record `ended`.
+5. Remove `pdd:working` (an absent label is fine). Add `pdd:stuck` for a `job` cause,
+   for a `runtime` or `pdd` cause without a GitHub report (draft, off or over the
+   daily limit: nothing to wait on), and for a loop.
+6. When the job has an open PR, leave it open: mark it draft (`gh pr ready PR --undo`;
+   a refusal only warns) and comment the cause on the PR once, with the marker
+   `<!-- pdd:autopilot-core:end-pr:N:JOB-ID -->`. A failing GitHub call retries on the
+   next tick; after 3 failed tries the note is skipped with a warning.
+7. Only then clean up locally (below). Record `ended`.
 
 Local cleanup, after END, a merge, a hand-over or a person's stop: stop the job's
 processes; remove every `worktrees/N…` folder of the issue; remove every

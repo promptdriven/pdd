@@ -426,3 +426,75 @@ test('an ended job holds no slot after a restart, and END and merge remove its p
   assert.deepEqual([...merged('jobs'), ...merged('worktrees'), ...merged('logs')], []);
   assert.ok(w.job(19, 'build'), 'the merged slot is free in the same tick');
 });
+
+test('a Runtime END in the report repository is blocked natively, returns when the report closes, and a repeat gets pdd:stuck', async t => {
+  const w = await coreWorld(t, { repository: 'promptdriven/pdd', settings: { runs: 1, report: 'file' } });
+  w.issue(17); w.issue(18);
+  await w.tick(); w.finish(17, 'build', { result: runtimeFailure }); await w.tick();
+  const report = [...w.github.issues.values()].find(issue => issue.labels.includes('pdd:runtime'));
+  assert.ok(report, 'the report is filed in the same repository');
+  assert.deepEqual(w.github.issues.get(17).blockedBy, [report.number], 'native blocked-by dependency');
+  assert.ok(!w.labels(17).includes('pdd:stuck')); assert.ok(!w.labels(17).includes('pdd:working'));
+  assert.match(endComments(w, 17)[0], new RegExp(`Blocked by #${report.number}`));
+  assert.ok(w.job(18, 'build'), 'the next issue starts');
+  w.kill(18, 'build'); await w.tick();
+  assert.equal(w.started.filter(j => j.issue === 17).length, 1, '#17 waits while the report is open');
+  w.github.close(report.number);
+  await w.tick();
+  assert.equal(w.started.filter(j => j.issue === 17).length, 2, '#17 is ready again when the report closes');
+  w.finish(17, 'build', { result: runtimeFailure }); await w.tick();
+  assert.ok(w.labels(17).includes('pdd:stuck'), 'the same cause after its report closed is a loop: pdd:stuck');
+  assert.equal([...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:runtime')).length, 1, 'a report closed less than 14 days ago is reused');
+  assert.match(endComments(w, 17).at(-1), /came back after .*closed/i);
+});
+
+test('a Runtime END in another repository falls back to the hidden marker that the ready rule reads', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, report: 'file' } });
+  w.issue(17); w.issue(18);
+  await w.tick(); w.finish(17, 'build', { result: runtimeFailure }); await w.tick();
+  assert.deepEqual(w.github.issues.get(17).blockedBy, [], 'the cross-repository native link was refused');
+  assert.match(endComments(w, 17)[0], /<!-- pdd:core-blocked-by:promptdriven\/pdd#1:runtime\.pdd-test\.no-verdict\.0\.1 -->/);
+  assert.ok(!w.labels(17).includes('pdd:stuck'));
+  assert.ok(w.job(18, 'build'));
+  w.kill(18, 'build'); await w.tick();
+  assert.equal(w.started.filter(j => j.issue === 17).length, 1, '#17 waits while promptdriven/pdd#1 is open');
+  assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), []);
+  w.reports.close(1);
+  assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), [17]);
+});
+
+test('Runtime END without a filed report (draft) and job causes keep pdd:stuck; reports are never core work', async t => {
+  const w = await coreWorld(t, { repository: 'promptdriven/pdd', settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick(); w.finish(17, 'build', { result: runtimeFailure }); await w.tick();
+  assert.ok(w.labels(17).includes('pdd:stuck'), 'nothing to wait on: a person decides');
+  w.issue(30, { labels: ['pdd:autopilot-report'] }); w.issue(31, { labels: ['pdd:runtime'] });
+  assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), [], 'report issues wait for the self-fix lane');
+});
+
+test('zero CI checks count as "CI: none" 10 minutes after the PR; pending checks still wait', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); w.issue(18);
+  await w.tick();
+  const none = w.build(17, { checks: null }), pending = w.build(18, { checks: null });
+  w.github.setChecks(pending.head, null, 'in_progress');
+  await w.tick();
+  for (const n of [17, 18]) { w.review(n, 'PASS'); w.suite(n, 0); }
+  await w.tick();
+  assert.equal(w.github.merges.length, 0, 'before 10 minutes a PR with no checks waits');
+  w.advance(11 * MIN); await w.tick();
+  assert.deepEqual(w.github.merges, [none.pr.number]);
+  assert.ok(none.pr.comments.some(c => /CI: none/.test(c.body) && c.body.includes(none.head)), 'the merge comment says CI: none');
+  assert.ok(!pending.pr.comments.some(c => /CI: none/.test(c.body)));
+});
+
+test('END with an open PR leaves it open as a draft and comments the cause on the PR', async t => {
+  const w = await coreWorld(t, { settings: { repairs: 0 } });
+  w.issue(17);
+  await w.tick(); const { pr } = w.build(17); await w.tick();
+  w.review(17, 'FAIL', ['Missing test']); w.suite(17, 0); await w.tick();
+  assert.equal(pr.state, 'open'); assert.equal(pr.draft, true);
+  const comments = pr.comments.filter(c => c.body.includes('<!-- pdd:autopilot-core:end-pr:'));
+  assert.equal(comments.length, 1); assert.match(comments[0].body, /Missing test/);
+  assert.ok(w.labels(17).includes('pdd:stuck'), 'a job cause keeps pdd:stuck');
+});
