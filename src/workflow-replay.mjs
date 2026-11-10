@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 60fdb78236a539bf97b9126e0ce66595c6cee86d8c0975a96be07e987daa2f3b).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 78641c196bd70ac43403cf54c314beec8d7e42c61eb68cba90cebba9554349f4).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -6,6 +6,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, rea
 import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
 import { gitFiles } from './runtime-preflight.mjs';
 import { cleanText } from './runtime-output.mjs';
+import { headerPrompts } from './file-owner.mjs';
 export const REPLAY_POLICY = 'pdd.replay-evidence.v1';
 const LIMIT = 2 * 1024 * 1024, MAX = 10000;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -347,11 +348,6 @@ function bindingLinks(bytes) {
     return {state:'used',links};
   } catch {return {state:'invalid',links:new Map()};}
 }
-// A PDD header names the prompt that a file was generated from, in one of its first 10 lines, for example
-// `// Generated from prompts/cli/x.prompt.md (sha256: HEX).` or `# Generated from prompts/x.py.prompt.md.`
-const HEADER=/^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: [a-f0-9]{64}\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
-const headerPrompts=bytes=>bytes?new TextDecoder().decode(bytes.subarray(0,64*1024)).split(/\r?\n/,10)
-  .filter(line=>line.length<=1100).map(line=>HEADER.exec(line)?.[1]).filter(canonicalPath):[];
 // Root pdd.json on the base commit: {"replay":{"base_scenarios":"linked"|"all"}}; missing means linked.
 function baseSelection(bytes,commit) {
   if(!bytes)return 'linked';
