@@ -173,8 +173,10 @@ Codex usage limit), or while `core.json` holds it.
 
 **No result is a machine fault first.** An agent that exited with no result, a start
 failure (also one that the spawn reports later), a dead process (a restart or a
-sleep), a job with no agent record and a job that cannot advance past its deadline
-all end as `no-result`.
+sleep), a job with no agent record, a job that cannot advance past its deadline, a
+reviewer that twice gives no valid verdict and a suite run that died three times all
+end as `no-result`. Any job kind follows the same rules; it is never `pdd:stuck` by
+itself.
 
 - Per issue: count the `no-result` ends of the issue in `history.jsonl` (lines with
   `noResult: true`) of the last 24 hours. A result in between (a PR, a review, a
@@ -183,19 +185,29 @@ all end as `no-result`.
   with no comment and no `pdd:stuck`, mark this job's own open PR as draft with a note,
   record `released` in the history, and skip the issue for the rest of the tick. The
   2nd in 24 hours is a normal END (comment and `pdd:stuck`). This covers repair jobs
-  too, so a repair that always gives no result ends after 2 builds.
+  too, so a repair that always gives no result ends after 2 builds. A `no-result` end
+  while the breaker is open or half-open (the trial included) only releases the issue
+  and does not count for it: its history line has `machine: true`, not `noResult`.
+  The history file is read line by line; a line that does not parse is skipped.
 - Machine breaker, saved in `core.json` as `breaker {state, hours, until, trial}` and
   `streak`, so it survives restarts. Each `no-result` end adds 1 to `streak`; a job that
   produced a result (a PR or a reported failure) sets it to 0 and closes the breaker
   with `hours` 1. Closed: 3 `no-result` ends in a row open it for 1 hour. Open: start
   no new job until `until`; jobs that already run go on. When the pause has passed:
-  half-open, and exactly one new job starts (its job id is `trial`); while it runs, no
+  half-open, and at most one issue is claimed: the trial (its job id is `trial`). It is
+  the oldest ready issue with no `noResult` line in the last 24 hours, else the oldest
+  ready issue. A start that throws is the trial too, and its END can open the breaker
+  again at once; then no other claim follows in that tick. While the trial runs, no
   other new job starts, and a vanished trial (for example a person stop) lets the next
-  tick start another. A trial that ends with no result opens the breaker again with
+  tick start another. A pause never outlasts its own length: when the saved end is
+  more than `hours` (at most 8) away, for example because the clock went back, the
+  pause starts again from now. A trial that ends with no result opens the breaker again with
   `hours` doubled (1, 2, 4, then 8 at most). Each opening sends one `usage-limit` alert
   through `ports.alert` with `update` and the text "Autopilot paused new jobs for H h:
   the agent ended N jobs with no result. Check sign-in and limits." (the machine and
-  the end time follow). There is no readiness probe.
+  the end time follow). There is no readiness probe. A `core.json` that is missing,
+  `null`, not an object or not JSON reads as a closed breaker with `streak` 0 (one
+  warning per tick); it never stops a tick or status.
 
 ## Jobs
 
@@ -273,7 +285,7 @@ Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in 
    (check runs and commit statuses of the head; neutral and skipped pass); else
    a review FAIL or a failed suite. With no red finding yet, start the review and
    the suite for this head when missing; CI may still be pending. A reviewer that
-   twice gives no valid verdict for the head ends `review-missing`; no test command
+   twice gives no valid verdict for the head ends as `no-result`; no test command
    ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
    the head, summary and must-fix list.
 4. Any red finding: stop the other checks. With repairs left, start one repair job,

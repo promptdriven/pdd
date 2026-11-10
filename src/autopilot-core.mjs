@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 5c28a83c1ab979e548c7292fbe176d4d9e97c1e465c343bfe6429bdb747c707a).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: aee28d67fda611611160c5968e444259e20dde5d31e482b5bd82762437ad75f0).
 import * as nativeFs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,8 +89,21 @@ function readJobs(fs, root) {
 // Slots come only from this engine's own job files. A job holds a slot while its process runs or its outcome
 // (merge check or END decision) is not yet handled; a job that only finishes its END writes holds none.
 const holdsSlot = job => job.phase !== 'ending';
+// One bad line (a cut append after a power loss or a full disk) is skipped; it never hides the other lines.
 function readHistory(fs, root, count = 5) {
-  try { return fs.readFileSync(folders(root).history, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).slice(-count).reverse(); } catch { return []; }
+  let text = '';
+  try { text = fs.readFileSync(folders(root).history, 'utf8'); } catch { return []; }
+  const rows = [];
+  for (const line of text.split('\n')) { try { const row = JSON.parse(line); if (object(row)) rows.push(row); } catch { /* Skipped. */ } }
+  return rows.slice(-count).reverse();
+}
+// core.json that is missing, null, not an object or not JSON reads as a closed breaker.
+function readMachine(fs, root, warn) {
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(folders(root).machine, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') warn?.(`Autopilot core reads ${folders(root).machine} as closed: ${error.message}`); }
+  if (raw !== null && !object(raw)) warn?.(`Autopilot core reads ${folders(root).machine} as closed: it is not an object`);
+  const m = object(raw) ? raw : {};
+  return { ...m, streak: Number.isSafeInteger(m.streak) ? m.streak : 0, breaker: { state: 'closed', hours: 1, ...(object(m.breaker) ? m.breaker : {}) } };
 }
 
 // ---- GitHub through the counted gh port -----------------------------------------------------------------
@@ -129,7 +142,8 @@ function context({ state, settings, budget }, ports) {
     timeout: settings.jobTimeoutMinutes * MIN, pdd: join(state.packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs'), skip: new Set(), warn: ports.warn ?? (() => {}) };
   ctx.saveJob = job => save(fs, join(dirs.jobs, `${job.issue}.json`), job);
   ctx.comment = (number, body) => gh.ok('POST', `repos/${repo}/issues/${number}/comments`, { body: safeBody(body) });
-  ctx.machineState = () => { const m = readJson(fs, dirs.machine, {}); return { streak: 0, ...m, breaker: { state: 'closed', hours: 1, ...m.breaker } }; };
+  let warned = false;
+  ctx.machineState = () => readMachine(fs, root, text => { if (!warned) { warned = true; ctx.warn(text); } });
   ctx.saveMachine = value => save(fs, dirs.machine, value);
   // A job that produced a result (a PR or a reported failure) proves the agent works: the streak ends and the
   // breaker closes (its pause goes back to 1 hour). The per-issue count is not reset: it is read from the history.
@@ -328,16 +342,29 @@ async function intake(ctx, rows) {
   // The machine breaker. Open: no new job until the pause ends. Half-open: exactly one new job, the trial.
   const m = ctx.machineState(), b = m.breaker;
   if (b.state === 'open') {
+    // A pause never outlasts its own length: a clock that went back (or a bad saved time) starts it again from now.
+    const pause = Math.min(Number(b.hours) || 1, MAX_PAUSE_HOURS) * HOUR;
+    if (!(b.until - ctx.now() <= pause)) { Object.assign(b, { openedAt: ctx.now(), until: ctx.now() + pause }); ctx.saveMachine(m); }
     if (ctx.now() < b.until) return `new jobs paused until ${new Date(b.until).toISOString()}: the breaker is open for ${b.hours} h because the agent ended jobs with no result`;
     Object.assign(b, { state: 'half-open', trial: null }); ctx.saveMachine(m);
   }
-  if (b.state === 'half-open') {
+  const halfOpen = b.state === 'half-open';
+  if (halfOpen) {
     if (b.trial && jobs.some(job => job.id === b.trial)) return 'the breaker is half-open: one trial job runs, no other new job starts';
     free = Math.min(free, 1);
   }
-  let checked = false;
-  for await (const row of readyRows(ctx, rows)) {
-    if (free <= 0 || tries++ >= CLAIM_TRIES) break;
+  // The trial prefers the oldest ready issue with no no-result in the last 24 hours, so one issue that always breaks
+  // the agent is not the trial each time.
+  const recent = new Set(readHistory(ctx.fs, ctx.root, Infinity).filter(row => row.noResult && ctx.now() - row.at < DAY).map(row => row.issue));
+  async function* candidates() {
+    if (!halfOpen) { yield* readyRows(ctx, rows); return; }
+    const seen = [];
+    for await (const row of readyRows(ctx, rows)) { if (!recent.has(row.number)) { yield row; return; } seen.push(row); }
+    yield* seen;
+  }
+  let checked = false, claimed = 0;
+  for await (const row of candidates()) {
+    if (free <= 0 || tries++ >= CLAIM_TRIES || halfOpen && claimed >= 1) break;
     if (!checked) {
       if (!await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
       // A base fetch failure is not about one issue: it stops intake for this tick.
@@ -357,6 +384,7 @@ async function intake(ctx, rows) {
     let claim = null;
     try { claim = await claimIssue(ctx, n); } catch (error) { ctx.warn(`Autopilot core claim of #${n} failed: ${error.message}`); }
     if (!claim) { await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); continue; }
+    claimed++;
     const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
       branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), deadline: ctx.now() + ctx.timeout };
     ctx.saveJob(job);
@@ -365,6 +393,8 @@ async function intake(ctx, rows) {
     catch (error) {
       await end(ctx, job, cause('job', 'no-result', `the agent could not start: ${oneLine(error.message)}`))
         .catch(failure => ctx.warn(`Autopilot core END of #${n} waits: ${failure.message}`));
+      // The END can open the breaker: no further claim in this tick then.
+      if (ctx.machineState().breaker.state !== 'closed') return 'new jobs paused: an agent start failed';
     }
   }
   return null;
@@ -425,7 +455,7 @@ async function suiteState(ctx, job) {
   const runner = /Shared test suite queue failed|Test suite execution timeout|Test suite could not start|Test suite ended by SIG|Test suite descendants could not be confirmed|Supply a suite command|Autopilot core: dependency install failed/;
   if (seen.state === 'dead' || seen.exit?.signal || [86, 127].includes(seen.exit?.code) || runner.test(log) || !log.trim()) {
     if ((job.suite.restarts ?? 0) < 2) return start(job.suite.cwd ?? await checkout(ctx, job, 'suite'), (job.suite.restarts ?? 0) + 1);
-    return { state: 'broken', text: `the full test suite runner failed for head ${short(job.head)} (${seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}`}, 3 tries). Log: ${job.suite.agent.log}` };
+    return { state: 'broken', dead: seen.state === 'dead', text: `the full test suite runner failed for head ${short(job.head)} (${seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}`}, 3 tries). Log: ${job.suite.agent.log}` };
   }
   return { state: 'fail', text: `The full test suite failed for head ${short(job.head)} (exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}). Log: ${job.suite.agent.log}${tail ? `\nLast lines:\n${tail}` : ''}` };
 }
@@ -460,9 +490,9 @@ async function mergeCheck(ctx, job) {
   let review, suite;
   if (!reds.length) {
     review = await reviewState(ctx, job); suite = await suiteState(ctx, job);
-    if (review.state === 'missing') return end(ctx, job, cause('job', 'review-missing', 'the fresh reviewer ended twice without a valid verdict'));
+    if (review.state === 'missing') return end(ctx, job, cause('job', 'no-result', 'the fresh reviewer ended twice with no valid verdict'));
     if (suite.state === 'missing') return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
-    if (suite.state === 'broken') return end(ctx, job, cause('pdd', 'suite-broken', suite.text));
+    if (suite.state === 'broken') return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text) : cause('pdd', 'suite-broken', suite.text));
     if (review.state === 'fail') reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`);
     if (suite.state === 'fail') reds.push(suite.text);
   }
@@ -554,16 +584,18 @@ async function end(ctx, job, why) {
     // No result is a machine fault first (a sign-out, a usage limit, a broken agent CLI, a restart). Per issue: the
     // first no-result in 24 hours only releases the claim (no comment, no pdd:stuck); the 2nd in 24 hours, whatever
     // came between, is a normal END, so one issue cannot loop through builds or repairs.
+    // While the breaker is open or half-open (also for the trial), the agent is down, not the issue: only release,
+    // and the end does not count for the issue.
+    const m = ctx.machineState(), b = m.breaker, machineFault = b.state !== 'closed';
     const recent = readHistory(ctx.fs, ctx.root, Infinity).filter(row => row.issue === job.issue && row.noResult && ctx.now() - row.at < DAY).length;
-    why = { ...why, release: recent < 1 };
+    why = { ...why, release: machineFault || recent < 1, ...(machineFault ? { machine: true } : {}) };
     // Machine breaker: 3 no-result ends in a row open it; the trial of a half-open breaker that ends with no
     // result opens it again with the pause doubled (1, 2, 4, then 8 hours at most).
-    const m = ctx.machineState(), b = m.breaker;
     m.streak = (m.streak ?? 0) + 1;
     const reopen = b.state === 'half-open' && b.trial === job.id;
     if (reopen || b.state === 'closed' && m.streak >= STRIKES) {
       b.hours = reopen ? Math.min(MAX_PAUSE_HOURS, (b.hours ?? 1) * 2) : 1;
-      Object.assign(b, { state: 'open', until: ctx.now() + b.hours * HOUR, trial: null });
+      Object.assign(b, { state: 'open', openedAt: ctx.now(), until: ctx.now() + b.hours * HOUR, trial: null });
       const text = `Autopilot paused new jobs for ${b.hours} h: the agent ended ${reopen ? 'the trial job' : `${m.streak} jobs`} with no result. Check sign-in and limits.`;
       try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'usage-limit', update: true, text: `${text} (machine ${ctx.state.machine}, until ${new Date(b.until).toISOString()})`,
         tried: `No new job starts until ${new Date(b.until).toISOString()}; then one trial job runs. Jobs that already run go on.`, need: 'Check the agent sign-in and usage limits on this machine, for example with pdd autopilot doctor.' }); }
@@ -675,7 +707,7 @@ async function finishLocal(ctx, job, outcome, text) {
     await step('history', () => {
       ctx.fs.mkdirSync(ctx.root, { recursive: true, mode: 0o700 });
       ctx.fs.appendFileSync(ctx.dirs.history, JSON.stringify({ at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null,
-        ...(job.end?.cause?.code === 'no-result' && ['released', 'ended'].includes(outcome) ? { noResult: true } : {}) }) + '\n', { mode: 0o600 });
+        ...(job.end?.cause?.code === 'no-result' && ['released', 'ended'].includes(outcome) ? job.end.cause.machine ? { machine: true } : { noResult: true } : {}) }) + '\n', { mode: 0o600 });
     });
   } finally {
     try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
@@ -776,7 +808,7 @@ export async function tickCore(input, ports) {
 
 // ---- Status (local files only) --------------------------------------------------------------------------
 export function coreStatus({ state, settings, sources = {} }, ports) {
-  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), machine = readJson(fs, folders(ports.root).machine, {}), b = machine.breaker ?? { state: 'closed' };
+  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), machine = readMachine(fs, ports.root), b = machine.breaker;
   const busy = jobs.filter(holdsSlot).length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
   const from = sources.engine === 'machine' ? 'this machine: pdd autopilot start --engine core' : 'pdd.json autopilot.engine';
   const lines = [`Autopilot engine core (${from}), mode ${settings.mode}: ${state.repo ?? 'repository unknown'} in ${state.cwd} · base ${state.baseBranch ?? 'unknown'} · agent ${state.agent?.kind ?? 'none'}`,

@@ -1426,9 +1426,11 @@ the fresh review alone; its merge comment says `CI: none`. To stop a running job
 `pdd:stuck`. After three jobs in a row end with no result, a breaker pauses new
 jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs for
 1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that
-already run go on. After the pause, one trial job starts: a result closes the
+already run go on. After the pause, one trial job starts, on an issue that had no
+job without a result in the last day when there is one: a result closes the
 breaker, and no result pauses new jobs again for twice as long (2, 4, then 8 hours
-at most), with a new alert. `pdd autopilot status` shows the jobs, the busy slots,
+at most), with a new alert. While the breaker is open or in its trial, a job with
+no result only releases its issue and never counts toward `pdd:stuck`. `pdd autopilot status` shows the jobs, the busy slots,
 the breaker and the time it lets a job start again, and the last results from
 local files.
 
