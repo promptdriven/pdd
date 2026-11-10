@@ -4,7 +4,7 @@
 incident or a real human decision. Each person sets their own destination once
 per machine: a Discord or Slack incoming webhook, or a Discord bot that posts in
 one channel. The coordinator sends one
-alert per incident, material updates and one recovery message. The answer goes
+message only for a concrete person ask that passes the quiet-send gates below. The answer goes
 on the GitHub issue, so it stays with the original run.
 
 Export module functions `runAutopilotAlerts(input, ports)` and
@@ -12,7 +12,7 @@ Export module functions `runAutopilotAlerts(input, ports)` and
 `test`, `clear`, `alert` or native-only `digest` and returns `{exitCode, message}` with a one-line
 message. The [CLI](pdd-cli.prompt.md) owns streams and reads stdin into
 `input.text`. The [launcher](autopilot-launcher.prompt.md) shows the status line.
-This is a new public interface.
+Preserve destination setup, transport safety, local status and existing CLI forms; the rules below intentionally narrow chat delivery.
 
 ## The webhook URL is a secret
 
@@ -64,7 +64,7 @@ saves nothing. The CLI gives `--discord-channel` and `--token-command` only to
 `set`.
 
 Bot requests go to Discord REST v10, `https://discord.com/api/v10`, with headers
-`Authorization: Bot TOKEN` and `User-Agent: DiscordBot (https://github.com/promptdriven/pdd, VERSION)`,
+`Authorization: Bot TOKEN` and `User-Agent: PDD-Autopilot/VERSION`,
 where VERSION is the package version.
 
 - Send: `POST /channels/ID/messages` with
@@ -108,7 +108,7 @@ not a mismatch.
 
 `allowed_mentions` and the Slack escapes stop issue text from paging a whole
 channel. Each send is one request with a 10-second limit. The module does not
-retry inside one call. Clip each field to 500 characters and TEXT to 1900.
+retry inside one call. Digest TEXT is limited to 1900 characters; alert and recovery TEXT to 480 (about 400). Never cut an issue link or the ask to fit; record an oversized ask instead.
 
 Each send has one result:
 
@@ -119,136 +119,97 @@ Each send has one result:
   readback. The message can exist, so a repeat call does not send it again.
 - `not-configured`: no destination is set. The alert stays in the local record.
 
-## Alerts
+## Alerts: one real ask
 
-`alert` input: `cwd`, `issue` (a positive integer as text), `kind`, `update`
-(Boolean) and `text`, a JSON object from stdin. Kinds:
+`alert` still accepts `cwd`, `issue` (positive integer text), `kind`, `update`
+and JSON `text` from stdin. Export `ALERT_KINDS` with usage-limit, resource,
+interpreter, interpreter-access, access, decision, stuck, test-suite,
+long-running and recovered. Invalid issue/kind/JSON or missing nonblank `cause`,
+`tried`, `need` (only `cause` for recovery) exits 2 without effects.
 
-| Kind | Use | One incident per |
-| --- | --- | --- |
-| `usage-limit` | An AI account usage limit; give the reset time when known | repository, machine and kind |
-| `resource` | A CPU, memory or disk failure | repository, machine and kind |
-| `interpreter` | The PDD interpreter (the hosted service behind `pdd test`) is unavailable for this repository | repository, machine and kind |
-| `interpreter-access` | The interpreter health check of this machine cannot be read: its gh sign-in or `PDD_RUNTIME_URL` needs a person | repository, machine and kind |
-| `access` | An access or spending decision | repository, issue and kind |
-| `decision` | An unresolved product choice | repository, issue and kind |
-| `stuck` | An issue stuck after its retry time | repository, issue and kind |
-| `long-running` | Information only: an issue claimed 24 hours ago with no merge | repository, issue and kind |
-| `recovered` | A matching open incident ended | |
+The coordinator alone should call this module. `notifyAutopilotAsk(input, ports)`
+is the small native hook for a future core caller: it takes the same inputs with
+`fields` as the JSON object instead of `text`, forces action `alert`, and returns
+the same `{exitCode, message}`. It does not wire itself into the core or authorize
+workers. Existing CLI forms stay unchanged. The module cannot authenticate the
+calling process; coordinator ownership is a caller obligation.
 
-`usage-limit`, `resource`, `interpreter` and `interpreter-access` are machine incidents: they are not specific to
-one issue. One usage limit that blocks 5 runs is one incident and one alert. The
-incident lists every affected issue. An access or spending decision belongs to
-its issue, so two different decisions on two issues are two incidents and two
-alerts, and a recovery of one leaves the other open.
+Additional JSON fields: `code` is a stable lowercase cause identifier (letters,
+digits, hyphens, underscores, periods, colons and slashes; 1–160 characters),
+`ifNoAnswer` explains what waits and what continues, `owner` optionally names who
+answers, `details` optionally links an issue comment, and `issues` optionally
+lists additional positive issue numbers known before sending. `paused` is a
+Boolean for machine observations; optional `tick` (string or number) identifies
+a coordinator tick. Missing tick uses the observation time in milliseconds.
+No free-text cause is used as identity. Legacy payloads without code or a
+consequence remain recorded and are not sent.
 
-The JSON has nonblank string fields `cause`, `tried` and `need`. For `recovered`
-only `cause` (what changed) is needed, and an optional `kind` names the one
-incident that ended: `usage-limit`, `resource`, `interpreter`, `interpreter-access`, `access`, `decision`, `stuck` or `long-running`.
-A missing or invalid issue, kind or field exits 2 with one line that names the
-problem, and records nothing.
+An eligible ask is a single line containing one question ending in `?`, or one
+imperative sentence beginning Approve, Choose, Grant, Provide, Supply, Sign,
+Release, Review, Restore, Renew, Increase, Allow or Run. Reject multiple questions,
+multiple sentences, blank/generic needs (including "Identify the blocker" and
+"No named blocker is saved"), and informational/no-action wording in any need.
+This is structural validation; the coordinator owns whether only a person can
+answer. A sendable message must retain its full ask and all issue links.
 
-Find the repository with `gh repo view --json nameWithOwner` in `cwd`. If that
-fails, read a `github.com` owner and name from the `origin` remote. If both fail,
-exit 1. The issue link is `https://github.com/OWNER/REPO/issues/N`. HOST is the
-machine name of the alert:
+| Kind | Chat eligibility |
+| --- | --- |
+| decision, access | One clear person ask, code, tried and ifNoAnswer |
+| usage-limit, resource, interpreter, interpreter-access | The same fields, plus paused work on two distinct consecutive observations spanning at least 15 minutes; paused false resets the observation window. Repeating one tick never advances it. |
+| test-suite, long-running | Record only for the issue/daily report; never send, even with update |
+| stuck | Record only; the core owns retry exhaustion and must express any actual person ask as decision/access |
+| recovered | Close matching incidents, but notify only for a confirmed delivered alert that remained open at least 15 minutes from delivery and passes the message budgets |
 
-- the `machine` value of the coordinator's saved launcher state: first this
-  checkout's own state file (the launcher's id: the first 20 hex characters of
-  the SHA-256 of `cwd`, which is the Git top level for the coordinator), then
-  the other `<state root>/<20 hex>.json` files in file-name order. Use the first
-  one whose `repo` is this repository (ignoring case) and whose `machine` is a
-  nonblank string;
-- else this machine's host name.
+Incident identity is lowercase repository + code, shared across issues and
+checkouts. Machine kinds additionally use the saved stable machine name. Missing
+code falls back to issue/kind only for local record identity. Issues join an
+open incident without another send. `--update` can resend only when need or owner
+changes; changed cause/tried/issue lists cannot send. Even a changed ask obeys
+the budgets. A failed delivery may be attempted on a later call subject to them;
+an unconfirmed send is not repeated. A recovered payload may name `kind` and/or
+`code`; without them it closes all incidents listing the issue on this machine.
+Legacy incident keys and missing sent timestamps cannot authorize recovery chat.
 
-The launcher saves `machine` once, at the first start. A host name can change,
-for example when macOS renames the host on a network change. The saved name does
-not change, so a repeat after a rename finds the same incident. This checkout's
-state comes first, so two machines that share one home keep their own incidents.
+Every automatic chat send, including recovery and digest, obeys at most six
+attempts per rolling hour per machine across repos and destinations. Each issue
+can appear in at most one attempted chat message in a rolling 24 hours, including
+recoveries and digests. No alert sends within two hours after recovery of any
+of its issues (even when the recovery was quiet). Boundaries are inclusive:
+at exactly 15 minutes, 2 hours, 24 hours, or 1 hour the corresponding wait ends.
+Failed/unconfirmed attempts consume budgets because an external outcome may be
+uncertain. Unconfigured destinations consume none. Suppression never closes the
+open ask, except an explicit recovery, and remains available to a later digest.
 
-An alert or update has these lines:
+Messages have the form:
 
 ```text
-PDD Autopilot alert: KIND (HOST)
-Repository: OWNER/REPO
+PDD Autopilot needs you: decision
 Issue: https://github.com/OWNER/REPO/issues/N
-Cause: CAUSE
-Tried: TRIED
-Needs: NEED
-Answer on the GitHub issue.
+Ask: Approve one resend?
+Tried: Read the saved verdict; none exists.
+If no answer: This run waits; other work continues.
 ```
 
-When the incident lists more than one issue, the third line is
-`Issues: LINK, LINK` in issue-number order. It shows at most 10 links and then
-` and N more`. An update starts with `PDD Autopilot update: KIND (HOST)`. A
-recovery starts with `PDD Autopilot recovered: KIND, KIND (HOST)` and has the
-Repository line, the Issue or Issues line of the closed incidents and
-`What changed: CAUSE`.
+Use Issues for multiple sorted unique links. Append optional Owner and Details
+lines when they fit. Keep tried/consequence on single lines, compact them to
+80 characters apiece as needed; never cut the ask. A recovery instead names the
+kind, issue links and what changed. Omit run identifiers, hashes and cause prose
+from person asks. Defensively scrub secrets from text before chat as from replies.
 
-The incident of a call is its machine incident (this repository, HOST and kind)
-for `usage-limit`, `resource`, `interpreter` and `interpreter-access`, else the incident of its issue and kind. This answers the question **when does a call send, and what ends an
-incident?**
+Resolve repo with `repository({cwd})` (native gh repo view, then origin remote).
+Use the saved launcher machine for cwd first, then other matching repo state
+files in filename order, else hostname. Retain the existing record path:
+`<state root>/alerts/<first 20 hex SHA-256 of lowercase repo>.json`, private
+atomic JSON `{v:1, repo, incidents, log}`. Retain the latest 200 log rows.
+Incidents store kind, code, host, issues, listed, fields, openedAt, updatedAt,
+result, optional detail/destination, firstPausedAt, ticks, lastTick and sentAt
+(the confirmed delivery time). `listed` means issues in the last attempted send.
+Logs retain at, issue, kind, action, result, optional detail/destination.
+`recorded` and `not-sent` are local outcomes, not transport failures.
 
-```mermaid
-flowchart TD
-    K{Kind is recovered?} -->|No| O{Open incident for this call?}
-    O -->|No| N[Open it with this issue and send the alert]
-    O -->|Yes| J[Add this issue to its issues]
-    J --> U{"--update, and cause or need changed or an issue is not in the last sent message?"}
-    U -->|Yes| S[Save the fields and send an update]
-    U -->|No| R{Latest result failed or not-configured, and a destination is set?}
-    R -->|Yes| A[Send the alert again]
-    R -->|No| Q(["Record a repeat; send nothing"])
-    K -->|Yes| C{Matching open incidents?}
-    C -->|No| Z([Send nothing])
-    C -->|Yes| E[Close all of them and send one recovery]
-```
-
-Compare `cause` and `need` after trim, plus the affected issue list. These are
-the incident's state. A change only to `tried`, an elapsed review time or routine
-review bookkeeping is not a material change and must not send a new message,
-even with `--update`. Callers keep cause and need unchanged while no new fact or
-decision exists; this module does not infer semantic equivalence of free text.
-A repeat keeps the fields of the last send. A repeat
-that adds an issue says so, sends nothing and names `--update`. Each send sets
-the latest result of its incident and the issues that its message named.
-
-A recovery for issue N matches:
-
-- with `kind`: the open incident of that kind, which is the machine incident of
-  this HOST for a machine kind, else the incident of issue N;
-- without `kind`: every open incident of issue N and every machine incident of
-  this HOST that lists issue N.
-
-A closed incident has no further sends. The next alert for that incident opens a
-new one.
-
-Record every call that reaches the diagram, also one that sends nothing, in
-`<state root>/alerts/<ID>.json`, with mode 0600. The state root is
-`ports.stateRoot`, else `<home folder>/.local/state/pdd/autopilot` (the
-launcher's state folder), with the [home folder](#an-absolute-home-folder)
-above. ID is the first 20 hex characters of the SHA-256 of the lowercase
-`OWNER/REPO`. The record keeps the open incidents (kind, affected issues,
-issues in the last sent message, fields, open and update times, latest result
-and detail) and the newest 200 log rows (time, issue, kind, action `alert`,
-`update`, `retry`, `repeat`, `recovered` or `test`, result and detail). It never
-holds the URL.
-
-`alert` exits 0 when the record is saved, whatever the delivery result, so work
-continues. Its message names the issue, the kind and the result. A delivered
-result says `the webhook confirmed it` for a webhook and
-`the Discord bot readback confirmed it` for a bot. A failed or
-unconfirmed result says that `pdd autopilot status` shows it. A `not-configured`
-result says that the alert is recorded on this machine and names
-`pdd autopilot alerts set`. A repeat says that nothing was sent and names
-`--update`. A failure to save the record exits 1. A repeat after a `failed` or
-`not-configured` result is how a coordinator sends a failed alert again, so the
-coordinator may repeat the same call on a later tick while the need lasts.
-
-`test-suite` is also an accepted alert kind and recovery kind. It is one
-incident per repository, issue and kind. Its cause names the suite failure,
-timeout or interruption. Ordinary test-slot waiting creates no alert. A suite
-failure uses this kind instead of `stuck`; existing retry and readback rules apply.
+Every recorded call exits 0 with a one-line outcome and work continues. Error
+saving exits 1; unavailable home/repository retains existing exit 1 behavior.
+No approval is recorded and no GitHub issue/comment is written here.
 
 ## Separate infrastructure destination
 
@@ -278,42 +239,45 @@ the shared record lock for each record update.
 
 ## Quiet digest and concurrent runs
 
-The native `digest` action takes `cwd`, `env`, and `attention`, an array of
-`{number, category, cause}` from the workflow runner's automatic attention
-projection. Categories are `stuck`, `parked`, `decision`. Resolve repo and stable
-machine as for an alert. Combine this projection with this machine's open issue
-incidents (use their cause and need); omit machine incidents. Keep distinct
-categories per issue, deduplicate matching issue/category rows, sort by issue
-then category and show issue links and causes. Include at most 10 complete rows,
-with fields clipped to 120 characters. Budget the heading, rows and omission
-footer together within 1900 characters. Keep rows in sorted order and stop before
-the next row would exceed the budget; never cut an issue link. When any items are
-left out by either limit, the footer counts every item not shown.
-The heading identifies a digest, repository and machine. No open item means no
-send and no change to the last digest time. There is at most one digest attempt
-per repository and machine in 6 hours, including failed, unconfirmed and
-not-configured attempts. Save each attempt's `at`, `result`, optional `detail`
-in `digests[HOST]` and a log row with kind/action `digest`, no issue. This survives
-restarts and is independent of per-incident sends and recoveries. Digest delivery
-uses the existing service safety and readback rules and never blocks other work.
-Legacy records with no `digests` remain readable. New incidents save `host`;
-legacy incidents without it belong to the local machine for the digest.
+Native `digest` takes cwd, env and optional attention rows `{number, category,
+need}` (legacy cause-only rows are not person asks). Keep only decision/access
+rows with a concrete need. Save each repo/host attention snapshot so calls from
+other checkouts can combine it with all locally visible open decision/access
+incidents routed to the same destination. Do not show machine causes, suite
+failures, age notices, generic parked/stuck rows or cause prose as asks.
+Deduplicate and sort by lowercase repo, issue and ask. Each complete line is the
+issue link and ask; never append an omission count. If the complete list exceeds
+1900 characters, record only rather than omit asks.
 
-Serialize every alert/digest record read, decision, send and save with a
-repository record lock shared across processes and checkouts. Bounded lock
-contention may fail with no send; it must never read stale state and double-post
-or discard another run's incidents. Use the workflow runner's `acquireRunLock`
-with a distinct alert filename and its dead-owner recovery. Wait at most 30
-seconds (20 ms between attempts); an injected `sleep(ms)` can control waiting.
-Retain atomic private writes. A send interrupted before saving remains an
-unproved external outcome; this is not an exactly-once transport guarantee.
+Send at most once per rolling 24 hours per destination channel, across locally
+visible repos and hosts, and only if this canonical open list differs from the
+last attempted digest. A host change or changed cause text is not a list change.
+No list means no send/time change. Failed/unconfirmed attempts count for the day;
+no destination does not count. Use the same machine/issue message budgets.
+
+Shared private `alerts/delivery.json` stores `v:1`, `sends` (rolling-hour entries
+with numeric millisecond at, host, destination hash and issue identities),
+`issueSentAt` and `recoveredAt` maps keyed by lowercase repo:number, `digests`
+(destination hash to at/fingerprint/outcome), and `attention` (repo/host to rows).
+Hash destination identity from service and webhook URL or bot channel; never
+store credentials there. This aggregates only state visible in this state root;
+cross-machine channel coordination requires shared state or a future broker.
+Corrupt/unreadable existing shared history fails closed without sending.
+Reserve budgets atomically before the external send; interruption may suppress
+a later send rather than double-post. This is not exactly-once transport.
+
+Serialize alert/digest/readback/save and shared history under one state-root lock
+`alerts/delivery.lock`, shared across processes and checkouts. Use acquireRunLock
+with dead-owner recovery, at most 30 seconds of contention and 20 ms sleeps.
+Retain injected recordLock and sleep ports and private atomic writes.
 
 ## Status line
 
 `alertStatusLine({repo, env}, ports)` reads only local files: no network and no
 GitHub. It returns the empty string when `repo` is absent, the record is absent
 or unreadable, or there is no problem. A problem is an open incident whose latest
-result is not `delivered`, or a newest send (of any action) that is `failed` or
+result is a delivery failure, unconfirmed or not-configured (record-only and
+quietly deferred incidents are not delivery problems), or a newest send (of any action) that is `failed` or
 `unconfirmed`. Then it returns one line, for example:
 
 ```text
