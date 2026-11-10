@@ -29,6 +29,10 @@ Do not put credentials in the command array or config. Raw process diagnostics
 are suppressed. Each uncached issue version makes one agent call, even in dry
 run, and may consume the agent's normal usage or credits. There is no automatic
 retry, usage reset or agent installation.
+SIGTERM/SIGINT stop further issues, kill active process groups on POSIX, wait for
+children to close and remove the agent directory and cache lock before exiting
+143/130. Interrupted calls remain cached. SIGKILL cannot run this cleanup, and
+agents must not detach descendants into another process group.
 
 ```sh
 node scripts/route-runtime-issues.mjs --repo OWNER/REPO --config /path/to/router.json

@@ -69,12 +69,14 @@ function validateCache(row) {
 }
 
 // Standalone hook: no Autopilot imports, decisions, or live-state access.
-export async function routeRuntimeIssues({repo, owner, apply=false}, ports) {
+export async function routeRuntimeIssues({repo, owner, apply=false, signal}, ports) {
   validateTarget(repo, owner);
+  signal?.throwIfAborted();
   const issues = (await ports.listIssues(repo)).filter(issue => !issue.pull_request && issue.state === 'open')
     .sort((a, b) => a.number - b.number);
   const rows = [];
   for (const issue of issues) {
+    if (signal?.aborted) break;
     let failure = 'Issue read failed';
     try {
       let comments = await ports.listComments(repo, issue.number);
@@ -87,6 +89,7 @@ export async function routeRuntimeIssues({repo, owner, apply=false}, ports) {
         await ports.writeCache(version, {error:'Classification attempt incomplete; remove this cache entry to retry'});
         failure = 'Classification failed; remove this cache entry to retry';
         try {
+          signal?.throwIfAborted();
           const classification = parseClassification(await ports.classify(evidenceFor(repo, issue, comments)));
           cached = {classification, appliedOwners:[]};
         } catch {
@@ -96,6 +99,7 @@ export async function routeRuntimeIssues({repo, owner, apply=false}, ports) {
         failure = 'Cache write failed';
         await ports.writeCache(version, cached);
       }
+      signal?.throwIfAborted();
       if (cached.error) {
         // Do not echo cache content, which is local untrusted input.
         failure = 'Classification failed or incomplete; remove this cache entry to retry';
@@ -114,6 +118,7 @@ export async function routeRuntimeIssues({repo, owner, apply=false}, ports) {
         plan = buildRoutingPlan({issue:fresh, version, classification:cached.classification, owner, comments});
         failure = 'GitHub routing write failed; earlier actions may have succeeded';
         for (const action of plan.actions) {
+          signal?.throwIfAborted();
           if (action.type === 'label') await ports.addLabel(repo, issue.number, action.label);
           else if (action.type === 'assign') await ports.addAssignee(repo, issue.number, action.owner);
           else await ports.postComment(repo, issue.number, action.body);
@@ -122,36 +127,64 @@ export async function routeRuntimeIssues({repo, owner, apply=false}, ports) {
         await ports.writeCache(version, {...cached, appliedOwners:[...cached.appliedOwners, owner]});
       }
       rows.push(plan);
-    } catch { rows.push({number:issue.number, error:failure}); }
+    } catch {
+      if (signal?.aborted) break;
+      rows.push({number:issue.number, error:failure});
+    }
   }
   return rows;
 }
 
 // Processes never receive issue text in argv or a shell, and raw diagnostics are
 // never surfaced. The command is trusted configuration, not issue content.
-function run(command, args, {input='', cwd, env=process.env}={}) {
-  return new Promise((fulfill, reject) => {
-    let child, output='', bytes=0;
-    const stop = () => {
-      if (!child) return;
-      try { process.platform === 'win32' ? child.kill('SIGKILL') : process.kill(-child.pid, 'SIGKILL'); }
-      catch { child.kill('SIGKILL'); }
-    };
-    const timer = setTimeout(() => { stop(); reject(Error('Process timed out')); }, 120000);
-    try { child = spawn(command, args, {cwd, env, shell:false, detached:process.platform !== 'win32', stdio:['pipe','pipe','pipe']}); }
-    catch { clearTimeout(timer); reject(Error('Process failed')); return; }
-    child.on('error', () => { clearTimeout(timer); reject(Error('Process failed')); });
-    child.on('close', code => { clearTimeout(timer); code === 0 ? fulfill(output) : reject(Error('Process failed')); });
-    const consume = (chunk, stdout) => {
-      bytes += Buffer.byteLength(chunk);
-      if (bytes > 8 * 1024 * 1024) { stop(); reject(Error('Process output limit')); }
-      else if (stdout) output += chunk;
-    };
-    child.stdout.setEncoding('utf8').on('data', chunk => consume(chunk, true));
-    child.stderr.setEncoding('utf8').on('data', chunk => consume(chunk, false));
-    child.stdin.on('error', () => {});
-    child.stdin.end(input);
-  });
+function createProcessRunner(signal) {
+  const active = new Set();
+  const abort = () => { for (const entry of active) entry.stop('Process cancelled'); };
+  signal.addEventListener('abort', abort);
+  return {
+    run(command, args, {input='', cwd, env=process.env}={}) {
+      if (signal.aborted) return Promise.reject(Error('Process cancelled'));
+      const entry = {};
+      entry.done = new Promise((fulfill, reject) => {
+        let child, output='', bytes=0, failure;
+        entry.stop = message => {
+          failure ??= Error(message);
+          if (!child?.pid) return;
+          try { process.platform === 'win32' ? child.kill('SIGKILL') : process.kill(-child.pid, 'SIGKILL'); }
+          catch { try { child.kill('SIGKILL'); } catch {} }
+        };
+        try { child = spawn(command, args, {cwd, env, shell:false, detached:process.platform !== 'win32', stdio:['pipe','pipe','pipe']}); }
+        catch { reject(Error('Process failed')); return; }
+        active.add(entry);
+        const timer = setTimeout(() => entry.stop('Process timed out'), 120000);
+        child.on('error', () => { failure ??= Error('Process failed'); });
+        // Wait for close even after abort/timeout/overflow: the caller may now
+        // remove the working directory, release the lock and exit safely.
+        child.on('close', code => {
+          clearTimeout(timer);
+          active.delete(entry);
+          if (failure || code !== 0) reject(failure ?? Error('Process failed'));
+          else fulfill(output);
+        });
+        const consume = (chunk, stdout) => {
+          if (failure) return;
+          bytes += Buffer.byteLength(chunk);
+          if (bytes > 8 * 1024 * 1024) entry.stop('Process output limit');
+          else if (stdout) output += chunk;
+        };
+        child.stdout.setEncoding('utf8').on('data', chunk => consume(chunk, true));
+        child.stderr.setEncoding('utf8').on('data', chunk => consume(chunk, false));
+        child.stdin.on('error', () => {});
+        child.stdin.end(input);
+      });
+      return entry.done;
+    },
+    async close() {
+      abort();
+      await Promise.allSettled([...active].map(entry => entry.done));
+      signal.removeEventListener('abort', abort);
+    },
+  };
 }
 
 const CLASSIFIER_INSTRUCTIONS = `Classify ownership only. Do not use tools or perform actions.
@@ -164,7 +197,7 @@ Return ONLY one JSON object with exactly ownership (runtime, pdd or uncertain)
 and reason (one nonblank line, at most 300 characters). Explain the boundary.
 `;
 
-function nativePorts({cacheDir, agentCommand}) {
+function nativePorts({cacheDir, agentCommand, run}) {
   const api = async (endpoint, data, paginate=false) => {
     const args = ['api', endpoint];
     if (paginate) args.push('--paginate', '--slurp');
@@ -208,7 +241,7 @@ function nativePorts({cacheDir, agentCommand}) {
   };
 }
 
-async function main(argv) {
+async function main(argv, {signal, run}) {
   if (argv.length === 1 && argv[0] === '--help') { process.stdout.write(USAGE); return; }
   const values = {};
   for (let i = 0; i < argv.length; i++) {
@@ -223,20 +256,42 @@ async function main(argv) {
       || !Array.isArray(config.agentCommand) || config.agentCommand.length === 0
       || config.agentCommand.some(arg => typeof arg !== 'string' || !arg.trim() || arg.includes('\0'))) throw Error('Invalid configuration');
   validateTarget(values['--repo'], config.owner);
+  signal.throwIfAborted();
   const cacheDir = resolve(values['--cache-dir'] ?? '.cache/runtime-issue-router');
   await mkdir(cacheDir, {recursive:true, mode:0o700});
   const lock = join(cacheDir, '.lock');
   try { await mkdir(lock); }
   catch { throw Error('Cache locked; inspect and remove a stale .lock directory before retrying'); }
   try {
-    const rows = await routeRuntimeIssues({repo:values['--repo'], owner:config.owner, apply:values['--apply'] === true}, nativePorts({cacheDir, agentCommand:config.agentCommand}));
+    const rows = await routeRuntimeIssues({repo:values['--repo'], owner:config.owner, apply:values['--apply'] === true, signal}, nativePorts({cacheDir, agentCommand:config.agentCommand, run}));
+    if (signal.aborted) return;
     process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
     if (rows.some(row => row.error)) process.exitCode = 1;
   } finally { await rm(lock, {recursive:true, force:true}); }
 }
 
+async function cli(argv) {
+  const controller = new AbortController();
+  const runner = createProcessRunner(controller.signal);
+  const shutdown = code => {
+    if (controller.signal.aborted) return;
+    process.exitCode = code;
+    controller.abort();
+  };
+  const term = () => shutdown(143), interrupt = () => shutdown(130);
+  process.on('SIGTERM', term);
+  process.on('SIGINT', interrupt);
+  try { await main(argv, {signal:controller.signal, run:runner.run}); }
+  catch (error) { if (!controller.signal.aborted) throw error; }
+  finally {
+    await runner.close();
+    process.removeListener('SIGTERM', term);
+    process.removeListener('SIGINT', interrupt);
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).catch(error => {
+  cli(process.argv.slice(2)).catch(error => {
     process.stderr.write(error.message.startsWith('Cache locked') ? `${error.message}\n` : `Runtime issue router failed: check arguments, configuration, cache and GitHub access.\n${USAGE}`);
     process.exitCode = 1;
   });

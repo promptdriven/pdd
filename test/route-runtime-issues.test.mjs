@@ -263,7 +263,8 @@ console.log(JSON.stringify([args[1].includes('/comments') ? [] : ${JSON.stringif
 // Ignore graceful signals: the router must terminate the whole process group.
 process.on('SIGTERM', () => {});
 process.on('SIGINT', () => {});
-fs.writeFileSync(process.env.FAKE_ROUTER_READY, JSON.stringify({pid:process.ppid, descendant:process.pid, cwd:process.cwd()}));
+fs.writeFileSync(process.env.FAKE_ROUTER_READY + '.tmp', JSON.stringify({pid:process.ppid, descendant:process.pid, cwd:process.cwd()}));
+fs.renameSync(process.env.FAKE_ROUTER_READY + '.tmp', process.env.FAKE_ROUTER_READY);
 setInterval(() => {}, 1000);
 `);
     await writeFile(agent, `import fs from 'node:fs';
@@ -296,7 +297,7 @@ setInterval(() => {}, 1000);
     assert.equal(code, signal === 'SIGTERM' ? 143 : 130);
     await waitUntil(async () => !(await running(child.pid)) && !(await running(child.descendant)), 'classifier process group termination');
     assert.ok(!(await readdir(cache)).includes('.lock'), 'cache lock released');
-    assert.ok(!(await readdir(join(child.cwd, '..'))).includes(child.cwd.split('/').at(-1)), 'agent temporary directory removed');
+    await assert.rejects(readdir(child.cwd), {code:'ENOENT'}, 'agent temporary directory removed');
     const cacheFiles = (await readdir(cache)).filter(name => name.endsWith('.json'));
     assert.equal(cacheFiles.length, 1, 'only the first issue was reserved');
     assert.ok(JSON.parse(await readFile(join(cache, cacheFiles[0]), 'utf8')).error, 'interrupted call remains reserved');
