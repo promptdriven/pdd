@@ -38,7 +38,7 @@ repairs the named declaration, a fresh check must reach a verdict.
    identity resume without another allocation or publication.
 3. Lost verdict: ticks send nothing again; the explicit synthetic person's
    resend decision permits exactly one new attempt, then completion.
-4. A stuck run parks, keeps progress and wakes when its named blocker clears. A parked run that is cancelled clears its parking record, releases its claim and removes `pdd:working` and `pdd:stuck` from the issue, and status shows it cancelled. Release refuses a live worker, held check or unattributed working label. A cancelled or archived run cannot release a replacement run's claim. Expired and lost claims retry label cleanup after budget deferral and remove a leftover `pdd:stuck` label.
+4. A stuck run parks, keeps progress and wakes when its named blocker clears. A parked run that is cancelled clears its parking record and records pending cleanup; it frees local allocation and removes `pdd:working` and `pdd:stuck` only after chat, worker, check, local-allocation and remote-label results confirm safe release. A busy or unknown worker/check, retained chat, or local `conflict`/`recovery_required` keeps ownership and the retry marker. Release refuses an unattributed working label and a same-machine replacement claim era. A cancelled or archived run cannot release a replacement run's claim. Expired and lost claims retry after budget deferral or partial label removal, then confirm both labels are absent.
 5. A full pane budget and full check slots defer work without losing it; release
    admits it. An undispatched dead interpreter holder is reclaimed. A dead dispatched holder keeps an unknown outcome; queue recovery never
    sends its old request again.

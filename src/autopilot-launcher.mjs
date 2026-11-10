@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d8934a3d0ff2b0f7bac02ad245fe60b9a1e4b9f068d79b8ddb6dabb5b3ba6c7e).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 1b137f56af20b1e35aa7326e724eb2932d2b6ea1062fddb72e5212e66523a9b7).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1737,16 +1737,6 @@ async function runTick(stateFile, ports, completion) {
       && a?.repo?.toLowerCase() === b?.repo?.toLowerCase() && samePath(a?.sourceRoot,b?.sourceRoot);
     const sameClaimEra = (claim,origin) => Boolean(origin?.claim?.commentId && origin?.claim?.labelEventId
       && String(claim.commentId) === String(origin.claim.commentId) && String(claim.labelEventId) === String(origin.claim.labelEventId));
-    const confirmEndedRelease = candidate => {
-      let unlock;
-      try {
-        unlock = acquireRunLock(candidate.runDir);
-        const latest = readRun(candidate.runDir);
-        if (latest?.runId === candidate.runId && ['cancelled','completed'].includes(latest.state) && latest.claimRelease?.state === 'pending')
-          updateRun(latest.runDir,current => { if (current.runId === candidate.runId && current.claimRelease?.state === 'pending') delete current.claimRelease; return current; }, p);
-      } catch { /* Keep the release pending and retry after the run becomes writable. */ }
-      finally { unlock?.(); }
-    };
     // Adopt only admitted claims backed by this checkout's unfinished local runs.
     // Remote proof permits retry if the process died before the local custody write.
     for (const candidate of allKnownRuns) {
@@ -1766,16 +1756,17 @@ async function runTick(stateFile, ports, completion) {
         const newerLiveClaim = issueClaims.some(claim => claim.active === true && !sameClaimEra(claim,origin));
         if (newerLiveClaim || githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) continue;
         try {
-          const released = await (p.releaseParkedClaim ?? releaseParkedClaim)({
-            cwd: state.cwd, repository: state.repo,
-            claim: {issue:candidate.issue.url,coordinatorId:origin.coordinatorId,machine:origin.machine,...origin.claim},
-            coordinatorId: origin.coordinatorId, machine: state.machine,
-            runId: candidate.runId, branch: candidate.branch, reason: 'cancel',
-          }, { ...p, githubCache:etags, execFile: async (file, args, options) => p.execute(file, args, { purpose: 'claims', ...options }), ...(githubFloor ? { githubFloor } : {}) });
-          if (released?.state === 'released') {
-            confirmEndedRelease(candidate);
+          const releasePorts = {...workflowCleanupPorts(p,ports),
+            execFile: async (file,args,options={}) => p.execute(file,args,file === 'gh'
+              ? {...options,purpose:options.purpose ?? 'claims'} : options),
+            githubCache:etags, ...(githubFloor ? {githubFloor} : {})};
+          const released = await (p.releaseRunClaim ?? releaseRunClaim)({
+            ref:String(candidate.number),cwd:state.cwd,repository:state.repo,
+            machine:state.machine,coordinatorId:origin.coordinatorId,
+          },releasePorts);
+          if (released?.recovery === 'released' && released.exitCode === 0) {
             if (claimIndex >= 0) observedClaims.splice(claimIndex, 1);
-          }
+          } else if (released?.message) p.warn(`Cancelled-run claim cleanup deferred for ${candidate.issue?.url}: ${line(released.message)}`);
         } catch (error) { p.warn(`Cancelled-run claim cleanup deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
         continue;
       }

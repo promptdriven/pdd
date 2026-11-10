@@ -3,7 +3,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 4b2d17f2a73d216057bb65c3e82e547a025ea8e6e03aa4d1a6ade6241f3e4903).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 5234dc39a622bf4519e044ef888bd5a34edc323ec3c13f7aaa61ce731e7d3ba5).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1701,11 +1701,22 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
     let labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
     const hasWorking = labels.includes('pdd:working'), current = hasWorking ? await winner(raw) : null;
     if (hasWorking && !current) return reason === 'release' ? {state: 'refused', machine: 'unknown'} : skipped;
+    const suppliedIdentity = {
+      coordinatorId: claim?.coordinatorId ?? coordinatorId,
+      machine: claim?.machine ?? machine,
+      commentId: claim?.commentId,
+      labelEventId: claim?.labelEventId,
+    };
+    const identityMatches = observed => Object.entries(suppliedIdentity).every(([key,value]) =>
+      value === undefined || value === null || value === '' || String(observed?.[key] ?? '') === String(value));
     if (reason === 'release' && current?.active === true && (!current.machine || current.machine !== machine))
       return {state: 'refused', machine: current.machine || 'unknown'};
+    if (reason === 'release' && current && !identityMatches(current)) return skipped;
     if (reason !== 'release' && current) {
+      const expectedCoordinator = claim?.coordinatorId ?? coordinatorId;
       if (current.active === true && (!current.machine || current.machine !== machine)) return skipped;
-      if (current.machine && current.machine !== machine
+      if (current.machine && current.machine !== machine || !expectedCoordinator
+        || current.coordinatorId !== String(expectedCoordinator)
         || !claim?.commentId || !claim?.labelEventId
         || current.commentId !== String(claim.commentId) || current.labelEventId !== String(claim.labelEventId)) return skipped;
     }
@@ -1724,8 +1735,15 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
     || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return skipped;
   const matches = current => current && current.coordinatorId === coordinatorId && current.machine === machine
     && current.commentId === String(claim.commentId) && current.labelEventId === String(claim.labelEventId);
-  let current = await winner();
-  if (current && !matches(current)) return skipped;
+  const readIssue = async () => {
+    const observed = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
+    if (observed.error) throw Error('Claim label cleanup is not confirmed');
+    return observed;
+  };
+  const labelsOf = observed => observed.labels?.map(label => typeof label === 'string' ? label : label.name) ?? [];
+  let observed = await readIssue(), labels = labelsOf(observed);
+  let current = labels.includes('pdd:working') ? await winner(observed) : null;
+  if ((labels.includes('pdd:working') && !current) || (current && !matches(current))) return skipped;
   if (!current && record.value.parkRelease?.runId !== runId) return skipped;
   if (record.value.parkRelease?.runId !== runId) {
     const body = editClaimRecord(comment.body, record, {...record.value, parkRelease: {runId, branch}}, 'parkRelease');
@@ -1733,12 +1751,21 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
     const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({body}), 'claims', repository)).value;
     if (claimRecord(saved?.body)?.value.parkRelease?.runId !== runId) return skipped;
   }
-  current = await winner();
-  if (current && !matches(current)) return skipped;
-  if (current) {
-    await removeLabel('pdd%3Aworking');
-    if (current.stuckSince !== undefined) await removeLabel('pdd%3Astuck');
-  }
+  observed = await readIssue(); labels = labelsOf(observed);
+  current = labels.includes('pdd:working') ? await winner(observed) : null;
+  if ((labels.includes('pdd:working') && !current) || (current && !matches(current))) return skipped;
+  const parkedStuck = current?.stuckSince !== undefined;
+  if (current) await removeLabel('pdd%3Aworking');
+  // If the working label was already removed by an earlier attempt, the saved
+  // marker identifies the parked era whose leftover stuck label may be removed.
+  observed = await readIssue(); labels = labelsOf(observed);
+  const afterWorking = labels.includes('pdd:working') ? await winner(observed) : null;
+  if (labels.includes('pdd:working') && (!afterWorking || !matches(afterWorking))) return skipped;
+  if (afterWorking && !matches(afterWorking)) return skipped;
+  if (labels.includes('pdd:stuck') && (parkedStuck
+    || !afterWorking && record.value.parkRelease?.runId === runId)) await removeLabel('pdd%3Astuck');
+  observed = await readIssue(); labels = labelsOf(observed);
+  if (labels.includes('pdd:working') || labels.includes('pdd:stuck')) return skipped;
   const marker = `<!-- pdd:park-release:${runId} -->`;
   const comments = await allPages(github, repository, 'comments', i.issue, 'claims', true);
   if (!comments.some(row => row.body?.includes(marker)))

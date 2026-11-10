@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fc02b703724d3a381a7e7658a7a0e072065e40ec32d78f2ef022059300e2fa7b).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f3011ef6a920abb53e3a3b6e27d103f8da7ec502f617441419ec1de451e887f4).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -708,6 +708,13 @@ async function continuationOwnership(run, cwd, ports, custody = null, observed =
   } catch { return reason; }
 }
 
+function hasLiveReplacementRun(run, p) {
+  return allRuns({cancelled:true}, p).some(other => other.runId !== run.runId && !ended(other)
+    && other.repo?.toLowerCase() === run.repo?.toLowerCase()
+    && other.issue?.url?.toLowerCase() === run.issue?.url?.toLowerCase()
+    && samePath(other.sourceRoot, run.sourceRoot));
+}
+
 async function chatContinuationOwnership(run, p, {releaseUnowned = false, claimObservation = null, releaseReason = 'lost'} = {}) {
   const handedOver = run.cancelled?.state === 'handed-over', custody = {};
   let reason = handedOver ? run.cancelled.reason : await continuationOwnership(run, run.sourceRoot, p, custody, claimObservation);
@@ -723,32 +730,45 @@ async function chatContinuationOwnership(run, p, {releaseUnowned = false, claimO
     latest.cancelled = {state: 'handed-over', at: p.now(), reason};
     if (releaseUnowned) {
       delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
-      if (custody.unowned) latest.claimRelease = {state: 'pending', reason: releaseReason, at: latest.cancelled.at};
+      latest.claimRelease = {state: 'pending', reason: releaseReason, at: latest.cancelled.at};
     }
     for (const chat of latest.chats ?? []) chat.endedAt ??= latest.cancelled.at;
   });
   const {warnings, kept} = await cleanupRunChats(run, {...p, progressGuard: undefined}, {force: !releaseUnowned, reason: 'handover', ...(releaseUnowned ? {graceMs:0} : {})});
-  let remotePending = false;
+  let cleanupPending = false;
   if (releaseUnowned) {
-    await releaseIssueClaim({cwd:run.sourceRoot,issueNumber:run.number,runId:run.runId},p.commandPorts);
-    if (custody.unowned && validSavedAutomaticOrigin(run)) {
-      try {
-        const released = await (p.releaseParkedClaim ?? releaseParkedClaim)({
-          cwd: run.sourceRoot, repository: run.repo,
-          claim: {issue: run.issue.url, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim},
-          coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine,
-          runId: run.runId, branch: run.branch, reason: releaseReason,
-        }, {...p, ...p.commandPorts});
-        if (released?.state === 'released') commitRun(run, p, latest => {
-          if (latest.claimRelease?.reason === releaseReason) delete latest.claimRelease;
-        });
-        else remotePending = true;
-      } catch { remotePending = true; }
+    const latest = readRun(run.runDir) ?? run;
+    const held = kept.length ? 'Chat cleanup retained work.' : hasLiveReplacementRun(latest,p) ? 'A replacement local run owns this issue.' : await releaseWorkerHeld(latest,p);
+    if (held) cleanupPending = true;
+    else {
+      let local;
+      try { local = await releaseIssueClaim({cwd:run.sourceRoot,issueNumber:run.number,runId:run.runId},p.commandPorts); }
+      catch { local = {state:'recovery_required'}; }
+      if (local?.state !== 'released') cleanupPending = true;
+      else {
+        const afterLocal = readRun(run.runDir) ?? latest;
+        const heldAfterLocal = hasLiveReplacementRun(afterLocal,p) ? 'A replacement local run owns this issue.' : await releaseWorkerHeld(afterLocal,p);
+        if (heldAfterLocal) cleanupPending = true;
+        else if (custody.unowned && validSavedAutomaticOrigin(run)) {
+          try {
+            const released = await (p.releaseParkedClaim ?? releaseParkedClaim)({
+              cwd: run.sourceRoot, repository: run.repo,
+              claim: {issue: run.issue.url, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim},
+              coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine,
+              runId: run.runId, branch: run.branch, reason: releaseReason,
+            }, {...p, ...p.commandPorts});
+            if (released?.state === 'released') commitRun(run, p, latestRun => {
+              if (latestRun.claimRelease?.reason === releaseReason) delete latestRun.claimRelease;
+            });
+            else cleanupPending = true;
+          } catch { cleanupPending = true; }
+        } else if (custody.superseded) cleanupPending = true;
+      }
     }
   }
   return [reason, `This local run was handed over to another machine. The worktree stays at ${run.root}.`,
     ...warnings, ...(kept.length ? [`Kept open: ${kept.map(item => `${item.area} (${item.reason})`).join(', ')}. Retry safe cleanup with pdd workflow tidy.`] : []),
-    ...(remotePending ? ['Remote claim cleanup remains pending; the coordinator will retry it on a later tick.'] : [])].join('\n');
+    ...(cleanupPending ? ['Claim cleanup remains pending; local work or both claim labels are not confirmed released. The coordinator will retry it on a later tick.'] : [])].join('\n');
 }
 
 function validAutomaticContext(value) {
@@ -4249,32 +4269,46 @@ async function cancelRunCommand({ ref, cwd }, ports) {
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
+  const automatic = !ports?.claimReleased && validSavedAutomaticOrigin(run);
   p.say('Closing the chat tabs in Herdr…');
   const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
-  removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
-  const cancelled={state:'cancelled',at:p.now()}, automatic = !ports?.claimReleased && validSavedAutomaticOrigin(run);
+  const at = p.now(), held = automatic && !kept.length ? await releaseWorkerHeld(readRun(run.runDir) ?? run,p) : null;
+  if (!kept.length) removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
   commitRun(run,p,latest=>{
     latest.state='cancelled';
-    latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:cancelled;
+    latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:{state:'cancelled',at};
     latest.gate=null; delete latest.parking; delete latest.blockedOn; delete latest.parkReason;
     delete latest.runtimeWait; delete latest.routeWait;
-    for(const chat of latest.chats ?? []) chat.endedAt ??= cancelled.at;
-    if (automatic) latest.claimRelease = {state:'pending',reason:'cancel',at:cancelled.at};
+    for(const chat of latest.chats ?? []) chat.endedAt ??= at;
+    if (automatic) latest.claimRelease = {state:'pending',reason:'cancel',at};
   });
   const cleanupNotes = [];
   if (automatic) {
-    try { await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts); }
-    catch { cleanupNotes.push('The local issue allocation release is pending.'); }
-    try {
-      const remote = await (p.releaseParkedClaim ?? releaseParkedClaim)({
-        cwd: run.sourceRoot, repository: run.repo,
-        claim: { issue: run.issue.url, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim },
-        coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine,
-        runId: run.runId, branch: run.branch, reason: 'cancel',
-      }, {...p, ...p.commandPorts});
-      if (remote?.state === 'released') commitRun(run,p,latest=>{if(latest.claimRelease?.reason==='cancel')delete latest.claimRelease;});
-      else cleanupNotes.push('Remote claim cleanup remains pending; the coordinator will retry it on a later tick.');
-    } catch { cleanupNotes.push('Remote claim cleanup remains pending; the coordinator will retry it on a later tick.'); }
+    const latest = readRun(run.runDir) ?? run;
+    const replacement = hasLiveReplacementRun(latest,p);
+    const custody = kept.length ? 'Herdr retained one or more chats.' : held || (replacement ? 'A replacement local run owns this issue.' : null);
+    if (custody) cleanupNotes.push(`Claim cleanup remains pending: ${custody} Local allocation and GitHub labels stay held.`);
+    else {
+      let local;
+      try { local = await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts); }
+      catch { local = {state:'recovery_required',message:'The local issue allocation could not be confirmed.'}; }
+      if (local?.state !== 'released') cleanupNotes.push(`Claim cleanup remains pending: ${local?.message ?? 'the local issue allocation is not confirmed released'}`);
+      else {
+        const after = readRun(run.runDir) ?? latest;
+        const afterHeld = await releaseWorkerHeld(after,p);
+        if (afterHeld || hasLiveReplacementRun(after,p)) cleanupNotes.push(`Claim cleanup remains pending: ${afterHeld ?? 'a replacement local run owns this issue'}. The GitHub labels stay held.`);
+        else try {
+          const remote = await (p.releaseParkedClaim ?? releaseParkedClaim)({
+            cwd: run.sourceRoot, repository: run.repo,
+            claim: { issue: run.issue.url, coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine, ...run.automaticOrigin.claim },
+            coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine,
+            runId: run.runId, branch: run.branch, reason: 'cancel',
+          }, {...p, ...p.commandPorts});
+          if (remote?.state === 'released') commitRun(run,p,current=>{if(current.claimRelease?.reason==='cancel')delete current.claimRelease;});
+          else cleanupNotes.push('Remote claim cleanup remains pending; both labels were not confirmed absent. The coordinator will retry it on a later tick.');
+        } catch { cleanupNotes.push('Remote claim cleanup remains pending; both labels were not confirmed absent. The coordinator will retry it on a later tick.'); }
+      }
+    }
   }
   return done([...warnings, `Cancelled the run for ${run.repo}#${run.number}.${kept.length ? ` Kept open: ${kept.map(item=>`${item.area} (${item.reason})`).join(', ')}. Retry: pdd workflow tidy, or cancel from another terminal.` : ' Closed its Herdr tabs.'}`,
     ...cleanupNotes, `The worktree stays at ${run.root} (branch ${run.branch}).`].join('\n'));
@@ -4322,26 +4356,40 @@ export const releaseRunClaim = saveGuard(async ({ ref, cwd, repository, machine,
       && run.automaticOrigin.machine === host;
     if (run && Object.hasOwn(run,'automaticOrigin') && !validSavedAutomaticOrigin(run))
       return fail('The local run has malformed automatic claim ownership; inspect it before release.');
-    if (localAutomatic && !ended(run)) {
+    if (run && hasLiveReplacementRun(run,p)) return fail(`Cannot release ${repo}#${number}: another local run still owns this issue.`);
+    let releaseReason = localAutomatic && run.claimRelease?.reason
+      && ['cancel','release','expired','lost'].includes(run.claimRelease.reason) ? run.claimRelease.reason : 'release';
+    if (localAutomatic) {
       const held = await releaseWorkerHeld(run,p);
       if (held) return fail(`Cannot release ${repo}#${number}: ${held}`);
       const at = p.now();
       commitRun(run,p,latest=>{
-        latest.state='cancelled'; latest.cancelled={state:'cancelled',at}; latest.gate=null;
-        delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
-        latest.claimRelease={state:'pending',reason:'release',at};
-        for(const chat of latest.chats ?? []) chat.endedAt ??= at;
+        if (!ended(latest)) {
+          latest.state='cancelled'; latest.cancelled={state:'cancelled',at}; latest.gate=null;
+          delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
+          for(const chat of latest.chats ?? []) chat.endedAt ??= at;
+        }
+        latest.claimRelease={state:'pending',reason:releaseReason,at:latest.claimRelease?.at ?? at};
       });
-      try { await cleanupRunChats(run,p,{force:true,reason:'cancel'}); } catch {}
+      const {kept}=await cleanupRunChats(readRun(run.runDir) ?? run,p,{force:true,reason:'cancel'});
+      if (kept.length) return fail(`Cannot release ${repo}#${number}: Herdr retained work. The local allocation and GitHub labels stay held.`);
+      const cleaned = readRun(run.runDir) ?? run, heldAfter = await releaseWorkerHeld(cleaned,p);
+      if (heldAfter) return fail(`Cannot release ${repo}#${number}: ${heldAfter} The local allocation and GitHub labels stay held.`);
+      let local;
+      try { local = await releaseIssueClaim({cwd:run.sourceRoot,runId:run.runId,issueNumber:run.number},p.commandPorts); }
+      catch { local = {state:'recovery_required',message:'The local issue allocation could not be confirmed released.'}; }
+      if (local?.state !== 'released') return fail(`Cannot release ${repo}#${number}: local allocation release is ${local?.state ?? 'unknown'}; ${local?.message ?? 'retry after inspection'}. GitHub labels stay held.`);
       removeStaleLoginFiles(run.runDir,{maxAgeMs:0});
-      try { await releaseIssueClaim({cwd:run.sourceRoot,runId:run.runId,issueNumber:run.number},p.commandPorts); } catch {}
+      const afterLocal = readRun(run.runDir) ?? run, heldAfterLocal = await releaseWorkerHeld(afterLocal,p);
+      if (heldAfterLocal || hasLiveReplacementRun(afterLocal,p))
+        return fail(`Cannot release ${repo}#${number}: ${heldAfterLocal ?? 'another local run now owns this issue'}. GitHub labels stay held.`);
     }
     const issueUrl = `https://github.com/${repo}/issues/${number}`;
     const savedClaim = localAutomatic ? run.automaticOrigin.claim : {};
     const remote = await (p.releaseParkedClaim ?? releaseParkedClaim)({
       cwd, repository: repo,
       claim: { issue: issueUrl, coordinatorId: coord, machine: host, ...savedClaim },
-      coordinatorId: coord, machine: host, runId: run?.runId, branch: run?.branch, reason: 'release',
+      coordinatorId: coord, machine: host, runId: run?.runId, branch: run?.branch, reason: releaseReason,
     }, {...p, ...p.commandPorts});
     if (remote?.state === 'refused') {
       const owner = remote.machine || 'unknown';
@@ -4349,8 +4397,9 @@ export const releaseRunClaim = saveGuard(async ({ ref, cwd, repository, machine,
         : `Cannot release ${repo}#${number}: ${owner} holds a live claim.`);
     }
     if (remote?.state !== 'released') return fail(`Could not confirm claim cleanup for ${repo}#${number}; retry the release.`);
-    if (localAutomatic && run.claimRelease?.reason === 'release')
-      commitRun(run,p,latest=>{if(latest.claimRelease?.reason==='release')delete latest.claimRelease;});
+    const completedRun = localAutomatic ? readRun(run.runDir) ?? run : null;
+    if (completedRun?.claimRelease?.reason === releaseReason)
+      commitRun(completedRun,p,latest=>{if(latest.claimRelease?.reason===releaseReason)delete latest.claimRelease;});
     return { ...done(`Released the Autopilot claim for ${repo}#${number}.${run ? ` The worktree stays at ${run.root} (branch ${run.branch}).` : ''}`), number, repo, recovery: 'released' };
   } finally { release?.(); }
 });
