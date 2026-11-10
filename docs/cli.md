@@ -68,6 +68,43 @@ have refusals. Exit 0 is not a lint or test pass. Root/configuration failures
 return an error. `pdd test --files` remains the exact upload-file preview for a
 selected check.
 
+## Find the prompt that owns a file
+
+`pdd owner PATH... [--json]` shows which prompt owns each file. It reads local
+working files only. It does not sign in, call the interpreter or change a file.
+PATH is relative to the current folder and must be inside the repository. The
+file does not need to exist: a prompt is written before its code.
+
+pdd reads three records, in this order:
+
+| Source | Record | Certain |
+|---|---|---|
+| `binding` | An entry of the root `pdd-bindings.json` with `module` PATH and a `prompt` | yes |
+| `header` | A `Generated from PROMPT` line in the first 4 KiB of the file ([header form](replay-evidence.md#approved-scenarios-on-the-base)) | yes |
+| `prose` | The first sentence of a prompt's opening paragraph names PATH, for example ``Own `src/x.mjs`.`` | no |
+
+The prose record is used only when no binding or header names a prompt. A prose
+answer is not certain. Treat a file with `certain: false` as owned. The answer is
+also not certain when a binding or header names a prompt that does not exist,
+when `pdd-bindings.json` cannot be read and no owner is found, or when the file
+cannot be read and no binding names a prompt. A short note tells you what to add.
+
+```text
+src/runner.mjs: prompts/cli/runner.prompt.md (header)
+src/queue.mjs: prompts/cli/queue.prompt.md (prose, not certain: treat as owned)
+  named only in the opening sentence of prompts/cli/queue.prompt.md; add a Generated from header or a pdd-bindings.json entry
+docs/guide.md: no owner
+```
+
+With `--json`, pdd prints `{"schema_version":"pdd.owner.v1","files":[...]}`. Each
+row has `path`, `owner` (the first owner or null), `owners` (every owner: binding
+first, then headers in line order; or the sorted prose owners), `source`
+(`binding`, `header`, `prose` or null), `certain` and `note` (empty when there is
+nothing to add). The command returns 0 when it can answer, also for an uncertain
+or missing owner. It returns 2 outside a Git repository or for a PATH outside it.
+Code replay and the `pdd test` check plan use the binding and header records
+only.
+
 ## Autopilot on this machine
 
 `pdd autopilot doctor` checks the pdd selected by PATH, Node 22.20 or newer,

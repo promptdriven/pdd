@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: f314bdd66dee91d66dc7c31885ef3c625b6d638d31ffe3201bc8d9b4742b77c9).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: e73bdcf69d49201501d1c979d5af0f517f6f44228c30cf2af6a1411923d5546f).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -359,6 +359,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'project-files': {
       const { runProjectFiles } = await import('./project-files.mjs');
       return runProjectFiles({ cwd, json: !!plan.options['--json'] }, { stdout, stderr });
+    }
+    case 'file-owner': {
+      const { runOwner } = await import('./file-owner.mjs');
+      return runOwner({ cwd, paths: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
     }
     case 'interface-draft': {
       const {runInterfaceDraft}=await import('./interface-draft.mjs');
