@@ -4,7 +4,7 @@ import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { endedRunQuestion } from './issue-sort.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: fc7606dc58b74a162a36f5777a14a8992732bcf3043b816e65c749574e9cc0ff).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 8bd465f6a1f3e25fdb2e7c8f7c6fd216b171c439f4d3e51c4a8018efda92373c).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -13,7 +13,7 @@ import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { runAutopilot } from './autopilot.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
-import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
+import { gitContext, currentChat, stateDirFor, workflowEnded } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
 import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, nativeGithubCounter } from './github-calls.mjs';
@@ -1204,9 +1204,7 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     if (typeof runId !== 'string' || !runId) { runsKnown = false; continue; }
     seen.add(runId);
     const runIssue = `https://github.com/${repository.toLowerCase()}/issues/${run.number}`;
-    const closedOutcome = (run.cost?.outcome === 'closed' || run.prState?.state === 'closed')
-      && !(run.gate?.kind === 'ask-code' && run.through === 'code');
-    const runEnded = ['completed', 'cancelled'].includes(run.state) || closedOutcome;
+    const runEnded = workflowEnded(run);
     const batch = typeof run.runtimeWait?.batch === 'string' && /^\d{8}-\d{6}-[a-z0-9]+$/i.test(run.runtimeWait.batch) ? run.runtimeWait.batch : null;
     runEvidence.push({issue:runIssue, runId, batch, ended:runEnded});
     const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);

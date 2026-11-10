@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 15c2ed51f64c3123dc8edcb6e87084beb70f34ffa94ccf74298b0114a67af0ed).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: aa49e4660bbf07554ba400fb9c9fdc3b374eb7fbed5cafdcd6570e391e26969a).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -16,7 +16,10 @@ import { captureCosts } from './cost-ledger.mjs';
 const ordinary = promisify(execFileCallback);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
-const ended = run => ['cancelled', 'completed'].includes(run.state);
+const ended = run => ['cancelled', 'completed'].includes(run?.state);
+export const closedOutcome = run => (run?.cost?.outcome === 'closed' || run?.prState?.state === 'closed')
+  && !(run?.gate?.kind === 'ask-code' && run?.through === 'code');
+export const workflowEnded = run => ended(run) || closedOutcome(run);
 
 export const runDirFor = (commonDir, number) => join(commonDir, 'pdd', 'runs', String(number));
 export const stateDirFor = (ports = {}) => ports.stateDir ?? join((ports.env ?? process.env).HOME || homedir(), '.local', 'state', 'pdd');

@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2186d26bb86a74958fb3097ad998ee9e07221145053e07633760cdcaa59b1ff9).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 518807149d3faa8aa68be5033f818d5071de1e68c1ef8467a71c99bda8ee1a97).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -27,7 +27,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrChecker, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
+import { allRuns, closedOutcome, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, workflowEnded, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -82,7 +82,6 @@ const keepLines = value => String(value ?? '').split('\n').map(oneLine).filter(B
 const done = message => ({ exitCode: 0, message });
 const fail = message => ({ exitCode: 1, message });
 const ended = run => ['cancelled', 'completed'].includes(run.state);
-const closedOutcome = run => (run.cost?.outcome === 'closed' || run.prState?.state === 'closed') && !(run.gate?.kind === 'ask-code' && run.through === 'code');
 const isAgentSession = env => Boolean(env.PDD_AGENT_SESSION || env.CLAUDECODE || env.CODEX_THREAD_ID);
 // About max characters at a word end, never inside a URL: a URL that crosses the end stays whole (0.1.6 tester: status
 // showed "report https://ru").
@@ -95,7 +94,7 @@ function clip(text, max) {
 }
 // The chat's open question. One asked before the current gate opened was answered when that gate opened (0.1.6 tester:
 // status showed "Do you approve … so PDD can open PR 1?" after PR 1 was open). An ended run has no open question.
-const openQuestion = run => !ended(run) && !closedOutcome(run) && run.question && !run.question.answeredAt && !(run.gate && run.question.at < run.gate.at) ? run.question : null;
+const openQuestion = run => !workflowEnded(run) && run.question && !run.question.answeredAt && !(run.gate && run.question.at < run.gate.at) ? run.question : null;
 const listed = items => items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : items[0];
 // A plain approval sent with changes (0.1.6 tester: "I approve. The Story and the prompt look good now." reached the chat as
 // a change request, and the chat could not approve with it). An approval word with a change word is a change request.
@@ -5234,9 +5233,24 @@ function replaceParkingBlocker(run, blocker, interpreterBatch, interpreterCheck,
 export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
   const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
   const skipped = reason => ({...done(''), recovery: 'skipped', ...(reason ? {reasonCounts:{[reason]:1}} : {})});
-  if (!run || ended(run) || !validSavedAutomaticOrigin(run)
+  if (!run || !validSavedAutomaticOrigin(run)
     || run.automaticOrigin.machine !== input.machine
     || !samePath(run.sourceRoot, input.cwd) || explicitlyStopped(run, p) || ['waking', 'releasing'].includes(run.parking?.phase)) return skipped();
+  if (workflowEnded(run)) {
+    const closed = run.automaticOrigin.coordinatorId === input.coordinatorId && currentParkingOwner(run, p)
+      && run.parking?.phase === 'parked' && run.parking.checkHeld === true
+      && run.layout?.phase === 'closed' && run.chats.every(chat => Number.isFinite(chat.closed?.confirmedAt));
+    if (!closed || input.expected && !['runId','state','parking','runtimeWait','automaticOrigin','layout','chats']
+      .every(key => sameFact(run[key], input.expected[key])) || continuationCheckHeld(run, p)) return skipped('custody-unavailable');
+    const current = fresh => fresh && runIdentity(fresh) === runIdentity(run) && workflowEnded(fresh)
+      && fresh.state === run.state && fresh.parking?.phase === 'parked' && fresh.parking.checkHeld === true
+      && sameFact(fresh.parking, run.parking) && fresh.layout?.phase === 'closed'
+      && fresh.chats.every(chat => Number.isFinite(chat.closed?.confirmedAt))
+      && sameFact(fresh.automaticOrigin, run.automaticOrigin) && !continuationCheckHeld(fresh, p);
+    const cleared = conditionalCommit(run, p, current, fresh => { delete fresh.parking.checkHeld; });
+    return cleared ? {...done(''), recovery:'parked'} : skipped('custody-changed');
+  }
+  if (ended(run)) return skipped();
   if (['area-end', 'run-end', 'budget', 'cancel'].includes(currentChat(run)?.closed?.reason)) return skipped();
   if (!run.layout?.workspaceId) return skipped('not-pdd-created');
   if (input.expected && ['runId', 'root', 'state', 'area', 'gate', 'question', 'done', 'blockedOn', 'runtimeWait', 'parkReason', 'stuckCause', 'environmentRetry', 'automaticOrigin', 'progressAt', 'updatedAt', 'chatIdleLimit', 'chatResumeLimit']

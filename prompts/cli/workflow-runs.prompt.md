@@ -114,6 +114,8 @@ For workflow session observations and cleanup only, updateRun accepts ports.pres
 
 ## Selection
 
+Export `closedOutcome(run)` and `workflowEnded(run)` as the shared lifecycle predicates. `closedOutcome` is true for a closed cost or PR outcome except when `gate.kind` is `ask-code` and `through` is `code`; that explicit code follow-up remains active. `workflowEnded` is true for `completed` or `cancelled` state, or `closedOutcome`. Lifecycle owners use these functions instead of defining another closed-outcome rule. The C3 projection's state-only terminal test remains separate because it also displays a completed-at-PR-1 ask-code gate.
+
 - `gitContext(cwd, ports)` returns `{toplevel, commonDir}` (real paths) or null.
 - `runForWorktree(cwd, ports)` returns the run whose `root` is the current worktree.
 - `resolveRun(ref, {cwd}, ports)` returns `{run}` or `{error}`. `N` looks in the current repository, worktrees included. Outside a repository it uses the index; when several repositories have issue N, it asks for `owner/repo#N`. `owner/repo#N` and issue URLs pick that repository. Without ref: the run of the current worktree, else the only run of this repository that waits for a person, else the only active run; otherwise list the choices.

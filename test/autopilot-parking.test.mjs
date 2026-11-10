@@ -1596,3 +1596,73 @@ test('closed workflow keeps an unknown Runtime wait in local dependency evidence
   assert.deepEqual(observed.runEvidence.find(row => row.runId === run.runId),
     {issue:run.issue.url,runId:run.runId,batch,ended:true},'the same run remains the source of the request');
 });
+
+
+test('ended parked check custody stays reserved until reconciliation sees idle', async t => {
+  const {f,tick,ports,stateFile} = await setup(t);
+  const run = f.record(), batch = '20261109-141500-hijk';
+  run.state = 'cancelled'; run.cancelled = {state:'cancelled',at:f.clock};
+  run.runtimeWait = {at:f.clock,batch,cause:'unknown',reason:'runner-stopped; no verdict'};
+  run.parking = {at:f.clock,phase:'parked',blocker:{kind:'interpreter',until:null},checkHeld:true};
+  run.layout.phase = 'closed';
+  for (const chat of run.chats) {
+    chat.state = 'ended'; chat.endedAt = f.clock;
+    chat.closed = {reason:'park',confirmedAt:f.clock};
+  }
+  save(f,run);
+  let suiteReads = 0, interpreterReads = 0;
+  ports.readSuiteProgress = () => {suiteReads++; return null;};
+  ports.readInterpreterProgress = () => {interpreterReads++; return {state:'unavailable'};};
+  const promptsBefore = deliveries(f).length, launchesBefore = launches(f).length;
+  await tick();
+  assert.equal(f.record().parking.checkHeld,true,'unavailable queue evidence retains the saved reservation');
+  assert.equal(JSON.parse(readFileSync(stateFile,'utf8')).parking.working,1,'unknown custody continues to consume capacity');
+  assert.ok(suiteReads > 0 && interpreterReads > 0,'the ended run reaches existing queue observations');
+
+  ports.readInterpreterProgress = () => {interpreterReads++; return null;};
+  const herdr = ports.herdr;
+  ports.herdr = async () => {throw Object.assign(Error('controlled unavailable'),{code:'server_unavailable'});};
+  await tick();
+  assert.equal(f.record().parking.checkHeld,true,'an unknown worker read retains the reservation');
+  assert.equal(JSON.parse(readFileSync(stateFile,'utf8')).parking.working,1);
+  ports.herdr = herdr;
+  await tick();
+  const after = f.record();
+  assert.equal(after.runId,run.runId,'custody reconciliation keeps the same run identity');
+  assert.equal(after.state,'cancelled');
+  assert.equal(after.runtimeWait.batch,batch,'custody reconciliation keeps the original paid-request identity');
+  assert.equal(after.parking?.checkHeld,undefined,'a fresh idle observation clears only the reservation');
+  assert.equal(JSON.parse(readFileSync(stateFile,'utf8')).parking.working,0);
+  assert.equal(deliveries(f).length,promptsBefore,'reconciliation does not send a wake or retry');
+  assert.equal(launches(f).length,launchesBefore,'reconciliation does not launch a worker');
+});
+
+test('closed PR keeps the ask-code follow-up live when through is code', async t => {
+  const {f} = await setup(t);
+  const {blockerFor,idleParkingBlocker,reconcileParking} = await import('../src/autopilot-parking.mjs');
+  const base = {state:'waiting',cost:{outcome:'closed'},prState:{state:'closed'},gate:{kind:'ask-code',at:100},
+    question:{at:101,text:'Which code follow-up should proceed?'},through:'code'};
+  assert.equal(blockerFor(base)?.kind,'person','closed PR must not hide the current follow-up question');
+  assert.equal(idleParkingBlocker(base,102,0)?.kind,'person','idle parking retains the same person blocker');
+  const {closedOutcome,workflowEnded} = await import('../src/workflow-runs.mjs');
+  assert.equal(closedOutcome(base),false);
+  assert.equal(workflowEnded(base),false);
+  assert.equal(workflowEnded({...base,through:'prompt-pr'}),true,'the exception applies only to the code follow-up');
+
+  const live = {...base,number:17,repo:'example/project',sourceRoot:'/work',automaticOrigin:{coordinatorId:'coordinator',machine:'machine'},areas:[],area:0};
+  let observedBlocker = null;
+  await reconcileParking({repo:live.repo,cwd:live.sourceRoot,coordinatorId:'coordinator',machine:'machine',runs:1}, {
+    list:async()=>[live],now:()=>200,checkProgress:async()=>false,observeBlocker:async()=>null,
+    park:async(_run,blocker)=>{observedBlocker=blocker;},
+  });
+  assert.equal(observedBlocker?.kind,'person','the parked reconciliation path still sees the active question');
+
+  const local = f.record();
+  local.state='waiting'; local.through='code'; local.gate={kind:'ask-code',at:f.clock};
+  local.question={at:f.clock,text:'Which code follow-up should proceed?'};
+  local.cost={outcome:'closed'}; local.prState={state:'closed',ci:'none',checkedAt:f.clock}; save(f,local);
+  const native = createDependencyReadPorts({cwd:f.source},{...f.ports,owners:undefined});
+  const owners = JSON.parse((await native.owners.read({repository:local.repo,issues:[]})).json);
+  assert.equal(owners.runEvidence.find(row=>row.runId===local.runId)?.ended,false,
+    'dependency evidence uses the same active ask-code exception');
+});

@@ -1,7 +1,6 @@
 // Source: prompts/cli/autopilot-parking.prompt.md.
 import {environmentRecovery} from './autopilot-environment.mjs';
-
-const ended = run => ['completed', 'cancelled'].includes(run?.state) || run?.cost?.outcome === 'closed' || run?.prState?.state === 'closed';
+import {workflowEnded as ended} from './workflow-runs.mjs';
 const stopped = run => ['stuck', 'waiting', 'paused'].includes(run.state);
 const reasonFor = run => [run.parkReason, run.question && !run.question.answeredAt ? run.question.text : ''].filter(Boolean).join(' ');
 // Route reports are facts from the worker, not decisions made by a model in a tick.
@@ -99,8 +98,8 @@ function closingHold(run, now, blocker = blockerFor({...run, parking: undefined}
     return `recovery grace until ${new Date(idleSince(run) + 60_000).toISOString()}`;
   return null;
 }
+const custody = run => Boolean(run.checkHeld || run.parking?.checkHeld || ['closing', 'waking', 'releasing'].includes(run.parking?.phase));
 export function parkingSummary(runs, limit, now) {
-  const custody = run => Boolean(run.checkHeld || run.parking?.checkHeld || ['closing', 'waking', 'releasing'].includes(run.parking?.phase));
   const live = runs.filter(run => !ended(run) || custody(run)), parked = live.filter(run => !ended(run) && run.parking?.phase === 'parked' && !run.parking.checkHeld && !run.checkHeld);
   const reservations = run => run.parking && run.parking.phase !== 'parked' || run.parking?.checkHeld;
   const working = live.filter(run => custody(run) || !parked.includes(run) && !ended(run) && (!stopped(run) || reservations(run) || run.checkHeld)).length;
@@ -121,13 +120,19 @@ export function parkingWords(summary, interpreter) {
 }
 export async function reconcileParking(state, ports, {wakeRules = [], wake = false, policy = {}, release = true} = {}) {
   const limit = state.runs ?? state.checkCapacity?.runs ?? 1;
-  const owned = run => !ended(run) && run.repo?.toLowerCase() === state.repo.toLowerCase()
+  const owned = run => (!ended(run) || custody(run)) && run.repo?.toLowerCase() === state.repo.toLowerCase()
     && run.automaticOrigin?.coordinatorId === state.coordinatorId && run.automaticOrigin?.machine === state.machine
     && run.sourceRoot === state.cwd;
   const list = async () => (await ports.list()).filter(owned);
   let runs = await list();
   for (const run of runs) {
     if (['waking', 'releasing'].includes(run.parking?.phase)) continue;
+    if (ended(run)) {
+      if (run.parking?.phase !== 'parked' || run.parking.checkHeld !== true || !run.parking.blocker) continue;
+      if (await ports.checkProgress(run)) continue;
+      await ports.park(run, run.parking.blocker);
+      continue;
+    }
     const chat = [...(run.chats ?? [])].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
     if (!run.parking && ['area-end', 'run-end', 'budget', 'cancel'].includes(chat?.closed?.reason)) continue;
     // Classify current facts before consulting the park's cached inference.

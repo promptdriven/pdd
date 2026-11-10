@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 09dd048bd02275b49d06e674c8ffed1bd8325bd8fad9d53038b820f431bbff65).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a619dc0fa6d2e87439c0b42975d5a9267ad963b58f9e396e010dfcdc2c53b712).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -364,8 +364,13 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
       const busy = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
       if (busy((p.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: p.env}, p))
         || busy((p.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: p.env}, {now: p.now, ...p.interpreterQueuePorts}))) return true;
-      const chat = currentChat(run), live = chat ? await chatSession(chat, {...worker, run}) : null;
-      return Boolean(live?.alive && !['idle', 'done'].includes(live.status));
+      const chat = currentChat(run);
+      if (!chat) return false;
+      const live = await chatSession(chat, {...worker, run});
+      if (live?.alive === true) return !['idle', 'done'].includes(live.status);
+      if (live?.alive === false && Number.isFinite(chat.closed?.confirmedAt)
+        && !['herdr_failed', 'server_unavailable'].includes(live.code)) return false;
+      return true;
     },
     observeBlocker: async run => {
       if (run.blockedOn) return null;
