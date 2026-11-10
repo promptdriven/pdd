@@ -20,7 +20,7 @@ const CHANNEL = '1300000000000000099';
 const SECRETS = [DISCORD, SLACK, 'SECRET', 'discord_token', 'slacktoken', '123456789012345678', BOT_TOKEN, ROTATED_TOKEN, 'bot_token_value', 'rotated_token'];
 const capture = () => ({ text: '', write(value) { this.text += value; } });
 const echo = request => ({ status: 200, text: JSON.stringify({ id: '991', channel_id: '7', content: request.body.content }) });
-const usage = { cause: 'Codex usage limit; resets 2026-11-06T18:00Z', tried: 'Paused issue 12 and kept other work going', need: 'More quota or another signed-in account' };
+const usage = { cause: 'Codex usage limit; resets 2026-11-06T18:00Z', tried: 'Paused issue 12 and kept other work going', need: 'Grant access to another signed-in account?' };
 
 function setup(t) {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-alerts-'));
@@ -47,7 +47,7 @@ function setup(t) {
     f.outputs.push(stdout.text, stderr.text);
     return { exitCode, stdout: stdout.text, stderr: stderr.text };
   };
-  f.alert = (issue, kind, fields, ...extra) => f.pdd(['autopilot', 'alert', '--issue', String(issue), '--kind', kind, '--input', '-', ...extra], JSON.stringify(fields));
+  f.alert = (issue, kind, fields, ...extra) => f.pdd(['autopilot', 'alert', '--issue', String(issue), '--kind', kind, '--input', '-', ...extra], JSON.stringify({code: `${issue}:${kind}`, ifNoAnswer: 'This run waits; other work continues.', ...fields}));
   f.config = join(home, '.config', 'pdd', 'autopilot-alerts.json');
   f.recordFile = () => join(f.ports.stateRoot, 'alerts', `${createHash('sha256').update('owner/repo').digest('hex').slice(0, 20)}.json`);
   f.record = () => JSON.parse(readFileSync(f.recordFile(), 'utf8'));
@@ -74,6 +74,32 @@ function setup(t) {
     for (const text of texts) for (const secret of SECRETS) assert.ok(!text.includes(secret), `a secret part is visible: ${text}`);
   };
   return f;
+}
+
+// A fake Discord REST v10 API: it keeps posted messages so the readback is a real lookup.
+function fakeDiscord(f) {
+  const posted = new Map();
+  f.discord = { me: 200, channel: 200, readback: 'same' };
+  f.ports.http = async request => {
+    f.requests.push(structuredClone(request));
+    const url = new URL(request.url);
+    const path = url.origin === 'https://discord.com' && url.pathname.startsWith('/api/v10/') ? url.pathname.slice('/api/v10'.length) + url.search : null;
+    const reply = (status, value) => ({ status, text: JSON.stringify(value) });
+    if (request.method === 'GET' && path === '/users/@me') return f.discord.me === 200 ? reply(200, { id: '42', username: 'PDD', bot: true }) : reply(f.discord.me, { message: 'no' });
+    if (request.method === 'GET' && path === `/channels/${CHANNEL}`) return f.discord.channel === 200 ? reply(200, { id: CHANNEL, name: 'internal-alerts', type: 0 }) : reply(f.discord.channel, { message: 'no' });
+    if (request.method === 'POST' && path === `/channels/${CHANNEL}/messages`) {
+      const id = String(1300000000000000100n + BigInt(posted.size));
+      posted.set(id, request.body.content);
+      return reply(200, { id, channel_id: CHANNEL, content: request.body.content });
+    }
+    const message = path?.match(new RegExp(`^/channels/${CHANNEL}/messages/([0-9]+)$`))?.[1];
+    // 'normalized' stores the text as a chat service may: LF line ends and no whitespace at line ends or at either end.
+    const stored = text => f.discord.readback === 'same' ? text : f.discord.readback === 'normalized'
+      ? text.replaceAll('\n', '  \r\n') + '  ' : 'edited by someone else';
+    if (request.method === 'GET' && posted.has(message)) return reply(200, { id: message, content: stored(posted.get(message)) });
+    return reply(404, { message: 'Unknown' });
+  };
+  f.route = request => `${request.method} ${request.url.slice('https://discord.com/api/v10'.length)}`;
 }
 
 test('alerts set saves a webhook from stdin outside the repository with private permissions and never prints it', async t => {
@@ -104,6 +130,7 @@ test('alerts set saves a webhook from stdin outside the repository with private 
   f.noSecret();
 });
 
+
 test('an empty or relative HOME never puts the secret or a record in the checkout: pdd uses the account home, or saves nothing', async t => {
   const f = setup(t);
   delete f.ports.stateRoot;
@@ -129,7 +156,7 @@ test('an empty or relative HOME never puts the secret or a record in the checkou
     assert.deepEqual(JSON.parse(readFileSync(config, 'utf8')), { v: 1, service: 'discord', url: DISCORD }, `HOME=${HOME}: the account home holds it`);
     assert.equal(statSync(config).mode & 0o777, 0o600);
     f.replies.push(echo);
-    assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /confirmed/);
+    assert.match((await f.alert(12, 'access', usage)).stdout, /confirmed/);
     assert.equal(statSync(record).mode & 0o777, 0o600, 'the record is in the account home too');
     assert.equal((await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true'])).exitCode, 0);
     assert.equal(JSON.parse(readFileSync(config, 'utf8')).tokenCommand, 'true');
@@ -163,6 +190,7 @@ test('an empty or relative HOME never puts the secret or a record in the checkou
   f.noSecret();
 });
 
+
 test('alerts test confirms a Discord message by readback; a missing readback is not a delivery', async t => {
   const f = setup(t);
   await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
@@ -186,6 +214,7 @@ test('alerts test confirms a Discord message by readback; a missing readback is 
   f.noSecret();
 });
 
+
 test('Slack: an ok reply is delivered, an error reply fails with only its status and error word, and mentions are escaped', async t => {
   const f = setup(t);
   assert.match((await f.pdd(['autopilot', 'alerts', 'set'], SLACK)).stdout, /Slack/);
@@ -200,293 +229,13 @@ test('Slack: an ok reply is delivered, an error reply fails with only its status
   assert.match(failed.stderr, /failed \(HTTP 404 no_service\)/);
 
   f.replies.push({ status: 200, text: 'ok' });
-  const sent = await f.alert(30, 'access', { cause: 'Needs <!channel> & a paid plan', tried: 'Read the billing page', need: 'Approve spending' });
+  const sent = await f.alert(30, 'access', { cause: 'Needs a paid plan', tried: 'Read <!channel> & the billing page', need: 'Approve spending' });
   assert.equal(sent.exitCode, 0, sent.stderr);
-  assert.match(f.requests.at(-1).body.text, /Needs &lt;!channel&gt; &amp; a paid plan/);
-  assert.equal(f.record().incidents['30:access'].result, 'delivered');
+  assert.match(f.requests.at(-1).body.text, /Read &lt;!channel&gt; &amp; the billing page/);
+  assert.equal(f.record().incidents['cause:30:access'].result, 'delivered');
   f.noSecret();
 });
 
-test('an alert names repo, issue link, cause, attempt and need, and a repeat without a material change sends nothing', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  f.replies.push(echo);
-  const first = await f.alert(12, 'usage-limit', usage);
-  assert.equal(first.exitCode, 0, first.stderr);
-  assert.match(first.stdout, /#12 usage-limit/);
-  assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0].body.content, [
-    'PDD Autopilot alert: usage-limit (test-host)', 'Repository: owner/repo', 'Issue: https://github.com/owner/repo/issues/12',
-    `Cause: ${usage.cause}`, `Tried: ${usage.tried}`, `Needs: ${usage.need}`, 'Answer on the GitHub issue.'].join('\n'));
-
-  const repeat = await f.alert(12, 'usage-limit', usage);
-  assert.equal(repeat.exitCode, 0);
-  assert.match(repeat.stdout, /nothing sent/);
-  const reworded = await f.alert(12, 'usage-limit', { ...usage, tried: 'Paused it again' });
-  assert.match(reworded.stdout, /nothing sent/, 'without --update new wording is not a material change');
-  const sameUpdate = await f.alert(12, 'usage-limit', usage, '--update');
-  assert.match(sameUpdate.stdout, /nothing sent/, '--update with unchanged fields sends nothing');
-  assert.equal(f.requests.length, 1);
-
-  f.replies.push(echo);
-  const update = await f.alert(12, 'usage-limit', { ...usage, cause: 'Codex usage limit; reset moved to 2026-11-06T20:00Z' }, '--update');
-  assert.equal(update.exitCode, 0);
-  assert.equal(f.requests.length, 2);
-  assert.match(f.requests[1].body.content, /^PDD Autopilot update: usage-limit \(test-host\)\n[^]*reset moved/);
-
-  f.replies.push(echo);
-  await f.alert(12, 'decision', { cause: 'Two layouts fit the Story', tried: 'Asked on the issue', need: 'Pick one layout' });
-  assert.equal(f.requests.length, 3, 'another kind on the same issue is another incident');
-  const actions = f.record().log.map(row => `${row.kind}:${row.action}:${row.result}`);
-  assert.deepEqual(actions, ['usage-limit:alert:delivered', 'usage-limit:repeat:not-sent', 'usage-limit:repeat:not-sent', 'usage-limit:repeat:not-sent', 'usage-limit:update:delivered', 'decision:alert:delivered']);
-  assert.equal(statSync(f.recordFile()).mode & 0o777, 0o600);
-  assert.deepEqual((await f.status()).length, 1, 'delivered alerts add no status line');
-  f.noSecret();
-});
-
-test('a failed delivery is recorded, does not stop work, shows in status, and the next call sends it again', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  f.replies.push({ status: 500, text: `{"message":"${DISCORD}"}` });
-  const failed = await f.alert(12, 'usage-limit', usage);
-  assert.equal(failed.exitCode, 0, 'work continues after a failed delivery');
-  assert.match(failed.stdout, /delivery failed \(HTTP 500\)/);
-  assert.match(failed.stdout, /pdd autopilot status/);
-  assert.equal(f.record().incidents['usage-limit@test-host'].result, 'failed');
-
-  const lines = await f.status();
-  assert.equal(lines.length, 2);
-  assert.match(lines[0], /^Autopilot enabled; .*owner\/repo/);
-  assert.equal(lines[1], 'Alerts: 1 open alert not delivered; last delivery failed (HTTP 500) for #12 usage-limit at 2026-11-06T10:00:00.000Z; check with pdd autopilot alerts test.');
-
-  f.time += 30 * 60 * 1000;
-  f.replies.push(echo);
-  const retried = await f.alert(12, 'usage-limit', usage);
-  assert.equal(f.requests.length, 2, 'a failed alert is sent again on the next call');
-  assert.match(retried.stdout, /confirmed/);
-  assert.equal((await f.status()).length, 1, 'the status line ends after delivery');
-
-  f.replies.push(Object.assign(Error(`connect ECONNREFUSED ${DISCORD}`), { code: 'unreached' }));
-  const unreached = await f.alert(14, 'resource', { cause: 'Disk full on the runner', tried: 'Stopped new runs', need: 'Free disk space' });
-  assert.match(unreached.stdout, /delivery failed \(not reached\)/);
-  f.replies.push(Object.assign(Error('timeout'), { code: 'unknown' }));
-  await f.alert(15, 'stuck', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'A person to look' });
-  const again = await f.alert(15, 'stuck', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'A person to look' });
-  assert.match(again.stdout, /nothing sent/, 'an unconfirmed alert may exist, so it is not sent again');
-  assert.equal(f.requests.length, 4);
-  assert.match((await f.status())[1], /^Alerts: 2 open alerts not delivered; last delivery unconfirmed \(no reply\) for #15 stuck/);
-  f.noSecret();
-});
-
-test('without a destination an alert is recorded locally, work continues and status says how to set one', async t => {
-  const f = setup(t);
-  const result = await f.alert(12, 'usage-limit', usage);
-  assert.equal(result.exitCode, 0);
-  assert.match(result.stdout, /recorded on this machine/);
-  assert.match(result.stdout, /pdd autopilot alerts set/);
-  assert.equal(f.requests.length, 0);
-  assert.deepEqual(f.record().incidents['usage-limit@test-host'].fields, usage);
-  assert.equal(f.record().incidents['usage-limit@test-host'].result, 'not-configured');
-  assert.equal((await f.status())[1], 'Alerts: 1 open alert not delivered; set one with pdd autopilot alerts set.');
-
-  assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /nothing sent/, 'no destination: a repeat adds no send');
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  f.replies.push(echo);
-  await f.alert(12, 'usage-limit', usage);
-  assert.equal(f.requests.length, 1, 'once a destination exists, the recorded alert is sent');
-  f.noSecret();
-});
-
-test('recovered closes the open alerts of the issue with one recovery message', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  f.replies.push(echo, echo, echo);
-  await f.alert(12, 'usage-limit', usage);
-  await f.alert(12, 'decision', { cause: 'Two layouts fit', tried: 'Asked on the issue', need: 'Pick one' });
-  await f.alert(40, 'stuck', { cause: 'Other issue', tried: 'Waited', need: 'Look' });
-
-  f.replies.push(echo);
-  const recovered = await f.alert(12, 'recovered', { cause: 'Quota reset and the layout was chosen' });
-  assert.equal(recovered.exitCode, 0, recovered.stderr);
-  assert.equal(f.requests.at(-1).body.content, ['PDD Autopilot recovered: usage-limit, decision (test-host)', 'Repository: owner/repo',
-    'Issue: https://github.com/owner/repo/issues/12', 'What changed: Quota reset and the layout was chosen'].join('\n'));
-  assert.deepEqual(Object.keys(f.record().incidents), ['40:stuck'], 'only the issue named in the recovery closes');
-
-  const count = f.requests.length;
-  const none = await f.alert(12, 'recovered', { cause: 'Again' });
-  assert.match(none.stdout, /nothing sent/);
-  assert.equal(f.requests.length, count, 'a second recovery sends nothing');
-  f.replies.push(echo);
-  await f.alert(12, 'usage-limit', usage);
-  assert.equal(f.requests.length, count + 1, 'a later alert opens a new incident');
-  f.noSecret();
-});
-
-test('one usage limit that blocks five issues sends one alert; the issues join it, --update sends the list and recovered closes it', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  const links = issues => issues.map(n => `https://github.com/owner/repo/issues/${n}`).join(', ');
-  f.replies.push(echo);
-  assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /Alert sent for #12 usage-limit; the webhook confirmed it/);
-  for (const issue of [13, 14, 15, 16]) {
-    const joined = await f.alert(issue, 'usage-limit', usage);
-    assert.equal(joined.exitCode, 0);
-    assert.match(joined.stdout, new RegExp(`Added #${issue} to the open usage-limit alert on this machine; nothing sent`));
-  }
-  assert.match((await f.alert(13, 'usage-limit', usage)).stdout, /already open; nothing sent/);
-  assert.equal(f.requests.length, 1, 'one usage limit is one alert, not one per blocked issue');
-  assert.deepEqual(f.record().incidents['usage-limit@test-host'].issues, [12, 13, 14, 15, 16]);
-
-  f.replies.push(echo);
-  assert.match((await f.alert(14, 'usage-limit', usage, '--update')).stdout, /Update sent for #12, #13, #14, #15, #16 usage-limit; the webhook confirmed it/);
-  assert.equal(f.requests[1].body.content, ['PDD Autopilot update: usage-limit (test-host)', 'Repository: owner/repo', `Issues: ${links([12, 13, 14, 15, 16])}`,
-    `Cause: ${usage.cause}`, `Tried: ${usage.tried}`, `Needs: ${usage.need}`, 'Answer on the GitHub issue.'].join('\n'));
-  assert.match((await f.alert(15, 'usage-limit', usage, '--update')).stdout, /nothing sent/, 'the list was sent, so an unchanged --update sends nothing');
-
-  const layout = { cause: 'Two layouts fit the Story', tried: 'Asked on the issue', need: 'Pick one layout' };
-  f.replies.push(echo, echo);
-  await f.alert(12, 'decision', layout);
-  await f.alert(13, 'decision', layout);
-  assert.equal(f.requests.length, 4, 'a decision stays one incident per issue');
-  f.ports.hostname = () => 'other-host';
-  f.replies.push(echo);
-  await f.alert(12, 'usage-limit', usage);
-  assert.match(f.requests[4].body.content, /^PDD Autopilot alert: usage-limit \(other-host\)\n/, 'another machine is another incident');
-  f.ports.hostname = () => 'test-host';
-
-  // A failed send is sent again by the next call from any affected issue, with the current list.
-  const disk = { cause: 'Disk full on the runner', tried: 'Stopped new runs', need: 'Free disk space' };
-  f.replies.push({ status: 503, text: '' });
-  assert.match((await f.alert(20, 'resource', disk)).stdout, /delivery failed \(HTTP 503\)/);
-  f.replies.push(echo);
-  assert.match((await f.alert(21, 'resource', disk)).stdout, /Alert sent for #20, #21 resource; the webhook confirmed it/);
-  assert.match(f.requests.at(-1).body.content, new RegExp(`\nIssues: ${links([20, 21]).replaceAll('.', '\\.')}\n`));
-  for (let issue = 22; issue <= 31; issue += 1) await f.alert(issue, 'resource', disk);
-  f.replies.push(echo);
-  await f.alert(31, 'resource', disk, '--update');
-  assert.match(f.requests.at(-1).body.content, new RegExp(`\nIssues: ${links([20, 21, 22, 23, 24, 25, 26, 27, 28, 29]).replaceAll('.', '\\.')} and 2 more\n`));
-
-  const count = f.requests.length;
-  f.replies.push(echo);
-  const recovered = await f.alert(16, 'recovered', { cause: 'The usage limit reset', kind: 'usage-limit' });
-  assert.equal(recovered.exitCode, 0, recovered.stderr);
-  assert.equal(f.requests.length, count + 1, 'one recovery for the whole incident');
-  assert.equal(f.requests.at(-1).body.content, ['PDD Autopilot recovered: usage-limit (test-host)', 'Repository: owner/repo',
-    `Issues: ${links([12, 13, 14, 15, 16])}`, 'What changed: The usage limit reset'].join('\n'));
-  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['12:decision', '13:decision', 'resource@test-host', 'usage-limit@other-host']);
-  assert.match((await f.alert(13, 'recovered', { cause: 'Again', kind: 'usage-limit' })).stdout, /No open alert of kind usage-limit for #13; nothing sent/);
-
-  f.replies.push(echo);
-  await f.alert(12, 'recovered', { cause: 'The layout was chosen' });
-  assert.match(f.requests.at(-1).body.content, /^PDD Autopilot recovered: decision \(test-host\)\n[^]*\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/12\n/);
-  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['13:decision', 'resource@test-host', 'usage-limit@other-host'],
-    'without a kind, the issue\'s own incidents of this machine close');
-  f.replies.push(echo);
-  await f.alert(14, 'usage-limit', usage);
-  assert.match(f.requests.at(-1).body.content, /^PDD Autopilot alert: usage-limit \(test-host\)\n[^]*\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/14\n/, 'a later limit opens a new incident');
-  f.noSecret();
-});
-
-test('an access or spending decision is one incident per issue: two decisions send two alerts, and a recovery closes only its own', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  const plan = { cause: 'Issue 70 needs a paid OpenAI plan', tried: 'Read the billing page', need: 'Approve 20 USD per month' };
-  const dataset = { cause: 'Issue 71 needs the private dataset repo', tried: 'Cloned it with the run account', need: 'Grant read access' };
-  f.replies.push(echo, echo);
-  assert.match((await f.alert(70, 'access', plan)).stdout, /Alert sent for #70 access; the webhook confirmed it/);
-  assert.match((await f.alert(71, 'access', dataset)).stdout, /Alert sent for #71 access; the webhook confirmed it/);
-  assert.equal(f.requests.length, 2, 'a second, different decision is sent to the person');
-  assert.equal(f.requests[1].body.content, ['PDD Autopilot alert: access (test-host)', 'Repository: owner/repo', 'Issue: https://github.com/owner/repo/issues/71',
-    `Cause: ${dataset.cause}`, `Tried: ${dataset.tried}`, `Needs: ${dataset.need}`, 'Answer on the GitHub issue.'].join('\n'));
-  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['70:access', '71:access']);
-
-  f.replies.push(echo);
-  await f.alert(70, 'recovered', { cause: 'Spending approved', kind: 'access' });
-  assert.equal(f.requests.at(-1).body.content, ['PDD Autopilot recovered: access (test-host)', 'Repository: owner/repo',
-    'Issue: https://github.com/owner/repo/issues/70', 'What changed: Spending approved'].join('\n'));
-  assert.deepEqual(Object.keys(f.record().incidents), ['71:access'], 'the other decision stays open');
-  assert.match((await f.alert(71, 'access', dataset)).stdout, /Alert for #71 access is already open; nothing sent/);
-  assert.equal(f.requests.length, 3);
-  f.noSecret();
-});
-
-test('a long-running issue is one informational incident per issue: one alert, no repeat, and a recovery closes it', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  const day = { cause: 'Issue 80 was claimed 24 hours ago and has no merge yet', tried: 'Kept working on its review fixes', need: 'Nothing now; this is information' };
-  f.replies.push(echo, echo);
-  assert.match((await f.alert(80, 'long-running', day)).stdout, /Alert sent for #80 long-running; the webhook confirmed it/);
-  assert.match((await f.alert(81, 'long-running', { ...day, cause: 'Issue 81 was claimed 24 hours ago and has no merge yet' })).stdout, /Alert sent for #81 long-running/);
-  assert.equal(f.requests[0].body.content.split('\n')[0], 'PDD Autopilot alert: long-running (test-host)');
-  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['80:long-running', '81:long-running']);
-  assert.match((await f.alert(80, 'long-running', day)).stdout, /Alert for #80 long-running is already open; nothing sent/);
-  f.replies.push(echo);
-  await f.alert(80, 'recovered', { cause: 'The PR merged', kind: 'long-running' });
-  assert.deepEqual(Object.keys(f.record().incidents), ['81:long-running'], 'the other issue stays open');
-  assert.equal(f.requests.length, 3);
-  f.noSecret();
-});
-
-test('the machine in an incident is the coordinator\'s saved machine name, so a host rename finds the same incident', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  // Launcher states: one of another repository, then this repository's, with the machine name saved at its first start.
-  mkdirSync(f.ports.stateRoot, { recursive: true });
-  writeFileSync(join(f.ports.stateRoot, `${'a'.repeat(20)}.json`), JSON.stringify({ repo: 'owner/other', enabled: true, machine: 'other-repo-machine' }));
-  writeFileSync(join(f.ports.stateRoot, `${'b'.repeat(20)}.json`), JSON.stringify({ repo: 'Owner/Repo', enabled: true, machine: 'saved-machine' }));
-  f.ports.hostname = () => 'renamed-host-2';
-  f.replies.push(echo);
-  await f.alert(12, 'usage-limit', usage);
-  assert.match(f.requests[0].body.content, /^PDD Autopilot alert: usage-limit \(saved-machine\)\n/);
-  f.ports.hostname = () => 'renamed-host-3';
-  assert.match((await f.alert(13, 'usage-limit', usage)).stdout, /Added #13 to the open usage-limit alert on this machine; nothing sent/);
-  assert.equal(f.requests.length, 1, 'a host rename opens no new incident');
-  f.replies.push(echo);
-  await f.alert(13, 'recovered', { cause: 'The usage limit reset', kind: 'usage-limit' });
-  assert.equal(f.requests[1].body.content, ['PDD Autopilot recovered: usage-limit (saved-machine)', 'Repository: owner/repo',
-    'Issues: https://github.com/owner/repo/issues/12, https://github.com/owner/repo/issues/13', 'What changed: The usage limit reset'].join('\n'));
-  assert.deepEqual(f.record().incidents, {}, 'the recovery closes the incident after the rename');
-  f.noSecret();
-});
-
-test('the machine name comes from this checkout\'s launcher state first, so machines that share one home keep their own incidents', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  mkdirSync(f.ports.stateRoot, { recursive: true });
-  // Another checkout of the same repository on another machine; its state file sorts first.
-  writeFileSync(join(f.ports.stateRoot, `${'0'.repeat(20)}.json`), JSON.stringify({ repo: 'owner/repo', enabled: true, machine: 'machine-a' }));
-  writeFileSync(join(f.ports.stateRoot, `${createHash('sha256').update(f.cwd).digest('hex').slice(0, 20)}.json`), JSON.stringify({ repo: 'owner/repo', enabled: true, machine: 'machine-b' }));
-  f.replies.push(echo);
-  await f.alert(51, 'usage-limit', usage);
-  assert.match(f.requests[0].body.content, /^PDD Autopilot alert: usage-limit \(machine-b\)\n/);
-  f.noSecret();
-});
-
-test('a delivered alerts test ends the status line of an older failed recovery; an open undelivered alert still shows', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  f.replies.push(echo, { status: 500, text: '' });
-  await f.alert(30, 'decision', { cause: 'Two layouts fit', tried: 'Asked on the issue', need: 'Pick one' });
-  assert.match((await f.alert(30, 'recovered', { cause: 'The layout was chosen', kind: 'decision' })).stdout, /delivery failed \(HTTP 500\)/);
-  assert.deepEqual(f.record().incidents, {}, 'the recovery closed the incident');
-  assert.match((await f.status())[1], /^Alerts: last delivery failed \(HTTP 500\) for #30 decision at /);
-
-  f.time += 60 * 1000;
-  f.replies.push(echo);
-  assert.equal((await f.pdd(['autopilot', 'alerts', 'test'])).exitCode, 0);
-  assert.equal((await f.status()).length, 1, 'the delivered test is the newest send');
-  assert.deepEqual(f.record().log.at(-1), { at: '2026-11-06T10:01:00.000Z', kind: 'test', action: 'test', result: 'delivered' });
-
-  f.replies.push({ status: 500, text: '' });
-  await f.alert(31, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' });
-  f.replies.push(echo);
-  await f.pdd(['autopilot', 'alerts', 'test']);
-  assert.equal((await f.status())[1], 'Alerts: 1 open alert not delivered; check with pdd autopilot alerts test.');
-  f.replies.push(echo);
-  assert.match((await f.alert(31, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' })).stdout, /Alert sent for #31 stuck/);
-  assert.equal((await f.status()).length, 1);
-  f.noSecret();
-});
 
 test('invalid alert input is refused with its problem named, and records and sends nothing', async t => {
   const f = setup(t);
@@ -517,6 +266,7 @@ test('invalid alert input is refused with its problem named, and records and sen
   f.noSecret();
 });
 
+
 test('alerts clear removes the destination, and test then reports that none is set', async t => {
   const f = setup(t);
   await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
@@ -530,31 +280,6 @@ test('alerts clear removes the destination, and test then reports that none is s
   f.noSecret();
 });
 
-// A fake Discord REST v10 API: it keeps posted messages so the readback is a real lookup.
-function fakeDiscord(f) {
-  const posted = new Map();
-  f.discord = { me: 200, channel: 200, readback: 'same' };
-  f.ports.http = async request => {
-    f.requests.push(structuredClone(request));
-    const url = new URL(request.url);
-    const path = url.origin === 'https://discord.com' && url.pathname.startsWith('/api/v10/') ? url.pathname.slice('/api/v10'.length) + url.search : null;
-    const reply = (status, value) => ({ status, text: JSON.stringify(value) });
-    if (request.method === 'GET' && path === '/users/@me') return f.discord.me === 200 ? reply(200, { id: '42', username: 'PDD', bot: true }) : reply(f.discord.me, { message: 'no' });
-    if (request.method === 'GET' && path === `/channels/${CHANNEL}`) return f.discord.channel === 200 ? reply(200, { id: CHANNEL, name: 'internal-alerts', type: 0 }) : reply(f.discord.channel, { message: 'no' });
-    if (request.method === 'POST' && path === `/channels/${CHANNEL}/messages`) {
-      const id = String(1300000000000000100n + BigInt(posted.size));
-      posted.set(id, request.body.content);
-      return reply(200, { id, channel_id: CHANNEL, content: request.body.content });
-    }
-    const message = path?.match(new RegExp(`^/channels/${CHANNEL}/messages/([0-9]+)$`))?.[1];
-    // 'normalized' stores the text as a chat service may: LF line ends and no whitespace at line ends or at either end.
-    const stored = text => f.discord.readback === 'same' ? text : f.discord.readback === 'normalized'
-      ? text.replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim() : 'edited by someone else';
-    if (request.method === 'GET' && posted.has(message)) return reply(200, { id: message, content: stored(posted.get(message)) });
-    return reply(404, { message: 'Unknown' });
-  };
-  f.route = request => `${request.method} ${request.url.slice('https://discord.com/api/v10'.length)}`;
-}
 
 test('a Discord bot with a stdin token: set saves it privately; test checks bot and channel, then posts with readback', async t => {
   const f = setup(t); fakeDiscord(f);
@@ -571,7 +296,7 @@ test('a Discord bot with a stdin token: set saves it privately; test checks bot 
     `GET /channels/${CHANNEL}/messages/1300000000000000100`]);
   for (const request of f.requests) {
     assert.equal(request.headers.authorization, `Bot ${BOT_TOKEN}`);
-    assert.match(request.headers['user-agent'], /^DiscordBot \(https:\/\/github\.com\/promptdriven\/pdd, [^)]+\)$/);
+    assert.match(request.headers['user-agent'], /^PDD-Autopilot\/[^ ]+$/);
     assert.equal(request.body === undefined, request.method === 'GET', 'only the POST has a body');
   }
   const post = f.requests[2].body;
@@ -579,27 +304,28 @@ test('a Discord bot with a stdin token: set saves it privately; test checks bot 
   assert.deepEqual(post.allowed_mentions, { parse: [] });
   assert.match(post.content, /^PDD Autopilot test alert \(test-host\)\.$/);
 
-  const sent = await f.alert(12, 'usage-limit', usage);
+  const sent = await f.alert(12, 'access', usage);
   assert.equal(sent.exitCode, 0, sent.stderr);
   assert.match(sent.stdout, /confirmed/);
   assert.deepEqual(f.requests.slice(4).map(f.route), [`POST /channels/${CHANNEL}/messages`, `GET /channels/${CHANNEL}/messages/1300000000000000101`]);
-  assert.match(f.requests[4].body.content, /^PDD Autopilot alert: usage-limit \(test-host\)\nRepository: owner\/repo\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/12\n/);
-  assert.equal(f.record().incidents['usage-limit@test-host'].result, 'delivered');
+  assert.match(f.requests[4].body.content, /^PDD Autopilot needs you: access\nIssue: https:\/\/github\.com\/owner\/repo\/issues\/12\n/);
+  assert.equal(f.record().incidents['cause:12:access'].result, 'delivered');
   assert.equal((await f.status()).length, 1);
   f.noSecret();
 });
+
 
 test('a Discord bot readback mismatch is unconfirmed, shown in status and not sent again', async t => {
   const f = setup(t); fakeDiscord(f);
   await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], BOT_TOKEN);
   f.discord.readback = 'changed';
-  const sent = await f.alert(12, 'stuck', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'A person to look' });
+  const sent = await f.alert(12, 'decision', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'Review the required check?' });
   assert.equal(sent.exitCode, 0, 'work continues');
   assert.match(sent.stdout, /delivery unconfirmed \(readback mismatch\)/);
-  assert.equal(f.record().incidents['12:stuck'].result, 'unconfirmed');
-  assert.match((await f.status())[1], /^Alerts: 1 open alert not delivered; last delivery unconfirmed \(readback mismatch\) for #12 stuck/);
+  assert.equal(f.record().incidents['cause:12:decision'].result, 'unconfirmed');
+  assert.match((await f.status())[1], /^Alerts: 1 open alert not delivered; last delivery unconfirmed \(readback mismatch\) for #12 decision/);
   const count = f.requests.length;
-  assert.match((await f.alert(12, 'stuck', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'A person to look' })).stdout, /nothing sent/);
+  assert.match((await f.alert(12, 'decision', { cause: 'No progress after the retry time', tried: 'Two repairs', need: 'Review the required check?' })).stdout, /nothing sent/);
   assert.equal(f.requests.length, count, 'an unconfirmed bot message may exist, so it is not posted again');
   const tested = await f.pdd(['autopilot', 'alerts', 'test']);
   assert.equal(tested.exitCode, 1);
@@ -607,17 +333,19 @@ test('a Discord bot readback mismatch is unconfirmed, shown in status and not se
   f.noSecret();
 });
 
+
 test('a Discord bot readback that changed only line ends or end spaces is delivered, and the result names the readback', async t => {
   const f = setup(t); fakeDiscord(f);
   await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL], BOT_TOKEN);
   f.discord.readback = 'normalized';
-  const sent = await f.alert(12, 'stuck', { cause: 'Line one  \r\nLine two\rLine three', tried: 'Two repairs', need: 'A person to look' });
-  assert.equal(sent.stdout, 'Alert sent for #12 stuck; the Discord bot readback confirmed it.\n');
-  assert.match(f.requests.at(-2).body.content, /\nCause: Line one {2}\r\nLine two\rLine three\n/, 'the sent text is unchanged');
-  assert.equal(f.record().incidents['12:stuck'].result, 'delivered');
+  const sent = await f.alert(12, 'decision', { cause: 'Line one  \r\nLine two\rLine three', tried: 'Two repairs', need: 'Review the required check?' });
+  assert.equal(sent.stdout, 'Alert sent for #12 decision; the Discord bot readback confirmed it.\n');
+  assert.match(f.requests.at(-2).body.content, /Ask: Review the required check\?/, 'the full ask is retained');
+  assert.equal(f.record().incidents['cause:12:decision'].result, 'delivered');
   assert.equal((await f.status()).length, 1, 'no false unconfirmed alert in status');
   f.noSecret();
 });
+
 
 test('a bot token command runs at each send, the token never reaches disk or output, and a failing command sends nothing', async t => {
   const f = setup(t); fakeDiscord(f);
@@ -630,10 +358,10 @@ test('a bot token command runs at each send, the token never reaches disk or out
   assert.deepEqual(JSON.parse(readFileSync(f.config, 'utf8')), { v: 1, service: 'discord-bot', channel: CHANNEL, tokenCommand: `cat '${tokenFile}'` });
   assert.equal(statSync(f.config).mode & 0o777, 0o600);
 
-  assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /confirmed/);
+  assert.match((await f.alert(12, 'access', usage)).stdout, /confirmed/);
   assert.equal(f.requests.at(-1).headers.authorization, `Bot ${BOT_TOKEN}`);
   writeFileSync(tokenFile, ROTATED_TOKEN);
-  assert.match((await f.alert(13, 'resource', { cause: 'Disk full', tried: 'Stopped new runs', need: 'Free disk space' })).stdout, /confirmed/);
+  assert.match((await f.alert(13, 'access', { cause: 'Disk full', tried: 'Stopped new runs', need: 'Grant disk quota?' })).stdout, /confirmed/);
   assert.equal(f.requests.at(-1).headers.authorization, `Bot ${ROTATED_TOKEN}`, 'the command runs at send time, so a rotated token is used');
   assert.match((await f.pdd(['autopilot', 'alerts', 'test'])).stdout, /Discord bot PDD in #internal-alerts/);
 
@@ -646,12 +374,13 @@ test('a bot token command runs at each send, the token never reaches disk or out
   assert.equal(tested.exitCode, 1);
   assert.match(tested.stderr, /token command failed \(exit 3\)\. Its output is not shown/);
   await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true']);
-  assert.match((await f.alert(15, 'decision', { cause: 'Two layouts', tried: 'Asked on the issue', need: 'Pick one' })).stdout, /token command gave no token/);
+  assert.match((await f.alert(15, 'decision', { cause: 'Two layouts', tried: 'Asked on the issue', need: 'Choose one layout?' })).stdout, /token command gave no token/);
   assert.equal(f.requests.length, count, 'no request is sent without a token');
   assert.match((await f.status())[1], /last delivery failed \(token command gave no token\) for #15 decision/);
 
   f.noSecret({ config: true });
 });
+
 
 test('a Discord bot check failure sends no message, and invalid bot settings save nothing', async t => {
   const f = setup(t); fakeDiscord(f);
@@ -678,210 +407,6 @@ test('a Discord bot check failure sends no message, and invalid bot settings sav
   f.noSecret();
 });
 
-// A synthetic suite incident uses the same fake HTTP delivery as other alerts.
-test('suite failures are separate per-issue incidents and can recover without stuck', async t => {
-  const f = setup(t); await f.pdd(['autopilot','alerts','set'], DISCORD);
-  const fields = {cause:'per-file timeout: test/slow.test.mjs',tried:'The queued suite ran',need:'Inspect the stalled test'};
-  await f.alert(80, 'test-suite', fields); await f.alert(81, 'test-suite', fields);
-  assert.equal(f.requests.length, 2);
-  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['80:test-suite','81:test-suite']);
-  await f.alert(80, 'test-suite', fields); assert.equal(f.requests.length, 2);
-  await f.alert(80, 'recovered', {cause:'The suite passed',kind:'test-suite'});
-  assert.deepEqual(Object.keys(f.record().incidents), ['81:test-suite']);
-});
-
-test('stuck reviews with new attempt notes do not post; new causes, decisions and recovery do', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  const stuck = { cause: 'Required check unavailable', tried: 'Read check result', need: 'Restore the required check' };
-  f.replies.push(echo, echo, echo, echo, echo);
-  assert.equal((await f.alert(41, 'stuck', stuck)).exitCode, 0);
-  for (let review = 1; review <= 3; review++) {
-    f.time += 4 * 60 * 60 * 1000;
-    assert.equal((await f.alert(41, 'stuck', { ...stuck, tried: `Review ${review}: still blocked` }, '--update')).exitCode, 0);
-    assert.equal(f.requests.length, 1, 'unchanged stuck cause and decision must not post at a four-hour review');
-  }
-  const changedDecision = { ...stuck, need: 'Choose another required check' };
-  assert.equal((await f.alert(41, 'stuck', changedDecision, '--update')).exitCode, 0);
-  assert.equal(f.requests.length, 2, 'a new decision must post');
-  assert.equal((await f.alert(41, 'stuck', { ...changedDecision, cause: 'Check credentials expired' }, '--update')).exitCode, 0);
-  assert.equal(f.requests.length, 3, 'a new cause must post');
-  assert.equal((await f.alert(41, 'recovered', { cause: 'Check restored', kind: 'stuck' })).exitCode, 0);
-  assert.equal(f.requests.length, 4);
-  await f.alert(41, 'recovered', { cause: 'Check restored', kind: 'stuck' });
-  assert.equal(f.requests.length, 4, 'repeated recovery stays quiet');
-  await f.alert(41, 'stuck', stuck);
-  assert.equal(f.requests.length, 5, 'a later incident can open');
-  f.noSecret();
-});
-
-test('parallel issues retain both incidents and concurrent repeats post nothing', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  f.replies.push(echo, echo);
-  const fields = { cause: 'Missing choice', tried: 'Read the issue', need: 'Choose a policy' };
-  const results = await Promise.all([f.alert(41, 'decision', fields), f.alert(42, 'stuck', fields)]);
-  assert.deepEqual(results.map(r => r.exitCode), [0, 0]);
-  assert.equal(Object.keys(f.record().incidents).length, 2, 'parallel runs must not overwrite each other');
-  assert.equal(f.requests.length, 2);
-  await Promise.all([f.alert(41, 'decision', fields, '--update'), f.alert(42, 'stuck', fields, '--update')]);
-  assert.equal(f.requests.length, 2);
-});
-
-test('native digests combine open incidents and parallel run attention once per six hours', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  f.replies.push(echo, echo, echo, echo);
-  await f.alert(41, 'stuck', { cause: 'Required check unavailable', tried: 'Read checks', need: 'Restore checks' });
-  let attention = [{ number: 41, category: 'stuck', cause: 'Required check unavailable' },
-    { number: 42, category: 'parked', cause: 'Interpreter busy' }, { number: 43, category: 'decision', cause: 'Choose retention' }];
-  const digest = () => runAutopilotAlerts({ action: 'digest', cwd: f.cwd, env: f.env, attention }, f.ports);
-  assert.equal((await digest()).exitCode, 0);
-  assert.equal(f.requests.length, 2);
-  const text = f.requests.at(-1).body.content;
-  assert.match(text, /digest/i);
-  for (const n of [41, 42, 43]) assert.equal(text.split(`/issues/${n}`).length - 1, 1);
-  for (const category of ['stuck', 'parked', 'decision']) assert.ok(text.includes(category));
-  const first = f.time;
-  f.time += 6 * 60 * 60 * 1000 - 1;
-  assert.equal((await digest()).exitCode, 0);
-  assert.equal(f.requests.length, 2);
-  f.time++;
-  await Promise.all([digest(), digest()]);
-  assert.equal(f.requests.length, 3, 'the six-hour boundary permits one digest across concurrent ticks');
-  assert.equal(f.record().digests['test-host'].at, new Date(first + 6 * 60 * 60 * 1000).toISOString());
-  await f.alert(41, 'recovered', { cause: 'Restored', kind: 'stuck' });
-  attention = [];
-  f.time += 6 * 60 * 60 * 1000;
-  await digest();
-  assert.equal(f.requests.length, 4, 'an empty repository sends no digest');
-  f.noSecret();
-});
-
-test('digest attempts are bounded after failure and scoped to repository and machine', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  const input = { action: 'digest', cwd: f.cwd, env: f.env, attention: Array.from({ length: 15 }, (_, i) => ({ number: i + 1, category: 'parked', cause: 'x'.repeat(500) })) };
-  f.replies.push({ status: 403, text: '' }, echo, echo);
-  assert.equal((await runAutopilotAlerts(input, f.ports)).exitCode, 0);
-  assert.equal(f.record().digests['test-host'].result, 'failed');
-  assert.ok(f.requests[0].body.content.length <= 1900);
-  assert.match(f.requests[0].body.content, /5 more/);
-  await runAutopilotAlerts(input, f.ports);
-  assert.equal(f.requests.length, 1, 'delivery failure cannot cause digest flapping');
-  await runAutopilotAlerts(input, { ...f.ports, hostname: () => 'second-host' });
-  assert.equal(f.requests.length, 2);
-  await runAutopilotAlerts(input, { ...f.ports, repository: async () => ({ nameWithOwner: 'elsewhere/project' }) });
-  assert.equal(f.requests.length, 3);
-});
-
-for (const count of [10, 15]) {
-  test(`digest accounts for all omitted rows within the character budget with ${count} long-repository items`, async t => {
-    const f = setup(t);
-    const repo = `${'o'.repeat(39)}/${'r'.repeat(100)}`;
-    f.ports.repository = async () => ({ nameWithOwner: repo });
-    assert.equal((await f.pdd(['autopilot', 'alerts', 'set'], DISCORD)).exitCode, 0);
-    f.replies.push(echo);
-    const attention = Array.from({ length: count }, (_, i) => ({ number: i + 1, category: 'parked', cause: 'x'.repeat(120) }));
-    const result = await runAutopilotAlerts({ action: 'digest', cwd: f.cwd, env: f.env, attention }, f.ports);
-    assert.equal(result.exitCode, 0);
-    assert.equal(f.requests.length, 1, 'one digest request');
-    const text = f.requests[0].body.content;
-    assert.ok(text.length <= 1900, 'the complete message fits the character budget');
-    const lines = text.split('\n');
-    assert.ok(lines[0].includes('test-host'));
-    assert.ok(lines[1].includes(repo));
-    const omitted = lines.at(-1).match(/^(\d+)\b/);
-    assert.ok(omitted, 'the footer counts rows omitted by the character budget');
-    const rows = lines.slice(2, -1);
-    assert.ok(rows.length > 0 && rows.length < 10, 'the character budget limits the displayed rows');
-    assert.equal(Number(omitted[1]), count - rows.length, 'the footer counts every item not shown');
-    assert.deepEqual(rows, attention.slice(0, rows.length).map(item =>
-      `${item.category}: https://github.com/${repo}/issues/${item.number} — ${item.cause}`), 'displayed rows and issue links are complete and ordered');
-    f.noSecret();
-  });
-}
-
-test('infrastructure set, send, recovery, test and clear use a separate destination', async t => {
-  const f = setup(t);
-  const selected = ['--destination', 'infrastructure'];
-  assert.equal((await f.pdd(['autopilot', 'alerts', 'set'], DISCORD)).exitCode, 0);
-  const configured = await f.pdd(['autopilot', 'alerts', 'set', ...selected], SLACK);
-  assert.equal(configured.exitCode, 0);
-  assert.ok(configured.stdout.includes('--destination infrastructure'));
-  const infraFile = join(f.home, '.config', 'pdd', 'autopilot-infrastructure-alerts.json');
-  assert.equal(statSync(infraFile).mode & 0o777, 0o600);
-  const before = readFileSync(f.config, 'utf8');
-  f.replies.push({ status: 200, text: 'ok' }, echo, echo, { status: 200, text: 'ok' });
-  await f.alert(41, 'resource', { cause: 'Disk full', tried: 'Read disk usage', need: 'Free disk' });
-  await f.alert(41, 'decision', { cause: 'Choose retention', tried: 'Read policy', need: 'Choose days' });
-  await f.alert(41, 'recovered', { cause: 'Resolved' });
-  assert.ok(f.requests[0].url.startsWith('https://hooks.slack.com/'));
-  assert.ok(f.requests[1].url.startsWith('https://discord.com/'));
-  assert.ok(f.requests[2].url.startsWith('https://discord.com/'));
-  assert.ok(f.requests[3].url.startsWith('https://hooks.slack.com/'));
-  assert.equal(Object.keys(f.record().incidents).length, 0);
-  const logLength = f.record().log.length;
-  f.replies.push({ status: 200, text: 'ok' });
-  assert.equal((await f.pdd(['autopilot', 'alerts', 'test', ...selected])).exitCode, 0);
-  assert.equal(f.record().log.length, logLength + 1);
-  assert.equal(f.record().log.at(-1).destination, 'infrastructure', 'infrastructure tests record only their own route');
-  assert.equal((await f.pdd(['autopilot', 'alerts', 'clear', ...selected])).exitCode, 0);
-  assert.equal(existsSync(infraFile), false);
-  assert.equal(readFileSync(f.config, 'utf8'), before);
-  f.replies.push(echo);
-  await f.alert(42, 'resource', { cause: 'Disk full', tried: 'Read disk usage', need: 'Free disk' });
-  assert.ok(f.requests.at(-1).url.startsWith('https://discord.com/'), 'unset infrastructure route falls back');
-  assert.equal((await f.pdd(['autopilot', 'alerts', 'clear', '--destination', 'unknown'])).exitCode, 2);
-  assert.equal(readFileSync(f.config, 'utf8'), before);
-  // Both private destination files may hold secrets; neither output nor records may hold them.
-  f.noSecret();
-});
-
-
-test('destination tests retain concurrent alert state and clear only the selected route failure', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  await f.pdd(['autopilot', 'alerts', 'set', '--destination', 'infrastructure'], SLACK);
-  const fields = { cause: 'Missing choice', tried: 'Read policy', need: 'Choose policy' };
-  f.replies.push(echo);
-  await f.alert(40, 'decision', fields);
-  let release, entered;
-  const hold = new Promise(resolve => { release = resolve; });
-  const started = new Promise(resolve => { entered = resolve; });
-  f.replies.push(async request => { entered(); await hold; return echo(request); }, echo);
-  const sending = f.alert(41, 'decision', fields);
-  await started;
-  const testing = f.pdd(['autopilot', 'alerts', 'test']);
-  release();
-  assert.deepEqual((await Promise.all([sending, testing])).map(r => r.exitCode), [0, 0]);
-  assert.equal(Object.keys(f.record().incidents).length, 2);
-  assert.equal(f.record().log.at(-1).action, 'test', 'test evidence must survive the pending alert save');
-  f.replies.push({ status: 403, text: '' });
-  await f.alert(42, 'resource', fields);
-  let status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
-  assert.ok(status.includes('--destination infrastructure'));
-  f.replies.push(echo);
-  await f.pdd(['autopilot', 'alerts', 'test']);
-  status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
-  assert.ok(status.includes('403'), 'an Autopilot test must not hide an infrastructure failure');
-  f.replies.push({ status: 200, text: 'ok' });
-  await f.pdd(['autopilot', 'alerts', 'test', '--destination', 'infrastructure']);
-  status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
-  assert.equal(status.includes('403'), false, 'infrastructure test clears its old send failure');
-  assert.ok(status.includes('--destination infrastructure'), 'the open undelivered incident still needs attention');
-});
-
-test('failed digest status names the digest without inventing an issue', async t => {
-  const f = setup(t);
-  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
-  f.replies.push({ status: 403, text: '' });
-  await runAutopilotAlerts({ action: 'digest', cwd: f.cwd, env: f.env, attention: [{ number: 41, category: 'parked', cause: 'Interpreter down' }] }, f.ports);
-  const status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
-  assert.ok(status.includes('digest'));
-  assert.equal(status.includes('#undefined'), false);
-});
-
 
 test('alerts help exposes quiet review, digest cadence and separate destination rules', async t => {
   const f = setup(t);
@@ -901,7 +426,7 @@ test('two native processes share incident custody and post the same alert once',
     import { runAutopilotAlerts } from ${JSON.stringify(new URL('../src/autopilot-alerts.mjs', import.meta.url).href)};
     import { acquireRunLock } from ${JSON.stringify(new URL('../src/workflow-runner.mjs', import.meta.url).href)};
     const result = await runAutopilotAlerts({ action: 'alert', cwd: ${JSON.stringify(f.cwd)}, env: process.env,
-      issue: '41', kind: 'stuck', text: JSON.stringify({ cause: 'Required check unavailable', tried: 'Read checks', need: 'Restore check' }) }, {
+      issue: '41', kind: 'access', text: JSON.stringify({ code: 'required-check', cause: 'Required check unavailable', tried: 'Read checks', need: 'Restore check?', ifNoAnswer: 'Run waits; other work continues.' }) }, {
       stateRoot: ${JSON.stringify(f.ports.stateRoot)}, hostname: () => 'test-host', repository: async () => ({ nameWithOwner: 'owner/repo' }),
       recordLock: (...args) => { try { return acquireRunLock(...args); } catch (error) { process.send({ type: 'contended' }); throw error; } },
       http: async request => { process.send({ type: 'send' }); await new Promise(resolve => process.once('message', resolve));

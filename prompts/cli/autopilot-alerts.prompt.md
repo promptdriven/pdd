@@ -147,7 +147,7 @@ consequence remain recorded and are not sent.
 An eligible ask is a single line containing one question ending in `?`, or one
 imperative sentence beginning Approve, Choose, Grant, Provide, Supply, Sign,
 Release, Review, Restore, Renew, Increase, Allow or Run. Reject multiple questions,
-multiple sentences, blank/generic needs (including "Identify the blocker" and
+multiple sentences or coordinated actions (such as "approve and grant"), blank/generic needs (including "Identify the blocker" and
 "No named blocker is saved"), and informational/no-action wording in any need.
 This is structural validation; the coordinator owns whether only a person can
 answer. A sendable message must retain its full ask and all issue links.
@@ -173,7 +173,7 @@ Legacy incident keys and missing sent timestamps cannot authorize recovery chat.
 Every automatic chat send, including recovery and digest, obeys at most six
 attempts per rolling hour per machine across repos and destinations. Each issue
 can appear in at most one attempted chat message in a rolling 24 hours, including
-recoveries and digests. No alert sends within two hours after recovery of any
+recoveries and digests. No new alert or digest sends within two hours after recovery of any
 of its issues (even when the recovery was quiet). Boundaries are inclusive:
 at exactly 15 minutes, 2 hours, 24 hours, or 1 hour the corresponding wait ends.
 Failed/unconfirmed attempts consume budgets because an external outcome may be
@@ -194,7 +194,7 @@ Use Issues for multiple sorted unique links. Append optional Owner and Details
 lines when they fit. Keep tried/consequence on single lines, compact them to
 80 characters apiece as needed; never cut the ask. A recovery instead names the
 kind, issue links and what changed. Omit run identifiers, hashes and cause prose
-from person asks. Defensively scrub secrets from text before chat as from replies.
+from person asks. Defensively scrub secrets from fields before persistence, attention snapshots, chat and replies.
 
 Resolve repo with `repository({cwd})` (native gh repo view, then origin remote).
 Use the saved launcher machine for cwd first, then other matching repo state
@@ -202,7 +202,8 @@ files in filename order, else hostname. Retain the existing record path:
 `<state root>/alerts/<first 20 hex SHA-256 of lowercase repo>.json`, private
 atomic JSON `{v:1, repo, incidents, log}`. Retain the latest 200 log rows.
 Incidents store kind, code, host, issues, listed, fields, openedAt, updatedAt,
-result, optional detail/destination, firstPausedAt, ticks, lastTick and sentAt
+result, optional detail/destination, firstPausedAt, ticks, lastTick, asked (the last attempted need/owner identity),
+channel (destination hash) and sentAt
 (the confirmed delivery time). `listed` means issues in the last attempted send.
 Logs retain at, issue, kind, action, result, optional detail/destination.
 `recorded` and `not-sent` are local outcomes, not transport failures.
@@ -262,6 +263,9 @@ with numeric millisecond at, host, destination hash and issue identities),
 Hash destination identity from service and webhook URL or bot channel; never
 store credentials there. This aggregates only state visible in this state root;
 cross-machine channel coordination requires shared state or a future broker.
+When shared history is absent, seed known issue sends/recoveries and the current
+channel digest time from legacy record logs, so an upgrade cannot bypass recent
+message budgets. Unknown legacy transport outcomes cannot authorize recovery.
 Corrupt/unreadable existing shared history fails closed without sending.
 Reserve budgets atomically before the external send; interruption may suppress
 a later send rather than double-post. This is not exactly-once transport.

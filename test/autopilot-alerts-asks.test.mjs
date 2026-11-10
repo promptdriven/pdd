@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import * as alerts from '../src/autopilot-alerts.mjs';
@@ -39,7 +40,7 @@ for(const kind of ['test-suite','long-running','stuck'])test(`${kind}: return re
   assert.equal(f.incidents()[0].kind,kind);assert.equal(alerts.alertStatusLine({repo:f.repo,env:f.env},f.ports),'');
 });
 
-for(const need of ['', 'No action needed.', 'Informational only.', 'No operator action required.', 'No action now.', 'Identify the blocker', 'No named blocker is saved', 'Choose A? Also choose B?', 'Choose A. Then approve B.', 'Choose A?\nGrant access?'])test(`refuse empty, generic, no-action or multiple asks: ${JSON.stringify(need)}`,async t=>{
+for(const need of ['', 'No action needed.', 'Informational only.', 'No operator action required.', 'No action now.', 'Identify the blocker', 'No named blocker is saved', 'Choose A? Also choose B?', 'Choose A. Then approve B.', 'Choose A?\nGrant access?', 'Approve the change and grant access', 'Can you approve this and grant access?', 'No further action required.', 'No human intervention needed.', 'Nothing to do.', 'FYI: Choose policy A?'])test(`refuse empty, generic, no-action or multiple asks: ${JSON.stringify(need)}`,async t=>{
   const f=setup(t);await f.config();const r=await f.alert(1,'decision',{...ask,need});
   assert.equal(f.requests.length,0);assert.equal(r.exitCode,need?0:2);
 });
@@ -111,12 +112,13 @@ for(const mode of ['short','unsent','failed','unconfirmed','issue-budget'])test(
 test('reopen after recovery waits two hours even for a different code and a quiet recovery',async t=>{
   const f=setup(t);await f.config();await f.alert();f.time+=DAY;await f.recover();
   f.time+=DAY; // clear the recovery message issue budget before another quiet incident
-  await f.alert(2);await f.recover(2); // shared cause, quiet close; issue 3 had no send
+  await f.alert(4);await f.alert(2);await f.recover(2); // shared cause, quiet close; issue 3 had no send
   const before=f.requests.length;
   await f.alert(3,'decision',{...ask,code:'other-policy'}); // unrelated issue remains eligible
   assert.equal(f.requests.length,before+1);
   await f.alert(2,'decision',{...ask,code:'reopened'});assert.equal(f.requests.length,before+1);
-  f.time+=2*HOUR;await f.alert(2,'decision',{...ask,code:'reopened'});assert.equal(f.requests.length,before+2);
+  f.time+=2*HOUR-1;await f.alert(2,'decision',{...ask,code:'reopened'});assert.equal(f.requests.length,before+1);
+  f.time++;await f.alert(2,'decision',{...ask,code:'reopened'});assert.equal(f.requests.length,before+2);
 });
 
 test('at most six messages per rolling hour per machine across repos; exactly an hour releases capacity',async t=>{
@@ -169,10 +171,66 @@ test('oversize asks and secret text are never sent as truncated questions or exp
   const f=setup(t);await f.config();await f.alert(1,'decision',{...ask,need:`Choose ${'a'.repeat(600)}?`});assert.equal(f.requests.length,0);
   await f.alert(2,'decision',{...ask,code:'safe',tried:'Read https://hooks.slack.com/services/sensitive/value.'});
   assert.equal(f.requests.length,1);assert.doesNotMatch(f.requests[0].body.text,/sensitive|hooks\.slack/);
+  assert.doesNotMatch(JSON.stringify(f.records()),/sensitive|hooks\.slack/);
 });
 
 test('native hook accepts fields without a text envelope and preserves no approvals or core coupling',async t=>{
   const f=setup(t);await f.config();assert.equal(typeof alerts.notifyAutopilotAsk,'function');
   const r=await alerts.notifyAutopilotAsk({env:f.env,issue:'1',kind:'decision',fields:ask},f.ports);
   assert.equal(r.exitCode,0);assert.equal(f.requests.length,1);
+});
+
+
+test('failed alert retries only after 24 hours; a destination test does not erase open failures',async t=>{
+  const f=setup(t);await f.config();f.reply={status:500,text:'error'};await f.alert();
+  assert.match(alerts.alertStatusLine({repo:f.repo,env:f.env},f.ports),/1 open alert not delivered/);
+  f.reply=null;await f.alert();assert.equal(f.requests.length,1);
+  await f.run({action:'test'});assert.match(alerts.alertStatusLine({repo:f.repo,env:f.env},f.ports),/1 open alert not delivered/);
+  f.time+=DAY;await f.alert();assert.equal(f.requests.length,3);assert.equal(alerts.alertStatusLine({repo:f.repo,env:f.env},f.ports),'');
+});
+
+test('a missing destination consumes no issue budget and setup allows the recorded ask to send',async t=>{
+  const f=setup(t);await f.alert();assert.equal(f.requests.length,0);
+  assert.match(alerts.alertStatusLine({repo:f.repo,env:f.env},f.ports),/set one/);
+  await f.config();await f.alert();assert.equal(f.requests.length,1);
+});
+
+test('only changing the owner can update an ask after the issue cooldown',async t=>{
+  const f=setup(t);await f.config();await f.alert();f.time+=DAY;
+  await f.alert(1,'decision',{...ask,owner:'Maintainers'},{update:true});assert.equal(f.requests.length,2);
+  assert.match(f.requests.at(-1).body.text,/Owner: Maintainers/);
+});
+
+test('digest observes the recovery quiet period even when the prior recovery did not send',async t=>{
+  const f=setup(t);await f.config();await f.alert(1);await f.alert(2);await f.recover(2);
+  const rows=[{number:2,category:'decision',need:'Choose another policy?'}];
+  await f.digest(rows);assert.equal(f.requests.length,1);
+  f.time+=2*HOUR-1;await f.digest(rows);assert.equal(f.requests.length,1);
+  f.time++;await f.digest(rows);assert.equal(f.requests.length,2);
+});
+
+test('destination changes do not leak the previous channel open list into a new channel digest',async t=>{
+  const f=setup(t);await f.config();await f.alert(1);f.time+=DAY;
+  await f.run({action:'set',text:'https://hooks.slack.com/services/synthetic/other/channel'});
+  await f.digest([{number:2,category:'access',need:'Grant access?'}]);assert.equal(f.requests.length,2);
+  assert.doesNotMatch(f.requests.at(-1).body.text,/issues\/1/);
+});
+
+test('oversize digest remains local without truncating links or hiding open asks',async t=>{
+  const f=setup(t);await f.config();const rows=Array.from({length:40},(_,i)=>({number:i+1,category:'decision',need:'Choose policy A?'}));
+  await f.digest(rows);assert.equal(f.requests.length,0);
+});
+
+
+for(const action of ['alert','recovered','digest'])test(`legacy ${action} log seeds quiet budgets when shared history is absent`,async t=>{
+  const f=setup(t);await f.config();const root=join(f.ports.stateRoot,'alerts');mkdirSync(root,{recursive:true});
+  const id=createHash('sha256').update(f.repo).digest('hex').slice(0,20);
+  writeFileSync(join(root,`${id}.json`),JSON.stringify({v:1,repo:f.repo,incidents:{},log:[{
+    at:new Date(f.time-HOUR).toISOString(),host:f.host,issue:action==='digest'?undefined:1,kind:action==='digest'?'digest':'decision',action,result:action==='recovered'?'not-sent':'delivered'
+  }]}));
+  if(action==='digest')await f.digest([{number:1,category:'decision',need:'Choose policy A?'}]);else await f.alert();
+  assert.equal(f.requests.length,0);
+  f.time+=action==='recovered'?HOUR:23*HOUR;
+  if(action==='digest')await f.digest([{number:1,category:'decision',need:'Choose policy A?'}]);else await f.alert();
+  assert.equal(f.requests.length,1);
 });

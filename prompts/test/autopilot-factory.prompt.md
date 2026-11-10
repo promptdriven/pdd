@@ -10,7 +10,11 @@ against a disposable project. Use real Git commits, branches, worktrees and a
 local bare origin. Only external services and agent reasoning are fake.
 Use the real alert owner with private state and injected HTTP delivery. Retain
 its `{exitCode,message}` result, including confirmed failure and unconfirmed
-delivery. Saving an incident can return zero even if delivery fails. Keep open
+delivery. Saving an incident can return zero even if delivery fails.
+An audit payload without the alert owner's stable code, concrete single ask and
+no-answer consequence stays record-only, regardless of the configured HTTP
+response. The audit retains unknown alert publication custody and does not retry
+it; the factory must not fabricate missing payload fields in its alert adapter. Keep open
 incident suppression and material updates observable; never confirm every call.
 GitHub must retain mutations and answer REST, GraphQL, claims, PR head/check readback
 and merge requests. Reject unsupported service operations. The interpreter must
