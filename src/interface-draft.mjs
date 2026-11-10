@@ -368,6 +368,8 @@ function purposeMatches(operation,verb,sentence) {
   return operationWords.length>1 && operationWords[0]===normalize(verb)
     && operationWords.slice(1).every(word=>sentenceWords.includes(word));
 }
+const singlePurposeAction=sentence=>!(/\b(?:and|or|then|also)\b/i.test(sentence));
+
 function sentenceTypes(sentence,entry,returnedField) {
   let conflicting=false,unresolved=false,typed=false;
   const keys=new Map(),errorNames=new Set(['Error','RangeError','TypeError','SyntaxError','code',...(entry?.errors ?? [])]);
@@ -461,7 +463,8 @@ function sentenceCoverage(sources,expanded) {
         ...[...sentence.matchAll(/\bcode`?(?:\s+property)?\s+(?:equal to|is)\s+`"?([^"`]+)"?`/gi)].map(m=>m[1]),
         ...[...sentence.matchAll(/\berror(?:\s+code)?\s+`"?([^"`]+)"?`/gi)].map(m=>m[1]),
       ];
-      const scopeClaim=/\bexisting\b[^.]*\b(?:remain unchanged|must not change)\b/i.test(sentence);
+      const scopeClaim=/\bexisting\b[^.]*\b(?:remain unchanged|must not change)\b/i.test(sentence)
+        || /\b(?:this )?module\s+(?:has|stores?|keeps?)\b[^.]*\b(?:saved|persistent)\s+state\b/i.test(sentence);
       const errorClassClaim=/\b[A-Z][A-Za-z]*Error\b/.test(sentence);
       const refusalClause=/^(?:Reject\s+(?:negative\b|fractions\b|non-numbers?\b|invalid\b)[^.]*|[^.]*\b(?:fractions|non-numbers?(?:\s+values)?|NaN|infinities|unsafe\s+integers)\b[^.]*\bare\s+(?:refused|rejected)|Do not (?:coerce|round)\s+inputs?(?:\s+or\s+\w+)?|No input is (?:rounded|coerced)|Nothing is (?:rounded|coerced))\.$/i.test(sentence);
       if(binding) {
@@ -473,7 +476,7 @@ function sentenceCoverage(sources,expanded) {
       }
       if(opPurpose) {
         const opIndex=expanded.entries?.findIndex(item=>item.operation===opPurpose[1]) ?? -1;
-        if(opIndex>=0 && purposeMatches(expanded.entries[opIndex].operation,opPurpose[2],sentence) && !conflicting && !unresolved && !behaviorRule.test(sentence)) mappings=[{pointer:`/entries/${opIndex}/operation`,meaning:expanded.entries[opIndex].operation}];
+        if(opIndex>=0 && purposeMatches(expanded.entries[opIndex].operation,opPurpose[2],sentence) && singlePurposeAction(sentence) && !conflicting && !unresolved && !behaviorRule.test(sentence)) mappings=[{pointer:`/entries/${opIndex}/operation`,meaning:expanded.entries[opIndex].operation}];
         else if(opIndex<0 && expanded.entries?.length) conflicting=true;
       }
       if(ownDeclaration && ownExpected) {
@@ -509,7 +512,7 @@ function sentenceCoverage(sources,expanded) {
         if(targetIndex>=0 && Array.isArray(entry?.errors) && entry.errors.length===0 && /\b(?:reject|refused|rejected)\b/i.test(sentence)) conflicting=true;
         else unresolved=true;
       }
-      if(!mappings.length && modulePurpose && !behaviorRule.test(sentence) && !conflicting && !unresolved && targetIndex>=0 && typeof entry?.operation==='string' && entry.operation.trim() && purposeMatches(entry.operation,modulePurpose[1],sentence)) {
+      if(!mappings.length && modulePurpose && singlePurposeAction(sentence) && !behaviorRule.test(sentence) && !conflicting && !unresolved && targetIndex>=0 && typeof entry?.operation==='string' && entry.operation.trim() && purposeMatches(entry.operation,modulePurpose[1],sentence)) {
         mappings=[{pointer:`/entries/${targetIndex}/operation`,meaning:entry.operation}];
       }
       if(!mappings.length && !conflicting && !unresolved && targetIndex>=0 && !behaviorRule.test(sentence)) {

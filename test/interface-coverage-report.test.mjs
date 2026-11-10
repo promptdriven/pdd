@@ -285,6 +285,28 @@ test('3130 #39 ordinal coverage maps only the declared meaning and keeps scope o
   }
 });
 
+test('coverage leaves a module-wide saved-state claim open despite a result description',t=>{
+  const sentence='This module has no saved state.';
+  const described=structuredClone(ordinalContract);
+  described.entries[0].result_schema.description=sentence;
+  const r=draft(setup(t,'# ordinal\n\n'+sentence+'\n'+fence(described)));
+  assert.equal(r.code,0);
+  const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+  assert.ok(row);assert.equal(row.status,'unmapped');
+  assert.deepEqual(row.pointers,[]);assert.deepEqual(row.mappings,[]);
+  assert.equal(r.row.questions.filter(question=>question.sentence===sentence).length,1);
+});
+
+test('coverage leaves an operation sentence with an extra effect open',t=>{
+  const sentence='Operation `formatOrdinal` formats English ordinals and emails a copy to an administrator.';
+  const r=draft(setup(t,'# ordinal\n\n'+sentence+'\n'+fence(ordinalContract)));
+  assert.equal(r.code,0);
+  const row=r.row.prose_coverage.find(item=>item.sentence===sentence);
+  assert.ok(row);assert.equal(row.status,'unmapped');
+  assert.deepEqual(row.pointers,[]);assert.deepEqual(row.mappings,[]);
+  assert.equal(r.row.questions.filter(question=>question.sentence===sentence).length,1);
+});
+
 test('3130 #39 a safe integer claim maps when type and bounds retain it',t=>{
   const claim='Accept only a JavaScript Number that is a nonnegative safe integer.';
   const exact=structuredClone(ordinalContract);
