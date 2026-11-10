@@ -47,6 +47,28 @@ test('two issues in different locally owned areas get one global umbrella', asyn
   assert.ok(!group.members.includes(group.umbrella));
 });
 
+for (const { name, members, umbrellaKind, expected } of [
+  { name: 'small-change and bug choose bug', members: ['small-change','bug','bug'], umbrellaKind: 'feature', expected: 'bug' },
+  { name: 'bug and feature choose feature', members: ['bug','feature','bug'], umbrellaKind: 'bug', expected: 'feature' },
+]) test(`active umbrella workflow precedence: ${name}`, async () => {
+  const w = fixture([1,2,3]);
+  const scope = kind => ({ kind, evidence: ['The issue requirement defines the requested fix.', 'The behavior contract defines the affected result.'] });
+  for (const [index, kind] of members.entries()) {
+    const changeScope = kind === 'small-change' ? scope('tests-only') : scope('behavior');
+    const genuine = { kind: kind === 'feature' ? 'feature' : 'bug', duplicateOf: '', reason: '' };
+    const paths = kind === 'small-change' ? ['test/words.vectors.test.mjs'] : ['src/cli.mjs'];
+    w.save(w.record(index + 1, { genuine, changeScope, paths })); w.review(index + 1);
+  }
+  await tick(w);
+  const [group] = await groups(w), umbrella = w.issues.find(x => x.html_url === group.umbrella);
+  assert.ok(umbrella, 'the active group has a dedicated umbrella');
+  w.save(w.record(umbrella.number, { genuine: { kind: umbrellaKind, duplicateOf: '', reason: '' }, changeScope: scope('behavior'), rootCause: '' }));
+  w.review(umbrella.number);
+  const route = sortPlan({ snapshot: await read(w) }).routes.find(x => x.issue === group.umbrella);
+  assert.equal(route?.action, 'work');
+  assert.equal(route?.workflow, expected);
+});
+
 test('a changed cause leaves the old group and joins the matching saved group', async () => {
   const w = fixture([1,2,3,4,5]); seed(w, [1,2,3]);
   for (const n of [4,5]) { w.save(w.record(n, { rootCause: 'other-cause' })); w.review(n); }

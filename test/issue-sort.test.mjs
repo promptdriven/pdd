@@ -106,6 +106,19 @@ for (const kind of ['duplicate','old-code','not-genuine']) test(`${kind} routes 
   assert.equal(w.issues[0].state, 'closed');
 });
 
+test('close and question routes expose an empty workflow', async () => {
+  for (const row of [
+    { name: 'close', action: 'close', changes: w => ({ status: fixed(w) }) },
+    { name: 'question', action: 'question', changes: () => ({ belongs: { kind: 'unknown', area: '', repository: '' }, question: 'Which repository owns this issue?' }) },
+  ]) {
+    const w = fixture();
+    w.save(w.record(1, row.changes(w))); w.review(1);
+    const route = sortPlan({ snapshot: await read(w) }).routes.find(x => x.issue === key(1));
+    assert.equal(route?.action, row.action, row.name);
+    assert.equal(route?.workflow, '', row.name);
+  }
+});
+
 test('another login gets one note and an assignment, with no eligible start', async () => {
   const w = fixture([1], { context: { areas: [{ name: 'cli', owner: 'runtime-owner', match: { paths: ['src/**'] } }] } });
   assert.equal((await complete(w, [w.record(1)])).state, 'complete');
