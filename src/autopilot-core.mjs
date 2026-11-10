@@ -189,7 +189,7 @@ const repairPrompt = (ctx, job, reds, result) => `You are an Autopilot core repa
 Work only in this folder: ${job.worktree}. The checks of head ${job.head} are red:
 ${reds.map(red => `- ${red}`).join('\n')}
 
-Fix these causes on the same branch and push to it. Do not open a new PR. When the Runtime result changes, update the "Runtime:" line in the PR body.
+Fix these causes on the same branch and push to it. Do not open a new PR. If the result of \`pdd test\` changes, update the "Runtime:" line in the PR body.
 
 ${issueText(job)}
 
