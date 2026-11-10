@@ -1,7 +1,7 @@
 // A small offline world for the Autopilot core tick: a fake GitHub (one work repository and the
 // promptdriven/pdd report repository), a real local Git origin and clone, a fake clock and a scripted
 // agent job runner. No network, no real agent, no timer.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -133,7 +133,8 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     },
     read: job => ({ state: w.alive.has(job.pid) ? 'running' : existsSync(job.exit) ? 'exited' : 'dead',
       exit: existsSync(job.exit) ? JSON.parse(readFileSync(job.exit, 'utf8')) : null,
-      result: existsSync(job.result) ? JSON.parse(readFileSync(job.result, 'utf8')) : null }),
+      result: existsSync(job.result) ? JSON.parse(readFileSync(job.result, 'utf8')) : null,
+      log: existsSync(job.log) ? { size: statSync(job.log).size, mtime: statSync(job.log).mtimeMs } : null }),
     stop: job => { const was = w.alive.delete(job.pid); if (was) w.stopped.push(job.id); return was; },
   };
   w.job = (issue, role) => [...w.started].reverse().find(j => j.issue === issue && (!role || j.role === role));
@@ -145,6 +146,8 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     writeFileSync(job.exit, JSON.stringify({ code, signal: null, at: w.now() }));
     return job;
   };
+  // The agent makes progress: one more log line.
+  w.progress = (issue, role) => appendFileSync(w.job(issue, role).log, `progress at ${w.now()}\n`);
   w.kill = (issue, role) => { const job = w.job(issue, role); w.alive.delete(job.pid); return job; };
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.
   w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {} } = {}) => {

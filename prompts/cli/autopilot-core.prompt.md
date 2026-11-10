@@ -27,7 +27,7 @@ string `core`; any other value, or none, is `full`.
 | `trust` | the nonblank strings of `autopilot.trust`, else `[]` |
 | `runs` | positive safe integer, default 2: the slot count |
 | `label` | trimmed nonblank opt-in label, for example `pdd:autopilot`, else `null` |
-| `jobTimeoutMinutes` | positive safe integer, default 120 |
+| `quietMinutes` | positive safe integer, default 45: the no-progress period (there is no fixed time limit) |
 | `report` | `file`, `draft` or `off`, default `draft` |
 | `repairs` | safe integer of at least 0, default 2 |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
@@ -46,8 +46,19 @@ below) and `core.json` (the machine pause and the pending no-result). The job fi
 restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
 (`running`, `pr` or `ending`), `role` (`build` or `repair`), `repairs`, `started`,
-`deadline`, the started `agent` job, and in phase `pr` also `pr`, `head`,
-`runtime`, `review` and `suite`.
+`progress {sig, at, running}`, the started `agent` job, and in phase `pr` also `pr`,
+`head`, `runtime`, `review` and `suite`.
+
+**Progress, no fixed time limits.** A job ends only when it stops making progress.
+Each tick builds a signature of what it sees and saves `progress`: a changed
+signature, or something that still runs, sets `at` to now. A job is **quiet** when
+nothing ran at the last look and `at` is `quietMinutes` or more ago. A running build
+or repair agent's signature is its log size and change time (`readAgentJob().log`)
+and the commit of its worktree (`git rev-parse HEAD`). In phase `pr` it is the head,
+the CI state, the review and suite states and the reviewer's log; it runs while CI is
+pending (queued or in progress, or no check yet within its 10 minutes), the reviewer
+runs or the suite process is alive. A new job, a repair, a PR result and a base
+refresh start the clock again.
 
 Slots come only from these job files, never from workflow allocation or other
 local records. A job holds a slot while its process runs or its outcome is not yet
@@ -64,7 +75,7 @@ ended or moved to the merge check before free slots are counted.
 
 1. Mode `off` returns `Autopilot is off.` Then read `core.json` and save `lastTick`
    (now). A **sleep gap** is a gap since the saved `lastTick` that is longer than the
-   job time limit (a laptop sleep; a clock that went back is no gap). Mode `observe`
+   quiet period (a laptop sleep; a clock that went back is no gap). Mode `observe`
    does everything that `auto` does (claim, build, PR, review, suite, CI, Runtime,
    base check, repairs, END) **except the merge** (merge check step 7); its message
    starts `Autopilot core (observe: no merge):`.
@@ -75,7 +86,7 @@ ended or moved to the merge check before free slots are counted.
    with no GitHub write, and do not take that issue again in this tick. A job with a
    PR reads it first: a merged PR (GitHub closes the issue from "Fixes #N") finishes
    as merged, not as a person stop.
-4. For each own claim of a job that is not past its deadline, read the winning claim
+4. For each own claim of a job that is not quiet, read the winning claim
    with the owners port first. The job still owns the issue only while the winner is
    this machine's coordinator, machine and claim comment. When the owner is unknown
    because a later claim comment names this job's label event (a loser whose delete
@@ -96,15 +107,15 @@ ended or moved to the merge check before free slots are counted.
 5. Advance each job, each in its own error boundary. An error saves `lastError` on
    that job, and `lastErrorTool` true when it came from a GitHub or Git call, and the
    tick continues with the next job. A job that waits with no error clears both, and
-   so does a new head. A job whose advance fails on 2 ticks after its deadline ends
-   (`job` / `no-result`), so no job holds a slot or a claim past its deadline plus 2
-   ticks. A `running` job with no agent record (the tick died between its two saves)
-   ends at once as `no-result`. After a sleep gap, a job whose deadline passed in the
-   gap is this machine's fault, never a timeout or claim-expired END: a running job
-   (and a PR whose claim expired) ends as a **machine no-result**: a release with no
-   comment and no `pdd:stuck`, which is not counted for the issue (no cooldown, no
-   strike) and does not add to `streak`. A PR in its checks with a live claim gets a
-   new deadline (now plus the time limit) and goes on.
+   so does a new head. A quiet job whose advance fails on 2 ticks ends (`job` /
+   `no-result`), so no job holds a slot or a claim long past its quiet period. A
+   `running` job with no agent record (the tick died between its two saves) ends at
+   once as `no-result`. After a sleep gap nothing could make progress: every job's
+   quiet clock starts again (`progress.at` = now). A claim that expired in the gap, or
+   an agent whose process ended in the gap with no exit record, is this machine's
+   fault, never a timeout or claim-expired END: a **machine no-result**, a release
+   with no comment and no `pdd:stuck`, which is not counted for the issue (no
+   cooldown, no strike) and does not add to `streak`.
 
 **Hand-over**: a job that lost its claim to another machine stops its processes,
 changes nothing on the issue (no comment, no label), marks this machine's own open
@@ -122,13 +133,13 @@ flowchart TD
     C -->|no| X([skip; no start])
     C -->|yes| B[build job running]
     B -->|result pr| M{merge check}
-    B -->|failed, dead, no result, time limit| E([END])
+    B -->|failed, dead, no result, no progress| E([END])
     M -->|all green| G([merge, close issue])
     M -->|waiting| M
     M -->|red, repairs left| P[repair job running]
     P -->|result pr| M
-    P -->|failed, dead, time limit| E
-    M -->|red, no repairs left; head moved; PR closed; time limit| E
+    P -->|failed, dead, no progress| E
+    M -->|red, no repairs left; head moved; PR closed; no progress| E
 ```
 
 ## Ready rule
@@ -199,7 +210,7 @@ Codex usage limit), or while a machine pause runs (below).
 
 **No result is a machine fault first.** An agent that exited with no result, a start
 failure (also one that the spawn reports later), a dead process (a restart or a
-sleep), a job with no agent record, a job that cannot advance past its deadline, a
+sleep), a job with no agent record, a quiet job that cannot advance, a quiet agent, a
 reviewer that twice gives no valid verdict and a suite runner that died 3 times all
 end as `no-result`. Every job kind follows the same rules, in every machine state.
 
@@ -293,7 +304,7 @@ any other pdd (for example an older global install).
   result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`.
 - **Suite** (in `worktrees/N-suite`): `node bin/pdd.mjs workflow suite --command
   TEST --timeout MIN` through the [shared full-suite queue](test-suite-queue.prompt.md),
-  with MIN = the smaller of 120 and `jobTimeoutMinutes`. Exit 0 is green; any other
+  with MIN = 120 (the shared queue's own runner limit). Exit 0 is green; any other
   exit code of the repository's test command is a red suite, and repairs apply. Only a
   failure of the runner itself is not a test result: a run that died (no exit record)
   or was killed by a signal, the wrapper's exit 127 (could not start), no output at
@@ -311,8 +322,10 @@ any other pdd (for example an older global install).
   "Autopilot core: dependency install failed") is a runner failure, not a red suite.
   A repository with no dependencies installs nothing.
 
-A running build or repair job past its `deadline` (start plus `jobTimeoutMinutes`)
-is stopped and ends with `timeout`. An exited or dead job: a valid `pr` result moves
+A running build or repair agent that is quiet is stopped; with no valid result file
+it ends as `no-result` (the no-result rules apply), with one it goes on as an exited
+job. A reviewer whose log does not change for the quiet period is stopped and counts
+as no verdict. An exited or dead job: a valid `pr` result moves
 to the merge check in the same tick. The PR number may be a number or a string of
 digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digits in
 any case and is saved in lower case. Any other PR value is no result. A `failed`
@@ -320,12 +333,13 @@ result ends with the agent's cause; anything else ends with `no-result`.
 
 ## Merge check
 
-Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in order:
+Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 
-1. Read the PR. Merged: finish as merged, also past the deadline, so END never runs
-   on a merged issue. Past the deadline: stop the checks and end with the last error,
-   a `pdd` cause `merge-check-tool` when the PR read fails or the last saved error
-   came from a GitHub or Git call, else a `job` cause `checks-timeout`. Closed: end
+1. Read the PR. Merged: finish as merged, also when quiet, so END never runs on a
+   merged issue. Quiet: stop the checks and end with the last error, a `pdd` cause
+   `merge-check-tool` when the PR read fails or the last saved error came from a
+   GitHub or Git call, else a `job` cause `checks-quiet` ("the PR checks made no
+   progress for N minutes"). Closed: end
    `pr-closed`. The PR head SHA, head branch or base differs from the job: end
    `head-moved`.
 2. `Runtime: not run (…)` is allowed, and the PR body is not rewritten. When the
@@ -351,12 +365,13 @@ Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in 
    ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
    the head, summary and must-fix list.
 4. Any red finding: stop the other checks. With repairs left, start one repair job,
-   count it and give it a new deadline. Without, end `checks-red` with the findings.
+   count it and start its quiet clock. Without, end `checks-red` with the findings.
 5. Wait while CI, review or suite is not green. CI is green when the head has at
    least one check and none is pending. When the head has no check run and no
    status 10 minutes after the job reported the PR (`prAt`, set each time a build
    or repair job reports a head), CI is `none`: the full suite and the fresh review
-   decide alone. A pending check still waits, within the time limit.
+   decide alone. A pending check still waits, as long as it takes; save `progress`
+   first.
 6. The head must contain the current base tip (`compare/BASE...HEAD`,
    `behind_by` 0). When the base moved, refresh natively in the job worktree: reset to
    the job head, merge `origin/BASE` (identity "PDD Autopilot", no hooks, no signing),
@@ -397,7 +412,7 @@ Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in 
 `END(cause)` takes `{kind, component, code, text, detail}`; kinds are `runtime`
 (no verdict, lint refusal, binding refusal, interpreter error), `pdd` (CLI error,
 crash, claim error, merge-check tool error) and `job` (the agent did not do the
-task, a time limit, red checks). It stops the job's processes and saves phase
+task, no progress, red checks). It stops the job's processes and saves phase
 `ending`, then, resumable step by step on later ticks:
 
 0. Each tick counts one try. After 6 tries, or 24 hours in phase `ending`, send one
@@ -447,7 +462,7 @@ agent's commits may exist only there.
 
 `coreStatus({state, settings}, {root, reportRoot, now, fs})` returns text from local
 files only: the engine line (mode, repository, folder, base, agent), the slot line
-(`B of R slots busy`, time limit, repairs, report mode, opt-in label), the pause
+(`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
 of local report drafts.

@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -21,11 +21,12 @@ test('settings: engine switch, defaults and bounded values', () => {
   assert.equal(autopilotEngine({ autopilot: { engine: 'core' } }), 'core');
   assert.equal(autopilotEngine({ autopilot: { engine: 'turbo' } }), 'full');
   assert.deepEqual(coreSettings({ autopilot: { mode: 'auto', engine: 'core' } }), {
-    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, jobTimeoutMinutes: 120, report: 'draft', repairs: 2, testCommand: null });
-  const custom = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 3, label: 'pdd:autopilot', jobTimeoutMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check', trust: ['Dana'] } });
-  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', jobTimeoutMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check' });
-  const invalid = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 0, jobTimeoutMinutes: -1, report: 'loud', repairs: 1.5, label: '' } });
-  assert.deepEqual([invalid.runs, invalid.jobTimeoutMinutes, invalid.report, invalid.repairs, invalid.label], [2, 120, 'draft', 2, null]);
+    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, report: 'draft', repairs: 2, testCommand: null });
+  const custom = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check', trust: ['Dana'] } });
+  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check' });
+  const invalid = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 0, quietMinutes: -1, report: 'loud', repairs: 1.5, label: '' } });
+  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'draft', 2, null]);
+  assert.equal(coreSettings({ autopilot: { jobTimeoutMinutes: 120 } }).jobTimeoutMinutes, undefined, 'there is no fixed time limit');
   assert.equal(coreSettings({ autopilot: { engine: 'core' } }, { scripts: { test: 'node --test' } }).testCommand, 'npm test');
 });
 
@@ -92,16 +93,16 @@ test('a job that dies releases its claim with no mark, closes its own PR and coo
   assert.equal(w.reports.calls.length, 0, 'a job failure files no report');
 });
 
-test('a job that runs past its time limit is stopped and ended', async t => {
-  const w = await coreWorld(t, { settings: { jobTimeoutMinutes: 60 } });
+test('a live agent that makes no progress for the quiet period is stopped and released as no result', async t => {
+  const w = await coreWorld(t, { settings: { quietMinutes: 45 } });
   w.issue(17);
   await w.tick();
-  w.advance(59 * MIN); await w.tick();
+  for (let i = 0; i < 4; i++) { w.advance(10 * MIN); await w.tick(); }      // 40 quiet minutes
   assert.deepEqual(w.stopped, []); assert.equal(endComments(w, 17).length, 0);
-  w.advance(2 * MIN); await w.tick();
+  w.advance(10 * MIN); await w.tick();
   assert.deepEqual(w.stopped, [w.job(17, 'build').id]);
-  assert.match(endComments(w, 17)[0], /time limit|60 minutes/i);
-  assert.ok(w.labels(17).includes('pdd:stuck'));
+  assert.equal(endComments(w, 17).length, 0, 'a no-result end only releases'); assert.ok(!w.labels(17).includes('pdd:stuck'));
+  assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /made no progress for 45 minutes/);
 });
 
 test('claim race between two machines: one machine starts, the loser starts nothing', async t => {
@@ -178,18 +179,15 @@ test('C1 a 5-hour tick gap (a laptop sleep): jobs past their time limit are rele
   assert.ok(w.job(19, 'build'), 'new intake starts');
 });
 
-test('C1b a 3-hour sleep while a PR waits for its checks: a new deadline, no END, and it merges', async t => {
-  const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.issue(17); await w.tick();
+test('C1b a 3-hour sleep while a PR waits for its checks or an agent runs: the quiet clock starts again, no END, and it merges', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.issue(17); w.issue(18); await w.tick();
   const { pr } = w.build(17); await w.tick();
   w.advance(3 * HOUR); await w.tick();
   assert.equal(endComments(w, 17).length, 0); assert.equal(pr.state, 'open');
+  assert.deepEqual(w.stopped, [], 'the agent of #18 is not stopped at wake-up');
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.equal(pr.merged, true);
-  // A sleep shorter than the time limit keeps the old rule: a running job past its deadline is a timeout END.
-  w.issue(18); await w.tick();
-  w.advance(90 * MIN); await w.tick(); w.advance(40 * MIN); await w.tick();
-  assert.match(endComments(w, 18)[0] ?? '', /time limit/);
 });
 
 test('Runtime no verdict files one report, links it, and the next issue starts', async t => {
@@ -402,8 +400,8 @@ test('at most 3 new reports per machine per day; a 4th new cause stays a local d
   assert.match(endComments(w, 20)[0], /local draft/);
 });
 
-test('a merge check that keeps failing on GitHub ends at its time limit with a PDD report', async t => {
-  const w = await coreWorld(t, { settings: { report: 'draft', jobTimeoutMinutes: 30 } });
+test('a merge check that keeps failing on GitHub ends after its quiet period with a PDD report', async t => {
+  const w = await coreWorld(t, { settings: { report: 'draft', quietMinutes: 30 } });
   w.issue(17);
   await w.tick(); const { pr } = w.build(17);
   const gh = w.gh;
@@ -413,7 +411,7 @@ test('a merge check that keeps failing on GitHub ends at its time limit with a P
   // Ticks every 8 minutes (no sleep gap) until the time limit passes, then 2 more tries to read the PR.
   for (let i = 0; i < 4; i++) { w.advance(8 * MIN); await w.tick(); }
   await w.tick(); await w.tick();
-  assert.match(endComments(w, 17)[0], /did not finish within 30 minutes.*502/, 'after 3 tries to read the PR, the END goes on');
+  assert.match(endComments(w, 17)[0], /made no progress for 30 minutes.*502/, 'after 3 tries to read the PR, the END goes on');
   assert.equal(listReportDrafts({ root: w.reportRoot })[0].fingerprint, 'pdd.autopilot-core.merge-check-tool.0.1');
 });
 
@@ -602,7 +600,7 @@ test('R3 a locked or unremovable leftover worktree fails only that issue; intake
 
 test('R4 a failed cleanup never keeps the job file, and END never runs on a merged issue', async t => {
   const nativeFs = await import('node:fs');
-  const w = await coreWorld(t, { settings: { jobTimeoutMinutes: 30 } });
+  const w = await coreWorld(t, { settings: { quietMinutes: 30 } });
   let broken = false;
   const fs = { ...nativeFs, rmSync: (p, o) => { if (broken && String(p).includes('/worktrees/')) throw Object.assign(Error('EACCES'), { code: 'EACCES' }); return nativeFs.rmSync(p, o); } };
   const realGit = w.ports().git;
@@ -629,15 +627,16 @@ test('R4 a failed cleanup never keeps the job file, and END never runs on a merg
 });
 
 test('R5 should-fix: a cleared tool error, a dead suite, a restart, a partial claim and a stuck END', async t => {
-  // S1: one transient tool error, then pending CI to the deadline, is a job cause with no PDD report.
-  let w = await coreWorld(t, { settings: { report: 'draft', jobTimeoutMinutes: 30 } });
+  // S1: one transient tool error, then a quiet wait (the base check cannot verify), is a job cause with no PDD report.
+  let w = await coreWorld(t, { settings: { report: 'draft', quietMinutes: 30 } });
   w.issue(17); await w.tick();
-  const built = w.build(17, { checks: null }); w.github.setChecks(built.head, null, 'in_progress');
+  const built = w.build(17);
   let fail = true; const gh = w.gh;
   w.gh = async (args, o) => fail && args.some(x => String(x).includes(`/pulls/${built.pr.number}`)) ? (fail = false, { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' }) : gh(args, o);
-  await w.tick(); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
-  for (let i = 0; i < 4; i++) { w.advance(8 * MIN); await w.tick(); }   // ticks with no sleep gap
-  assert.match(endComments(w, 17)[0], /Cause: job \/ checks-timeout/); assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0);
+  const checkBase = async () => ({ exitCode: 1, message: 'Base check could not verify the base; retry.' });
+  await w.tick({ checkBase }); await w.tick({ checkBase }); w.review(17, 'PASS'); w.suite(17, 0); await w.tick({ checkBase });
+  for (let i = 0; i < 4; i++) { w.advance(8 * MIN); await w.tick({ checkBase }); }   // ticks with no sleep gap
+  assert.match(endComments(w, 17)[0], /Cause: job \/ checks-quiet/); assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0);
   // S2: a dead suite run starts again and uses no repair.
   w = await coreWorld(t);
   w.issue(17); await w.tick(); w.build(17); await w.tick();
@@ -713,7 +712,7 @@ test('R7 a job file with no agent record, or one whose advance keeps failing, en
   assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /no agent record/);
   assert.ok(w.job(18, 'build'), 'the slot is free');
   // Advance throws on every tick: at the deadline plus 2 ticks the job ends; after the deadline it gets no heartbeat.
-  const v = await coreWorld(t, { settings: { runs: 1, jobTimeoutMinutes: 60 } });
+  const v = await coreWorld(t, { settings: { runs: 1, quietMinutes: 60 } });
   v.issue(17); v.issue(18);
   await v.tick();
   const broken = { ...v.jobs, read: () => { throw Error('broken job record'); } };
@@ -740,7 +739,7 @@ test('R8 a non-zero test exit is a red suite and gets a repair; only a runner fa
 });
 
 test('R9 a worktree that Git still lists but whose folder is gone does not block the review checkout', async t => {
-  const w = await coreWorld(t, { settings: { jobTimeoutMinutes: 30 } });
+  const w = await coreWorld(t, { settings: { quietMinutes: 30 } });
   w.issue(17); await w.tick();
   const path = join(w.root, 'worktrees', '17-review');
   w.git(w.cwd, 'worktree', 'add', '-q', '--detach', path, 'HEAD');
@@ -1126,7 +1125,11 @@ test('R24 a core.json that is null, not an object or not JSON reads as not pause
   await w.tick(); failAll(); await w.tick(); failAll(); await w.tick();
   w.advance(-48 * HOUR);
   let paused = 0;
-  for (let i = 0; i < 40; i++) { const r = await w.tick(); if (/paused/.test(r.message)) paused++; w.advance(30 * MIN); }
+  for (let i = 0; i < 40; i++) {
+    const r = await w.tick(); if (/paused/.test(r.message)) paused++;
+    for (const job of w.started) if (w.alive.has(job.pid)) appendFileSync(job.log, 'working\n');   // working agents
+    w.advance(30 * MIN);
+  }
   assert.ok(paused <= 3, `paused ticks after the clock went back: ${paused}`);
 });
 
@@ -1185,7 +1188,7 @@ async function lifeCycle(t, { runs = 2, issues = 20, hours, down, buildTicks = 1
         w.finish(job.issue, job.role, { code: 1 }); continue;
       }
       age.set(job.id, (age.get(job.id) ?? 0) + 1);
-      if (age.get(job.id) < (job.role === 'review' ? 1 : buildTicks)) continue;
+      if (age.get(job.id) < (job.role === 'review' ? 1 : buildTicks)) { appendFileSync(job.log, 'working\n'); continue; }   // a working agent writes its log
       if (job.role === 'build' || job.role === 'repair') w.build(job.issue, { role: job.role });
       else if (job.role === 'review') w.review(job.issue, 'PASS');
     }
@@ -1577,4 +1580,68 @@ test('E1 report owner: a scenario or test-vector cause is a PDD report; interfac
   const runtime = listReportDrafts({ root }).find(d => d.fingerprint === binding.fingerprint);
   assert.equal(binding.fingerprint, 'runtime.pdd-test.binding-refused.0.1'); assert.deepEqual(runtime.labels, ['pdd:runtime']); assert.deepEqual(runtime.assignees, ['agarwal-ishaan']);
   assert.equal(reportKind({ kind: 'pdd', component: 'pdd', code: 'crash' }), 'pdd'); assert.equal(reportKind({ kind: 'job', code: 'scenario' }), 'job');
+});
+
+// ---- A (#3183): no fixed time limits --------------------------------------------------------------------
+test('G1 a 5-hour build whose log keeps growing runs on; then it merges', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  for (let i = 0; i < 30; i++) { w.advance(10 * MIN); w.progress(17, 'build'); await w.tick(); }
+  assert.deepEqual(w.stopped, []); assert.equal(endComments(w, 17).length, 0);
+  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+test('G2 a branch commit is progress too; quietMinutes comes from pdd.json', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, quietMinutes: 20 } });
+  w.issue(17); await w.tick();
+  const job = w.job(17, 'build');
+  for (let i = 0; i < 4; i++) {
+    w.advance(10 * MIN);
+    writeFileSync(join(job.cwd, `step-${i}.txt`), `${i}\n`); w.git(job.cwd, 'add', '.'); w.git(job.cwd, 'commit', '-qm', `step ${i}`);
+    await w.tick();
+  }
+  assert.deepEqual(w.stopped, [], 'commits keep it alive');
+  w.advance(10 * MIN); await w.tick(); w.advance(11 * MIN); await w.tick();
+  assert.deepEqual(w.stopped, [job.id], 'after 20 quiet minutes it stops');
+});
+
+test('G3 a PR waits 3 hours while CI is in progress; nothing running and nothing changing for the quiet period ends it', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const built = w.build(17, { checks: null }); w.github.setChecks(built.head, null, 'in_progress'); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  for (let i = 0; i < 18; i++) { w.advance(10 * MIN); await w.tick(); }
+  assert.equal(endComments(w, 17).length, 0, 'queued or running CI keeps the PR waiting');
+  w.github.setChecks(built.head); await w.tick();
+  assert.deepEqual(w.github.merges, [built.pr.number]);
+  // The base check keeps saying "could not verify": nothing runs and nothing changes, so after 45 minutes it ends.
+  const v = await coreWorld(t, { settings: { runs: 1 } });
+  v.issue(17); await v.tick(); v.build(17); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0);
+  const checkBase = async () => ({ exitCode: 1, message: 'Base check could not verify the release tag; retry.' });
+  await v.tick({ checkBase });
+  for (let i = 0; i < 4; i++) { v.advance(10 * MIN); await v.tick({ checkBase }); }
+  assert.equal(endComments(v, 17).length, 0);
+  v.advance(10 * MIN); await v.tick({ checkBase });
+  assert.match(endComments(v, 17)[0], /Cause: job \/ checks-quiet/); assert.match(endComments(v, 17)[0], /made no progress for 45 minutes/);
+});
+
+test('G4 an agent that wrote its PR result but did not exit is stopped after the quiet period and its PR goes on', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const job = w.job(17, 'build');
+  const { pr } = w.build(17); w.alive.add(job.pid);   // the result file is there, the process lingers
+  for (let i = 0; i < 5; i++) { w.advance(10 * MIN); await w.tick(); }
+  assert.ok(w.stopped.includes(job.id)); assert.ok(w.job(17, 'review'), 'the merge check starts');
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+test('G5 a reviewer whose log stops for the quiet period is stopped and tried once more', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  const first = w.job(17, 'review');
+  w.suite(17, 0);
+  for (let i = 0; i < 6; i++) { w.advance(10 * MIN); await w.tick(); }
+  assert.ok(w.stopped.includes(first.id)); assert.notEqual(w.job(17, 'review').id, first.id, 'a second reviewer starts');
 });

@@ -1381,14 +1381,14 @@ says to run `pdd autopilot start`.
 
 ```json
 {"autopilot":{"mode":"auto","trust":[],"engine":"core","runs":2,"label":"pdd:autopilot",
-  "jobTimeoutMinutes":120,"report":"draft","repairs":2,"testCommand":"npm test"}}
+  "quietMinutes":45,"report":"draft","repairs":2,"testCommand":"npm test"}}
 ```
 
 | Key | Meaning | Default |
 |---|---|---|
 | `runs` | Issues in progress at the same time on this machine | 2 |
 | `label` | Take only issues with this label | none: every ready issue |
-| `jobTimeoutMinutes` | Time limit for one agent job, and for the checks of one PR | 120 |
+| `quietMinutes` | Minutes with no progress after which a job or the checks of a PR end. There is no fixed time limit: a job runs as long as its log or branch changes, and a PR waits while CI, the review or the suite still runs | 45 |
 | `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `draft` |
 | `repairs` | Repair jobs for one PR after a red check | 2 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
@@ -1400,7 +1400,7 @@ Each tick, without AI calls:
    issue dependency or a `blocked by #N` line in its body), a trusted author and,
    when `label` is set, that label. The oldest ready issue goes first.
 2. Refresh the heartbeat of this machine's claims.
-3. Check each job. A job that ran past its time limit, failed, died or left no
+3. Check each job. A job that made no progress for `quietMinutes`, failed, died or left no
    result ends. A job with a PR goes to the merge check.
 4. Merge check: the PR head is the job's head, CI is green for that head, the
    full test suite passes for that head, a fresh reviewer agent that did not write
@@ -1459,9 +1459,10 @@ alert. A job with a result, a review verdict or a merge sets the pause length ba
 to 1 hour. `pdd autopilot status` shows the jobs, the busy slots,
 a pause and the time it ends, and the last results from local files.
 
-When the machine sleeps longer than the job time limit, a job that passed its time
-limit during the sleep is only released (no comment, no `pdd:stuck`, and it does not
-count against the issue); a PR that waits for its checks gets a new time limit. When
+When the machine sleeps longer than `quietMinutes`, every job's no-progress clock
+starts again at wake-up. A job whose claim expired or whose agent ended during the
+sleep is only released (no comment, no `pdd:stuck`, and it does not count against
+the issue). When
 several machines run the core on one repository, each machine's GitHub share is the
 `autopilot.github.share` divided by the number of machines with live claims, and a
 machine over its share starts no new job. A machine that finishes an END or a release

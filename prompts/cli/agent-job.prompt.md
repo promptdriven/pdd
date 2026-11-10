@@ -43,13 +43,15 @@ record is simply dead. There is no "uncertain custody" state.
   log as stdout and stderr (append). When the child ends, it writes
   `{code, signal, at}` to the exit file with a temporary file and a rename. On
   SIGTERM, SIGINT or SIGHUP it stops the child and still writes the exit record.
-- `readAgentJob(job, ports)` returns `{state, exit, result}`; a missing job record
+- `readAgentJob(job, ports)` returns `{state, exit, result, log}`; a missing job record
   is `dead`:
   - `state` is `running` when `ports.alive(pid, token)` is true; else `exited` when
     the exit record parses; else `dead`.
   - `exit` is the parsed exit record or null.
   - `result` is the parsed JSON object at `job.result`, `null` when the file is
     absent, or the string `invalid` when it does not parse to an object.
+  - `log` is `{size, mtime}` (bytes and change time in milliseconds) of `job.log`, or
+    null when it cannot be read; the core uses it to see progress.
 - `stopAgentJob(job, ports)` sends SIGTERM to the job's process group and returns
   true only when the job was alive; it returns false and sends nothing otherwise.
 

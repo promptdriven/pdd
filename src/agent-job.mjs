@@ -1,6 +1,6 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 5b76b12ab5b2e8e517eb30d8f7c3cb7251a10a74cce45a09fd5011eb89ea287b).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 58f5dfb2fc9cd66d52936fbf88f2de6eb794a37c625a42d974efde44665a79a9).
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,11 +44,14 @@ function nativeAlive(pid, token) {
 }
 
 export function readAgentJob(job, ports = {}) {
-  if (!object(job)) return { state: 'dead', exit: null, result: null };
+  if (!object(job)) return { state: 'dead', exit: null, result: null, log: null };
   const alive = Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token);
   const exit = readJson(job.exit), result = readJson(job.result);
+  // The log's size and change time show progress while the job runs.
+  let log = null;
+  try { const stat = statSync(job.log); log = { size: stat.size, mtime: stat.mtimeMs }; } catch { /* No log yet. */ }
   return { state: alive ? 'running' : object(exit) ? 'exited' : 'dead', exit: object(exit) ? exit : null,
-    result: result === undefined ? null : object(result) ? result : 'invalid' };
+    result: result === undefined ? null : object(result) ? result : 'invalid', log };
 }
 
 export function stopAgentJob(job, ports = {}) {
