@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2a47f692dd11eae221b5f2cce66e2f7b276ca9098512e2ef5061a53fb191ba1e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2186d26bb86a74958fb3097ad998ee9e07221145053e07633760cdcaa59b1ff9).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -724,7 +724,7 @@ async function chatContinuationOwnership(run, p, {releaseUnowned = false} = {}) 
     latest.cancelled = {state: 'handed-over', at: p.now(), reason};
     if (releaseUnowned) {
       latest.question = null; latest.gate = null;
-      delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
+      if (!latest.parking?.checkHeld && !['closing','waking','releasing'].includes(latest.parking?.phase)) delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.routeWait;
     }
     for (const chat of latest.chats ?? []) chat.endedAt ??= latest.cancelled.at;
   });
@@ -842,8 +842,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
       if (existing && !ended(existing) && closedOutcome(existing)) commitRun(existing, p, latest => {
         latest.state = 'cancelled'; latest.cancelled = latest.cancelled ?? { state: 'closed', at: p.now() };
         latest.question = null; latest.gate = null;
-        delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
-        for (const chat of latest.chats ?? []) chat.endedAt ??= p.now();
+        delete latest.blockedOn; delete latest.parkReason; delete latest.routeWait;
       });
       if (existing && !ended(existing)) return fail('Automatic start deferred: issue has an active run.');
       automaticOrigin = { repository: binding.repository, coordinatorId: coordinator.coordinatorId, machine: coordinator.machine, claim: { ...coordinator.claim } };
@@ -4253,7 +4252,7 @@ async function cancelRunCommand({ ref, cwd }, ports) {
   // No chat of a cancelled run may still read a login file.
   removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
   const cancelled={state:'cancelled',at:p.now()};
-  commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:cancelled;latest.question=null;latest.gate=null;delete latest.parking;delete latest.blockedOn;delete latest.parkReason;delete latest.runtimeWait;delete latest.routeWait;for(const chat of latest.chats ?? [])chat.endedAt ??= cancelled.at;});
+  commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:cancelled;latest.question=null;latest.gate=null;if(!latest.parking?.checkHeld&&!['closing','waking','releasing'].includes(latest.parking?.phase))delete latest.parking;delete latest.blockedOn;delete latest.parkReason;delete latest.routeWait;for(const chat of latest.chats ?? [])chat.endedAt ??= cancelled.at;});
   if (!ports?.claimReleased && validSavedAutomaticOrigin(run)) {
     try { await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts); } catch {}
     try {
@@ -4296,7 +4295,7 @@ export const releaseRunClaim = saveGuard(async ({ ref, cwd, repository, machine,
       try {
         commitRun(run, p, latest => {
           latest.question = null; latest.gate = null;
-          delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
+          if (!latest.parking?.checkHeld && !['closing','waking','releasing'].includes(latest.parking?.phase)) delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.routeWait;
         });
       } catch {}
     }
@@ -4334,8 +4333,7 @@ async function refreshPr(run, p) {
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
     if (ended(latest) || closedOutcome(latest) && !latest.promptReturn) {
       latest.question = null;
-      delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
-      for (const chat of latest.chats ?? []) chat.endedAt ??= checkedAt;
+      delete latest.blockedOn; delete latest.parkReason; delete latest.routeWait;
     }
   });
   await refreshTops();

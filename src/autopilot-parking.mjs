@@ -100,9 +100,10 @@ function closingHold(run, now, blocker = blockerFor({...run, parking: undefined}
   return null;
 }
 export function parkingSummary(runs, limit, now) {
-  const live = runs.filter(run => !ended(run)), parked = live.filter(run => run.parking?.phase === 'parked' && !run.parking.checkHeld && !run.checkHeld);
+  const custody = run => Boolean(run.checkHeld || run.parking?.checkHeld || ['closing', 'waking', 'releasing'].includes(run.parking?.phase));
+  const live = runs.filter(run => !ended(run) || custody(run)), parked = live.filter(run => !ended(run) && run.parking?.phase === 'parked' && !run.parking.checkHeld && !run.checkHeld);
   const reservations = run => run.parking && run.parking.phase !== 'parked' || run.parking?.checkHeld;
-  const working = live.filter(run => !parked.includes(run) && (!stopped(run) || reservations(run) || run.checkHeld)).length;
+  const working = live.filter(run => custody(run) || !parked.includes(run) && !ended(run) && (!stopped(run) || reservations(run) || run.checkHeld)).length;
   const blockers = {};
   for (const run of parked) {const name = label(run.parking.blocker); blockers[name] = (blockers[name] ?? 0) + 1;}
   const closing = live.filter(run => run.parking?.phase === 'closing').map(run => {

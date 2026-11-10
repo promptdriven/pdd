@@ -2980,3 +2980,27 @@ test('interpreter queue position is visible in detailed and JSON workflow status
   assert.equal(f.record().state, before.state, 'status must not advance workflow state');
   assert.equal(f.record().updatedAt, before.updatedAt);
 });
+
+
+test('merged PR ends the workflow but preserves unknown Runtime and check custody', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), batch = '20261110-065100-lwd1';
+  const url = 'https://github.com/example/project/pull/23';
+  const stage = run.areas.at(-1).name;
+  run.state = 'paused';
+  run.runtimeWait = {at:f.clock,reason:`Interpreter batch ${batch}: runner-stopped; no verdict.`,batch,cause:'unknown'};
+  run.parking = {at:f.clock,phase:'closing',blocker:{kind:'interpreter',until:null},checkHeld:true};
+  run.pr = [{number:23,url,stage,state:'open',ci:'none'}];
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  f.prs.push({number:23,url,state:'OPEN',headRefName:'pdd/test',baseRefName:'main',headRefOid:f.git(run.root,'rev-parse','HEAD'),body:''});
+  f.mergedNumbers.push(23);
+
+  const shown = await runStatus({ref:'17',cwd:f.source},f.ports);
+  assert.equal(shown.exitCode,0,shown.message);
+  const closed = f.record();
+  assert.equal(closed.state,'completed');
+  assert.equal(closed.runtimeWait.batch,batch,'PR closure keeps the request identity for local reconciliation');
+  assert.deepEqual(closed.parking,run.parking,'PR closure keeps check/cleanup custody');
+  assert.equal(closed.chats[0].endedAt,undefined,'PR closure does not claim the worker chat ended');
+});

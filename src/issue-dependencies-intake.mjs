@@ -1,5 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: d098606e91907fb1c461bb31a880cb4f1ed316f6ecbca17460e9ee61781061ca).
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: a1972add54c9832ddd077ff222631ef57a93bc1ada895b398ff0b54820b5f41f).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';

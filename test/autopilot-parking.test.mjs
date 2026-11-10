@@ -1569,3 +1569,30 @@ test('3157: when a run ends (merged, closed, cancelled, claim lost), its open qu
   assert.match(firstMessage, /Previous run notes:/);
   assert.ok(firstMessage.includes(fresh.previous[0].runDir));
 });
+
+
+test('cost or PR closure does not hide positively observed check custody', async () => {
+  const {parkingSummary, blockerFor} = await import('../src/autopilot-parking.mjs');
+  const closed = {number:17,state:'paused',cost:{outcome:'closed'},prState:{state:'closed'},
+    runtimeWait:{at:100,batch:'20261108-062749-jlsv',reason:'runner-stopped',cause:'unknown'},checkHeld:true};
+  assert.equal(blockerFor(closed),null,'workflow closure still ends its ordinary blocker');
+  assert.equal(parkingSummary([closed],1).working,1,'check custody remains reserved after closure');
+  assert.equal(parkingSummary([{...closed,checkHeld:false}],1).working,0,
+    'closure with positively idle checks does not retain a working slot');
+});
+
+test('closed workflow keeps an unknown Runtime wait in local dependency evidence until reconciliation', async t => {
+  const {f} = await setup(t);
+  const run = f.record(), batch = '20261108-062749-jlsv';
+  run.state = 'paused';
+  run.runtimeWait = {at:f.clock,batch,reason:'runner-stopped; no verdict',cause:'unknown'};
+  run.cost = {outcome:'closed'};
+  run.prState = {state:'closed',ci:'none',checkedAt:f.clock};
+  save(f,run);
+  const native = createDependencyReadPorts({cwd:f.source},{...f.ports,owners:undefined});
+  const observed = JSON.parse((await native.owners.read({repository:run.repo,issues:[]})).json);
+  const ownerRun = observed.runs.find(row => row.runId === run.runId);
+  assert.equal(ownerRun?.waiting,'runtime','closure does not hide the saved wait while check probes look idle');
+  assert.deepEqual(observed.runEvidence.find(row => row.runId === run.runId),
+    {issue:run.issue.url,runId:run.runId,batch,ended:true},'the same run remains the source of the request');
+});

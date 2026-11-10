@@ -732,69 +732,21 @@ test('factory 3157: a parked run is cancelled, its claim and labels go away, and
   assert.match(autoStatus.stdout,/working 0 of \d+ · parked 0/);
 });
 
-test('factory 3157: an ended run open question stops holding its issue so a fresh run starts with old notes while an issue question keeps holding',async t=>{
-  const {analysisFor}=await import('./helpers/autopilot-github-world.mjs');
-  const w=await factoryWorld(t,{workflow:'bug'});
-  await w.begin();
-  const oldRun=w.record(17);
-  put(oldRun.runDir,'NOTES.md','Old run note: check batch 20261108-062749-jlsv lost verdict.\n');
-  await w.command(['workflow','ask','What happened to batch 20261108-062749-jlsv?'],{cwd:oldRun.root});
-  assert.equal(w.record(17).question?.text,'What happened to batch 20261108-062749-jlsv?');
-
-  const cancel=await w.command(['workflow','cancel','17'],{actor:'person'});
-  assert.equal(cancel.code,0,cancel.stderr);
-  assert.equal(w.record(17).state,'cancelled');
-  assert.equal(w.record(17).question,null);
-
-  w.github.edit(17,'The value must be 2.');
-  w.github.add(18,{title:'Clarify value representation',body:'Should value be exported as a number or a bigint?',created:w.time-1000,updated:w.time});
-  await w.tick();w.messages();
-  const request=w.dependencyRequests.shift();
-  assert.ok(request,'expected dependency review request for #17 and #18');
-  const analysis=analysisFor(request);
-  for(const review of analysis.reviews) {
-    if(review.issue.endsWith('/17')) {
-      review.outcome='question';
-      review.questions=['What happened to batch 20261108-062749-jlsv, and should the coordinator treat the existing run as failed/stalled and start a fresh run?'];
-    }
-    if(review.issue.endsWith('/18')) {
-      review.outcome='question';
-      review.questions=['Should the exported value constant be a number or a bigint?'];
-    }
-  }
-  for(const sort of analysis.sorts??[]) {
-    if(sort.issue.endsWith('/17')) sort.question='Should the coordinator treat the existing run as failed/stalled (batch 20261108-062749-jlsv) and start a fresh run?';
-    if(sort.issue.endsWith('/18')) sort.question='Should the exported value constant be a number or a bigint?';
-  }
-  await w.command(['dependencies','complete','--input','-'],{actor:'coordinator',env:w.context(),stdin:JSON.stringify({request,analysis})});
-  await w.tick();w.messages();
-
-  const packet=w.packets.at(-1);
-  assert.ok(packet,'expected coordinator packet after dependency completion');
-  const i17=packet.issues.find(i=>i.number===17);
-  const i18=packet.issues.find(i=>i.number===18);
-  assert.equal(i17?.eligible,true,'ended-run question on #17 must stop holding');
-  assert.equal(i18,undefined,'issue-level person question on #18 must keep holding and exclude #18 from eligible packet issues');
-
-  await w.github.gh(['issue','edit','17','--add-label','pdd:working']);
-  const event=w.github.issues.get(17).timeline.at(-1);
-  await w.github.gh(['issue','comment','17','--body-file','-'],{input:'Factory coordinator claim.\n\n```json\n'+JSON.stringify({repository:packet.repository,coordinatorId:packet.coordinatorId,machine:packet.machine,labelEventId:String(event.id),lastSeen:new Date(w.time).toISOString()})+'\n```'});
-  await w.command(['workflow','run','bug','17','--agent','codex','--origin','autopilot','--decision-id',i17.decisionId,'--outcome','code'],{actor:'coordinator',env:w.context()});
-
-  const fresh=w.record(17);
-  assert.notEqual(fresh.runId,oldRun.runId);
-  assert.equal(fresh.state,'running');
-  assert.equal(fresh.question,undefined);
-  assert.equal(fresh.previous?.length,1);
-  assert.equal(fresh.previous[0].runId,oldRun.runId);
-  assert.ok(existsSync(join(fresh.previous[0].runDir,'NOTES.md')));
-  const firstPrompt=readFileSync(fresh.chats[0].messageFile,'utf8');
-  assert.match(firstPrompt,/Previous run notes:/);
-  assert.ok(firstPrompt.includes(fresh.previous[0].runDir));
-
-  const a=scriptedAgent(w);
-  await a.finish();await a.merge();
-  assert.equal(w.record(17).state,'completed');
-  assert.equal(existsSync(join(w.commonDir,'pdd/runs/18/status.json')),false);
+test('factory 3157: cost or PR closure keeps saved unknown Runtime custody until reconciliation',async t=>{
+  const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);
+  await a.until(r=>r.area===1);w.interpreter.mode='no-verdict';
+  const lost=await a.step();assert.notEqual(lost.check.code,0);
+  const batch=JSON.parse(lost.check.stdout).batch;
+  await w.command(['workflow','status','17']);
+  await w.command(['workflow','park','--interpreter','--reason',`Interpreter batch ${batch}: runner-stopped; no verdict.`],{cwd:w.record().root});
+  const held=w.record(),sent=w.interpreter.posts.filter(p=>p.command==='check').length;
+  held.cost={schema:'pdd.cost.v1',outcome:'closed'};
+  held.prState={state:'closed',ci:'none',checkedAt:w.time};
+  writeFileSync(join(held.runDir,'status.json'),JSON.stringify(held));
+  await w.github.gh(['issue','edit','17','--remove-label','pdd:working']);
+  await w.tick();await w.tick();w.messages();
+  assert.equal(w.record().runId,held.runId,'closure does not replace the run that owns the unknown request');
+  assert.equal(w.record().runtimeWait.batch,batch,'closure preserves exact batch identity');
+  assert.equal(w.interpreter.posts.filter(p=>p.command==='check').length,sent,'ticks do not send another paid request');
   assert.deepEqual(w.leadActions,[]);
 });

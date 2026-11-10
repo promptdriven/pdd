@@ -4,6 +4,7 @@ import { readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { prepareDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
 import { fixture, complete, repository, key } from './helpers/issue-sort-fixture.mjs';
+import { endedRunQuestion } from '../src/issue-sort.mjs';
 const read = async w => (await readDependencySnapshot({ repository }, w.ports)).snapshot;
 const graph = async w => projectIssueGraph({ snapshot: await read(w) });
 const node = async (w, n = 1) => (await graph(w)).nodes.find(x => x.key === key(n));
@@ -352,6 +353,16 @@ test('a confirmed expired claim does not block a fixed-issue route', async () =>
 test('3157: ended-run questions on a saved sort record stop holding the issue while issue-level questions keep holding', async () => {
   // 1. Ended-run question on a valid work sort clears the question so the issue is eligible to start fresh.
   const w1 = fixture();
+  const bindEndedBatch = (w, batch) => {
+    const readOwners = w.ports.owners.read, readContext = w.ports.context.read;
+    w.ports.owners.read = async args => {
+      const observed = JSON.parse((await readOwners(args)).json);
+      observed.runEvidence = [{issue:key(1),runId:`ended-${batch}`,batch,ended:true}];
+      return {json:JSON.stringify(observed)};
+    };
+    w.ports.context.read = async args => ({json:JSON.stringify({...JSON.parse((await readContext(args)).json),nativeExecution:true})});
+  };
+  bindEndedBatch(w1,'20261108-062749-jlsv');
   w1.save(w1.record(1, {
     question: 'Should the coordinator treat the existing run as failed/stalled and start a fresh run, or recover the lost check batch 20261108-062749-jlsv?',
   }));
@@ -363,6 +374,7 @@ test('3157: ended-run questions on a saved sort record stop holding the issue wh
 
   // 2. Ended-run question on an unclear/unknown sort (like #2793) ignores the stale sort and queues a fresh sort.
   const w2 = fixture();
+  bindEndedBatch(w2,'20261108-065710-b0mh');
   w2.save(w2.record(1, {
     genuine: 'unclear',
     question: 'Should the coordinator treat the existing run as failed/stalled (check batch 20261108-065710-b0mh has no saved verdict) and start a fresh run?',
@@ -394,4 +406,23 @@ test('3157: ended-run questions on a saved sort record stop holding the issue wh
   const n4 = await node(w4);
   assert.equal(n4.sort?.action, 'question');
   assert.equal(n4.eligible, false);
+});
+
+
+test('run-local questions bind to their exact ended run, not current issue state or batch mention alone', () => {
+  const oldBatch = '20261108-062749-jlsv', currentBatch = '20261109-091122-abcd';
+  const issue = {execution:'running', holds:['Claimed'], title:'Runtime results', sortText:'', runEvidence:[
+    {runId:'old-run', batch:oldBatch, ended:true},
+    {runId:'new-run', batch:currentBatch, ended:false},
+  ]};
+  assert.equal(endedRunQuestion(issue, `What happened to batch ${oldBatch}?`), true,
+    'the old run remains ended while a newer run is active');
+  assert.equal(endedRunQuestion(issue, `What happened to batch ${currentBatch}?`), false,
+    'a question about the current run stays current');
+  assert.equal(endedRunQuestion({...issue, execution:'idle', holds:[]},
+    `Which expected value should batch ${oldBatch} assert?`), false,
+    'a product question stays even when a batch matches ended run evidence');
+  assert.equal(endedRunQuestion({...issue, runEvidence:[]},
+    `What happened to batch ${oldBatch}?`), false,
+    'missing source evidence cannot discard a question');
 });

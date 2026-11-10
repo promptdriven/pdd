@@ -1149,7 +1149,13 @@ test('3157: ended-run questions in dependency reviews stop holding the issue whi
     },
   });
 
-  const g = await graph(w);
+  const owners = w.ports({owners:{read:async()=>reply({localOwner:'coordinator',claims:[],runs:[],runsKnown:true,runEvidence:[
+    {issue:key(2697),runId:'ended-2697',batch:'20261108-062749-jlsv',ended:true},
+    {issue:key(2747),runId:'ended-2747',batch:'20261108-063153-9i5c',ended:true},
+    {issue:key(2793),runId:'ended-2793',batch:'20261108-065710-b0mh',ended:true},
+    {issue:key(2790),runId:'ended-2790',batch:'20261031-163927-j74s',ended:true},
+  ]})}});
+  const g = await graph(w,owners);
   for (const num of [2697, 2747, 2793]) {
     const n = g.node(num);
     assert.equal(n.reviewState, 'current', `#${num} ended-run question stops holding`);
@@ -1165,4 +1171,36 @@ test('3157: ended-run questions in dependency reviews stop holding the issue whi
     assert.ok(n.reasons.includes('Review question'), `#${num} keeps Review question reason`);
     assert.equal(n.facts.length, 1);
   }
+});
+
+
+test('run question scope follows exact source run and preserves product questions with comment-only batch evidence', async () => {
+  const oldBatch = '20261108-062749-jlsv', currentBatch = '20261109-091122-abcd';
+  const i2697 = issue(2697), i2747 = issue(2747), i2790 = issue(2790);
+  const all = [i2697, i2747, i2790], candidates = all.map(row);
+  const reviewQuestion = (id, subject, text) => comment(id, recordBody({
+    analysis:'Review question scope.', base:[], continuation:'', issue:subject.html_url,
+    inputs:[row(subject)], candidates, outcome:'question', dependencies:[], questions:[text], effects:'none',
+  }));
+  const productEvidence = comment('600', `Runtime note refers to batch ${oldBatch}.`);
+  const w = world({issues:all, comments:{
+    [key(2697)]:[reviewQuestion('601',i2697,`What happened to batch ${oldBatch}?`)],
+    [key(2747)]:[reviewQuestion('602',i2747,`What happened to batch ${currentBatch}?`)],
+    [key(2790)]:[productEvidence,reviewQuestion('603',i2790,`Which expected value should batch ${oldBatch} assert?`)],
+  }});
+  const ports = w.ports({owners:{read:async()=>reply({localOwner:'coordinator',claims:[
+    {issue:key(2697),active:true,owner:'coordinator',coordinatorId:'coordinator',machine:'machine',commentId:'1',labelEventId:'2'},
+  ],runs:[{issue:key(2697),runId:'new-run',state:'running',working:true}],runsKnown:true,runEvidence:[
+    {issue:key(2697),runId:'old-run',batch:oldBatch,ended:true},
+    {issue:key(2697),runId:'new-run',batch:currentBatch,ended:false},
+    {issue:key(2747),runId:'new-run-2747',batch:currentBatch,ended:false},
+    {issue:key(2790),runId:'old-run-2790',batch:oldBatch,ended:true},
+  ]})}});
+  const g = await graph(w,ports);
+  assert.equal(g.node(2697).reviewState,'current','old run identity still ends its question beside a newer active run');
+  assert.deepEqual(g.node(2697).facts,[]);
+  assert.equal(g.node(2747).reviewState,'question','the newer run question still holds');
+  assert.deepEqual(g.node(2747).facts.map(f=>f.text),[`What happened to batch ${currentBatch}?`]);
+  assert.equal(g.node(2790).facts.length,1,'batch appearing only in a trusted comment does not make a product question run-local');
+  assert.equal(g.node(2790).facts[0].text,`Which expected value should batch ${oldBatch} assert?`);
 });

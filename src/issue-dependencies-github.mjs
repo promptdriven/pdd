@@ -4,7 +4,7 @@ import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { endedRunQuestion } from './issue-sort.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: aebc28170168922209050d353dc52ddc80632f6592d9804dfdb7a685c56d8959).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: fc7606dc58b74a162a36f5777a14a8992732bcf3043b816e65c749574e9cc0ff).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1188,7 +1188,7 @@ export async function recordLongRunningAlert(args, ports = {}) {
 async function readLocalOccupied({ cwd, repository }, ports = {}) {
   const context = await gitContext(cwd, ports);
   if (!context || !await selectedCheckout(cwd, repository, ports)) return { runs: [], runsKnown: false };
-  const runs = [], seen = new Set(); let runsKnown = true, names = [];
+  const runs = [], runEvidence = [], seen = new Set(); let runsKnown = true, names = [];
   const directory = join(context.commonDir, 'pdd', 'runs');
   try { names = readdirSync(directory); } catch (e) { if (e.code !== 'ENOENT') runsKnown = false; }
   for (const name of names.filter(n => /^[1-9][0-9]*(?:-cancelled-[0-9a-f]+)?$/.test(n))) {
@@ -1203,11 +1203,18 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     const runId = run.runId || run.runDir;
     if (typeof runId !== 'string' || !runId) { runsKnown = false; continue; }
     seen.add(runId);
-    if (['completed', 'cancelled'].includes(run.state) || run.cost?.outcome === 'closed' || run.prState?.state === 'closed') continue;
+    const runIssue = `https://github.com/${repository.toLowerCase()}/issues/${run.number}`;
+    const closedOutcome = (run.cost?.outcome === 'closed' || run.prState?.state === 'closed')
+      && !(run.gate?.kind === 'ask-code' && run.through === 'code');
+    const runEnded = ['completed', 'cancelled'].includes(run.state) || closedOutcome;
+    const batch = typeof run.runtimeWait?.batch === 'string' && /^\d{8}-\d{6}-[a-z0-9]+$/i.test(run.runtimeWait.batch) ? run.runtimeWait.batch : null;
+    runEvidence.push({issue:runIssue, runId, batch, ended:runEnded});
     const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
     const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports))
       || held((ports.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: ports.env}, {now: ports.now ?? Date.now, ...ports.interpreterQueuePorts}));
     const working = parkingSummary([{...run, checkHeld}], 1).working > 0;
+    if (['completed','cancelled'].includes(run.state) && !checkHeld && !run.parking?.checkHeld
+      && !['closing','waking','releasing'].includes(run.parking?.phase)) continue;
     if (run.parking?.phase === 'parked' && run.layout?.phase === 'closed'
       && run.chats.every(chat => Number.isFinite(chat.closed?.confirmedAt))) {
       runs.push({issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId,
@@ -1232,7 +1239,7 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     }
     runs.push({ issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId, working: checkHeld || Boolean(agentHeld) || working && !finishedTurn,
       state: chat?.startUnconfirmed || (state === 'starting' && !finishedTurn) ? 'starting' : ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown', ...(finishedTurn ? { occupied: false } : {}),
-      ...(run.state === 'paused' && run.runtimeWait ? { waiting: 'runtime' } : {}) });
+      ...(run.runtimeWait ? { waiting: 'runtime' } : {}) });
   }
   const index = join(context.commonDir, 'pdd', 'worktree-assignments');
   let indexExists = false;
@@ -1266,7 +1273,7 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
       } catch { runsKnown = false; }
     }
   } catch { runsKnown = false; }
-  return { runs, runsKnown };
+  return { runs, runsKnown, runEvidence };
 }
 
 // A live label batch avoids one REST call per unclaimed review subject. Only a
@@ -1526,6 +1533,9 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
         if (limited) issue.holds.push(`Taken over ${limited.takeovers} times; take the stuck path, not another takeover`);
         const runs = observation.runs.filter(r => canonical(r.issue) === issue.key);
         if (observation.runsKnown) issue.runIds = runs.map(r => r.runId).filter(Boolean);
+        if (observation.runsKnown && Array.isArray(observation.runEvidence)) issue.runEvidence = observation.runEvidence
+          .filter(r => canonical(r.issue) === issue.key && typeof r.runId === 'string' && typeof r.ended === 'boolean')
+          .map(({runId,batch,ended}) => ({runId,batch:typeof batch === 'string' ? batch : null,ended}));
         if (runs.some(r => r.waiting === 'runtime') && !issue.holds.includes('Waiting for the interpreter')) issue.holds.push('Waiting for the interpreter');
         if (claims.length === 1 && claims[0].coordinatorId && claims[0].commentId && claims[0].labelEventId) {
           const { coordinatorId, commentId, labelEventId } = claims[0];

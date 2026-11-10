@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-sort.prompt.md (sha256: a049bfb1a69bb2d4dc3afcb4885ab7c7cc7ebca04cb93bc936481fc0f1a94965).
+// Generated from prompts/cli/issue-sort.prompt.md (sha256: 0dd947e230a2d89c254fe04939127a524fe8777ef7679915d87a2bed8a14c633).
 import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea } from './autopilot-areas.mjs';
 const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/.test(x);
@@ -33,18 +33,20 @@ export const sortSourceKey = (repository, path) => `https://github.com/${reposit
 export const noActiveRun = issue => issue?.execution === 'idle'
   && !(issue.holds ?? []).some(h => h === 'Claimed' || h === 'Stuck' || h === 'Waiting for the interpreter');
 export function endedRunQuestion(issue, value) {
-  if (!noActiveRun(issue) || !text(value) || !value.trim()) return false;
-  const own = `${issue.title ?? ''}\n${issue.sortText ?? ''}`.toLowerCase();
-  for (const m of value.matchAll(/\bbatch\s+(\d{8}-\d{6}-[a-z0-9]+)\b/gi))
-    if (!own.includes(m[1].toLowerCase())) return true;
-  const whatBatch = /\bwhat\s+happened\s+to\s+batch\s+([^\s?,.;:)]+)/i.exec(value);
-  if (whatBatch && !own.includes(whatBatch[1].toLowerCase())) return true;
-  if ((/\b(?:preserve|resume|retry|continue|reconcil\w*)\s+the\s+(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run\b/i.test(value)
-    || /\b(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run(?:'s|\s+#?\d+|\s+before\s+(?:it\s+resumes|retrying|any\s+new\s+check|further\s+hosted\s+work))\b/i.test(value)
-    || /\bin\s+the\s+(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run\b/i.test(value)
-    || /\bbefore\s+(?:this|the)\s+run\s+(?:continues|resumes|retries|proceeds)\b/i.test(value))
-    && !/\b(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run\b/i.test(own)) return true;
-  return false;
+  if (!text(value) || !value.trim()) return false;
+  const batch = /\bbatch\s+(\d{8}-\d{6}-[a-z0-9]+)\b/i.exec(value)?.[1]?.toLowerCase();
+  if (!batch || /\b(?:expected\s+(?:value|output)|assert(?:ion)?|product\s+requirement)\b/i.test(value)) return false;
+  const explicitRunScope = /\bwhat\s+happened\s+to\b.{0,100}\bbatch\s+\d{8}-\d{6}-[a-z0-9]+\b/i.test(value)
+    || /\b(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run\b/i.test(value)
+      && /\b(?:preserve|resume|retry|continue|reconcil\w*|recover|wait|start\s+(?:a\s+)?fresh)\b/i.test(value)
+    || /\b(?:no|missing|unknown)\s+(?:saved\s+)?verdict\b/i.test(value)
+      && /\b(?:runner[- ]stopped|interpreter|check)\b/i.test(value);
+  if (!explicitRunScope) return false;
+  const matches = (Array.isArray(issue?.runEvidence) ? issue.runEvidence : []).filter(row => row
+    && typeof row.runId === 'string' && row.runId.trim()
+    && typeof row.batch === 'string' && row.batch.toLowerCase() === batch
+    && typeof row.ended === 'boolean');
+  return matches.length === 1 && matches[0].ended === true;
 }
 export function selectedSort(snapshot, issue) {
   if (!issue || !sortCovered(snapshot, issue)) return null;
