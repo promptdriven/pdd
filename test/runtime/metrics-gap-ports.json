@@ -1,0 +1,223 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/metrics-gap-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`recordCaptureGap` normalizes the repository slug to lowercase, formats the observation timestamp as ISO-8601 UTC, allocates a gap UUID, and writes only the `pdd.metrics.event.v1` incomplete-coverage record to `pdd/metrics-gaps/{id}.json` under `commonDir`."
+    },
+    {
+      "id": "AC2",
+      "text": "`recordCaptureGap` raises `invalid-gap-observation` without touching storage or allocating a UUID when the repository slug, issue number, or timestamp is invalid."
+    },
+    {
+      "id": "AC3",
+      "text": "`recordCaptureGap` raises `storage-unavailable` without writing a gap file when `commonDir` is missing or is a symbolic link."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/.git": {
+        "content": "",
+        "is_symlink": false
+      }
+    },
+    "calls": {
+      "randomUUID": 0
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "ids.randomUUID": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/randomUUID",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "id": "11111111-2222-4333-8444-555555555555"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "record-valid-gap",
+      "entry_path": "prompts/cli/metrics-gap.prompt.md",
+      "operation": "recordCaptureGap",
+      "input": {
+        "commonDir": "/repo/.git",
+        "repo": "PromptDriven/PDD",
+        "issue": 3148,
+        "at": "2026-11-10T01:00:00.000Z"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/file",
+          "op": "equals",
+          "value": "/repo/.git/pdd/metrics-gaps/11111111-2222-4333-8444-555555555555.json"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/event",
+          "op": "equals",
+          "value": {
+            "schema": "pdd.metrics.event.v1",
+            "id": "gap:11111111-2222-4333-8444-555555555555",
+            "repo": "promptdriven/pdd",
+            "issue": 3148,
+            "type": "coverage",
+            "at": "2026-11-10T01:00:00.000Z",
+            "observedAt": "2026-11-10T01:00:00.000Z",
+            "source": "gap:11111111-2222-4333-8444-555555555555",
+            "data": {
+              "complete": false
+            }
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1repo~1.git~1pdd~1metrics-gaps~111111111-2222-4333-8444-555555555555.json/content",
+          "op": "contains",
+          "value": "\"id\":\"gap:11111111-2222-4333-8444-555555555555\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/metrics-gap-files-stat",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/metrics-gap-ids-randomUUID",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/metrics-gap-files-write",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "reject-invalid-observation",
+      "entry_path": "prompts/cli/metrics-gap.prompt.md",
+      "operation": "recordCaptureGap",
+      "input": {
+        "commonDir": "/repo/.git",
+        "repo": "invalid-repo-slug",
+        "issue": 0,
+        "at": "2026-11-10T01:00:00.000Z"
+      },
+      "expected_error": "invalid-gap-observation",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-gap-observation"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/metrics-gap-files-stat",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/metrics-gap-ids-randomUUID",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/metrics-gap-files-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "reject-missing-common-dir",
+      "entry_path": "prompts/cli/metrics-gap.prompt.md",
+      "operation": "recordCaptureGap",
+      "input": {
+        "commonDir": "/missing/.git",
+        "repo": "promptdriven/pdd",
+        "issue": 3148,
+        "at": "2026-11-10T01:00:00.000Z"
+      },
+      "expected_error": "storage-unavailable",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "storage-unavailable"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/metrics-gap-files-stat",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/metrics-gap-ids-randomUUID",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/metrics-gap-files-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

@@ -1,0 +1,505 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/approval-evidence-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`findNativeSessions` skips files whose `mtimeMs` is older than `stage.startedAt` without reading their contents, excludes subagent rollouts, and returns matching sessions `[{id, startedAt}]`."
+    },
+    {
+      "id": "AC2",
+      "text": "`findNativeSessions` raises `session_unreadable` when session discovery encounters an unreadable directory or file rather than returning an empty list."
+    },
+    {
+      "id": "AC3",
+      "text": "`readApprovalEvidence` excludes generated `environment_context` wrappers, `[Request interrupted` lines, and `ignorePrefixes` matches, returning the latest eligible human message after `gateAskedAt` or `{ok: false, code: \"user_message_missing\"}` when none remain."
+    },
+    {
+      "id": "AC4",
+      "text": "`readApprovalEvidence` raises `clock_unavailable` without reading session directories when `clock.now` returns a non-positive observation timestamp."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/home/dev/.codex/sessions/rollout-old.jsonl": {
+        "content": "{\"timestamp\":400,\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-old\",\"cwd\":\"/work/repo\",\"timestamp\":400}}\n",
+        "is_symlink": false
+      },
+      "/home/dev/.codex/sessions/rollout-subagent.jsonl": {
+        "content": "{\"timestamp\":1200,\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-sub\",\"cwd\":\"/work/repo\",\"timestamp\":1200,\"thread_source\":\"subagent\"}}\n{\"timestamp\":2400,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"Subagent prompt\"}}\n",
+        "is_symlink": false
+      },
+      "/home/dev/.codex/sessions/rollout-main.jsonl": {
+        "content": "{\"timestamp\":1100,\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\",\"cwd\":\"/work/repo\",\"timestamp\":1100}}\n{\"timestamp\":2100,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"<environment_context>ctx</environment_context>\"}}\n{\"timestamp\":2200,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"[Request interrupted by user]\"}}\n{\"timestamp\":2300,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"Ship it, I approve.\"}}\n",
+        "is_symlink": false
+      }
+    },
+    "calls": {
+      "readdir": 0,
+      "stat": 0,
+      "now": 0
+    }
+  },
+  "simulation": {
+    "fs.readdir": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/readdir",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/home/dev/.codex/sessions"
+          },
+          "result": {
+            "entries": [
+              {
+                "name": "rollout-old.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              },
+              {
+                "name": "rollout-subagent.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              },
+              {
+                "name": "rollout-main.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              }
+            ],
+            "error": null
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "path": "/home/unreadable/.codex/sessions"
+          },
+          "result": {
+            "entries": [],
+            "error": "EACCES"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "path": "/home/dev/.codex/sessions"
+          },
+          "result": {
+            "entries": [
+              {
+                "name": "rollout-old.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              },
+              {
+                "name": "rollout-subagent.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              },
+              {
+                "name": "rollout-main.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              }
+            ],
+            "error": null
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "path": "/home/dev/.codex/sessions"
+          },
+          "result": {
+            "entries": [
+              {
+                "name": "rollout-old.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              },
+              {
+                "name": "rollout-subagent.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              },
+              {
+                "name": "rollout-main.jsonl",
+                "isFile": true,
+                "isDirectory": false,
+                "isSymbolicLink": false
+              }
+            ],
+            "error": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "fs.stat": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/stat",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-old.jsonl"
+          },
+          "result": {
+            "mtimeMs": 500,
+            "error": null
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-subagent.jsonl"
+          },
+          "result": {
+            "mtimeMs": 2500,
+            "error": null
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-main.jsonl"
+          },
+          "result": {
+            "mtimeMs": 2500,
+            "error": null
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-old.jsonl"
+          },
+          "result": {
+            "mtimeMs": 500,
+            "error": null
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-subagent.jsonl"
+          },
+          "result": {
+            "mtimeMs": 2500,
+            "error": null
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-main.jsonl"
+          },
+          "result": {
+            "mtimeMs": 2500,
+            "error": null
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-old.jsonl"
+          },
+          "result": {
+            "mtimeMs": 500,
+            "error": null
+          }
+        },
+        {
+          "call_index": 8,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-subagent.jsonl"
+          },
+          "result": {
+            "mtimeMs": 2500,
+            "error": null
+          }
+        },
+        {
+          "call_index": 9,
+          "args": {
+            "path": "/home/dev/.codex/sessions/rollout-main.jsonl"
+          },
+          "result": {
+            "mtimeMs": 2500,
+            "error": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "clock.now": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/now",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "now": 3000
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {},
+          "result": {
+            "now": 3000
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {},
+          "result": {
+            "now": 3000
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {},
+          "result": {
+            "now": 3000
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {},
+          "result": {
+            "now": 0
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "find-matching-codex-session",
+      "entry_path": "prompts/cli/approval-evidence.prompt.md",
+      "operation": "findNativeSessions",
+      "input": {
+        "stage": {
+          "agent": "codex",
+          "root": "/work/repo",
+          "startedAt": 1000,
+          "endedAt": 2000
+        },
+        "codexHome": "/home/dev/.codex"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/sessions",
+          "op": "equals",
+          "value": [
+            {
+              "id": "sess-1",
+              "startedAt": 1100
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/approval-evidence-fs-stat",
+          "op": "equals",
+          "value": 3
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/approval-evidence-files-read",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "find-sessions-unreadable-error",
+      "entry_path": "prompts/cli/approval-evidence.prompt.md",
+      "operation": "findNativeSessions",
+      "input": {
+        "stage": {
+          "agent": "codex",
+          "root": "/work/repo",
+          "startedAt": 1000,
+          "endedAt": 2000
+        },
+        "codexHome": "/home/unreadable/.codex"
+      },
+      "expected_error": "session_unreadable",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "session_unreadable"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/approval-evidence-fs-readdir",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/approval-evidence-files-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-evidence-selects-human-turn",
+      "entry_path": "prompts/cli/approval-evidence.prompt.md",
+      "operation": "readApprovalEvidence",
+      "input": {
+        "stage": {
+          "agent": "codex",
+          "root": "/work/repo",
+          "startedAt": 1000,
+          "endedAt": 2000
+        },
+        "gateAskedAt": 2050,
+        "decision": "approve",
+        "codexHome": "/home/dev/.codex"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "ok": true,
+            "decision": "approve",
+            "agent": "codex",
+            "sessionId": "sess-1",
+            "userMessage": "Ship it, I approve.",
+            "userMessageAt": 2300,
+            "code": null,
+            "message": null
+          }
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/approval-evidence-files-read",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-evidence-missing-when-filtered",
+      "entry_path": "prompts/cli/approval-evidence.prompt.md",
+      "operation": "readApprovalEvidence",
+      "input": {
+        "stage": {
+          "agent": "codex",
+          "root": "/work/repo",
+          "startedAt": 1000,
+          "endedAt": 2000
+        },
+        "gateAskedAt": 2050,
+        "decision": "approve",
+        "ignorePrefixes": [
+          "Ship it"
+        ],
+        "codexHome": "/home/dev/.codex"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/ok",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/code",
+          "op": "equals",
+          "value": "user_message_missing"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-evidence-clock-unavailable-error",
+      "entry_path": "prompts/cli/approval-evidence.prompt.md",
+      "operation": "readApprovalEvidence",
+      "input": {
+        "stage": {
+          "agent": "codex",
+          "root": "/work/repo",
+          "startedAt": 1000,
+          "endedAt": 2000
+        },
+        "gateAskedAt": 2050,
+        "decision": "approve",
+        "codexHome": "/home/dev/.codex"
+      },
+      "expected_error": "clock_unavailable",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "clock_unavailable"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/approval-evidence-clock-now",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/approval-evidence-fs-readdir",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

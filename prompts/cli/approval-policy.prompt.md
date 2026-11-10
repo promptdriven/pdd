@@ -1,6 +1,6 @@
 # Approval policy and durable prompt evidence
 
-Own new `src/approval-policy.mjs`, the small shared native boundary used by standalone and workflow approval. It owns repository policy, invoking-actor identification and the durable prompt journal. It never decides that a person approved, changes a prompt, publishes or merges. New exports below are native production APIs, not Interpreter substitutes.
+Own new `src/approval-policy.mjs`, the small shared boundary used by standalone and workflow approval. It owns repository policy, invoking-actor identification and the durable prompt journal. It never decides that a person approved, changes a prompt, publishes or merges.
 
 ## Repository policy
 
@@ -22,7 +22,7 @@ Choose another quoted delimiter if a complete person-text line equals `PDD_SAID`
 
 ## Actor and evidence
 
-Module function `approvalActor(env)` returns `{kind,id}` describing the invoker, never claiming authenticated identity of the person whose words were supplied. Prefer concrete available session identity: a nonempty `CODEX_THREAD_ID` makes kind `agent` and id `CODEX_THREAD_ID=VALUE` (identifying Codex and its session). Otherwise a nonempty `CLAUDECODE` identifies the Claude invoker as `CLAUDECODE=VALUE`; do not claim it is a session ID. Only then fall back to nonempty `PDD_AGENT_SESSION` as `PDD_AGENT_SESSION=VALUE`. A generic PDD_AGENT_SESSION=1 must never hide a concrete Codex session. Otherwise kind is `terminal`, id is `USER`, falling back to `LOGNAME`, then `unknown`. Preserve the selected value verbatim; presentation safety belongs to the publisher.
+Module function `approvalActor({env})` returns `{kind,id}` describing the invoker, never claiming authenticated identity of the person whose words were supplied. Prefer concrete available session identity: a nonempty `CODEX_THREAD_ID` makes kind `agent` and id `CODEX_THREAD_ID=VALUE` (identifying Codex and its session). Otherwise a nonempty `CLAUDECODE` identifies the Claude invoker as `CLAUDECODE=VALUE`; do not claim it is a session ID. Only then fall back to nonempty `PDD_AGENT_SESSION` as `PDD_AGENT_SESSION=VALUE`. A generic PDD_AGENT_SESSION=1 must never hide a concrete Codex session. Otherwise kind is `terminal`, id is `USER`, falling back to `LOGNAME`, then `unknown`. Preserve the selected value verbatim; presentation safety belongs to the publisher. Reject environment values containing NUL (`\u0000`) with `invalid-actor-env`.
 
 An approval evidence record is `{id,route,actor,at,words,prompts}`. `id` is a nonempty string identifying one approval event independently of its evidence content or clock; new events have distinct identities even with identical route/actor/time/words/prompts. Copies of the same event in gate history and the journal retain the same id; retries retain it. Legacy evidence without id remains readable and does not acquire fabricated historical provenance. Identity allocation uses injected native dependencies when it needs external state; no particular encoding or private allocation algorithm is required. `route` is `said`, `terminal`, `chat` (existing native Herdr evidence), `automatic-check-pass`, `card-choice` or `prompt-reentry`. The last three are pdd's own records for a workflow run ([normal-run gates](workflow-runner.prompt.md#normal-run-gates)): `automatic-check-pass` for a prompt PR gate that a verified full check pass opened, and `card-choice` for the code gate that the person's Story-card choice covers. `prompt-reentry` records resuming an existing code scope after a returned automatic prompt repair. Its `basis` names `priorCodeApprovalId` and `storyEvidenceId`; it requires the runner's current scoped operator delegation and passing source checks. The runner also uses `automatic-check-pass` for that returned automatic prompt publication. These records have null `words` and may have a `basis` object that names the earlier evidence id and the check batches. They are never a person's later reply. `actor` is the invoking identity above; `at` is the approval command's epoch-millisecond clock value, not a fabricated chat timestamp. `words` is the exact supplied --said value, the exact native chat message for chat, or null for terminal. Each `prompts` row is `{path,proseSha256}`: repository-relative POSIX path and current lowercase SHA-256. Empty prompt arrays are valid for gates without changed prompts. Native chat session/message-time fields remain in their existing run fields. These are local provenance claims, not cryptographic proof of a speaker.
 
@@ -40,16 +40,546 @@ The journal also accepts route `automatic-check-pass`. Such records have null wo
 
 ## Dependencies
 
-No other business prompt supplies policy. Native filesystem concurrency, atomic rename, Git common-directory resolution and exact-byte hashing require native acceptance; no Runtime interface or alternate check-only API is declared for these unsupported effects.
+No other business prompt supplies policy. Bind config and journal file access through `files.stat`, `files.read` and `files.write`, stdin marker reads through `stdin.read`, event ID allocation through `ids.randomUUID`, journal lock custody through `lock.acquire` and `lock.release`, and caller commit guards through `guards.afterApprovalLock` and `guards.beforeApprovalCommit`. `readApprovalPolicy({root})` returns `{strictApprovals}` or raises `invalid-approval-policy`; `readSaidWords({said})` returns `{words}` or raises `invalid-said-words`; `approvalActor({env})` returns `{kind, id}` or raises `invalid-actor-env`; `readPromptApprovals({commonDir})` returns `{approvals}` or raises `invalid-approval-journal`; and `recordPromptApproval({commonDir, evidence})` returns `{record, count}` or raises `invalid-approval-evidence`, `approval-lock-busy`, `invalid-approval-journal` or `guard-refused`. Native filesystem concurrency, OS process-liveness probes, atomic rename and Git common-directory resolution remain native obligations (`test/approval-lead-fixes.test.mjs`, `test/approval-round2.test.mjs`, `test/autopilot-pr1-gate.test.mjs`, `test/autopilot.test.mjs`, `test/native-evidence-intake.test.mjs`).
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "5b1c36e3918d2f091d2cc6001bacda61c007b541e5adeb4fb252e3b7c17deb82",
-  "reason": "Prompt explicitly excludes a surrogate API; real actor identity, locking and atomic journal writes remain native. Native evidence owners: test/approval-lead-fixes.test.mjs, test/approval-round2.test.mjs, test/autopilot-pr1-gate.test.mjs, test/autopilot.test.mjs, test/native-evidence-intake.test.mjs."
+  "prose_sha256": "c35e0d0372a7f2b6fa3e90a36ddb55631879d07549c024c672e8e2923c829837",
+  "entries": [
+    {
+      "operation": "readApprovalPolicy",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": { "type": "string" }
+        },
+        "required": ["root"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "strictApprovals": { "type": "boolean" }
+        },
+        "required": ["strictApprovals"],
+        "additionalProperties": false
+      },
+      "errors": ["invalid-approval-policy"],
+      "resource_operations": ["files.stat", "files.read"]
+    },
+    {
+      "operation": "readSaidWords",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "said": { "type": "string" }
+        },
+        "required": ["said"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "words": { "type": "string" }
+        },
+        "required": ["words"],
+        "additionalProperties": false
+      },
+      "errors": ["invalid-said-words"],
+      "resource_operations": ["stdin.read"]
+    },
+    {
+      "operation": "approvalActor",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "env": {
+            "type": "object",
+            "properties": {
+              "CODEX_THREAD_ID": { "type": "string" },
+              "CLAUDECODE": { "type": "string" },
+              "PDD_AGENT_SESSION": { "type": "string" },
+              "USER": { "type": "string" },
+              "LOGNAME": { "type": "string" }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": ["env"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "enum": ["agent", "terminal"] },
+          "id": { "type": "string" }
+        },
+        "required": ["kind", "id"],
+        "additionalProperties": false
+      },
+      "errors": ["invalid-actor-env"],
+      "resource_operations": []
+    },
+    {
+      "operation": "readPromptApprovals",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "commonDir": { "type": "string" }
+        },
+        "required": ["commonDir"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "approvals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "route": {
+                  "type": "string",
+                  "enum": [
+                    "said",
+                    "terminal",
+                    "chat",
+                    "automatic-check-pass",
+                    "card-choice",
+                    "prompt-reentry"
+                  ]
+                },
+                "actor": {
+                  "type": "object",
+                  "properties": {
+                    "kind": { "type": "string", "enum": ["agent", "terminal"] },
+                    "id": { "type": "string" }
+                  },
+                  "required": ["kind", "id"],
+                  "additionalProperties": false
+                },
+                "at": { "type": "number" },
+                "words": {
+                  "oneOf": [
+                    { "type": "string" },
+                    { "type": "null" }
+                  ]
+                },
+                "prompts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": { "type": "string" },
+                      "proseSha256": { "type": "string" }
+                    },
+                    "required": ["path", "proseSha256"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["id", "route", "actor", "at", "words", "prompts"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["approvals"],
+        "additionalProperties": false
+      },
+      "errors": ["invalid-approval-journal"],
+      "resource_operations": ["files.stat", "files.read"]
+    },
+    {
+      "operation": "recordPromptApproval",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "commonDir": { "type": "string" },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "route": {
+                "type": "string",
+                "enum": [
+                  "said",
+                  "terminal",
+                  "chat",
+                  "automatic-check-pass",
+                  "card-choice",
+                  "prompt-reentry"
+                ]
+              },
+              "actor": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string", "enum": ["agent", "terminal"] },
+                  "id": { "type": "string" }
+                },
+                "required": ["kind", "id"],
+                "additionalProperties": false
+              },
+              "at": { "type": "number" },
+              "words": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "null" }
+                ]
+              },
+              "prompts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": { "type": "string" },
+                    "proseSha256": { "type": "string" }
+                  },
+                  "required": ["path", "proseSha256"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["route", "actor", "at", "words", "prompts"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["commonDir", "evidence"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "record": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "route": { "type": "string" },
+              "actor": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string" },
+                  "id": { "type": "string" }
+                },
+                "required": ["kind", "id"],
+                "additionalProperties": false
+              },
+              "at": { "type": "number" },
+              "words": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "null" }
+                ]
+              },
+              "prompts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": { "type": "string" },
+                    "proseSha256": { "type": "string" }
+                  },
+                  "required": ["path", "proseSha256"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["id", "route", "actor", "at", "words", "prompts"],
+            "additionalProperties": false
+          },
+          "count": { "type": "integer" }
+        },
+        "required": ["record", "count"],
+        "additionalProperties": false
+      },
+      "errors": [
+        "invalid-approval-evidence",
+        "approval-lock-busy",
+        "invalid-approval-journal",
+        "guard-refused"
+      ],
+      "resource_operations": [
+        "lock.acquire",
+        "lock.release",
+        "guards.afterApprovalLock",
+        "guards.beforeApprovalCommit",
+        "ids.randomUUID",
+        "compute.hash_utf8",
+        "files.stat",
+        "files.read",
+        "files.write"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": { "type": "boolean" },
+              "size": { "type": "integer", "minimum": 0 },
+              "is_symlink": { "type": "boolean" }
+            },
+            "required": ["exists", "size", "is_symlink"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": { "type": "string" }
+            },
+            "required": ["content"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "content": { "type": "string" }
+            },
+            "required": ["path", "content"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "stdin",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "read",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" },
+              "error": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["text", "error"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": { "type": "string" }
+            },
+            "required": ["value"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "ids",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "randomUUID",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" }
+            },
+            "required": ["id"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "lock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "acquire",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "commonDir": { "type": "string" }
+            },
+            "required": ["commonDir"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "acquired": { "type": "boolean" }
+            },
+            "required": ["acquired"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "release",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "commonDir": { "type": "string" }
+            },
+            "required": ["commonDir"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "guards",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "afterApprovalLock",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "commonDir": { "type": "string" }
+            },
+            "required": ["commonDir"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" },
+              "error": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["ok", "error"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "beforeApprovalCommit",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "commonDir": { "type": "string" }
+            },
+            "required": ["commonDir"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" },
+              "error": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["ok", "error"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 32,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

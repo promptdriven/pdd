@@ -1,0 +1,423 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/agent-adapters-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`parseAgentAuthStatus` classifies Codex `Logged in` or `API key configured` on exit 0 as `ready`, Claude `{\"loggedIn\":false}` on exit 0 or 1 as `signed_out`, and raises `invalid-auth-probe` when `agent` is blank."
+    },
+    {
+      "id": "AC2",
+      "text": "`discoverAgents` loads launcher definitions, runs help and status probes via `process.run`, maps missing executables to `not_installed`, and raises `invalid-discovery-cwd` when `cwd` is blank."
+    },
+    {
+      "id": "AC3",
+      "text": "`askAgent` parses a strict JSON reply from `process.run`, preserves `run: true` only when `supportsRun`, `supportsApply`, `apply: true`, and a valid `fill` are present, writes scrubbed failure stderr to `log.append` when a CLI invocation fails, and raises `invalid-agent-request` for an unknown agent."
+    },
+    {
+      "id": "AC4",
+      "text": "`runAgentProcess` returns `{code, stdout, stderr}` from `process.run` and raises `executable-missing` when `executableMissing` is true."
+    }
+  ],
+  "initial_world": {
+    "calls": {
+      "loadDefs": 0,
+      "processRun": 0
+    },
+    "logs": []
+  },
+  "simulation": {
+    "launcher.readDefinitions": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/loadDefs",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/repo"
+          },
+          "result": {
+            "definitions": [
+              {
+                "id": "codex",
+                "name": "Codex",
+                "kind": "codex",
+                "command": "codex"
+              },
+              {
+                "id": "claude",
+                "name": "Claude",
+                "kind": "claude",
+                "command": "claude"
+              }
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "process.run": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/processRun",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "command": "codex",
+            "args": [
+              "login",
+              "status"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "Logged in using ChatGPT\n",
+            "stderr": "",
+            "executableMissing": false
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "command": "claude",
+            "args": [
+              "auth",
+              "status"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 1,
+            "stdout": "{\"loggedIn\":false}\n",
+            "stderr": "",
+            "executableMissing": false
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "command": "codex",
+            "args": [
+              "exec",
+              "--sandbox",
+              "read-only",
+              "-c",
+              "mcp_servers={}"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "{\"say\":\"Try listing the project files.\",\"fill\":{\"entry\":\"files#listProjectFiles\",\"input\":{\"cwd\":\"/repo\"}},\"apply\":true,\"run\":true}\n",
+            "stderr": "",
+            "executableMissing": false
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "command": "codex",
+            "args": [
+              "--version"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "codex 0.160.0\n",
+            "stderr": "",
+            "executableMissing": false
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "command": "missing-cli",
+            "args": [
+              "--version"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 127,
+            "stdout": "",
+            "stderr": "not found",
+            "executableMissing": true
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "log.append": {
+      "action": "port.write",
+      "world_pointer": "/logs",
+      "result_template": {
+        "ok": true
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "parse-auth-ready",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "parseAgentAuthStatus",
+      "input": {
+        "agent": "codex",
+        "result": {
+          "code": 0,
+          "stdout": "API key configured\nAuthentication is checked when you send a request.\n",
+          "stderr": ""
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "ready"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "parse-auth-invalid-agent",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "parseAgentAuthStatus",
+      "input": {
+        "agent": "",
+        "result": {
+          "code": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      "expected_error": "invalid-auth-probe",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-auth-probe"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "discover-agents-ok",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "discoverAgents",
+      "input": {
+        "cwd": "/repo",
+        "env": {
+          "HOME": "/home/alice",
+          "PATH": "/usr/bin"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/agents",
+          "op": "equals",
+          "value": [
+            {
+              "id": "codex",
+              "name": "Codex",
+              "state": "ready"
+            },
+            {
+              "id": "claude",
+              "name": "Claude",
+              "state": "signed_out"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/agent-adapters-launcher-readDefinitions",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/agent-adapters-process-run",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "discover-agents-blank-cwd",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "discoverAgents",
+      "input": {
+        "cwd": "",
+        "env": {
+          "HOME": "/home/alice"
+        }
+      },
+      "expected_error": "invalid-discovery-cwd",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-discovery-cwd"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/agent-adapters-process-run",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ask-agent-structured-reply",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "askAgent",
+      "input": {
+        "agent": "codex",
+        "cwd": "/repo",
+        "env": {
+          "HOME": "/home/alice"
+        },
+        "context": {
+          "question": "Run the file list.",
+          "requestKind": "chat"
+        },
+        "entries": [
+          {
+            "entry": "files#listProjectFiles",
+            "prompt_path": "prompts/cli/files.prompt.md",
+            "operation": "listProjectFiles"
+          }
+        ],
+        "supportsApply": true,
+        "supportsRun": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/say",
+          "op": "equals",
+          "value": "Try listing the project files."
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/run",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/agent-adapters-process-run",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ask-agent-unknown-error",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "askAgent",
+      "input": {
+        "agent": "unknown-agent",
+        "cwd": "/repo",
+        "env": {
+          "HOME": "/home/alice"
+        },
+        "context": {
+          "question": "Hello"
+        },
+        "entries": []
+      },
+      "expected_error": "invalid-agent-request",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-agent-request"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/agent-adapters-process-run",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-agent-process-ok",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "runAgentProcess",
+      "input": {
+        "command": "codex",
+        "args": [
+          "--version"
+        ],
+        "cwd": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "codex 0.160.0\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-agent-process-missing-error",
+      "entry_path": "prompts/cli/agent-adapters.prompt.md",
+      "operation": "runAgentProcess",
+      "input": {
+        "command": "missing-cli",
+        "args": [
+          "--version"
+        ],
+        "cwd": "/repo"
+      },
+      "expected_error": "executable-missing",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "executable-missing"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

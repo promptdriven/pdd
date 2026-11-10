@@ -22,7 +22,7 @@ by any unavailable coverage and runs no native tests or Runtime checks.
 7. With valid said in easy mode, use the resolved words as the decision without another stdin read or a native conversation-log lookup. Otherwise ask `Approve <path>? y/n ` and read one line. On the terminal route only `y` or `yes` (any case) approves. Anything else, or no answer: `Not approved. Nothing changed.`, exit 1.
 8. On terminal yes or accepted said: set the top-level `"status"` to `"approved"` and the top-level `"prose_sha256"` to the current prose hash, and keep every other byte (a nested `status` field is never touched). Check that the new text parses to the same interface with only those two values changed and that its prose hash is unchanged. Append durable evidence through the shared owner, with the current path/hash, invoking actor, route, clock time and verbatim words (null for terminal). Print `Approved <path>.`, the approved path/hash and a short evidence line; exit 0 only after evidence is saved. Already-approved/current files keep their existing no-op output and do not invent another approval. If the block has no `prose_sha256` key, exit 4: `Add "prose_sha256": "" to the Runtime interface, then run pdd approve again.`
 
-Ports (tests inject them): `stdout`, `stderr`, `stdin`, `interactive` (default: stdin and stdout are TTYs), `env`, `now`, filesystem and Git execution ports for policy/journal/root resolution. Native filesystem/hash/TTY effects require native tests, not a surrogate Runtime operation.
+Ports (tests inject them): `stdout`, `stderr`, `stdin`, `interactive` (default: stdin and stdout are TTYs), `env`, `now`, filesystem and Git execution ports for policy/journal/root resolution. Bind Git repository and file checks through `git.execFile`, policy and durable journal operations through `policy.readPolicy` and `policy.appendApproval`, prompt file reads and writes through `files.stat`, `files.read` and `files.write`, prose hashing through `compute.hash_utf8({text})` on the trimmed prose text preceding `<details><summary>Runtime interface</summary>`, terminal confirmation through `terminal.ask`, clock observation through `clock.now`, and output through `output.stdout` and `output.stderr`. `approvePromptText({text})` returns `{text}` with top-level `"status": "approved"` and `"prose_sha256"` set to the `compute.hash_utf8` digest, or raises `missing-prose-sha256` when the interface block has no `prose_sha256` key. `runApprove({words, cwd, said, interactive})` returns `{exitCode}` and raises `invalid-approve-cwd` when `cwd` is blank. Native TTY streams, atomic file replacement and Git subprocess execution remain native obligations (`test/prompt-approve.test.mjs`).
 
 ## Native-only and automatic approval
 
@@ -50,10 +50,367 @@ Use “Runtime interface” when naming the declaration and its global approval 
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "95359d57e8bfe6c8f7538f01d10054aecb2ac6a5a4b629c3eedc4ce3be7d2a24",
-  "reason": "Prompt excludes a surrogate Runtime operation for filesystem/hash/TTY effects; real authorization is native. Native evidence owners: test/prompt-approve.test.mjs."
+  "prose_sha256": "edeefc85fb7be6c76fc14e0d4c7ee10205799d4501d6e2efc1dc928e4af7d42a",
+  "entries": [
+    {
+      "operation": "approvePromptText",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      },
+      "errors": ["missing-prose-sha256"],
+      "resource_operations": ["compute.hash_utf8"]
+    },
+    {
+      "operation": "runApprove",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "words": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "cwd": { "type": "string" },
+          "said": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "interactive": { "type": "boolean" }
+        },
+        "required": ["words", "cwd"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": { "type": "integer" }
+        },
+        "required": ["exitCode"],
+        "additionalProperties": false
+      },
+      "errors": ["invalid-approve-cwd"],
+      "resource_operations": [
+        "git.execFile",
+        "policy.readPolicy",
+        "policy.appendApproval",
+        "files.stat",
+        "files.read",
+        "files.write",
+        "compute.hash_utf8",
+        "terminal.ask",
+        "clock.now",
+        "output.stdout",
+        "output.stderr"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "git",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "execFile",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "args": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "cwd": { "type": "string" }
+            },
+            "required": ["args", "cwd"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "integer" },
+              "stdout": { "type": "string" },
+              "stderr": { "type": "string" }
+            },
+            "required": ["code", "stdout", "stderr"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "policy",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "readPolicy",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": { "type": "string" }
+            },
+            "required": ["root"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "strictApprovals": { "type": "boolean" }
+            },
+            "required": ["strictApprovals"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "appendApproval",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "commonDir": { "type": "string" },
+              "route": { "type": "string" },
+              "words": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "null" }
+                ]
+              },
+              "path": { "type": "string" },
+              "proseSha256": { "type": "string" },
+              "at": { "type": "number" }
+            },
+            "required": ["commonDir", "route", "words", "path", "proseSha256", "at"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stat",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": { "type": "boolean" },
+              "size": { "type": "integer", "minimum": 0 },
+              "is_symlink": { "type": "boolean" }
+            },
+            "required": ["exists", "size", "is_symlink"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": { "type": "string" }
+            },
+            "required": ["content"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "content": { "type": "string" }
+            },
+            "required": ["path", "content"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "compute",
+      "kind": "compute",
+      "access": "read",
+      "operations": [
+        {
+          "name": "hash_utf8",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "value": { "type": "string" }
+            },
+            "required": ["value"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "terminal",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "ask",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "question": { "type": "string" }
+            },
+            "required": ["question"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "answer": { "type": "string" }
+            },
+            "required": ["answer"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "now",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "now": { "type": "number" }
+            },
+            "required": ["now"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stdout",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "stderr",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 32,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

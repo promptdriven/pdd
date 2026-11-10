@@ -15,57 +15,72 @@ Append defaults unless `include_defaults` is false: `{id:'codex',name:'Codex',ki
 Node built-in filesystem, path and crypto modules provide local bounded reads, path resolution and stable hashes. No project or provider dependency is required.
 - [Secret redaction](secret-redaction.prompt.md) supplies secret-name selection and memory-only credential registration for expanded environment overrides.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+Runtime transport: `loadAgentDefinitions({cwd, env})` returns `{definitions}` and raises `invalid-agents-config` on a symlinked, oversized, unreadable or malformed `$HOME/.config/pdd/agents.json`, tilde expansion without `HOME`, unknown `kind`, missing/invalid `command` or `env`, or duplicate/default-colliding names, without falling back to defaults.
 
-Bind the existing Node filesystem dependency through files and SHA-256 through compute.hash_utf8. The simulated reply covers configuration validation and stable IDs. Final-symlink refusal, no-follow open identity, permissions, environment credential registration and installed executable selection remain native. Native evidence owners: test/agent-config.test.mjs.
+Bind `$HOME/.config/pdd/agents.json` inspection and reads through `files.stat` and `files.read`, custom-agent SHA-256 ID derivation through `compute.hash_utf8`, and secret-named expanded override registration through `secrets.remember({values})` (`values` is the list of nonblank expanded override values whose variable names are secret-named, such as `*_KEY`, `*_TOKEN`, `*_SECRET`; omit the call when no secret-named override is present). Descriptor-level `O_NOFOLLOW` open identity and OS permissions remain native obligations (`test/agent-config.test.mjs`).
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "a480842a531bdbb481e94d28e79325428e7bc1a645905333731779912fe66180",
+  "prose_sha256": "3f4db86460f84bcd01d8fdd71ebe0bb259ee065bbb7a8d76705cefd0c0987116",
   "entries": [
     {
       "operation": "loadAgentDefinitions",
       "input_schema": {
         "type": "object",
         "properties": {
-          "cwd": {
-            "type": "string"
-          },
+          "cwd": { "type": "string" },
           "env": {
-            "type": "string",
-            "description": "JSON text encoding of the supplied environment overrides and HOME. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "HOME": { "type": "string" }
+            },
+            "required": [],
+            "additionalProperties": false
           }
         },
-        "required": [
-          "cwd"
-        ],
+        "required": ["cwd", "env"],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the fresh id/name/kind/command/env definition records. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          "definitions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" },
+                "kind": { "type": "string", "enum": ["codex", "claude", "gemini"] },
+                "command": { "type": "string" },
+                "env": {
+                  "type": "object",
+                  "properties": {
+                    "OPENAI_API_KEY": { "type": "string" },
+                    "CODEX_HOME": { "type": "string" },
+                    "CUSTOM_PATH": { "type": "string" }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["id", "name", "kind", "command", "env"],
+              "additionalProperties": false
+            }
           }
         },
-        "required": [
-          "value"
-        ],
+        "required": ["definitions"],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": ["invalid-agents-config"],
       "resource_operations": [
-        "files.readFileSync",
-        "files.lstatSync",
-        "files.openSync",
-        "files.fstatSync",
-        "files.readSync",
-        "files.closeSync",
-        "compute.hash_utf8"
+        "files.stat",
+        "files.read",
+        "compute.hash_utf8",
+        "secrets.remember"
       ]
     }
   ],
@@ -73,252 +88,48 @@ Bind the existing Node filesystem dependency through files and SHA-256 through c
   "resources": [
     {
       "name": "files",
-      "kind": "port",
+      "kind": "blob",
       "access": "read",
       "operations": [
         {
-          "name": "readFileSync",
+          "name": "stat",
           "access": "read",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.readFileSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
+              "path": { "type": "string" }
             },
-            "required": [
-              "args"
-            ],
+            "required": ["path"],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
+              "exists": { "type": "boolean" },
+              "size": { "type": "integer", "minimum": 0 },
+              "is_symlink": { "type": "boolean" }
             },
-            "required": [
-              "value",
-              "error"
-            ],
+            "required": ["exists", "size", "is_symlink"],
             "additionalProperties": false
           }
         },
         {
-          "name": "lstatSync",
+          "name": "read",
           "access": "read",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.lstatSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
+              "path": { "type": "string" }
             },
-            "required": [
-              "args"
-            ],
+            "required": ["path"],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
+              "content": { "type": "string" }
             },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "openSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.openSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "fstatSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.fstatSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "readSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.readSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        },
-        {
-          "name": "closeSync",
-          "access": "read",
-          "arguments_schema": {
-            "type": "object",
-            "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing files.closeSync dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
-            },
-            "required": [
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          "result_schema": {
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "value",
-              "error"
-            ],
+            "required": ["content"],
             "additionalProperties": false
           }
         }
@@ -335,25 +146,47 @@ Bind the existing Node filesystem dependency through files and SHA-256 through c
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "text": {
-                "type": "string"
-              }
+              "text": { "type": "string" }
             },
-            "required": [
-              "text"
-            ],
+            "required": ["text"],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "sha256": {
-                "type": "string"
+              "value": { "type": "string" }
+            },
+            "required": ["value"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "secrets",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "remember",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "values": {
+                "type": "array",
+                "items": { "type": "string" }
               }
             },
-            "required": [
-              "sha256"
-            ],
+            "required": ["values"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
             "additionalProperties": false
           }
         }
@@ -361,11 +194,10 @@ Bind the existing Node filesystem dependency through files and SHA-256 through c
     }
   ],
   "limits": {
-    "max_steps": 64,
-    "max_model_calls": 16
+    "max_steps": 16,
+    "max_model_calls": 8
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

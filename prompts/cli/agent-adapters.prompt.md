@@ -60,50 +60,35 @@ ordinary explanations, fill requests and automatic results never authorize execu
 Drop unsupported/malformed run independently, preserving valid say/fill. Never launch
 a program here: the page owns the funded dispatch after its own guards.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+Runtime transport: `parseAgentAuthStatus({agent, result})` returns `{state}` and raises `invalid-auth-probe` when `agent` is blank; `discoverAgents({cwd, env})` returns `{agents}` and raises `invalid-discovery-cwd` when `cwd` is blank; `askAgent({agent, cwd, env, context, entries, supportsApply, supportsRun})` returns `{say, fill, apply, run, error}` and raises `invalid-agent-request` when `agent` is unknown or `cwd` is blank; and `runAgentProcess({command, args, cwd, timeoutMs, maxBytes})` returns `{code, stdout, stderr}` and raises `executable-missing` when `process.run` reports `executableMissing: true` or `command` is blank.
 
-Only parseAgentAuthStatus is declared. Installed-agent discovery, restricted subprocess invocation, cancellation, settings isolation, credential handling and local log writes remain native. Native evidence owners: test/agent-adapters.test.mjs.
+Bind subprocess execution through `process.run({command, args, cwd})`, launcher definition lookup through `launcher.readDefinitions({cwd})`, and scrubbed failure stderr logging (`~/.pdd/runtime/agent-chat.log`) through `log.append({path, content})`. OS process-group termination, temporary mode-`0600` Gemini system-settings overlay files and descriptor-level log permissions remain native obligations (`test/agent-adapters.test.mjs`).
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "4e6b9b85c958d216ae3a162dd9cbb298605418d615989c6b3cad80f31c5f472e",
+  "prose_sha256": "a95d1064bc2b38b4a6772f11347cc94a757448cebb6d086965836106dc72d7cb",
   "entries": [
     {
       "operation": "parseAgentAuthStatus",
       "input_schema": {
         "type": "object",
         "properties": {
-          "agent": {
-            "type": "string"
-          },
+          "agent": { "type": "string" },
           "result": {
             "type": "object",
             "properties": {
-              "code": {
-                "type": "integer"
-              },
-              "stdout": {
-                "type": "string"
-              },
-              "stderr": {
-                "type": "string"
-              }
+              "code": { "type": "integer" },
+              "stdout": { "type": "string" },
+              "stderr": { "type": "string" }
             },
-            "required": [
-              "code",
-              "stdout",
-              "stderr"
-            ],
+            "required": ["code", "stdout", "stderr"],
             "additionalProperties": false
           }
         },
-        "required": [
-          "agent",
-          "result"
-        ],
+        "required": ["agent", "result"],
         "additionalProperties": false
       },
       "result_schema": {
@@ -111,30 +96,293 @@ Only parseAgentAuthStatus is declared. Installed-agent discovery, restricted sub
         "properties": {
           "state": {
             "type": "string",
-            "enum": [
-              "ready",
-              "signed_out",
-              "unavailable"
+            "enum": ["ready", "signed_out", "unavailable"]
+          }
+        },
+        "required": ["state"],
+        "additionalProperties": false
+      },
+      "errors": ["invalid-auth-probe"],
+      "resource_operations": []
+    },
+    {
+      "operation": "discoverAgents",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cwd": { "type": "string" },
+          "env": {
+            "type": "object",
+            "properties": {
+              "HOME": { "type": "string" },
+              "PATH": { "type": "string" }
+            },
+            "required": ["HOME"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["cwd", "env"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" },
+                "state": {
+                  "type": "string",
+                  "enum": ["ready", "available", "signed_out", "quota", "not_installed", "error"]
+                }
+              },
+              "required": ["id", "name", "state"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["agents"],
+        "additionalProperties": false
+      },
+      "errors": ["invalid-discovery-cwd"],
+      "resource_operations": ["launcher.readDefinitions", "process.run"]
+    },
+    {
+      "operation": "askAgent",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent": { "type": "string" },
+          "cwd": { "type": "string" },
+          "env": {
+            "type": "object",
+            "properties": {
+              "HOME": { "type": "string" }
+            },
+            "required": ["HOME"],
+            "additionalProperties": false
+          },
+          "context": {
+            "type": "object",
+            "properties": {
+              "question": { "type": "string" },
+              "requestKind": { "type": "string" }
+            },
+            "required": ["question"],
+            "additionalProperties": false
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entry": { "type": "string" },
+                "prompt_path": { "type": "string" },
+                "operation": { "type": "string" }
+              },
+              "required": ["entry", "prompt_path", "operation"],
+              "additionalProperties": false
+            }
+          },
+          "supportsApply": { "type": "boolean" },
+          "supportsRun": { "type": "boolean" }
+        },
+        "required": ["agent", "cwd", "env", "context", "entries"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "say": { "type": "string" },
+          "fill": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "entry": { "type": "string" },
+                  "input": {
+                    "type": "object",
+                    "properties": {
+                      "cwd": { "type": "string" }
+                    },
+                    "required": ["cwd"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["entry", "input"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          },
+          "apply": { "type": "boolean" },
+          "run": { "type": "boolean" },
+          "error": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": { "type": "string" },
+                  "message": { "type": "string" }
+                },
+                "required": ["state", "message"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
             ]
           }
         },
-        "required": [
-          "state"
-        ],
+        "required": ["say", "fill", "apply", "run", "error"],
         "additionalProperties": false
       },
-      "errors": [],
-      "resource_operations": []
+      "errors": ["invalid-agent-request"],
+      "resource_operations": ["process.run", "log.append"]
+    },
+    {
+      "operation": "runAgentProcess",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string" },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "cwd": { "type": "string" },
+          "timeoutMs": { "type": "integer" },
+          "maxBytes": { "type": "integer" }
+        },
+        "required": ["command", "args", "cwd"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer" },
+          "stdout": { "type": "string" },
+          "stderr": { "type": "string" }
+        },
+        "required": ["code", "stdout", "stderr"],
+        "additionalProperties": false
+      },
+      "errors": ["executable-missing"],
+      "resource_operations": ["process.run"]
     }
   ],
   "calls": [],
-  "resources": [],
+  "resources": [
+    {
+      "name": "launcher",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "readDefinitions",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": { "type": "string" }
+            },
+            "required": ["cwd"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "definitions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "kind": { "type": "string", "enum": ["codex", "claude", "gemini"] },
+                    "command": { "type": "string" }
+                  },
+                  "required": ["id", "name", "kind", "command"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["definitions"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "process",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "run",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "command": { "type": "string" },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "cwd": { "type": "string" }
+            },
+            "required": ["command", "args", "cwd"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "integer" },
+              "stdout": { "type": "string" },
+              "stderr": { "type": "string" },
+              "executableMissing": { "type": "boolean" }
+            },
+            "required": ["code", "stdout", "stderr", "executableMissing"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "log",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "append",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "content": { "type": "string" }
+            },
+            "required": ["path", "content"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
   "limits": {
-    "max_steps": 64,
+    "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

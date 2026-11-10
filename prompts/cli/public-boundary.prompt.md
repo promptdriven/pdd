@@ -38,14 +38,168 @@ The package may include a licensed, attributed vendored public TOML parser under
 
 The local metrics routes dispatch to the metrics command; they require no interpreter call.
 
+Bind local route execution through `local.dispatch({route, argv})`, hosted interpreter execution (`test`, `lint`, `simulate`, `mcp`) through `interpreter.call({command, argv})`, and refusal diagnostics through `output.stderr({text})`. `dispatchBoundaryCommand({argv})` returns `{exitCode, route, usesInterpreter}` (`exitCode: 2`, `route: "refused"`, `usesInterpreter: false` without calling `local.dispatch` or `interpreter.call` when `argv` names `session`, `workflow feature|bug|small-change`, `check`, `try` or an unknown command) and raises `empty-command-argv` when `argv` is empty. `validateBoundaryText({text, kind})` returns `{ok: true}` when `kind` is `"machine"` or `"server"` or when a `"person"` line follows the PDD interpreter and command-word rules above, and raises `forbidden-boundary-word` when a `"person"` line uses `"PDD runtime"`, `"the runtime"`, `"pdd check"` or `"pdd try"`. Real package tarball contents, `gh auth token` subprocesses and Herdr sessions remain native obligations (`test/cli.test.mjs`).
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "61ec60ede3f9add57dbd56675ddb57eea5cc1fec467734fdbdeb50731d234454",
-  "reason": "This is shared native authoring and command-policy context, with no independently owned callable module entry. Real command dispatch, packaging, Git/Herdr effects and credential boundaries require native integration tests; an invented Runtime entry would not establish them. Native evidence owners: test/cli.test.mjs."
+  "prose_sha256": "61c52fd7287b97aaefc0f888a8e12abcb18dc539b4119a28a329bf13a7a866d2",
+  "entries": [
+    {
+      "operation": "dispatchBoundaryCommand",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["argv"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": { "type": "integer", "enum": [0, 1, 2] },
+          "route": { "type": "string" },
+          "usesInterpreter": { "type": "boolean" }
+        },
+        "required": ["exitCode", "route", "usesInterpreter"],
+        "additionalProperties": false
+      },
+      "errors": ["empty-command-argv"],
+      "resource_operations": [
+        "local.dispatch",
+        "interpreter.call",
+        "output.stderr"
+      ]
+    },
+    {
+      "operation": "validateBoundaryText",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["person", "machine", "server"]
+          }
+        },
+        "required": ["text", "kind"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" }
+        },
+        "required": ["ok"],
+        "additionalProperties": false
+      },
+      "errors": ["forbidden-boundary-word"],
+      "resource_operations": []
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "local",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "dispatch",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "route": { "type": "string" },
+              "argv": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["route", "argv"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": { "type": "integer" }
+            },
+            "required": ["exitCode"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "interpreter",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "call",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "command": { "type": "string" },
+              "argv": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["command", "argv"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": { "type": "integer" }
+            },
+            "required": ["exitCode"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stderr",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 32,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

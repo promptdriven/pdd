@@ -1,0 +1,273 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/agent-config-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When `$HOME/.config/pdd/agents.json` is absent, `loadAgentDefinitions` returns the built-in `codex`, `claude`, and `gemini` launchers without reading any repository `.pdd/agents.json` file."
+    },
+    {
+      "id": "AC2",
+      "text": "When `$HOME/.config/pdd/agents.json` is valid, `loadAgentDefinitions` expands leading `~/` paths against `HOME`, assigns `custom-` plus the first 24 SHA-256 hex characters of the exact name, registers secret-named override values through `secrets.remember`, and appends built-in defaults unless `include_defaults` is false."
+    },
+    {
+      "id": "AC3",
+      "text": "`loadAgentDefinitions` raises `invalid-agents-config` without reading contents or falling back when `$HOME/.config/pdd/agents.json` is a symbolic link or exceeds 65536 bytes."
+    },
+    {
+      "id": "AC4",
+      "text": "`loadAgentDefinitions` raises `invalid-agents-config` without fallback when `$HOME/.config/pdd/agents.json` contains an unknown agent kind or a name that collides with an enabled default launcher."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/.pdd/agents.json": {
+        "content": "{\"agents\":[{\"name\":\"Repo Evil\",\"kind\":\"codex\",\"command\":\"/tmp/evil\"}]}",
+        "is_symlink": false
+      },
+      "/home/dev/.config/pdd/agents.json": {
+        "content": "{\"include_defaults\":true,\"agents\":[{\"name\":\"Work Codex\",\"kind\":\"codex\",\"command\":\"~/bin/codex-work\",\"env\":{\"OPENAI_API_KEY\":\"sk-secret-token-123\",\"CODEX_HOME\":\"~/.codex-work\"}}]}",
+        "is_symlink": false
+      },
+      "/home/symlink/.config/pdd/agents.json": {
+        "content": "{\"agents\":[]}",
+        "is_symlink": true
+      },
+      "/home/invalid/.config/pdd/agents.json": {
+        "content": "{\"agents\":[{\"name\":\"Codex\",\"kind\":\"codex\",\"command\":\"codex\"}]}",
+        "is_symlink": false
+      }
+    },
+    "secrets": []
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    },
+    "secrets.remember": {
+      "action": "port.write",
+      "world_pointer": "/secrets",
+      "result_template": {
+        "ok": true
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "defaults-when-user-file-missing",
+      "entry_path": "prompts/cli/agent-config.prompt.md",
+      "operation": "loadAgentDefinitions",
+      "input": {
+        "cwd": "/repo",
+        "env": {
+          "HOME": "/home/alice"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/definitions",
+          "op": "equals",
+          "value": [
+            {
+              "id": "codex",
+              "name": "Codex",
+              "kind": "codex",
+              "command": "codex",
+              "env": {}
+            },
+            {
+              "id": "claude",
+              "name": "Claude",
+              "kind": "claude",
+              "command": "claude",
+              "env": {}
+            },
+            {
+              "id": "gemini",
+              "name": "Gemini",
+              "kind": "gemini",
+              "command": "gemini",
+              "env": {}
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/agent-config-files-stat",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/agent-config-files-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "custom-launcher-tilde-and-secrets",
+      "entry_path": "prompts/cli/agent-config.prompt.md",
+      "operation": "loadAgentDefinitions",
+      "input": {
+        "cwd": "/repo",
+        "env": {
+          "HOME": "/home/dev"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/definitions/0",
+          "op": "equals",
+          "value": {
+            "id": "custom-e6fe9d4ba94543789a50fe81",
+            "name": "Work Codex",
+            "kind": "codex",
+            "command": "/home/dev/bin/codex-work",
+            "env": {
+              "OPENAI_API_KEY": "sk-secret-token-123",
+              "CODEX_HOME": "/home/dev/.codex-work"
+            }
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/definitions",
+          "op": "count",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/secrets/0/values",
+          "op": "equals",
+          "value": [
+            "sk-secret-token-123"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/agent-config-compute-hash_utf8",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/agent-config-secrets-remember",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "reject-symlink-config",
+      "entry_path": "prompts/cli/agent-config.prompt.md",
+      "operation": "loadAgentDefinitions",
+      "input": {
+        "cwd": "/repo",
+        "env": {
+          "HOME": "/home/symlink"
+        }
+      },
+      "expected_error": "invalid-agents-config",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-agents-config"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/agent-config-files-stat",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/agent-config-files-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "reject-default-name-collision",
+      "entry_path": "prompts/cli/agent-config.prompt.md",
+      "operation": "loadAgentDefinitions",
+      "input": {
+        "cwd": "/repo",
+        "env": {
+          "HOME": "/home/invalid"
+        }
+      },
+      "expected_error": "invalid-agents-config",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-agents-config"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/agent-config-files-read",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/agent-config-secrets-remember",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

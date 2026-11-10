@@ -1,0 +1,502 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/approval-policy-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`readApprovalPolicy` reads `pdd.json` in `root`, returning `{strictApprovals: true}` when `strict_approvals` is `true`, `{strictApprovals: false}` when the file or key is absent, and raising `invalid-approval-policy` when `pdd.json` is malformed or has a non-boolean `strict_approvals`."
+    },
+    {
+      "id": "AC2",
+      "text": "`readSaidWords` reads once from `stdin.read` when `said` is `-`, preserves verbatim text including newlines and quotes, and raises `invalid-said-words` when the payload is blank-only."
+    },
+    {
+      "id": "AC3",
+      "text": "`approvalActor` prefers `CODEX_THREAD_ID` over `PDD_AGENT_SESSION`, falls back to terminal `USER` or `LOGNAME`, and raises `invalid-actor-env` when an environment value contains NUL."
+    },
+    {
+      "id": "AC4",
+      "text": "`readPromptApprovals` returns retained journal records from `pdd/approvals.json` under `commonDir` and raises `invalid-approval-journal` when the existing file is malformed."
+    },
+    {
+      "id": "AC5",
+      "text": "`recordPromptApproval` acquires lock custody, invokes `guards.afterApprovalLock` and `guards.beforeApprovalCommit`, allocates an event ID when absent, writes the updated `{v: 1, approvals}` journal, releases the lock, and raises `guard-refused` without writing when a guard rejects."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/strict-repo/pdd.json": {
+        "content": "{\"strict_approvals\":true}",
+        "is_symlink": false
+      },
+      "/bad-repo/pdd.json": {
+        "content": "{\"strict_approvals\":\"yes\"}",
+        "is_symlink": false
+      },
+      "/bad-common/pdd/approvals.json": {
+        "content": "{not-valid-json",
+        "is_symlink": false
+      }
+    },
+    "calls": {
+      "stdinRead": 0,
+      "randomUUID": 0,
+      "lockAcquire": 0,
+      "afterApprovalLock": 0,
+      "beforeApprovalCommit": 0
+    },
+    "lockReleases": []
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    },
+    "stdin.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/stdinRead",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "text": "I approve this prompt.\n",
+            "error": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "ids.randomUUID": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/randomUUID",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "id": "app-1111-2222"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "lock.acquire": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/lockAcquire",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "commonDir": "/repo/.git"
+          },
+          "result": {
+            "acquired": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "commonDir": "/repo/.git"
+          },
+          "result": {
+            "acquired": true
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "lock.release": {
+      "action": "port.write",
+      "world_pointer": "/lockReleases",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "guards.afterApprovalLock": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/afterApprovalLock",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "commonDir": "/repo/.git"
+          },
+          "result": {
+            "ok": true,
+            "error": null
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "commonDir": "/repo/.git"
+          },
+          "result": {
+            "ok": true,
+            "error": null
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "guards.beforeApprovalCommit": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/beforeApprovalCommit",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "commonDir": "/repo/.git"
+          },
+          "result": {
+            "ok": true,
+            "error": null
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "commonDir": "/repo/.git"
+          },
+          "result": {
+            "ok": false,
+            "error": "guard-refused"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "read-policy-strict-true",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "readApprovalPolicy",
+      "input": {
+        "root": "/strict-repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/strictApprovals",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/approval-policy-files-read",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-policy-invalid-type",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "readApprovalPolicy",
+      "input": {
+        "root": "/bad-repo"
+      },
+      "expected_error": "invalid-approval-policy",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-approval-policy"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-said-from-stdin-marker",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "readSaidWords",
+      "input": {
+        "said": "-"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/words",
+          "op": "equals",
+          "value": "I approve this prompt.\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/approval-policy-stdin-read",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-said-reject-blank",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "readSaidWords",
+      "input": {
+        "said": "   \n"
+      },
+      "expected_error": "invalid-said-words",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-said-words"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/approval-policy-stdin-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "actor-prefers-codex-thread",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "approvalActor",
+      "input": {
+        "env": {
+          "CODEX_THREAD_ID": "thread-42",
+          "PDD_AGENT_SESSION": "1",
+          "USER": "alice"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": {
+            "kind": "agent",
+            "id": "CODEX_THREAD_ID=thread-42"
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "actor-reject-nul-env",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "approvalActor",
+      "input": {
+        "env": {
+          "USER": "alice\u0000evil"
+        }
+      },
+      "expected_error": "invalid-actor-env",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-actor-env"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "record-approval-ok",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "recordPromptApproval",
+      "input": {
+        "commonDir": "/repo/.git",
+        "evidence": {
+          "route": "said",
+          "actor": {
+            "kind": "agent",
+            "id": "CODEX_THREAD_ID=thread-42"
+          },
+          "at": 1700000000000,
+          "words": "I approve this prompt.\n",
+          "prompts": [
+            {
+              "path": "prompts/cli/files.prompt.md",
+              "proseSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/record/id",
+          "op": "equals",
+          "value": "app-1111-2222"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/count",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/approval-policy-lock-acquire",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/approval-policy-files-write",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/approval-policy-lock-release",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "record-approval-guard-refused",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "recordPromptApproval",
+      "input": {
+        "commonDir": "/repo/.git",
+        "evidence": {
+          "id": "app-3333-4444",
+          "route": "terminal",
+          "actor": {
+            "kind": "terminal",
+            "id": "alice"
+          },
+          "at": 1700000001000,
+          "words": null,
+          "prompts": []
+        }
+      },
+      "expected_error": "guard-refused",
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "guard-refused"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/approval-policy-files-write",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/approval-policy-lock-release",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-approvals-ok",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "readPromptApprovals",
+      "input": {
+        "commonDir": "/repo/.git"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/approvals",
+          "op": "count",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/approvals/0/id",
+          "op": "equals",
+          "value": "app-1111-2222"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-approvals-malformed-error",
+      "entry_path": "prompts/cli/approval-policy.prompt.md",
+      "operation": "readPromptApprovals",
+      "input": {
+        "commonDir": "/bad-common"
+      },
+      "expected_error": "invalid-approval-journal",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-approval-journal"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

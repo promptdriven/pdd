@@ -1,0 +1,406 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/prompt-approve-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`approvePromptText` sets the top-level `\"status\"` to `\"approved\"` and `\"prose_sha256\"` to the `compute.hash_utf8` digest of the trimmed prose while leaving nested `\"status\"` fields untouched, and raises `missing-prose-sha256` when `\"prose_sha256\"` is absent."
+    },
+    {
+      "id": "AC2",
+      "text": "`runApprove` in easy mode with valid `said` words verifies that the target is a Git-visible `*.prompt.md` file, writes the approved prompt text, records durable approval evidence via `policy.appendApproval`, prints `Approved prompts/cli/sample.prompt.md.`, and returns `{exitCode: 0}`."
+    },
+    {
+      "id": "AC3",
+      "text": "`runApprove` in strict mode (`strictApprovals: true`) refuses `--said` with `{exitCode: 2}` and `pdd approve is for a person at a terminal.` on `output.stderr` without writing the prompt or recording an approval."
+    },
+    {
+      "id": "AC4",
+      "text": "`runApprove` raises `invalid-approve-cwd` before invoking Git when `cwd` is blank."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/repo/prompts/cli/sample.prompt.md": {
+        "content": "# Sample prompt\n\nSay hello.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\n  \"status\": \"draft\",\n  \"prose_sha256\": \"\",\n  \"entries\": [],\n  \"calls\": [],\n  \"resources\": [],\n  \"limits\": {\n    \"max_steps\": 1,\n    \"max_model_calls\": 1\n  }\n}\n```\n</details>\n",
+        "is_symlink": false
+      }
+    },
+    "calls": {
+      "gitExec": 0,
+      "readPolicy": 0,
+      "ask": 0,
+      "now": 0
+    },
+    "recordedApprovals": [],
+    "stdout": [],
+    "stderr": []
+  },
+  "simulation": {
+    "git.execFile": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/gitExec",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "/repo\n",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "args": [
+              "rev-parse",
+              "--git-common-dir"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "/repo/.git\n",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "args": [
+              "ls-files",
+              "--error-unmatch",
+              "--",
+              "prompts/cli/sample.prompt.md"
+            ],
+            "cwd": "/repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "prompts/cli/sample.prompt.md\n",
+            "stderr": ""
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "args": [
+              "rev-parse",
+              "--show-toplevel"
+            ],
+            "cwd": "/strict-repo"
+          },
+          "result": {
+            "code": 0,
+            "stdout": "/strict-repo\n",
+            "stderr": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "policy.readPolicy": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/readPolicy",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo"
+          },
+          "result": {
+            "strictApprovals": false
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "root": "/strict-repo"
+          },
+          "result": {
+            "strictApprovals": true
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "policy.appendApproval": {
+      "action": "port.write",
+      "world_pointer": "/recordedApprovals",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    },
+    "terminal.ask": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/ask",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "question": "Approve prompts/cli/sample.prompt.md? y/n "
+          },
+          "result": {
+            "answer": "y"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "clock.now": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/now",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {},
+          "result": {
+            "now": 1700000000000
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "output.stdout": {
+      "action": "port.write",
+      "world_pointer": "/stdout",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "output.stderr": {
+      "action": "port.write",
+      "world_pointer": "/stderr",
+      "result_template": {
+        "ok": true
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "approve-prompt-text-ok",
+      "entry_path": "prompts/cli/prompt-approve.prompt.md",
+      "operation": "approvePromptText",
+      "input": {
+        "text": "# Sample prompt\n\nSay hello.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\n  \"status\": \"draft\",\n  \"prose_sha256\": \"\"\n}\n```\n</details>\n"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "\"status\": \"approved\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "contains",
+          "value": "\"afa959c16f4bcaee35eb11cda532ec3e9f8c6a6cc3ef359b5451ec95815e1823\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/prompt-approve-compute-hash_utf8",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "approve-prompt-text-missing-hash-key",
+      "entry_path": "prompts/cli/prompt-approve.prompt.md",
+      "operation": "approvePromptText",
+      "input": {
+        "text": "# Sample prompt\n\nSay hello.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\n  \"status\": \"draft\"\n}\n```\n</details>\n"
+      },
+      "expected_error": "missing-prose-sha256",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "missing-prose-sha256"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-approve-easy-said-ok",
+      "entry_path": "prompts/cli/prompt-approve.prompt.md",
+      "operation": "runApprove",
+      "input": {
+        "words": [
+          "prompts/cli/sample.prompt.md"
+        ],
+        "cwd": "/repo",
+        "said": "Approve the sample prompt.",
+        "interactive": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/~1repo~1prompts~1cli~1sample.prompt.md/content",
+          "op": "contains",
+          "value": "\"status\": \"approved\""
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/recordedApprovals/0/words",
+          "op": "equals",
+          "value": "Approve the sample prompt."
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/prompt-approve-policy-appendApproval",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/prompt-approve-files-write",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-approve-strict-refuses-said",
+      "entry_path": "prompts/cli/prompt-approve.prompt.md",
+      "operation": "runApprove",
+      "input": {
+        "words": [
+          "prompts/cli/sample.prompt.md"
+        ],
+        "cwd": "/strict-repo",
+        "said": "Approve in strict mode.",
+        "interactive": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/stderr/0/text",
+          "op": "contains",
+          "value": "pdd approve is for a person at a terminal."
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/prompt-approve-policy-appendApproval",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/prompt-approve-files-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "run-approve-blank-cwd-error",
+      "entry_path": "prompts/cli/prompt-approve.prompt.md",
+      "operation": "runApprove",
+      "input": {
+        "words": [
+          "prompts/cli/sample.prompt.md"
+        ],
+        "cwd": "",
+        "said": null
+      },
+      "expected_error": "invalid-approve-cwd",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-approve-cwd"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/prompt-approve-git-execFile",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

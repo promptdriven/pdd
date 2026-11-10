@@ -107,16 +107,16 @@ and messages come from the same read snapshot.
 - [Public boundary](public-boundary.prompt.md): authoring and verification; use
   Node built-ins only, with no services or private runtime dependencies.
 
-Runtime transport: each entry names the public operation above. JSON-text fields are explicitly described in their schemas and are decoded before using the public value; the result field `value` encodes the complete public return value where its shape is dynamic. Other scalar/array returns use the named result wrapper. An empty result object represents a void return. Optional fields retain the native defaults. These transport wrappers do not add native exports or change domain decisions. Execution limits below are draft check budgets, not public input limits.
+Runtime transport: `readApprovalEvidence({stage, gateAskedAt, decision, ignorePrefixes, codexHome, claudeConfigDir, home})` returns `{ok, decision, agent, sessionId, userMessage, userMessageAt, code, message}` (with unused outcome fields set to `null`) and raises `clock_unavailable` when `clock.now` returns a non-positive timestamp. `findNativeSessions({stage, codexHome, claudeConfigDir, home})` returns `{sessions}` and raises `invalid_request` on invalid stage bounds or `session_unreadable` when discovery encounters a non-`ENOENT` directory/stat error or a malformed matched session file.
 
-The fs resource supplies the existing promises filesystem replies and clock.now supplies ports.now. This checks supplied-session selection and message exclusion only. Authentic session provenance, physical identity and concurrent host snapshots remain native; returned text never approves a gate. Native evidence owners: test/approval-evidence-budget.test.mjs, test/approval-evidence.test.mjs.
+Bind directory listing and file modification times through `fs.readdir` and `fs.stat`, session JSONL reads through `files.read`, and observation time through `clock.now`. Authentic host session provenance, physical inode identity and concurrent append snapshots remain native obligations (`test/approval-evidence-budget.test.mjs`, `test/approval-evidence.test.mjs`).
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "525f1893f4f2b82d1282ffa292d6a9be63ce037e9bbe2a23b6d042f5674330fa",
+  "prose_sha256": "9c8d6e967406151d8b8e8c58536aa925458b0c24c6e2906e1cbf1427635ff251",
   "entries": [
     {
       "operation": "readApprovalEvidence",
@@ -124,51 +124,103 @@ The fs resource supplies the existing promises filesystem replies and clock.now 
         "type": "object",
         "properties": {
           "stage": {
-            "type": "string",
-            "description": "JSON text encoding of the native stage identity and bounds. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+            "type": "object",
+            "properties": {
+              "agent": { "type": "string", "enum": ["codex", "claude"] },
+              "root": { "type": "string" },
+              "startedAt": { "type": "number" },
+              "endedAt": { "type": "number" },
+              "sessionId": { "type": "string" }
+            },
+            "required": ["agent", "root", "startedAt", "endedAt"],
+            "additionalProperties": false
           },
-          "gateAskedAt": {
-            "type": "number"
-          },
-          "decision": {
-            "type": "string",
-            "enum": [
-              "approve",
-              "changes"
-            ]
-          },
+          "gateAskedAt": { "type": "number" },
+          "decision": { "type": "string", "enum": ["approve", "changes"] },
           "ignorePrefixes": {
             "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
+            "items": { "type": "string" }
+          },
+          "codexHome": { "type": "string" },
+          "claudeConfigDir": { "type": "string" },
+          "home": { "type": "string" }
         },
-        "required": [
-          "stage",
-          "gateAskedAt",
-          "decision"
-        ],
+        "required": ["stage", "gateAskedAt", "decision"],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the success evidence or ok:false/code/message reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          "ok": { "type": "boolean" },
+          "decision": {
+            "oneOf": [
+              { "type": "string", "enum": ["approve", "changes"] },
+              { "type": "null" }
+            ]
+          },
+          "agent": {
+            "oneOf": [
+              { "type": "string", "enum": ["codex", "claude"] },
+              { "type": "null" }
+            ]
+          },
+          "sessionId": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "userMessage": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "userMessageAt": {
+            "oneOf": [
+              { "type": "number" },
+              { "type": "null" }
+            ]
+          },
+          "code": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "invalid_request",
+                  "session_not_found",
+                  "session_ambiguous",
+                  "session_unreadable",
+                  "user_message_missing"
+                ]
+              },
+              { "type": "null" }
+            ]
+          },
+          "message": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
           }
         },
         "required": [
-          "value"
+          "ok",
+          "decision",
+          "agent",
+          "sessionId",
+          "userMessage",
+          "userMessageAt",
+          "code",
+          "message"
         ],
         "additionalProperties": false
       },
-      "errors": [],
+      "errors": ["clock_unavailable"],
       "resource_operations": [
         "fs.readdir",
         "fs.stat",
-        "fs.readFile",
+        "files.read",
         "clock.now"
       ]
     },
@@ -178,35 +230,48 @@ The fs resource supplies the existing promises filesystem replies and clock.now 
         "type": "object",
         "properties": {
           "stage": {
-            "type": "string",
-            "description": "JSON text encoding of the native stage identity and bounds. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-          }
+            "type": "object",
+            "properties": {
+              "agent": { "type": "string", "enum": ["codex", "claude"] },
+              "root": { "type": "string" },
+              "startedAt": { "type": "number" },
+              "endedAt": { "type": "number" },
+              "sessionId": { "type": "string" }
+            },
+            "required": ["agent", "root", "startedAt", "endedAt"],
+            "additionalProperties": false
+          },
+          "codexHome": { "type": "string" },
+          "claudeConfigDir": { "type": "string" },
+          "home": { "type": "string" }
         },
-        "required": [
-          "stage"
-        ],
+        "required": ["stage"],
         "additionalProperties": false
       },
       "result_schema": {
         "type": "object",
         "properties": {
-          "value": {
-            "type": "string",
-            "description": "JSON text encoding of the distinct id/startedAt sessions. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "startedAt": { "type": "number" }
+              },
+              "required": ["id", "startedAt"],
+              "additionalProperties": false
+            }
           }
         },
-        "required": [
-          "value"
-        ],
+        "required": ["sessions"],
         "additionalProperties": false
       },
-      "errors": [
-        "session_unreadable"
-      ],
+      "errors": ["invalid_request", "session_unreadable"],
       "resource_operations": [
         "fs.readdir",
         "fs.stat",
-        "fs.readFile",
+        "files.read",
         "clock.now"
       ]
     }
@@ -216,128 +281,97 @@ The fs resource supplies the existing promises filesystem replies and clock.now 
     {
       "name": "fs",
       "kind": "port",
-      "access": "read",
+      "access": "write",
       "operations": [
         {
           "name": "readdir",
-          "access": "read",
+          "access": "write",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing fs.readdir dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
+              "path": { "type": "string" }
             },
-            "required": [
-              "args"
-            ],
+            "required": ["path"],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "isFile": { "type": "boolean" },
+                    "isDirectory": { "type": "boolean" },
+                    "isSymbolicLink": { "type": "boolean" }
+                  },
+                  "required": ["name", "isFile", "isDirectory", "isSymbolicLink"],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
+                  { "type": "string" },
+                  { "type": "null" }
                 ]
               }
             },
-            "required": [
-              "value",
-              "error"
-            ],
+            "required": ["entries", "error"],
             "additionalProperties": false
           }
         },
         {
           "name": "stat",
-          "access": "read",
+          "access": "write",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing fs.stat dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
+              "path": { "type": "string" }
             },
-            "required": [
-              "args"
-            ],
+            "required": ["path"],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
+              "mtimeMs": { "type": "number" },
               "error": {
                 "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
+                  { "type": "string" },
+                  { "type": "null" }
                 ]
               }
             },
-            "required": [
-              "value",
-              "error"
-            ],
+            "required": ["mtimeMs", "error"],
             "additionalProperties": false
           }
-        },
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
         {
-          "name": "readFile",
+          "name": "read",
           "access": "read",
           "arguments_schema": {
             "type": "object",
             "properties": {
-              "args": {
-                "type": "string",
-                "description": "JSON text encoding of the positional arguments to the existing fs.readFile dependency operation. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              }
+              "path": { "type": "string" }
             },
-            "required": [
-              "args"
-            ],
+            "required": ["path"],
             "additionalProperties": false
           },
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "string",
-                "description": "JSON text encoding of the dependency reply. Decode before applying the public contract; preserve all JSON values and absence inside the encoded value."
-              },
-              "error": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
+              "content": { "type": "string" }
             },
-            "required": [
-              "value",
-              "error"
-            ],
+            "required": ["content"],
             "additionalProperties": false
           }
         }
@@ -346,11 +380,11 @@ The fs resource supplies the existing promises filesystem replies and clock.now 
     {
       "name": "clock",
       "kind": "port",
-      "access": "read",
+      "access": "write",
       "operations": [
         {
           "name": "now",
-          "access": "read",
+          "access": "write",
           "arguments_schema": {
             "type": "object",
             "properties": {},
@@ -360,13 +394,9 @@ The fs resource supplies the existing promises filesystem replies and clock.now 
           "result_schema": {
             "type": "object",
             "properties": {
-              "value": {
-                "type": "number"
-              }
+              "now": { "type": "number" }
             },
-            "required": [
-              "value"
-            ],
+            "required": ["now"],
             "additionalProperties": false
           }
         }
@@ -374,11 +404,10 @@ The fs resource supplies the existing promises filesystem replies and clock.now 
     }
   ],
   "limits": {
-    "max_steps": 64,
+    "max_steps": 32,
     "max_model_calls": 16
   },
-  "conventions": [],
-  "kind": "partial"
+  "conventions": []
 }
 ```
 </details>

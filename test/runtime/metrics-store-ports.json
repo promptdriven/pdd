@@ -1,0 +1,546 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/metrics-store-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`readEvents` reads retained events, sources, and snapshots from `ledger.read`, and raises `invalid-ledger` when the root path is blank."
+    },
+    {
+      "id": "AC2",
+      "text": "`appendEvents` deduplicates identical events by `source` and `id`, retains conflicting payloads with the same `source` and `id`, persists the updated ledger via `ledger.write`, and raises `invalid-metrics-event` without writing when an event contains a query-string or localhost URL."
+    },
+    {
+      "id": "AC3",
+      "text": "`exportMetrics` builds a `pdd.metrics.export.v1` bundle with `scope: \"all-retained-repo-events\"` and installation metadata from `installation.read`, and raises `invalid-export-metadata` without reading the ledger when `repo` or `timezone` is invalid."
+    },
+    {
+      "id": "AC4",
+      "text": "`importMetrics` unions compatible bundle events, sources, and snapshots into the ledger and raises `invalid-metrics-bundle` before any write when a bundle has an unsupported scope."
+    },
+    {
+      "id": "AC5",
+      "text": "`validateSnapshot` returns `{valid: true}` for a canonical selector snapshot and raises `invalid-selector-snapshot` when the snapshot repository does not match or issue numbers repeat."
+    }
+  ],
+  "initial_world": {
+    "calls": {
+      "ledgerRead": 0,
+      "installationRead": 0
+    },
+    "ledgerWrites": []
+  },
+  "simulation": {
+    "ledger.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/ledgerRead",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo"
+          },
+          "result": {
+            "events": [
+              {
+                "schema": "pdd.metrics.event.v1",
+                "id": "evt-1",
+                "repo": "promptdriven/pdd",
+                "issue": 10,
+                "type": "start",
+                "at": "2026-11-10T00:00:00.000Z",
+                "observedAt": "2026-11-10T00:00:00.000Z",
+                "source": "inst-a",
+                "data": {
+                  "origin": "manual"
+                }
+              }
+            ],
+            "sources": [],
+            "snapshots": []
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "root": "/repo"
+          },
+          "result": {
+            "events": [
+              {
+                "schema": "pdd.metrics.event.v1",
+                "id": "evt-1",
+                "repo": "promptdriven/pdd",
+                "issue": 10,
+                "type": "start",
+                "at": "2026-11-10T00:00:00.000Z",
+                "observedAt": "2026-11-10T00:00:00.000Z",
+                "source": "inst-a",
+                "data": {
+                  "origin": "manual"
+                }
+              }
+            ],
+            "sources": [],
+            "snapshots": []
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "root": "/repo"
+          },
+          "result": {
+            "events": [
+              {
+                "schema": "pdd.metrics.event.v1",
+                "id": "evt-1",
+                "repo": "promptdriven/pdd",
+                "issue": 10,
+                "type": "start",
+                "at": "2026-11-10T00:00:00.000Z",
+                "observedAt": "2026-11-10T00:00:00.000Z",
+                "source": "inst-a",
+                "data": {
+                  "origin": "manual"
+                }
+              }
+            ],
+            "sources": [],
+            "snapshots": []
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "root": "/repo"
+          },
+          "result": {
+            "events": [],
+            "sources": [],
+            "snapshots": []
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "ledger.write": {
+      "action": "port.write",
+      "world_pointer": "/ledgerWrites",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "installation.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/installationRead",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo"
+          },
+          "result": {
+            "source": "inst-a",
+            "captureStartedAt": "2026-11-01T00:00:00.000Z"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "read-events-ok",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "readEvents",
+      "input": {
+        "root": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/events",
+          "op": "count",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/metrics-store-ledger-read",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "read-events-blank-root-error",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "readEvents",
+      "input": {
+        "root": ""
+      },
+      "expected_error": "invalid-ledger",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-ledger"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/metrics-store-ledger-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "append-events-dedup-and-conflict",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "appendEvents",
+      "input": {
+        "root": "/repo",
+        "events": [
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "evt-1",
+            "repo": "promptdriven/pdd",
+            "issue": 10,
+            "type": "start",
+            "at": "2026-11-10T00:00:00.000Z",
+            "observedAt": "2026-11-10T00:00:00.000Z",
+            "source": "inst-a",
+            "data": {
+              "origin": "manual"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "evt-1",
+            "repo": "promptdriven/pdd",
+            "issue": 10,
+            "type": "start",
+            "at": "2026-11-10T00:00:00.000Z",
+            "observedAt": "2026-11-10T00:00:00.000Z",
+            "source": "inst-a",
+            "data": {
+              "origin": "autopilot"
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/events",
+          "op": "count",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/ledgerWrites/0/events",
+          "op": "count",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/metrics-store-ledger-write",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "append-events-reject-query-url",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "appendEvents",
+      "input": {
+        "root": "/repo",
+        "events": [
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "evt-bad",
+            "repo": "promptdriven/pdd",
+            "issue": 10,
+            "type": "start",
+            "at": "2026-11-10T00:00:00.000Z",
+            "observedAt": "2026-11-10T00:00:00.000Z",
+            "source": "inst-a",
+            "data": {
+              "origin": "manual",
+              "evidence": "https://github.com/promptdriven/pdd/issues/10?token=secret"
+            }
+          }
+        ]
+      },
+      "expected_error": "invalid-metrics-event",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-metrics-event"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/metrics-store-ledger-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "export-metrics-ok",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "exportMetrics",
+      "input": {
+        "root": "/repo",
+        "metadata": {
+          "repo": "promptdriven/pdd",
+          "timezone": "UTC",
+          "exportedAt": "2026-11-10T01:00:00.000Z",
+          "cliVersion": "0.1.0"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/bundle/scope",
+          "op": "equals",
+          "value": "all-retained-repo-events"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/bundle/source",
+          "op": "equals",
+          "value": "inst-a"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/metrics-store-installation-read",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "export-metrics-invalid-metadata",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "exportMetrics",
+      "input": {
+        "root": "/repo",
+        "metadata": {
+          "repo": "not-a-repo",
+          "timezone": "UTC"
+        }
+      },
+      "expected_error": "invalid-export-metadata",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-export-metadata"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/metrics-store-ledger-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "import-metrics-ok",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "importMetrics",
+      "input": {
+        "root": "/repo",
+        "bundle": {
+          "schema": "pdd.metrics.export.v1",
+          "metricDefinitionVersion": "pdd.metrics.definitions.v1",
+          "scope": "all-retained-repo-events",
+          "repo": "promptdriven/pdd",
+          "exportedAt": "2026-11-10T01:00:00.000Z",
+          "timezone": "UTC",
+          "source": "inst-b",
+          "captureStartedAt": "2026-11-01T00:00:00.000Z",
+          "cliVersion": "0.1.0",
+          "events": [
+            {
+              "schema": "pdd.metrics.event.v1",
+              "id": "evt-2",
+              "repo": "promptdriven/pdd",
+              "issue": 11,
+              "type": "start",
+              "at": "2026-11-10T00:30:00.000Z",
+              "observedAt": "2026-11-10T00:30:00.000Z",
+              "source": "inst-b",
+              "data": {
+                "origin": "manual"
+              }
+            }
+          ],
+          "sources": [
+            {
+              "source": "inst-b",
+              "scope": "all-retained-repo-events",
+              "captureStartedAt": "2026-11-01T00:00:00.000Z",
+              "exportedAt": "2026-11-10T01:00:00.000Z",
+              "timezone": "UTC",
+              "cliVersion": "0.1.0",
+              "metricDefinitionVersion": "pdd.metrics.definitions.v1"
+            }
+          ],
+          "snapshots": []
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/events",
+          "op": "count",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/sources/0/source",
+          "op": "equals",
+          "value": "inst-b"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/metrics-store-ledger-write",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "import-metrics-reject-bad-scope",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "importMetrics",
+      "input": {
+        "root": "/repo",
+        "bundle": {
+          "schema": "pdd.metrics.export.v1",
+          "metricDefinitionVersion": "pdd.metrics.definitions.v1",
+          "scope": "partial-date-slice",
+          "repo": "promptdriven/pdd",
+          "exportedAt": "2026-11-10T01:00:00.000Z",
+          "timezone": "UTC",
+          "source": "inst-b",
+          "captureStartedAt": "2026-11-01T00:00:00.000Z",
+          "cliVersion": "0.1.0",
+          "events": []
+        }
+      },
+      "expected_error": "invalid-metrics-bundle",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-metrics-bundle"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/metrics-store-ledger-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "validate-snapshot-ok",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "validateSnapshot",
+      "input": {
+        "snapshot": {
+          "schema": "pdd.metrics.snapshot.v1",
+          "id": "snap-1",
+          "repo": "promptdriven/pdd",
+          "at": "2026-11-10T00:00:00.000Z",
+          "observedAt": "2026-11-10T00:00:00.000Z",
+          "source": "inst-a",
+          "issues": [
+            10,
+            11
+          ]
+        },
+        "repository": "promptdriven/pdd"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/valid",
+          "op": "equals",
+          "value": true
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "validate-snapshot-repo-mismatch",
+      "entry_path": "prompts/cli/metrics-store.prompt.md",
+      "operation": "validateSnapshot",
+      "input": {
+        "snapshot": {
+          "schema": "pdd.metrics.snapshot.v1",
+          "id": "snap-1",
+          "repo": "other/repo",
+          "at": "2026-11-10T00:00:00.000Z",
+          "observedAt": "2026-11-10T00:00:00.000Z",
+          "source": "inst-a",
+          "issues": [
+            10
+          ]
+        },
+        "repository": "promptdriven/pdd"
+      },
+      "expected_error": "invalid-selector-snapshot",
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-selector-snapshot"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

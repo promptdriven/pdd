@@ -4,7 +4,7 @@
 
 `pdd metrics` displays the current queue. `--date YYYY-MM-DD` selects activity on that date; `--snapshot ID` selects a fixed issue group; `--timezone IANA` declares the report timezone; `--json` emits the same calculation as terminal text. The report identifies its repository, selection, timezone, cutoff, sources and gaps and includes issue lists and reasons. `export FILE` writes a shareable ledger bundle; `import FILE` unions a compatible bundle. `record FILE` appends explicit sourced events, including human reports, outcome and recovery facts. Reject invalid options, date/timezone, missing input or inaccessible storage with a nonzero result and explanatory stderr. Do not imply absent machines are covered or that local facts prove all users' starts. Sharing occurs only through explicit export.
 
-This command is native-only for now: no executable Runtime interface is declared. Repository, selector, GitHub, clock, ledger and calculator boundaries need real bindings before a Runtime scenario can establish command behavior. Native tests must exercise the real command and the separate calculator and ledger contracts.
+Bind repository discovery through `repository.identify({cwd})`, observation time through `clock.now({})`, live queue selection through `selector.observe({cwd, repo})`, GitHub PR/comment/CI inspection through `github.observe({cwd, repo})`, ledger persistence through `store.loadLedger`, `store.saveEvents`, `store.createBundle` and `store.applyBundle`, metric calculation through `calculate.buildReport`, bundle/record file I/O through `files.read` and `files.write`, and terminal output through `output.stdout` and `output.stderr`. `runMetrics({argv, cwd})` returns `{exitCode}` (`0` on success, `1` with explanatory `output.stderr` on invalid options, historical `--at` without `--snapshot` or `--date`, or ambiguous repository identity) and raises `storage-unavailable` when `cwd` is blank. Native `gh`/`git` subprocess execution and filesystem journal scanning remain native obligations (`test/metrics-command.test.mjs`).
 
 The native gh runner records each `gh` call in the GitHub call ledger of the repository that the call names, through `nativeGithubCounter` of [GitHub calls](github-calls.prompt.md#ledger), with the purpose `other`. Counting never changes a call or its result; an injected `execFile` is not wrapped.
 
@@ -45,10 +45,485 @@ Historical saved-step backfill is a fallback: do not generate a completion alrea
 
 ```json
 {
-  "kind": "native-only",
   "status": "draft",
-  "prose_sha256": "38f838ab56f35c1d42e22e758c1145516efb1a8701b9487da817ec304438576a",
-  "reason": "Prompt explicitly says native-only for now; repository/selector/ledger bindings are incomplete. Native evidence owners: test/metrics-command.test.mjs."
+  "prose_sha256": "5d408f66078f30659ce42b6119f7171561e3b82a2438b978d25e0efe46a1533f",
+  "entries": [
+    {
+      "operation": "runMetrics",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "cwd": { "type": "string" }
+        },
+        "required": ["argv", "cwd"],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exitCode": { "type": "integer" }
+        },
+        "required": ["exitCode"],
+        "additionalProperties": false
+      },
+      "errors": ["storage-unavailable"],
+      "resource_operations": [
+        "repository.identify",
+        "clock.now",
+        "selector.observe",
+        "github.observe",
+        "store.loadLedger",
+        "store.saveEvents",
+        "store.createBundle",
+        "store.applyBundle",
+        "calculate.buildReport",
+        "files.read",
+        "files.write",
+        "output.stdout",
+        "output.stderr"
+      ]
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "repository",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "identify",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": { "type": "string" }
+            },
+            "required": ["cwd"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "repo": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "required": ["repo"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "now",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "now": { "type": "string" }
+            },
+            "required": ["now"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "selector",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "observe",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": { "type": "string" },
+              "repo": { "type": "string" }
+            },
+            "required": ["cwd", "repo"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "available": { "type": "boolean" },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "number": { "type": "integer" },
+                    "state": { "type": "string" },
+                    "reasons": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": ["number", "state", "reasons"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["available", "issues"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "github",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "observe",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": { "type": "string" },
+              "repo": { "type": "string" }
+            },
+            "required": ["cwd", "repo"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "available": { "type": "boolean" },
+              "prs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "number": { "type": "integer" },
+                    "issue": { "type": "integer" },
+                    "head": { "type": "string" },
+                    "merged": { "type": "boolean" }
+                  },
+                  "required": ["number", "issue", "head", "merged"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["available", "prs"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "store",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "loadLedger",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": { "type": "string" }
+            },
+            "required": ["root"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "schema": { "type": "string" },
+                    "id": { "type": "string" },
+                    "repo": { "type": "string" },
+                    "issue": { "type": "integer" },
+                    "type": { "type": "string" },
+                    "at": { "type": "string" },
+                    "observedAt": { "type": "string" },
+                    "source": { "type": "string" }
+                  },
+                  "required": ["schema", "id", "repo", "issue", "type", "at", "observedAt", "source"],
+                  "additionalProperties": false
+                }
+              },
+              "sources": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["events", "sources"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "saveEvents",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": { "type": "string" },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "repo": { "type": "string" },
+                    "issue": { "type": "integer" },
+                    "type": { "type": "string" }
+                  },
+                  "required": ["id", "repo", "issue", "type"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["root", "events"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "createBundle",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": { "type": "string" },
+              "metadata": {
+                "type": "object",
+                "properties": {
+                  "repo": { "type": "string" },
+                  "timezone": { "type": "string" },
+                  "exportedAt": { "type": "string" }
+                },
+                "required": ["repo", "timezone", "exportedAt"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["root", "metadata"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "bundle": {
+                "type": "object",
+                "properties": {
+                  "schema": { "type": "string" },
+                  "scope": { "type": "string" },
+                  "repo": { "type": "string" },
+                  "timezone": { "type": "string" },
+                  "exportedAt": { "type": "string" }
+                },
+                "required": ["schema", "scope", "repo", "timezone", "exportedAt"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["bundle"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "applyBundle",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": { "type": "string" },
+              "bundle": {
+                "type": "object",
+                "properties": {
+                  "schema": { "type": "string" },
+                  "repo": { "type": "string" }
+                },
+                "required": ["schema", "repo"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["root", "bundle"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "calculate",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "buildReport",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "repo": { "type": "string" },
+              "timezone": { "type": "string" },
+              "observedAt": { "type": "string" }
+            },
+            "required": ["repo", "timezone", "observedAt"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "report": {
+                "type": "object",
+                "properties": {
+                  "repo": { "type": "string" },
+                  "timezone": { "type": "string" },
+                  "observedAt": { "type": "string" },
+                  "issueCount": { "type": "integer" },
+                  "readyCount": { "type": "integer" }
+                },
+                "required": ["repo", "timezone", "observedAt", "issueCount", "readyCount"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["report"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "blob",
+      "access": "write",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": { "type": "string" }
+            },
+            "required": ["content"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "content": { "type": "string" }
+            },
+            "required": ["path", "content"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "output",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "stdout",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "stderr",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 32,
+    "max_model_calls": 16
+  },
+  "conventions": []
 }
 ```
 </details>

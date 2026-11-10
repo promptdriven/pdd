@@ -1,0 +1,317 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/agent-mcp-setup-ports.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When `prompt.confirm` returns `y`, `setupAgentMcp` previews the config patches, rechecks target files, writes the pinned `execPath` and `packageRoot/bin/pdd.mjs` `\"mcp\"` registration for detected agents, and returns `{exitCode: 0}`."
+    },
+    {
+      "id": "AC2",
+      "text": "When `prompt.confirm` returns any answer other than `y`, `setupAgentMcp` writes no files and returns `{exitCode: 0}`."
+    },
+    {
+      "id": "AC3",
+      "text": "When a candidate configuration file is a symbolic link or malformed, `setupAgentMcp` emits a `pdd setup:` diagnostic to `output.stderr`, asks no confirmation question, writes nothing, and returns `{exitCode: 1}`."
+    },
+    {
+      "id": "AC4",
+      "text": "`setupAgentMcp` raises `invalid-setup-context` before probing agents when `packageRoot` or `execPath` is not an absolute path."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/home/symlink/.claude.json": {
+        "content": "{}",
+        "is_symlink": true
+      }
+    },
+    "calls": {
+      "detectAgents": 0,
+      "confirm": 0
+    },
+    "stdout": [],
+    "stderr": []
+  },
+  "simulation": {
+    "host.detectAgents": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/detectAgents",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "env": {
+              "HOME": "/home/alice"
+            }
+          },
+          "result": {
+            "codex": true,
+            "claude": true,
+            "gemini": false
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "env": {
+              "HOME": "/home/bob"
+            }
+          },
+          "result": {
+            "codex": true,
+            "claude": false,
+            "gemini": false
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "env": {
+              "HOME": "/home/symlink"
+            }
+          },
+          "result": {
+            "codex": false,
+            "claude": true,
+            "gemini": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.write": {
+      "action": "blob.write",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": "/content",
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "prompt.confirm": {
+      "action": "fixture.lookup",
+      "world_pointer": "/calls/confirm",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "question": "Register these PDD Try tools? [y/N] "
+          },
+          "result": {
+            "answer": "y"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "question": "Register these PDD Try tools? [y/N] "
+          },
+          "result": {
+            "answer": "n"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "output.stdout": {
+      "action": "port.write",
+      "world_pointer": "/stdout",
+      "result_template": {
+        "ok": true
+      }
+    },
+    "output.stderr": {
+      "action": "port.write",
+      "world_pointer": "/stderr",
+      "result_template": {
+        "ok": true
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "consent-yes-registers-mcp",
+      "entry_path": "prompts/cli/agent-mcp-setup.prompt.md",
+      "operation": "setupAgentMcp",
+      "input": {
+        "env": {
+          "HOME": "/home/alice"
+        },
+        "packageRoot": "/opt/pdd",
+        "execPath": "/usr/bin/node"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1home~1alice~1.codex~1config.toml/content",
+          "op": "contains",
+          "value": "[mcp_servers.pdd]"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/files/~1home~1alice~1.claude.json/content",
+          "op": "contains",
+          "value": "\"/opt/pdd/bin/pdd.mjs\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/agent-mcp-setup-prompt-confirm",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/agent-mcp-setup-files-write",
+          "op": "equals",
+          "value": 2
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "consent-no-writes-nothing",
+      "entry_path": "prompts/cli/agent-mcp-setup.prompt.md",
+      "operation": "setupAgentMcp",
+      "input": {
+        "env": {
+          "HOME": "/home/bob"
+        },
+        "packageRoot": "/opt/pdd",
+        "execPath": "/usr/bin/node"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/agent-mcp-setup-prompt-confirm",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/agent-mcp-setup-files-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "reject-symlink-candidate",
+      "entry_path": "prompts/cli/agent-mcp-setup.prompt.md",
+      "operation": "setupAgentMcp",
+      "input": {
+        "env": {
+          "HOME": "/home/symlink"
+        },
+        "packageRoot": "/opt/pdd",
+        "execPath": "/usr/bin/node"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/stderr/0/text",
+          "op": "contains",
+          "value": "pdd setup:"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/agent-mcp-setup-prompt-confirm",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/agent-mcp-setup-files-write",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "raise-invalid-setup-context",
+      "entry_path": "prompts/cli/agent-mcp-setup.prompt.md",
+      "operation": "setupAgentMcp",
+      "input": {
+        "env": {
+          "HOME": "/home/alice"
+        },
+        "packageRoot": "relative/pdd",
+        "execPath": "/usr/bin/node"
+      },
+      "expected_error": "invalid-setup-context",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-setup-context"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/agent-mcp-setup-host-detectAgents",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
