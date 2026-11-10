@@ -400,6 +400,17 @@ test('two machine launchers offer the same issue to the skill without making a c
   // The bundled skill owns the cross-machine claim; this proves separate launcher state.
 });
 
+test('a core start refuses a quietMinutes below 2 ticks of the core timer, before any change', async t => {
+  const f = await fixture(t, { tempPrefix: 'pdd-quiet-floor-' });
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: ['helper'], quietMinutes: 10 } }));
+  const env = { HOME: f.home, PATH: process.env.PATH };
+  const refused = await f.invoke('start', { env, engine: 'core' });
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /autopilot\.quietMinutes is 10; it must be at least 20/);
+  assert.equal(f.active, false, 'no timer');
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: ['helper'], quietMinutes: 20 } }));
+  assert.equal((await f.invoke('start', { env, engine: 'core' })).exitCode, 0);
+});
+
 test('core start --mode off saves mode off and stops the timer; the next tick starts nothing; auto turns it on again', async t => {
   const f = await fixture(t, { tempPrefix: 'pdd-mode-off-' });
   const env = { HOME: f.home, PATH: process.env.PATH };

@@ -25,7 +25,7 @@ test('agent commands follow the headless auditor launch for codex and claude', (
   assert.deepEqual(agentCommand({ kind: 'codex', command: '/bin/codex' }), { command: '/bin/codex',
     args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', '-'] });
   assert.deepEqual(agentCommand({ kind: 'claude' }, { model: 'opus' }), { command: 'claude',
-    args: ['-p', '--output-format', 'json', '--permission-mode', 'bypassPermissions', '--model', 'opus'] });
+    args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', '--model', 'opus'] });
   assert.throws(() => agentCommand({ kind: 'gemini' }), /codex or claude/);
 });
 

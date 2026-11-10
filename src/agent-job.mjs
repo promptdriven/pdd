@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 58f5dfb2fc9cd66d52936fbf88f2de6eb794a37c625a42d974efde44665a79a9).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: ffbe4a8d6ef9730c263485bb8b3d685591b7fc9081bc4f82886f0a4799a6e2fe).
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -16,7 +16,8 @@ function writeAtomic(file, text) {
 export function agentCommand(agent, { model } = {}) {
   const extra = model ? ['--model', model] : [];
   if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', ...extra, '-'] };
-  if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--output-format', 'json', '--permission-mode', 'bypassPermissions', ...extra] };
+  // Claude streams its events (stream-json) so that its log grows while it works; the core reads the result file.
+  if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', ...extra] };
   throw Error('Autopilot core jobs need codex or claude');
 }
 

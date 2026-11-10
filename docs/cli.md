@@ -1390,7 +1390,9 @@ says to run `pdd autopilot start`.
 |---|---|---|
 | `runs` | Issues in progress at the same time on this machine | 2 |
 | `label` | Take only issues with this label | none: every ready issue |
-| `quietMinutes` | Minutes with no progress after which a job or the checks of a PR end. There is no fixed time limit: a job runs as long as its log or branch changes, and a PR waits while CI, the review or the suite still runs | 45 |
+| `quietMinutes` | Minutes with no progress after which a job or the checks of a PR end. There is no fixed time limit: a job runs as long as its log, its commits or its files change, and a PR waits while CI, the review or the suite still runs. At least 20 (2 ticks of the core timer) | 45 |
+| `ciStuckMinutes` | Minutes that CI may stay pending with no change before the job ends | 360 |
+| `maxJobHours` | Safety ceiling: a job whose log grows this long with no commit and no file change ends, with one alert | 24 |
 | `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `file` |
 | `reports.runtimeRepo` | Repository for Runtime problem reports, for example `promptdriven/prompt-runtime`; used when this machine can read it, else `promptdriven/pdd` with label `pdd:runtime` | none |
 | `repairs` | Repair jobs for one PR after a red check | 2 |
@@ -1433,7 +1435,10 @@ Each tick, without AI calls:
    job records it for each changed prompt with `pdd approve PROMPT --said -` and the
    words "Operator action: pdd autopilot start --engine core in auto mode for REPO on
    MACHINE at TIME", in the PR. A changed prompt that still has a draft interface is
-   red. `observe` mode never approves.
+   red: a draft, a stale or broken interface, or an approval that `pdd approve` did
+   not record. In a repository with `strict_approvals`, the job does not approve:
+   Autopilot asks a person (`pdd:needs-decision`) and keeps the PR open. `observe`
+   mode never approves.
 
 Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
 refusal, no interface, a scenario limit, no verdict), the job still ships its PR with
@@ -1445,8 +1450,9 @@ them in the merge comment.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
 adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment
-and remove `pdd:needs-decision`: removing the label is the signal. The next job gets
-the question and the comments of trusted people after it.
+and remove `pdd:needs-decision`: removing the label is the signal, and it counts only
+when a trusted person removes it. The next job gets Autopilot's own question and the
+comments of trusted people after it.
 
 When a job ends, the issue gets one comment with the cause and the log file name
 and loses `pdd:working`. Comments show no absolute path, user name or host name. Nothing else waits on it. A job with no result (the agent

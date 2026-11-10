@@ -3,7 +3,7 @@
 // agent job runner. No network, no real agent, no timer.
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createGithubRepoFake } from './github-repo-fake.mjs';
 import { tickCore, coreSettings } from '../../src/autopilot-core.mjs';
@@ -201,7 +201,7 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.comments = n => w.github.issues.get(n).comments.map(c => c.body);
   w.baseCommit = (file, text) => {
     const seed = join(dir, `seed-${Math.random().toString(36).slice(2)}`); git(dir, 'clone', '-q', w.remote, seed);
-    writeFileSync(join(seed, file), text); git(seed, 'add', '.'); git(seed, 'commit', '-qm', `base ${file}`); git(seed, 'push', '-q', 'origin', 'HEAD:main');
+    mkdirSync(dirname(join(seed, file)), { recursive: true }); writeFileSync(join(seed, file), text); git(seed, 'add', '.'); git(seed, 'commit', '-qm', `base ${file}`); git(seed, 'push', '-q', 'origin', 'HEAD:main');
     return git(seed, 'rev-parse', 'HEAD');
   };
   w.labels = n => w.github.issues.get(n).labels;

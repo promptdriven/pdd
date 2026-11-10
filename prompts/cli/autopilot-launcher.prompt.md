@@ -1385,6 +1385,10 @@ through this machine's alert destination with the core's cause, tried and need (
   replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
   only while still enabled, save the issue-list cache, base fields, `nextTick` and
   `core: {at, message}`.
+- Start: a core start whose `autopilot.quietMinutes` is below 2 times the core timer
+  (20) refuses before any change: `Autopilot did not start: autopilot.quietMinutes is
+  N; it must be at least 20 (2 times the 10-minute core timer). Nothing was started or
+  claimed.` The core tick gets `tickMinutes` (the installed timer interval).
 - Start: a core engine skips the workflow-readiness check, the Herdr check and the
   coordinator workspace; it still checks sign-ins, the agent, the base and the
   timer, saves the agent profile and runs the first tick. With no coordinator launch,

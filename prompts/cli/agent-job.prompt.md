@@ -20,7 +20,9 @@ record is simply dead. There is no "uncertain custody" state.
 - `agentCommand(agent, {model}={})` returns `{command, args}` for `agent.kind`
   `codex` or `claude`, using `agent.command` or the kind as the program:
   - codex: `exec --json --dangerously-bypass-approvals-and-sandbox -c features.multi_agent=false [--model M] -`
-  - claude: `-p --output-format json --permission-mode bypassPermissions [--model M]`
+  - claude: `-p --output-format stream-json --verbose --permission-mode bypassPermissions [--model M]`
+    (a stream of events, so the log grows while the agent works; the result is the
+    result file, not the output)
 
   Both read the prompt on stdin and have full access, like the post-merge auditor
   launch in [the audit owner](autopilot-audit.prompt.md). Another kind throws

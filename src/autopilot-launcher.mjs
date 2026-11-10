@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 44cb704f588bed94bc588e6a0f284ea9dd8fbc40d41497d3097d01ceee259792).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2c0c21d9352ae12d5141d13aa72c37fef03cdc0163b37326123aabba1ecc7990).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1564,7 +1564,7 @@ async function coreTick(stateFile, state, p, ports) {
   const result = await tickCore({ state, settings: core, budget }, {
     gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, ...options }),
     git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
-    now: p.now, env: p.env, warn: p.warn, root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env),
+    now: p.now, env: p.env, warn: p.warn, root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), tickMinutes: timerMinutes(state),
     version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
     trusted: row => trusted(row, state, { trust: core.trust }, p),
     agentReady: async () => agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env })).state !== 'limited',
@@ -2639,6 +2639,11 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status, add or release.' };
     const core = engineOf(state).engine === 'core';
+    // The no-progress period must be at least 2 ticks of the core timer, or a working job could look quiet.
+    if (core) {
+      const quiet = readCoreSettings(state.cwd).quietMinutes, floor = 2 * CORE_INTERVAL / 60000;
+      if (quiet < floor) return bad(`Autopilot did not start: autopilot.quietMinutes is ${quiet}; it must be at least ${floor} (2 times the ${CORE_INTERVAL / 60000}-minute core timer). Nothing was started or claimed.`);
+    }
     const readiness = core ? { state: 'ready' } : await workflowReadiness(state, p);
     if (readiness.state !== 'ready') return bad(`Autopilot did not start: pdd workflows cannot start in ${state.cwd}. ${readiness.message} Nothing was started or claimed, and every timer is unchanged.`);
     const priorBase = state.baseBranch;

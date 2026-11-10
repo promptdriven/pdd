@@ -27,7 +27,9 @@ string `core`; any other value, or none, is `full`.
 | `trust` | the nonblank strings of `autopilot.trust`, else `[]` |
 | `runs` | positive safe integer, default 2: the slot count |
 | `label` | trimmed nonblank opt-in label, for example `pdd:autopilot`, else `null` |
-| `quietMinutes` | positive safe integer, default 45: the no-progress period (there is no fixed time limit) |
+| `quietMinutes` | positive safe integer, default 45: the no-progress period (there is no fixed time limit); the tick uses at least 2 timer ticks (`ports.tickMinutes`, default 10), and a core start refuses a value below that |
+| `ciStuckMinutes` | positive safe integer, default 360: how long CI may stay pending with no change; at least 3 timer ticks |
+| `maxJobHours` | positive safe integer, default 24: the safety ceiling for an agent whose log grows with no commit and no file change |
 | `report` | `file`, `draft` or `off`, default `file` |
 | `runtimeRepo` | `autopilot.reports.runtimeRepo` when it is `OWNER/NAME` (the Runtime report repository), else `null` |
 | `repairs` | safe integer of at least 0, default 2 |
@@ -55,10 +57,16 @@ Each tick builds a signature of what it sees and saves `progress`: a changed
 signature, or something that still runs, sets `at` to now. A job is **quiet** when
 nothing ran at the last look and `at` is `quietMinutes` or more ago. A running build
 or repair agent's signature is its log size and change time (`readAgentJob().log`)
-and the commit of its worktree (`git rev-parse HEAD`). In phase `pr` it is the head,
-the CI state, the review and suite states and the reviewer's log; it runs while CI is
-pending (queued or in progress, or no check yet within its 10 minutes), the reviewer
-runs or the suite process is alive. A new job, a repair, a PR result and a base
+and its work: the SHA-256 of the worktree commit, `git status --porcelain=v1
+--untracked-files=all`, `git diff HEAD` and the size and change time of each new file
+(at most 200). A log that grows for `maxJobHours` while the work does not change is
+stopped with one `stuck` alert and ends as `no-result`. In phase `pr` the signature
+is the head, the CI state and picture (each check's name, state, conclusion and time),
+the review and suite states and the reviewer's log; it runs while CI is pending (queued
+or in progress, or no check yet within its 10 minutes), the reviewer runs or the suite
+process is alive. CI that stays pending with no change of its picture for
+`ciStuckMinutes` ends the job with `job` / `checks-stuck` under the no-result rules
+(named pending checks; a cause with `noResult` follows them like `no-result`). A new job, a repair, a PR result and a base
 refresh start the clock again.
 
 Slots come only from these job files, never from workflow allocation or other
@@ -205,8 +213,9 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    whose head branch starts with `pdd/core-N-` and is not the new branch, and that
    is not merged, gets `state: closed` and one short note with the marker
    `<!-- pdd:autopilot-core:superseded:N:BRANCH -->`; its branch stays. A PR from
-   another branch prefix, or one with a `would-merge` note (observe mode validated
-   it), is never touched. A failure only warns.
+   another branch prefix, or one with a `would-merge` or `needs-approval` note by this
+   engine's own login (observe mode validated it, or it waits for a person), is never
+   touched. A failure only warns.
 4. Save the job file, then start the build job (below). A start error, also one that
    the spawn reports later, ends the job as `no-result`; it never stops the tick.
 
@@ -287,9 +296,11 @@ any other pdd (for example an older global install).
   the operator's start is the approval of the job's prompt changes. For each changed
   `*.prompt.md`, after its checks pass, the job runs `printf '%s' 'WORDS' | pdd approve
   PROMPT --said -` with WORDS exactly `Operator action: pdd autopilot start --engine
-  core in auto mode for REPO on MACHINE at TIME` (TIME = `state.startedAt`, else
-  `state.activatedAt`) and commits the result in the PR. In observe mode the prompt has
-  no approval rule. Push the job
+  core in auto mode for REPO on MACHINE-ID at TIME` (the machine id, never the host;
+  TIME = `state.startedAt`, else `state.activatedAt`) and commits the result in the
+  PR. In a repository whose worktree `pdd.json` has `strict_approvals: true` the rule
+  says instead: do not run `pdd approve` and do not edit an interface status; Autopilot
+  asks a person. In observe mode the prompt has no approval rule. Push the job
   branch and open one PR against BASE with `Fixes #N`; never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
   file is JSON: `outcome` `pr` with `pr`, `head`, `promptChanged` (Boolean),
@@ -360,10 +371,15 @@ add `pdd:needs-decision` (never `pdd:stuck`); delete this machine's claim commen
 remove `pdd:working`; clean up locally with outcome `needs-person`. The slot is free.
 The person answers and removes the label; **the label removal is the signal**, a
 comment alone changes nothing. When the core claims an issue with comments, it reads
-the latest question marker and the comments after it by trusted people
-(`ports.trusted`), leaving out comments with a `<!-- pdd:` marker and claim comments.
-The next build prompt then has the question and those answers as data, or "no written
-answer" when there is none.
+the latest question comment that this engine posted (author = the engine's own login,
+`GET user`, and a marker that names this issue; a marker comment by anyone else is
+not a question) and the comments after it by trusted people (`ports.trusted`), leaving
+out comments with a `<!-- pdd:` marker and claim comments. Only a removal of
+`pdd:needs-decision` after the question by a trusted person (the timeline
+`unlabeled` event's actor) answers it; otherwise the core puts the label back, undoes
+its claim (claim comment and `pdd:working`) and starts nothing. The next build prompt
+then has the question and those answers as data, or "no written answer" when there
+is none.
 
 ## Merge check
 
@@ -390,13 +406,24 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    value is red, and the repair prompt quotes the line. Lines that disagree (PASS and
    not run) are red. The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body; else red. A body with no
-   Runtime line is red unless the result says `"promptChanged": false`. In auto mode,
-   a changed prompt (`git diff --name-only --diff-filter=AM origin/BASE...HEAD`, after a
-   fetch of the base and the branch, read once per head and saved as `approvals`) whose
-   Runtime interface block (`interfaceBlocks` of the
-   [preflight](runtime-preflight.prompt.md)) has `status` `draft` is red, with the
-   approval command and words in the finding (one repair, then END as usual). Observe
-   mode never approves: it lists the draft prompts in its "would merge" note. Then a
+   Runtime line is red unless the result says `"promptChanged": false`. **Prompt gate**
+   (once per head, saved as `approvals {head, strict, problems}`): after a fetch of the
+   base and the branch, each changed prompt of `git diff --name-status --find-renames
+   origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
+   clean checkout of the head (`worktrees/N-approve`) with the
+   [preflight](runtime-preflight.prompt.md)'s own `readPrompt` and `promptRefusal`. A
+   problem is: a refusal (two blocks, invalid JSON, a bad status, a stale prose hash), a
+   status other than `approved`, an interface that the base had and the head removed
+   (no interface on both sides is not an approval matter), or an approved status with
+   no entry for that path and prose hash in the approval journal of the repository's
+   common Git dir (`readPromptApprovals`): a hand-written approval. `strict` is true
+   when `strict_approvals` is true in `pdd.json` on the base or at the head. In auto
+   mode, problems in a strict repository end the job as **needs a person** (below)
+   with the question "PR #P changes prompts that need a person's approval in this
+   repository (strict_approvals): …", the PR stays open with one note
+   `<!-- pdd:autopilot-core:needs-approval:P -->`; in other repositories they are red,
+   with the approval command and words in the finding (one repair, then END as usual).
+   Observe mode never approves: it lists the problems in its "would merge" note. Then a
    failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass); else
    a review FAIL or a failed suite. With no red finding yet, start the review and
