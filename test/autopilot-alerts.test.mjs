@@ -412,8 +412,9 @@ test('alerts help exposes quiet review, digest cadence and separate destination 
   const f = setup(t);
   const reply = await f.pdd(['autopilot', 'alerts', '--help']);
   assert.equal(reply.exitCode, 0);
-  for (const fact of ['cause', 'decision', 'recover', 'stuck', 'digest', 'repository', 'machine', '6 hours', '--destination', 'infrastructure'])
+  for (const fact of ['cause', 'code', 'ifNoAnswer', 'person ask', 'recover', 'stuck', 'digest', 'repository', 'machine', 'daily', '24 hours', '--destination', 'infrastructure'])
     assert.ok(reply.stdout.includes(fact), `alerts help must explain ${fact}`);
+  assert.doesNotMatch(reply.stdout, /6 hours|changed cause, decision or issue list/);
   assert.equal(f.requests.length, 0);
 });
 
@@ -495,10 +496,10 @@ test('restored: destination tests retain a concurrent alert save and isolate fai
   await f.pdd(['autopilot','alerts','set','--destination','infrastructure'],SLACK);
   const fields={cause:'Missing policy choice',tried:'Read policy',need:'Choose policy A?'};
   f.replies.push(echo);await f.alert(40,'decision',fields);
-  let release,entered;const hold=new Promise(r=>{release=r;}),started=new Promise(r=>{entered=r;});
-  f.replies.push(async request=>{entered();await hold;return echo(request);},echo);
+  let release,entered,testEntered;const hold=new Promise(r=>{release=r;}),started=new Promise(r=>{entered=r;}),testStarted=new Promise(r=>{testEntered=r;});
+  f.replies.push(async request=>{entered();await hold;return echo(request);},request=>{testEntered();return echo(request);});
   const sending=f.alert(41,'decision',fields);await started;
-  const testing=f.pdd(['autopilot','alerts','test']);release();
+  const testing=f.pdd(['autopilot','alerts','test']);await testStarted;release();
   assert.deepEqual((await Promise.all([sending,testing])).map(r=>r.exitCode),[0,0]);
   assert.equal(Object.keys(f.record().incidents).length,2);assert.equal(f.record().log.at(-1).action,'test');
   f.replies.push({status:403,text:''});await persistent(f,42);
