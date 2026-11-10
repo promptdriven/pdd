@@ -22,7 +22,8 @@ problems even for a current approved prompt before approval's no-op return.
 
 The files view uses `findTests`, `readPrompt`, `promptRefusal`,
 `promptSchemaRefusals` and `preflight`. It must not invent another folder walk,
-parser, contract resolver or test name rule. Selection remains lazy for test and approve. Lint also applies the runtime client's workspace-wide CLI declaration presence gate; unrelated semantic/hash/schema problems remain outside a named selection.
+parser, contract resolver or test name rule. Selection remains lazy for lint,
+test and approve: an unrelated bad prompt must not refuse selected good work.
 The files view deliberately inspects every eligible prompt and discovered test.
 No interface kind is inferred here; a separate interface owner can extend the
 reader's metadata.
@@ -452,7 +453,7 @@ Only JSON/schema/kind decisions and text criterion parsing are declared. Discove
 ```json
 {
   "status": "draft",
-  "prose_sha256": "53a08edc005779bd278346c36bc261d1e69800788d2905db2521cb85ebe6d5c5",
+  "prose_sha256": "5bfd1ac8db2eded5d5150fbd3b030c52d5abaf342be3cd1e8a48dcf1a33b935a",
   "entries": [
     {
       "operation": "checkInput",

@@ -1064,6 +1064,38 @@ function select(found, words, root) {
   return selected;
 }
 
+function scopedCliPromptPaths(root, found, selected = [], nativeSelections = [], env = process.env) {
+  const cli = path => typeof path === 'string' && /^prompts\/cli\/.+\.prompt\.md$/.test(path) && found.discoveryVisible.has(path);
+  const paths = new Set(), seen = new Set();
+  const visit = path => {
+    if (typeof path !== 'string' || !path.endsWith('.prompt.md') || seen.has(path)) return;
+    seen.add(path);
+    if (cli(path)) paths.add(path);
+    if (!found.visible.has(path)) return;
+    try {
+      const prompt = readPrompt(root, found.visible, path, found.workspace);
+      for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
+    } catch { /* Boundary or read errors keep their normal handling. */ }
+  };
+  for (const test of selected) {
+    for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
+    for (const entry of Array.isArray(test.doc?.entry_paths) ? test.doc.entry_paths : []) visit(entry);
+    visit(test.doc?.context?.prompt_path);
+  }
+  for (const item of nativeSelections) visit(item?.promptPath);
+  const runs = allRuns({cancelled:true}, {env}).filter(run => {
+    try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
+  });
+  const base = runs.length === 1 && /^[a-f0-9]{40}$/i.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD';
+  let diff = spawnSync('git', ['diff', '--name-only', '-z', '--no-renames', base, '--'], {cwd:root, encoding:'utf8', stdio:['ignore','pipe','pipe']});
+  if (diff.status !== 0 && base !== 'HEAD') diff = spawnSync('git', ['diff', '--name-only', '-z', '--no-renames', 'HEAD', '--'], {cwd:root, encoding:'utf8', stdio:['ignore','pipe','pipe']});
+  const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], {cwd:root, encoding:'utf8', stdio:['ignore','pipe','pipe']});
+  for (const out of [diff, untracked]) {
+    if (out.status === 0 && typeof out.stdout === 'string') for (const path of out.stdout.split('\0').filter(Boolean)) if (cli(path)) paths.add(path);
+  }
+  return [...paths].sort();
+}
+
 const localRows = rows => rows.map(row => ({ ...row, ...(row.refusals.length ? {unsent:true} : {}), state: row.refusals.length ? 'refused' : row.native_only?.length ? 'not_run' : 'ready', phase: row.refusals.length || row.native_only?.length ? 'local' : 'server',
   ...(row.native_only?.length ? {unsent:true,note:{code:'native-only',message:row.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}} : {}),
   refusals:row.refusals.map(item=>({...item,hint:item.hint??'Fix the named test or prompt rule, then run the selection again.'})),
@@ -1961,6 +1993,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     return 4;
   }
   const selected = select(found, normalized, root);
+  if (words.length) findings.push(...cliInterfaceFindings({root,paths:scopedCliPromptPaths(root,found,selected,[],ports.env)}));
   context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
@@ -2646,17 +2679,19 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   try {
     if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
       const {root,found,normalized} = localSetup(cwd,words);
-      const declarationProblems = cliInterfaceFindings({root});
-      if (declarationProblems.length) {
-        const summary = 'Lint refused CLI Runtime interface declarations. 0 AI calls. No files were sent.';
-        if (context.json) line(ports.stdout,JSON.stringify({repo:root,exit_code:4,lint_state:'refused',problems:declarationProblems,rows:[],summary_line:summary}));
-        else for (const text of [...declarationProblems.map(item => `${item.code}: ${item.message}`),summary]) line(ports.stdout,text);
-        return 4;
-      }
       const selection = selectTests(found,normalized,{native:true});
       if (selection.nativeSelections?.length) {
         if(selection.untested.length)throw new Stop(2,selection.untested.join('\n'));
         if(selection.unknown.length)throw new Stop(2,[`Unknown story ${selection.unknown.map(word=>JSON.stringify(cleanText(word))).join(', ')}. Stories:`,...storyList(found)].join('\n'));
+        if (!selection.selected.length) {
+          const declarationProblems = cliInterfaceFindings({root,paths:scopedCliPromptPaths(root,found,[],selection.nativeSelections,ports.env)});
+          if (declarationProblems.length) {
+            const summary = 'Lint refused CLI Runtime interface declarations. 0 AI calls. No files were sent.';
+            if (context.json) line(ports.stdout,JSON.stringify({repo:root,exit_code:4,lint_state:'refused',problems:declarationProblems,rows:[],summary_line:summary}));
+            else for (const text of [...declarationProblems.map(item => `${item.code}: ${item.message}`),summary]) line(ports.stdout,text);
+            return 4;
+          }
+        }
         const runs = allRuns({cancelled:true},{env:ports.env}).filter(run => {
           try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
         });
@@ -2710,12 +2745,14 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
-        let promptPaths;
+        let promptPaths, problems;
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
           promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
+          problems = cliInterfaceFindings({root,paths:scopedCliPromptPaths(root,found,selected,[],ports.env)});
+        } else {
+          problems = interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         }
-        const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, state: problems.length ? 'refused' : 'partial', lint_state: 'partial', ...resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}), rows: [], problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
         return problems.length ? 4 : 0;

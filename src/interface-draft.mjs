@@ -25,11 +25,12 @@ export function interfaceFindings({root, paths = promptPaths(root)}) {
     } catch (error) { return [{code:error.code ?? 'interface-unreadable',path,message:error.message}]; }
   });
 }
-// Presence admission is workspace-wide for CLI owners, without judging unrelated behavior.
-export function cliInterfaceFindings({root}) {
-  const paths = promptPaths(root).filter(path => /^prompts\/cli\/.+\.prompt\.md$/.test(path));
+// Presence admission is workspace-wide by default, or scoped to selected/changed CLI owners.
+export function cliInterfaceFindings({root, paths}) {
+  const selected = paths ? new Set(paths) : null;
+  const cliPaths = promptPaths(root).filter(path => /^prompts\/cli\/.+\.prompt\.md$/.test(path) && (!selected || selected.has(path)));
   const codes = new Set(['interface-missing','pdd-two-interfaces','invalid-json','interface-kind-invalid','native-reason-missing']);
-  return interfaceFindings({root,paths}).filter(item => codes.has(item.code));
+  return interfaceFindings({root,paths:cliPaths}).filter(item => codes.has(item.code));
 }
 
 export function runtimeCoverage({root, paths = promptPaths(root)}) {
