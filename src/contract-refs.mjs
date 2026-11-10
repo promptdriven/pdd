@@ -11,8 +11,8 @@ const keysOf = value => {
   const written=new Set(layout.keys);
   return [...layout.keys.filter(key=>Object.hasOwn(value,key)),...Object.keys(value).filter(key=>!written.has(key))];
 };
-// Strings are scanned by hand: any regex for a string body either backtracks
-// exponentially or overflows the regex stack at the source size limit.
+// Strings are scanned by hand: the simple regex forms for a string body either backtrack
+// exponentially or overflow the regex stack at the source size limit.
 function lex(text) {
   const tokens = [], scalar = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\]:,"]/g;
   for (let match; (match = scalar.exec(text));) {
