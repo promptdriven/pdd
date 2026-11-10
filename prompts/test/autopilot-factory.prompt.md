@@ -33,7 +33,7 @@ recursion, exercise saved reads and the supported retry command. Keep the named
 local repair cause and batch history, with no paid dispatch. After the owner
 repairs the named declaration, a fresh check must reach a verdict.
 
-1. Small change to one merged PR; bug and feature to merged PR 1 and PR 2.
+1. Small change to one merged PR, including a test-only bug routed by sort to small-change with its request checklist; bug and feature to merged PR 1 and PR 2.
 2. Restart during work: retained claim, run, completed steps and native chat
    identity resume without another allocation or publication.
 3. Lost verdict: ticks send nothing again; the explicit synthetic person's

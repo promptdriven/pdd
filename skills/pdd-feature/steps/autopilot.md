@@ -3,15 +3,15 @@
 Use this file only when `autopilot.mode` in the root `pdd.json` is `observe` or `auto` and pdd-autopilot started the run. With `off` or no value, SKILL.md applies as written.
 
 Overrides SKILL.md and RUNBOOK §2, §4, §11 and §12:
-- Gates (§2): read the owner handoff/run notes. Follow the scoped delegation and native approval route in [$pdd-merge](../../pdd-merge/SKILL.md), ahead of generic ask-and-stop rules for covered non-strict gates. A fresh pdd-check checks each PR at its head; its PASS is checker evidence, not approval.
+- Gates (§2): read handoff/run notes; use scoped delegation in [$pdd-merge](../../pdd-merge/SKILL.md). A fresh pdd-check checks each PR at its head; its PASS is checker evidence, not approval.
 - Optional steps: do not ask. Visual only for a page/screen design. Skip try (§12): pdd-check runs the changed path. Never put a Simulator link in a PR, issue or file.
 - Story gate: put the checker's verdict line, the plan list and the full Story paths in the PR 1 body.
 - Code PR: start it as soon as PR 1 is open, stacked on PR 1; do not wait for PR 1 to merge. In `auto`, do this in every repo. In `observe`, a repo with a release does it too; a new product waits for a person's "code now".
 - Expected values (§4): take each one from an issue quote or from the old behavior. A new test value needs no person when the runtime and the checker (blind, from the Story, with a named rule) agree. Else it is a note on the PR. Never change a test to make it pass.
-- A Story or an expected value that seems wrong (§11): ask one question only for a product call the issue does not settle; else pick one and say why on the PR.
+- Story/value doubt (§11): ask only for an unsettled product call; else pick one and explain on the PR.
 - Cost (RUNBOOK "AI calls"): write the likely check cost on the issue or PR, and do not wait.
 - No AI verdict, busy or not run (§11): ask no person; follow [$pdd-autopilot interpreter outage](../../pdd-autopilot/steps/handoff.md#interpreter-outage): `pdd workflow park --interpreter`; end the turn.
-- Missing route: [record it](../../pdd-autopilot/steps/handoff.md#missing-pdd-route).
+- Missing route: [record it](../../pdd-autopilot/steps/handoff.md#missing-pdd-route). Cases outside an interface widen the prompt and interface first (draft); ask a route question only when prose cannot express the behavior.
 - Merge: pdd-merge, not a person. New words that users see go in its merge line; they do not stop the run.
 
 Keep: unresolved product calls, irreversible actions, `--max-calls`, strict mode, and never sending a failed check again.

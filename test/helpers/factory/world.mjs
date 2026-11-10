@@ -23,9 +23,9 @@ export function valuePrompt(value) {
   return `# Value\nReturn the value ${value}.\n\n## Dependencies\n\n<details><summary>Runtime interface</summary>\n\`\`\`json\n${JSON.stringify({status:'draft',prose_sha256:'',entries:[{operation:'value',input_schema:{type:'object',properties:{},required:[],additionalProperties:false},result_schema:{type:'object',properties:{value:{type:'integer'}},required:['value'],additionalProperties:false},errors:[]}],calls:[],resources:[],limits:{max_steps:1,max_model_calls:1},conventions:[]})}\n\`\`\`\n</details>\n`;
 }
 
-export async function factoryWorld(t,{workflow='small-change',repository='example/project',shared,codeOnly=false}={}) {
+export async function factoryWorld(t,{workflow='small-change',repository='example/project',shared,codeOnly=false,testOnly=false}={}) {
   const base=mkdtempSync(join(tmpdir(),'pdd-factory-world-'));
-  const w={repository,codeOnly,sessionName:shared?.sessionName??process.env.PDD_FACTORY_HERDR_SESSION??`pdd-factory-${randomUUID()}`,base,cwd:join(base,'repo'),home:shared?.home??join(base,'home'),remote:join(base,'origin.git'),mergeCheckout:join(base,'merge'),workflow,time:Date.now(),commands:[],warnings:[],alerts:[],packets:[],dependencyRequests:[],seenCalls:0,children:new Set()};
+  const w={repository,codeOnly,testOnly,sessionName:shared?.sessionName??process.env.PDD_FACTORY_HERDR_SESSION??`pdd-factory-${randomUUID()}`,base,cwd:join(base,'repo'),home:shared?.home??join(base,'home'),remote:join(base,'origin.git'),mergeCheckout:join(base,'merge'),workflow,time:Date.now(),commands:[],warnings:[],alerts:[],packets:[],dependencyRequests:[],seenCalls:0,children:new Set()};
   Object.defineProperty(w,'leadActions',{get:()=>w.commands.filter(c=>!['agent','worker','coordinator','operator','timer','person','other-worker','old-coordinator','resend-child','checker'].includes(c.actor))});
   for(const dir of [w.cwd,w.home,join(base,'bin')])mkdirSync(dir,{recursive:true});
   for(const name of ['gh','herdr','codex','claude','gemini','agy','curl','wget'])writeFileSync(join(base,'bin',name),'#!/bin/sh\necho factory-external-program-denied >&2\nexit 97\n',{mode:0o700});
@@ -39,9 +39,13 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   put(w.cwd,'pdd.json',{autopilot:{mode:'auto',trust:['example'],base:'main',parking:{hours:24,maxParked:20}}});
   put(w.cwd,'AGENTS.md','<!-- pdd:start -->\nUse the installed PDD skills.\n<!-- pdd:end -->\n');
   for (const skill of ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph','pdd-autopilot','pdd-check','pdd-merge']) put(w.home,`.agents/skills/${skill}/SKILL.md`,'Factory skill entrypoint.');
-  put(w.cwd,'value.mjs','export const value = 1;\n');
-  const initialPrompt=valuePrompt(codeOnly?2:1);
+  put(w.cwd,'value.mjs',`export const value = ${testOnly?2:1};\n`);
+  const initialPrompt=valuePrompt(codeOnly||testOnly?2:1);
   put(w.cwd,'value.prompt.md',initialPrompt.replace('"prose_sha256":""',`"prose_sha256":"${proseSha256(initialPrompt)}"`));
+  if(testOnly) {
+    put(w.cwd,'test/value.vectors.test.mjs','export const checkVectors = vectors => vectors.every(v => !v.checks.length || v.actual === v.expected);\n');
+    put(w.cwd,'test/value.test.mjs',"import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport {checkVectors} from './value.vectors.test.mjs';\ntest('vectors require nonempty checks',()=>assert.equal(checkVectors([{checks:[],actual:1,expected:2}]),false,'FACTORY_VALUE'));\n");
+  }
   put(w.cwd,'CONTRIBUTING.md','Run node --test test/value.test.mjs. Open PRs against main.\n');
   put(w.cwd,'package.json',{type:'module',scripts:{test:'node --test test/value.test.mjs'}});
   w.git(w.cwd,'add','.');w.git(w.cwd,'commit','-qm','Initial synthetic project');
@@ -212,7 +216,13 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     w.messages();
     for(let n=0;n<8;n++) {
       const request=w.dependencyRequests.shift();if(!request)break;
-      await w.command(['dependencies','complete','--input','-'],{actor:'coordinator',env:w.context(),stdin:JSON.stringify({request,analysis:analysisFor(request)})});w.messages();
+      w.lastDependencyRequest=request;
+      const analysis=analysisFor(request);
+      if(w.testOnly && analysis.sorts) {
+        const context=JSON.parse(request.contextJson);
+        analysis.sorts=analysis.sorts.map(s=>({...s,paths:['test/value.vectors.test.mjs'],status:{...s.status,evidence:['test/value.vectors.test.mjs:1']},inputs:[...s.inputs,...(context.source??[]).filter(r=>r.issues.includes(s.issue)).map(({key,revision})=>({key,revision}))]}));
+      }
+      await w.command(['dependencies','complete','--input','-'],{actor:'coordinator',env:w.context(),stdin:JSON.stringify({request,analysis})});w.messages();
     }
   };
   w.begin=async({beforeRun,number=17}={})=>{
@@ -223,9 +233,10 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     await w.github.gh(['issue','edit',String(number),'--add-label','pdd:working']);
     const event=w.github.issues.get(number).timeline.at(-1);
     await w.github.gh(['issue','comment',String(number),'--body-file','-'],{input:'Factory coordinator claim.\n\n```json\n'+JSON.stringify({repository:packet.repository,coordinatorId:packet.coordinatorId,machine:packet.machine,labelEventId:String(event.id),lastSeen:new Date(w.time).toISOString()})+'\n```'});
-    w.runArgs=['workflow','run',workflow,String(number),'--agent','codex','--origin','autopilot','--decision-id',issue.decisionId,'--outcome','code'];
+    w.runArgs=['workflow','run',w.workflow,String(number),'--agent','codex','--origin','autopilot','--decision-id',issue.decisionId,'--outcome','code'];
     if(beforeRun)await beforeRun(w);
-    await w.command(['workflow','run',workflow,String(number),'--agent','codex','--origin','autopilot','--decision-id',issue.decisionId,'--outcome','code'],{actor:'coordinator',env:w.context()});
+    w.runArgs=['workflow','run',w.workflow,String(number),'--agent','codex','--origin','autopilot','--decision-id',issue.decisionId,'--outcome','code'];
+    await w.command(w.runArgs,{actor:'coordinator',env:w.context()});
   };
   t.after(()=>{for(const child of w.children)child.kill('SIGTERM');rmSync(base,{recursive:true,force:true});});
   return w;

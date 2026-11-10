@@ -4,7 +4,9 @@ Required step for pdd-autopilot. After readiness and claim, check `pdd workflow 
 For a root-cause umbrella, carry all current members and their requirements in the same handoff. Never start a member separately. The umbrella code PR closes its current members.
 Reuse an active run with `pdd workflow open N`; otherwise start
 `pdd workflow run bug|feature|small-change N --agent AGENT` with the matching workflow
-and the packet's agent, or the current agent without a packet. Use the normal PDD
+(`route.workflow`: an issue whose fix changes only tests, test tooling, CI or docs, and no
+program behavior, runs as `small-change`, while the small-change checklist and checker still
+verify every requested item) and the packet's agent, or the current agent without a packet. Use the normal PDD
 session before issue edits or delegation. The run owns its worktree, area chats,
 gates and PRs; do not create issue worktrees or PRs outside it.
 
@@ -121,4 +123,4 @@ When no supported PDD command or tool covers a required step, record the gap in 
 pdd workflow park --route KIND --reason "QUESTION" --step STEP
 ```
 
-Use `interface-drafting`, `native-replay` or `prompt-reentry` for those gaps, or another lowercase kind for a distinct route. Supply the actual question and current step. Use `--until capability:NAME` or `--until commit:HEX` when the required installed fix is known. Do not ask a person which supported route to use when none exists. Do not invent an interface, approved cases, a verdict or an approval. End the turn. The native tick records and counts questions, opens one PDD issue for a repeated kind, and parks through the normal custody path. It wakes the saved session only when installed fix evidence proves the route exists. Product decisions still use the ordinary person gate.
+Use `interface-drafting`, `native-replay` or `prompt-reentry` for those gaps, or another lowercase kind for a distinct route. When an expected case lies outside the owning prompt's declared Runtime interface, widen the prompt and its interface first as a draft so Runtime can check it; ask a route question only when the prose cannot express the behavior. When an issue fix changes only tests, test tooling, CI or docs and no program behavior, route it to `small-change` instead of parking on `native-replay`. Supply the actual question and current step. Use `--until capability:NAME` or `--until commit:HEX` when the required installed fix is known. Do not ask a person which supported route to use when none exists. Do not invent an interface, approved cases, a verdict or an approval. End the turn. The native tick records and counts questions, opens one PDD issue for a repeated kind, and parks through the normal custody path. It wakes the saved session only when installed fix evidence proves the route exists. Product decisions still use the ordinary person gate.

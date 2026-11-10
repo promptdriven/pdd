@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-sort.prompt.md (sha256: a049bfb1a69bb2d4dc3afcb4885ab7c7cc7ebca04cb93bc936481fc0f1a94965).
+// Generated from prompts/cli/issue-sort.prompt.md (sha256: 7a3e864feb2901ab1f8d9d848f437927f1f129c19cfcb835918174352899a63c).
 import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea } from './autopilot-areas.mjs';
 const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/.test(x);
@@ -43,12 +43,20 @@ export function selectedSort(snapshot, issue) {
   if (r.paths.some(path => !r.inputs.some(x => x.key === sortSourceKey(snapshot.repository, path))) || r.inputs.some(x => current.get(x.key) !== x.revision) || sortInputs(snapshot, issue).some(x => !r.inputs.some(y => y.key === x.key && y.revision === x.revision))) return null;
   return r;
 }
+const nonBehaviorPath = path => typeof path === 'string' && (/^(?:tests?|__tests__|specs?|e2e|docs?|ci|scripts|\.github|\.circleci)\//i.test(path)
+  || /^prompts\/tests?\//i.test(path) || /^\.gitlab-ci\.ya?ml$/i.test(path) || /\.(?:test|spec)\.[a-z\d]+$/i.test(path)
+  || /\.md$/i.test(path) && !/\.prompt\.md$/i.test(path) && !/^(?:prompts|skills|user_stories)\//i.test(path));
+export function sortWorkflow(record) {
+  if (!record || ['fixed','unclear'].includes(record.status?.state) || ['old-code','unknown'].includes(record.belongs?.kind) || record.question || !['bug','feature','docs'].includes(record.genuine?.kind)) return '';
+  if (record.genuine.kind === 'docs' || Array.isArray(record.paths) && record.paths.length > 0 && record.paths.every(nonBehaviorPath)) return 'small-change';
+  return record.genuine.kind === 'feature' ? 'feature' : 'bug';
+}
 export function sortPlan({ snapshot }) {
   const queued = [], routes = [], groups = [];
   if (!snapshot.sortContext) return { queued, routes, groups };
   const prefix = `https://github.com/${snapshot.repository.toLowerCase()}/issues/`;
   for (const issue of snapshot.issues.filter(x => x.key.startsWith(prefix) && x.state === 'open' && x.authority === 'trusted')) {
-    const record = selectedSort(snapshot, issue), route = { issue: issue.key, action: 'hold', area: '', owner: '', reason: '', record, umbrella: '', members: [], evidence: record?.status.evidence ?? [] };
+    const record = selectedSort(snapshot, issue), route = { issue: issue.key, action: 'hold', workflow: '', area: '', owner: '', reason: '', record, umbrella: '', members: [], evidence: record?.status.evidence ?? [] };
     routes.push(route);
     const live = issue.execution !== 'idle' || issue.sortOpenPr === true || issue.holds.some(x => /claim/i.test(x) && !/^Expired claim\b/.test(x));
     if (!Array.isArray(issue.assignees) || issue.assignees.length) { route.reason = 'owned'; continue; }
@@ -78,7 +86,7 @@ export function sortPlan({ snapshot }) {
     if (record.belongs.kind === 'repository' && area.owner === 'autopilot') { route.action = live ? 'hold' : 'link'; route.owner = `repo:${record.belongs.repository}`; route.reason = 'another-repository'; continue; }
     if (area.owner !== 'autopilot') { route.action = live ? 'hold' : area.owner.startsWith('repo:') ? 'link' : 'assign'; route.reason = 'another-owner'; continue; }
     if (record.question || record.status.state === 'unclear' || record.genuine.kind === 'unclear') { route.action = live ? 'hold' : 'question'; route.reason = 'needs-answer'; continue; }
-    route.action = live ? 'hold' : 'work'; route.reason = live ? 'owned' : 'local';
+    route.action = live ? 'hold' : 'work'; route.workflow = sortWorkflow(record); route.reason = live ? 'owned' : 'local';
   }
   const saved = snapshot.sortContext.groups ?? [];
   const umbrellaKeys = new Set(saved.filter(x => !x.merged && !x.members.includes(x.umbrella)).map(x => x.umbrella).filter(Boolean));
@@ -113,12 +121,13 @@ export function sortPlan({ snapshot }) {
     const occupiedWork = old?.umbrella && routes.find(x => x.issue === old.umbrella)?.reason === 'owned';
     const umbrella = occupiedWork ? old.umbrella : dedicated ? (old?.umbrella && !old.members.includes(old.umbrella) ? old.umbrella : recovered.length === 1 ? recovered[0].key : '') : old?.umbrella && snapshot.issues.find(x => x.key === old.umbrella)?.state !== 'open' ? old.umbrella : keys[0];
     groups.push({ area, rootCause, umbrella, members: keys, notified: old?.notified ?? old?.members ?? keys });
+    const workflow = members.every(x => (x.workflow || sortWorkflow(x.record)) === 'small-change') ? 'small-change' : members.some(x => (x.workflow || sortWorkflow(x.record)) === 'feature') ? 'feature' : 'bug';
     for (const member of members) Object.assign(member, { umbrella, members: keys });
     const umbrellaRoute = routes.find(x => x.issue === umbrella);
-    if (umbrellaRoute) Object.assign(umbrellaRoute, { umbrella, members: keys });
+    if (umbrellaRoute) Object.assign(umbrellaRoute, { umbrella, members: keys, ...(umbrellaRoute.workflow ? { workflow } : {}) });
     if (!umbrella) for (const member of members) { member.action = 'hold'; member.reason = 'group-umbrella-pending'; }
   }
-  for (const route of routes) if (route.action === 'work' && synthetic(snapshot.issues.find(x => x.key === route.issue)) && !groups.some(g => g.umbrella === route.issue)) { route.action = 'hold'; route.reason = 'orphan-group-umbrella'; }
+  for (const route of routes) if (route.action === 'work' && synthetic(snapshot.issues.find(x => x.key === route.issue)) && !groups.some(g => g.umbrella === route.issue)) { route.action = 'hold'; route.workflow = ''; route.reason = 'orphan-group-umbrella'; }
   // Keep the merge boundary until all previous heads have been superseded.
   for (const group of saved.filter(x => x.merged)) groups.push(group);
   return { queued, routes, groups };
@@ -165,6 +174,7 @@ export function projectSortGraph(snapshot, graph) {
     if (!route) continue;
     if (!route.umbrella && route.record?.rootCause && uncertainSibling(route.area, route.record.rootCause)) { unsafeGroups.add(node.key); node.eligible = false; node.reasons.push('Group sort pending'); }
     node.sort = { action: route.action, area: route.area, owner: route.owner, umbrella: route.umbrella, members: route.members, rootCause: route.record?.rootCause ?? plan.groups.find(g => g.umbrella === node.key)?.rootCause ?? '', ready: !unsafeGroups.has(route.umbrella || node.key) };
+    Object.defineProperty(node.sort, 'workflow', { value: route.workflow });
     if (route.action !== 'work' || route.umbrella && route.umbrella !== node.key) {
       node.eligible = false;
       node.reasons.push(route.umbrella && route.umbrella !== node.key ? 'Waiting for root-cause umbrella' : `Sort: ${route.reason}`);

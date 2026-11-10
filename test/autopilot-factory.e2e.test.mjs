@@ -194,6 +194,35 @@ for(const workflow of ['small-change','bug','feature'])test(`factory 1: ${workfl
   }
 });
 
+test('factory routing: a test-only bug sorts to small-change and reaches merge in one PR with its checklist',async t=>{
+  const {sortPlan}=await import('../src/issue-sort.mjs');
+  const {reviewSmallChangeChecklist}=await import('../src/workflow-small-change.mjs');
+  const w=await factoryWorld(t,{workflow:'bug',testOnly:true});
+  w.github.edit(17,'test/value.vectors.test.mjs passes with empty checks.');
+  await w.begin({beforeRun:async()=>{
+    const comments=w.github.issues.get(17).comments;
+    const sortComment=comments.find(c=>c.body.includes('pdd-issue-sort:v1'));
+    assert.ok(sortComment,'sort comment saved');
+    assert.match(sortComment.body,/Sort: area; still-happens; bug; small-change\./);
+    const snapshot=JSON.parse(w.lastDependencyRequest.snapshotJson);
+    const record=JSON.parse(/```json\s*([\s\S]*?)```/.exec(sortComment.body)[1]);
+    snapshot.issues[0].sorts=[{id:String(sortComment.id),authority:'trusted',intact:true,record}];
+    for(const row of record.inputs)if(!snapshot.inputs.some(x=>x.key===row.key))snapshot.inputs.push(row);
+    const route=sortPlan({snapshot}).routes.find(r=>r.issue===record.issue);
+    assert.equal(route?.workflow,'small-change');
+    w.workflow=route.workflow;
+  }});
+  const a=scriptedAgent(w);await a.finish();
+  assert.equal(w.record().workflow,'small-change');
+  assert.equal(w.github.prs.length,1);
+  assert.equal(w.interpreter.posts.length,0);
+  const checklist=w.record().pr[0].readable.facts.records.checklist;
+  assert.deepEqual(reviewSmallChangeChecklist(checklist,[{id:'issue',request:w.github.issues.get(17).body,source:`https://github.com/${w.repository}/issues/17`,quote:w.github.issues.get(17).body}]),[]);
+  await a.merge();
+  assert.equal(w.record().state,'completed');
+  assert.deepEqual(w.leadActions,[]);
+});
+
 test('factory 3131: a code-only bug finishes independent review and merge with unchanged passing prompts',async t=>{
   const w=await factoryWorld(t,{workflow:'bug',codeOnly:true});await w.begin();
   const original=w.git(w.cwd,'show','HEAD:value.prompt.md');

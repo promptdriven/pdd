@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { prepareDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
+import { sortPlan, sortWorkflow } from '../src/issue-sort.mjs';
 import { fixture, complete, repository, key } from './helpers/issue-sort-fixture.mjs';
 const read = async w => (await readDependencySnapshot({ repository }, w.ports)).snapshot;
 const graph = async w => projectIssueGraph({ snapshot: await read(w) });
@@ -347,4 +348,31 @@ test('a confirmed expired claim does not block a fixed-issue route', async () =>
   assert.equal((await node(w)).sort?.action, 'close');
   await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
   assert.equal(w.issues[0].state, 'closed');
+});
+
+test('sort routing table maps test-only, tooling, CI and docs fixes to small-change and behavior changes to bug or feature', async () => {
+  const cases = [
+    { name: 'test-only bug', kind: 'bug', paths: ['test/words.vectors.test.mjs'], workflow: 'small-change' },
+    { name: 'test-tooling bug', kind: 'bug', paths: ['scripts/factory-test.sh'], workflow: 'small-change' },
+    { name: 'CI bug', kind: 'bug', paths: ['.github/workflows/ci.yml'], workflow: 'small-change' },
+    { name: 'docs bug', kind: 'bug', paths: ['docs/cli.md'], workflow: 'small-change' },
+    { name: 'docs kind', kind: 'docs', paths: ['src/cli.mjs'], workflow: 'small-change' },
+    { name: 'behavior bug', kind: 'bug', paths: ['src/cli.mjs'], workflow: 'bug' },
+    { name: 'mixed behavior and test bug', kind: 'bug', paths: ['src/cli.mjs', 'test/words.vectors.test.mjs'], workflow: 'bug' },
+    { name: 'prompt bug', kind: 'bug', paths: ['prompts/cli/issue-sort.prompt.md'], workflow: 'bug' },
+    { name: 'behavior feature', kind: 'feature', paths: ['src/cli.mjs'], workflow: 'feature' },
+    { name: 'test-only feature', kind: 'feature', paths: ['test/words.vectors.test.mjs'], workflow: 'small-change' },
+  ];
+  for (const row of cases) {
+    const w = fixture();
+    const record = w.record(1, { genuine: { kind: row.kind, duplicateOf: '', reason: '' }, paths: row.paths, status: { state: 'still-happens', release: '1.0.0', fix: '', evidence: [`${row.paths[0]}:1`] } });
+    assert.equal(sortWorkflow(record), row.workflow, row.name);
+    assert.equal((await complete(w, [record])).state, 'complete', row.name);
+    const snapshot = await read(w);
+    const route = sortPlan({ snapshot }).routes.find(x => x.issue === key(1));
+    assert.equal(route?.action, 'work', row.name);
+    assert.equal(route?.workflow, row.workflow, row.name);
+    assert.equal((await node(w)).sort?.workflow, row.workflow, row.name);
+    assert.match(w.writes.find(x => x.body?.includes('pdd-issue-sort:v1'))?.body ?? '', new RegExp(`; ${row.workflow}\\.`), row.name);
+  }
 });

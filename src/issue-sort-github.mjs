@@ -1,8 +1,8 @@
-// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 7b10f3e6725b8945b62f7c7d0a5d766a3717a902eda351238a71df998507bcca).
+// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 0ac38276d0c7be9e290bc6f92c8bc7d969347ec907798f6503708a66b2ed3f17).
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { validSort, selectedSort, sortInputs, sortPlan, sortSourceKey } from './issue-sort.mjs';
+import { validSort, selectedSort, sortInputs, sortPlan, sortSourceKey, sortWorkflow } from './issue-sort.mjs';
 import { gitContext } from './workflow-runs.mjs';
 import { currentSplitParent, readOwnerChoice } from './issue-mixed.mjs';
 import { draftAreas } from './autopilot-areas.mjs';
@@ -84,7 +84,8 @@ export async function saveSortBatch({ repository, snapshot, sorts }, ports, writ
   for (const record of sorts) {
     const issue = snapshot.issues.find(x => x.key === record.issue);
     if (JSON.stringify(selectedSort(snapshot, issue)) === JSON.stringify(record)) continue;
-    const body = `Sort: ${record.belongs.kind}; ${record.status.state}; ${record.genuine.kind}.\n${record.status.evidence.join('\n')}\n\n<!-- pdd-issue-sort:v1 -->\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\``;
+    const workflow = sortWorkflow(record);
+    const body = `Sort: ${record.belongs.kind}; ${record.status.state}; ${record.genuine.kind}${workflow ? `; ${workflow}` : ''}.\n${record.status.evidence.join('\n')}\n\n<!-- pdd-issue-sort:v1 -->\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\``;
     const route = { issue: record.issue, record };
     const result = parse((await write(async () => { if (!await sortOwnership({ repository, route, areas: snapshot.sortContext.areas }, ports)) throw Error('sort-owner-changed'); return ports.github.appendComment({ repository, issue: Number(record.issue.split('/').pop()), body, checkOwnership: () => sortOwnership({ repository, route, areas: snapshot.sortContext.areas }, ports) }); })).json);
     if (!result.id) throw Error('sort-write-pending');

@@ -15,7 +15,15 @@ test('value follows the issue',()=>assert.equal(process.env.FACTORY_MUTANT?value
 export function scriptedAgent(w) {
   const a={steps:[],briefs:[],suites:[],checks:[]};
   a.prepare=async()=>{
-    const {root}=w.record();
+    const run=w.record(),{root}=run;
+    if(w.testOnly) {
+      const sourceUrl=`https://github.com/${w.repository}/issues/${run.number}`;
+      const body=w.github.issues.get(run.number).body;
+      const source={kind:'git-content-v1',sha256:sourceFingerprint(root)};
+      put(run.runDir,'small-change-checklist.json',{schema_version:'pdd.small-change-checklist.v1',run_id:run.runId,source,items:[{id:'R1',request:body,source:sourceUrl,quote:body,state:'done',evidence:'test/value.vectors.test.mjs'}]});
+      put(run.runDir,'replay-evidence.json',{schema_version:'pdd.replay-evidence.v1',run_id:run.runId,source,formal:{result:'not_applicable',scope:'test-only',reason:'TESTONLY37',control_outcome:'not_run'}});
+      return;
+    }
     if(!w.codeOnly)put(root,'value.prompt.md',valuePrompt(2));
     put(root,'user_stories/value.md','As a user, I want the value to be two, so that the result follows my request.\n\n## Acceptance criteria\n\n1. The value is 2.\n');
     put(root,'tests/value.json',scenario);
@@ -50,20 +58,25 @@ export function scriptedAgent(w) {
     const brief=readFileSync(join(run.skillDir,'steps',step+'.md'),'utf8');assert.ok(brief.trim());
     a.briefs.push({area:area.name,step,sha256:sha(brief)});
     if(['scope','prompt-story'].includes(step))await a.prepare();
-    if(['change','build'].includes(step))put(run.root,'value.mjs','export const value = 2;\n');
+    if(['change','build'].includes(step)) {
+      if(w.testOnly)put(run.root,'test/value.vectors.test.mjs','export const checkVectors = vectors => vectors.every(v => v.checks.length > 0 && v.actual === v.expected);\n');
+      else put(run.root,'value.mjs','export const value = 2;\n');
+    }
     if(step==='check') {
       const r=await w.command(['test','value','--cache-clear','--json'],{cwd:run.root,allowFailure:true});a.checks.push(r);
       if(r.code!==0)return {check:r};
     }
     if(step==='verify') {
       if(w.git(run.root,'status','--porcelain')){w.git(run.root,'add','.');w.git(run.root,'commit','-qm','Factory implementation and native checks');}
+      if(w.testOnly)await a.prepare();
       const result=await w.command(['workflow','suite','--command',nativeCommand],{cwd:run.root});a.suites.push(result);
-      await w.command(['workflow','prove',String(w.record().number),'--test',nativeCommand,'--expect','FACTORY_VALUE'],{cwd:run.root});
-      const proof=readJson(join(run.runDir,'old-code-proof.json'));assert.equal(proof.outcome,'proved');assert.equal(proof.base.exitCode,1);assert.equal(proof.head.exitCode,0);
+      await w.command(['workflow','prove',String(w.record().number),'--test',nativeCommand,'--expect','FACTORY_VALUE'],{cwd:run.root,allowFailure:w.testOnly});
+      const proof=readJson(join(run.runDir,'old-code-proof.json'));assert.equal(proof.outcome,w.testOnly?'old-passes':'proved');assert.equal(proof.base.exitCode,w.testOnly?0:1);assert.equal(proof.head.exitCode,0);
       if(area.replay_evidence)a.evidence();
     }
     // Recompute after formal/review in case a step committed source.
     if(['formal','review'].includes(step) && area.replay_evidence)a.evidence();
+    if(step==='formal' && w.testOnly)await a.prepare();
     const verdict=w.codeOnly?'Verdict: the prompt is right; the bug is only in the CODE.':'Verdict: the bug is in the PROMPT (its check fails on the issue case).';
     const details=w.codeOnly?'Prompt unchanged; passing on old and new snapshots. Native old code fails the value assertion; corrected code passes.':'Prompt correction: old fails; new passes.';
     const argv=['workflow','done',step,'--summary',`${step==='reproduce'?verdict+'\n':''}${w.codeOnly?'This PR: '+details+'\nFix: Keep the prompt unchanged; correct the native value.\n':''}Factory ${step}; ${step==='check'?'Prompt tests: 1 of 1 pass':'native evidence retained'}\nResult: ${details}`];

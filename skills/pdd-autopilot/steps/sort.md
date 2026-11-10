@@ -44,6 +44,9 @@ Do not bypass a person assignee or live claim. Keep expected cases separate from
 code output. PDD validates the record; it does not verify the semantic assessment.
 
 PDD routes closed proposals, external owners and questions. Do not start them.
+When a work issue's fix changes only tests, test tooling, CI or docs, and no program
+behavior, its sort route derives the `small-change` workflow (`route.workflow`), while
+the small-change checklist and independent checker still verify every requested item.
 In auto, a close comment gives evidence and a reopen hint before closure. Observe
 keeps it open with pdd:close-proposed. Person assignees and live claims win.
 
