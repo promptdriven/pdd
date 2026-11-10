@@ -231,16 +231,15 @@ function clearAsk(need) {
   if (typeof need !== 'string' || !need.trim() || /[\r\n]/.test(need)) return false;
   const text = need.trim();
   if (/\bfyi\b|nothing to do|no human intervention|informational|no\s+(?:further\s+)?action|no\s+(?:(?:operator|human|person)\s+)?action|no\s+(?:action|operator|human)\s+(?:is\s+)?needed|no named blocker|identify the blocker/i.test(text)) return false;
-  if (/\b(?:and|then|also)\s+(?:(?:please|you)\s+)*(?:approve|choose|grant|provide|supply|sign|release|review|restore|renew|increase|allow|run|merge|resend|retry|pay|spend|pdd|gh|git)\b/i.test(text)) return false;
+  if (/(?:\b(?:and|then|also)\s+|[;,:—–]\s*|\s+-\s+)(?:(?:please|you)\s+)*(?:approve|choose|grant|provide|supply|sign|release|review|restore|renew|increase|allow|run|merge|resend|retry|pay|spend|pdd|gh|git)\b/i.test(text)) return false;
   if (/[.!]\s+\S/.test(text)) return false;
   const questions = (text.match(/\?/g) ?? []).length;
-  return questions === 1 ? text.endsWith('?') : questions === 0 &&
+  return questions === 1 ? text.endsWith('?') && /\p{L}{2}/u.test(text) : questions === 0 &&
     /^(approve|choose|grant|provide|supply|sign|release|review|restore|renew|increase|allow|run)\b/i.test(text) &&
     !/[.!]\s+\S/.test(text);
 }
 function askText(kind, repo, issues, fields) {
   const need = scrub(fields.need);
-  if (need.length > 160) return null;
   const lines = [`PDD Autopilot needs you: ${kind}`, issueLine(repo, issues), `Ask: ${need}`,
     `Tried: ${clip(scrub(oneLine(fields.tried)), 80)}`, `If no answer: ${clip(scrub(oneLine(fields.ifNoAnswer)), 80)}`];
   for (const [label, value] of [['Owner', fields.owner], ['Details', fields.details]]) {
@@ -374,14 +373,21 @@ async function sendAlert(input, ports, env, fs) {
       save();
       return done(0, `Recovery recorded for #${issue}; ${matches.length} open incident(s) closed.`);
     }
-    const machine = MACHINE_KINDS.includes(input.kind), code = CODE.test(clean.code ?? '') ? clean.code : null;
-    const key = code ? `cause:${code}${machine ? `@${host}` : ''}` : machine ? `${input.kind}@${host}` : `${issue}:${input.kind}`;
+    const incomingMachine = MACHINE_KINDS.includes(input.kind), code = CODE.test(clean.code ?? '') ? clean.code : null;
+    // A classification change on this host joins its existing cause, including legacy keys.
+    const causeKeys = code ? Object.keys(record.incidents).filter(key => record.incidents[key]?.code === code) : [];
+    const matchingKey = causeKeys.find(key => record.incidents[key].host === host) ??
+      (!incomingMachine && causeKeys.find(key => !MACHINE_KINDS.includes(record.incidents[key].kind)));
+    const key = matchingKey || (code ? `cause:${code}${incomingMachine ? `@${host}` : ''}` : incomingMachine ? `${input.kind}@${host}` : `${issue}:${input.kind}`);
     const open = object(record.incidents[key]) ? record.incidents[key] : null;
+    const eligibleKind = kind => MACHINE_KINDS.includes(kind) || PERSON_KINDS.includes(kind);
+    const incomingEligible = eligibleKind(input.kind);
+    const kind = eligibleKind(open?.kind) ? open.kind : input.kind, machine = MACHINE_KINDS.includes(kind);
     const issues = [...new Set([...issuesOf(open), number, ...(Array.isArray(fields.issues) ? fields.issues.filter(n => Number.isSafeInteger(n) && n > 0 && n <= 9999999999) : [])])].sort((a,b) => a-b);
-    const item = {...open, kind:input.kind, code, host, issues, listed:open?.listed ?? [], fields:clean,
+    const item = {...open, kind, code, host:open?.host ?? host, issues, listed:open?.listed ?? [], fields:!incomingEligible && eligibleKind(open?.kind) ? open.fields : clean,
       openedAt:open?.openedAt ?? at, updatedAt:at, result:open?.result ?? 'recorded',
-      channel: destinationFor(fs, env, ports, input.kind) ? destinationIdentity(destinationFor(fs, env, ports, input.kind)) : null};
-    if (machine) {
+      channel: destinationFor(fs, env, ports, kind) ? destinationIdentity(destinationFor(fs, env, ports, kind)) : null};
+    if (machine && incomingMachine) {
       if (fields.paused !== true) { item.firstPausedAt = null; item.ticks = 0; item.lastTick = null; }
       else {
         const tick = String(fields.tick ?? now);
@@ -396,10 +402,10 @@ async function sendAlert(input, ports, env, fs) {
     const quiet = ids.some(id => history.recoveredAt[id] !== undefined && now - history.recoveredAt[id] < 2 * HOUR);
     const changed = input.update && open?.asked !== askIdentity(clean);
     const canSend = !open?.asked || changed || ['failed','not-configured'].includes(open?.result);
-    const text = hasAsk && askText(input.kind, repo, issues, clean);
+    const text = hasAsk && askText(kind, repo, issues, clean);
     let outcome = {result:'not-sent'}, action = 'repeat';
-    if ((machine || PERSON_KINDS.includes(input.kind)) && persistent && !quiet && text && canSend) {
-      const destination = destinationFor(fs, env, ports, input.kind);
+    if (incomingEligible && persistent && !quiet && text && canSend) {
+      const destination = destinationFor(fs, env, ports, kind);
       outcome = await budgetedSend(destination, text, ids, context);
       if (outcome.result !== 'not-sent') {
         item.result = outcome.result; item.asked = askIdentity(clean); item.listed = issues;

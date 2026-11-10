@@ -171,9 +171,12 @@ async function alertUnavailableRecommendation(run, pr, audit, ports) {
   try {
     const input={action:'alert',update:true,cwd:run.sourceRoot ?? run.root,env:ports.env ?? process.env,
       issue:String(run.number),kind:'decision',text:JSON.stringify({
+        code:`audit-recommendation:${pr}:${audit.merge}`,
         cause:`Post-merge audit BAD for PR #${pr} (${audit.merge}). Revert recommendation is missing or unavailable.`,
         tried:'Held the audit without a revert or another auditor. Saved evidence and effect reservations are unchanged.',
-        need:`Inspect the saved audit evidence and decide: keep the merge and finish the rest on issue #${run.number}, or revert on a review branch with git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.`,
+        need:`Choose for PR #${pr}: keep the merge and finish the rest, or revert (recommendation unavailable)?`,
+        ifNoAnswer:'The evidence hold stays; other work continues.',
+        details:`https://github.com/${run.repo}/issues/${run.number}`,
       })};
     const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports,...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
     reservation.state=alertDeliveryState(result);
@@ -351,7 +354,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
     }
     const keepMerge=audit.result.verdict==='BAD' && !audit.result.revert;
     if(keepMerge) await effect('reopen',()=>command('gh',['api','--method','PATCH',`repos/${run.repo}/issues/${run.number}`,'-f','state=open']));
-    await effect('comment',()=>command('gh',['api','--method','POST',`repos/${run.repo}/issues/${run.number}/comments`,'-f',`body=Audit: ${audit.result.verdict}\n\nPR #${pr}, merge ${audit.merge}\n\nRevert recommendation: ${audit.result.revert}\n\n${keepMerge?'Keep the merge and finish the rest. Missing parts and audit evidence:\n\n':''}${audit.result.summary}\n\n${audit.result.evidence}\n\n<!-- pdd:audit:${run.runId}:${pr} -->`]));
+    await effect('comment',()=>command('gh',['api','--method','POST',`repos/${run.repo}/issues/${run.number}/comments`,'-f',`body=Audit: ${audit.result.verdict}\n\nPR #${pr}, merge ${audit.merge}\n\nRevert recommendation: ${audit.result.revert}\n\n${keepMerge?'Keep the merge and finish the rest. Missing parts and audit evidence:\n\n':''}${audit.result.summary}\n\n${audit.result.evidence}\n\n${keepMerge?`Default: keep the merge and finish the rest. Other option: on a review branch, git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.\n\n`:''}<!-- pdd:audit:${run.runId}:${pr} -->`]));
     if(audit.result.verdict === 'BAD') {
       if(audit.result.revert) await effect('revert',async()=>{
         const checkout=join(run.runDir,'audits',`revert-${pr}`), branch=`pdd/revert-${pr}-${randomUUID()}`;
@@ -364,13 +367,16 @@ async function auditMergeOwned({run, pr}, ports = {}) {
       });
       await effect('alert',async()=>{
         const input={action:'alert',update:true,cwd,env,issue:String(run.number),kind:'decision',text:JSON.stringify({
+          code:`audit-bad:${pr}:${audit.merge}`,
           cause:`Post-merge audit BAD for PR #${pr} (${audit.merge}). Auditor revert recommendation: ${audit.result.revert}.`,
           tried:keepMerge
             ? `Saved audit and missing parts on issue #${run.number}. Issue reopen: ${audit.reopen?.state ?? 'unknown'}. Audit comment: ${audit.comment?.state ?? 'unknown'}.`
             : `Saved audit. Revert PR: ${audit.revert?.value ?? audit.revert?.state ?? 'unknown'}.`,
           need:keepMerge
-            ? `Default: keep the merge and finish the rest on issue #${run.number}. Other option: revert on a review branch with git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.`
-            : 'Review the revert PR or resolve the saved revert failure.',
+            ? `Choose for PR #${pr} (revert recommendation: false): keep the merge and finish the rest (recommended), or revert?`
+            : `Review the revert PR or saved failure for PR #${pr} (revert recommendation: true)?`,
+          ifNoAnswer:'The merge stays; any revert PR waits for review; other work continues.',
+          details:(()=>{try {return JSON.parse(audit.comment?.value)?.html_url;} catch {return null;}})() ?? `https://github.com/${run.repo}/issues/${run.number}`,
         })};
         const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports,...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
         if(alertDeliveryState(result)!=='sent') throw Error('Alert unconfirmed');

@@ -1558,6 +1558,33 @@ async function coreTick(stateFile, state, p, ports) {
     return state.cachedIssues ?? [];
   };
   const agent = state.agent ?? {};
+  const sendCoreAsk = async (issue, kind, fields, update = false) => {
+    try {
+      return await (p.sendAlert ?? runAutopilotAlerts)({action:'alert', cwd:state.cwd, env:p.env, issue:String(issue), kind,
+        ...(update ? {update:true} : {}), text:JSON.stringify(fields)},
+      {...p.alertPorts, repository:async()=>({nameWithOwner:state.repo}), stateRoot:dirname(stateFile), now:p.now, hostname:()=>state.machine});
+    } catch (error) { p.warn(`Autopilot core alert waits: ${line(error.message)}`); }
+  };
+  const observePause = async pause => sendCoreAsk(pause.issue, 'usage-limit', {
+    code:'core-no-result', cause:pause.cause, tried:pause.tried, paused:true, tick:p.now(),
+    need:'Run pdd autopilot doctor on this machine to inspect sign-in and usage limits?',
+    ifNoAnswer:pause.until ? `New jobs wait until ${new Date(pause.until).toISOString()}; running jobs continue.` : 'New jobs stay paused until the saved deadline; running jobs continue.',
+    details:`https://github.com/${state.repo}/issues/${pause.issue}`,
+  });
+  const coreAlert = async ({issue, kind, text, tried, need, update}) => {
+    if (kind === 'usage-limit') {
+      state.coreAlertPause = {issue, cause:text, tried:'Agent result check: three consecutive jobs ended without a result.'};
+      return observePause(state.coreAlertPause);
+    }
+    if (kind === 'stuck') return sendCoreAsk(issue, 'decision', {
+      code:`core-end-exhausted:${issue}`, cause:text,
+      tried:tried ?? 'The core retried END on six ticks.',
+      need:"Finish this issue's END by hand after inspecting its comment and labels?",
+      ifNoAnswer:'The local job has ended; this issue waits for review while other work continues.',
+      details:`https://github.com/${state.repo}/issues/${issue}`,
+    });
+    return sendCoreAsk(issue, kind, {cause:text, tried:tried ?? 'The core could not continue.', need:need ?? 'Check the issue.'}, update);
+  };
   const result = await tickCore({ state, settings: core, budget }, {
     gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, ...options }),
     git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
@@ -1565,17 +1592,25 @@ async function coreTick(stateFile, state, p, ports) {
     version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
     trusted: row => trusted(row, state, { trust: core.trust }, p),
     agentReady: async () => agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env })).state !== 'limited',
-    // One alert through this machine's alert destination; the core gives each alert its own cause, tried and need.
-    alert: ({ issue, kind, text, tried, need, update }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, ...(update ? { update: true } : {}),
-      text: JSON.stringify({ cause: text, tried: tried ?? 'The Autopilot core engine could not go on with this issue.', need: need ?? 'Check the issue and this machine.' }) },
-      { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine }),
+    alert: coreAlert,
     ...p.corePorts,
   });
+  if (state.coreAlertPause) {
+    const machine = read(join(p.corePorts?.root ?? coreRoot(stateFile), 'core.json'), null);
+    if (Number.isFinite(machine?.pausedUntil) && machine.pausedUntil > p.now()) {
+      state.coreAlertPause.until = machine.pausedUntil;
+      await observePause(state.coreAlertPause);
+    } else if (machine) {
+      await sendCoreAsk(state.coreAlertPause.issue, 'recovered', {kind:'usage-limit', code:'core-no-result', cause:'The saved core machine pause ended.'});
+      delete state.coreAlertPause;
+    }
+  }
   const release = await claimAdmission(state, p);
   if (release) try {
     const latest = read(stateFile);
     if (latest?.enabled) {
       for (const key of ['defaultBranch', 'baseBranch', 'cachedIssues', 'etag', 'pages', 'issuesSince', 'issuesFullAt']) if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
+      if (state.coreAlertPause) latest.coreAlertPause = state.coreAlertPause; else delete latest.coreAlertPause;
       latest.core = { at: p.now(), message: result.message }; latest.nextTick = p.now() + timerMinutes(latest) * 60000; save(stateFile, latest);
     }
   } finally { release(); }

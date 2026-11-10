@@ -580,8 +580,9 @@ export function automaticAttention({ repo, machine }, ports = {}) {
       || run.state === 'cancelled' || run.state === 'completed' && run.gate?.kind !== 'ask-code') return [];
     const question = openQuestion(run);
     const item = run.state === 'stuck' ? { category: 'stuck', cause: stuckReason(run) }
+      : question ? { category: 'decision', cause: question.text, need: question.text }
       : run.state === 'paused' ? { category: 'parked', cause: run.runtimeWait?.reason ?? run.parkReason ?? 'automatic work paused' }
-      : question || run.gate ? { category: 'decision', cause: question?.text ?? run.gate.kind } : null;
+      : run.gate ? { category: 'decision', cause: run.gate.kind } : null;
     return item ? [{ number: run.number, ...item }] : [];
   }).sort((a, b) => a.number - b.number);
 }
