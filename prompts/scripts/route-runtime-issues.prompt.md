@@ -45,12 +45,14 @@ inject links or markup. Never remove other labels or assignees. PDD, uncertain,
 closed issues and already applied versions have empty actions. Existing marker
 comments suppress further comments even for another version.
 
-`routeRuntimeIssues({repo, owner, apply=false}, ports)` is the single integration
+`routeRuntimeIssues({repo, owner, apply=false, signal}, ports)` is the single integration
 hook, callable independently of Autopilot. Require `owner/repository` and a GitHub
 login before reading issues. Read all open issues, exclude pull requests, then
 process in issue-number order. Each plan uses the current labels and assignees.
 Return an array of plans or `{number,error}` rows for individual failures; continue
 other issues after a failure. No uncached raw agent/process errors are printed.
+`signal` is an optional AbortSignal: cancellation stops further issue processing
+and actions rather than treating shutdown as an isolated issue failure.
 
 Cache by content version, including failures and a durable attempt reservation
 BEFORE calling the agent. A cached failure requires explicit deletion of that
@@ -92,7 +94,17 @@ action fails without an application receipt, allowing repair without reclassific
 Agent working directory is a temporary empty directory, removed in finally;
 omit GitHub credentials from its environment. Limit processes to 120 seconds and
 8 MiB captured output; on timeout or overflow, kill the process group on POSIX so
-a wrapper cannot leave a spending agent behind. Suppress raw child stdout/stderr and filesystem errors in
+a wrapper cannot leave a spending agent behind. Track active children until their
+close event. While the CLI runs, handle SIGTERM and SIGINT by cancelling further
+processing, killing all active process groups (direct children on Windows), and
+awaiting child termination before removing temporary agent directories and the
+cache lock. Repeated shutdown signals must not interrupt cleanup. Exit with 143
+for SIGTERM or 130 for SIGINT, using the first signal received. Keep the durable
+attempt reservation or failure cache so cancellation cannot automatically spend
+another call. Remove signal handlers after cleanup; importing the module installs
+none. SIGKILL and agent descendants that deliberately escape their process group
+cannot be cleaned up through this catchable-signal contract.
+Suppress raw child stdout/stderr and filesystem errors in
 diagnostics; print generic failure categories to avoid leaking secrets. The tool
 prints JSON plans and exits 1 if any error row occurs, otherwise 0. Setup or usage
 failure also exits 1. It never retries processes automatically.

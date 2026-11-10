@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFile, mkdtemp, writeFile, rm, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { parseClassification, issueVersion, buildRoutingPlan, routeRuntimeIssues } from '../scripts/route-runtime-issues.mjs';
 
@@ -209,3 +211,101 @@ test('CLI help and invalid options never invoke a process', async () => {
   assert.match((await exec(process.execPath,[command,'--help'],{env:{PATH:''}})).stdout,/--apply/);
   for (const args of [['--apply','--unknown'],['--repo'],['--apply','--apply']]) await assert.rejects(exec(process.execPath,[command,...args],{env:{PATH:''}}),error=>error.code===1);
 });
+
+async function waitUntil(check, description) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await delay(20);
+  }
+  assert.fail(`Timed out waiting for ${description}`);
+}
+
+async function running(pid) {
+  try {
+    // A killed orphan can remain a zombie until the host reaps it. It cannot
+    // execute or spend usage; don't depend on the host's orphan reaping speed.
+    const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+    return !/^\s*Z\b/.test(stat.slice(stat.lastIndexOf(')') + 1));
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  test(`CLI ${signal} stops classifier and descendant before cleanup, without starting another issue`, {skip:process.platform !== 'linux', timeout:15000}, async t => {
+    const dir = await mkdtemp(join(tmpdir(), 'pdd-router-shutdown-'));
+    const bin = join(dir, 'bin'), cache = join(dir, 'cache');
+    const ready = join(dir, 'ready.json'), calls = join(dir, 'calls.jsonl');
+    let router, child;
+    t.after(async () => {
+      if (child) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+      }
+      if (router && router.exitCode === null && router.signalCode === null) {
+        router.kill('SIGKILL');
+        await once(router, 'close');
+      }
+      if (child) await rm(child.cwd, {recursive:true, force:true});
+      await rm(dir, {recursive:true, force:true});
+    });
+    await mkdir(bin);
+    await writeFile(join(bin, 'gh'), `#!/usr/bin/env node
+import fs from 'node:fs';
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.FAKE_ROUTER_CALLS, JSON.stringify(args) + '\\n');
+if (args.includes('POST')) process.exit(9);
+console.log(JSON.stringify([args[1].includes('/comments') ? [] : ${JSON.stringify([issue, {...issue, number:9}])}]));
+`, {mode:0o755});
+    const descendant = join(dir, 'descendant.mjs'), agent = join(dir, 'agent.mjs');
+    await writeFile(descendant, `import fs from 'node:fs';
+// Ignore graceful signals: the router must terminate the whole process group.
+process.on('SIGTERM', () => {});
+process.on('SIGINT', () => {});
+fs.writeFileSync(process.env.FAKE_ROUTER_READY, JSON.stringify({pid:process.ppid, descendant:process.pid, cwd:process.cwd()}));
+setInterval(() => {}, 1000);
+`);
+    await writeFile(agent, `import fs from 'node:fs';
+import {spawn} from 'node:child_process';
+fs.readFileSync(0, 'utf8');
+fs.appendFileSync(process.env.FAKE_ROUTER_CALLS, 'AGENT\\n');
+process.on('SIGTERM', () => {});
+process.on('SIGINT', () => {});
+spawn(process.execPath, [${JSON.stringify(descendant)}], {stdio:'inherit'});
+setInterval(() => {}, 1000);
+`);
+    const config = join(dir, 'config.json');
+    await writeFile(config, JSON.stringify({owner:options.owner, agentCommand:[process.execPath, agent]}));
+    router = spawn(process.execPath, [resolve('scripts/route-runtime-issues.mjs'), '--repo', options.repo, '--config', config, '--cache-dir', cache, '--apply'], {
+      cwd:dir, env:{...process.env, PATH:`${bin}:${process.env.PATH}`, FAKE_ROUTER_CALLS:calls, FAKE_ROUTER_READY:ready}, stdio:'pipe',
+    });
+    let stdout = '', stderr = '';
+    router.stdout.on('data', chunk => { stdout += chunk; });
+    router.stderr.on('data', chunk => { stderr += chunk; });
+    const closed = once(router, 'close');
+    await waitUntil(async () => {
+      try { child = JSON.parse(await readFile(ready, 'utf8')); return true; }
+      catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    }, 'fake classifier descendant readiness');
+    assert.equal(await running(child.pid), true);
+    assert.equal(await running(child.descendant), true);
+    assert.equal(router.kill(signal), true);
+    const [code, exitSignal] = await closed;
+    assert.equal(exitSignal, null, 'router must handle the signal and finish cleanup');
+    assert.equal(code, signal === 'SIGTERM' ? 143 : 130);
+    await waitUntil(async () => !(await running(child.pid)) && !(await running(child.descendant)), 'classifier process group termination');
+    assert.ok(!(await readdir(cache)).includes('.lock'), 'cache lock released');
+    assert.ok(!(await readdir(join(child.cwd, '..'))).includes(child.cwd.split('/').at(-1)), 'agent temporary directory removed');
+    const cacheFiles = (await readdir(cache)).filter(name => name.endsWith('.json'));
+    assert.equal(cacheFiles.length, 1, 'only the first issue was reserved');
+    assert.ok(JSON.parse(await readFile(join(cache, cacheFiles[0]), 'utf8')).error, 'interrupted call remains reserved');
+    const entries = (await readFile(calls, 'utf8')).trim().split('\n');
+    assert.equal(entries.filter(entry => entry === 'AGENT').length, 1);
+    const ghCalls = entries.filter(entry => entry !== 'AGENT').map(JSON.parse);
+    assert.equal(ghCalls.length, 2, 'only list issues and first issue comments were read');
+    assert.ok(!ghCalls.some(args => args.includes('POST')));
+    assert.ok(!stdout.includes('"number": 9'));
+    assert.equal(stderr, '');
+  });
+}
