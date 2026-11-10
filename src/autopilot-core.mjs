@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: a0aa9aa6896be65acbf666cc0d77b792b2351e96358e2156186d128b75793e5b).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 6d6955d570c1554bf4393a59a8e96de43d95e7873543456bb4b457722d8c7fe5).
 import * as nativeFs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,9 @@ function readJobs(fs, root) {
   try { names = fs.readdirSync(dir).filter(name => /^\d+\.json$/.test(name)); } catch { return []; }
   return names.map(name => readJson(fs, join(dir, name))).filter(job => object(job) && Number.isSafeInteger(job.issue)).sort((a, b) => a.issue - b.issue);
 }
+// Slots come only from this engine's own job files. A job holds a slot while its process runs or its outcome
+// (merge check or END decision) is not yet handled; a job that only finishes its END writes holds none.
+const holdsSlot = job => job.phase !== 'ending';
 function readHistory(fs, root, count = 5) {
   try { return fs.readFileSync(folders(root).history, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).slice(-count).reverse(); } catch { return []; }
 }
@@ -226,7 +229,7 @@ async function checkout(ctx, job, name) {
 }
 async function intake(ctx, rows) {
   const { state, settings } = ctx, held = ctx.machineState();
-  const busy = readJobs(ctx.fs, ctx.root).filter(job => job.phase !== 'ending').length;
+  const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length;
   let free = settings.runs - busy, tries = 0;
   if (free <= 0) return null;
   if (!['codex', 'claude'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex or Claude agent; run pdd autopilot start from a signed-in Codex or Claude';
@@ -394,16 +397,21 @@ async function continueEnd(ctx, job) {
   ctx.counts.ended++;
   return finishLocal(ctx, job, 'ended', why.text);
 }
-// Local cleanup: the worktrees go only after the GitHub outcome is confirmed. The branch stays unless merged.
+// Local cleanup: the worktrees go only after the GitHub outcome is confirmed. Every per-issue file of this engine
+// goes too, except the job logs that the END comment and history name. The branch stays unless merged.
 async function finishLocal(ctx, job, outcome, text) {
   stopChecks(ctx, job); ctx.skip.add(job.issue);
-  for (const path of [job.worktree, join(ctx.dirs.worktrees, `${job.issue}-review`), join(ctx.dirs.worktrees, `${job.issue}-suite`)])
+  const mine = name => name === String(job.issue) || name.startsWith(`${job.issue}-`) || name.startsWith(`${job.issue}.`);
+  const list = dir => { try { return ctx.fs.readdirSync(dir).filter(mine); } catch { return []; } };
+  for (const path of [job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))])
     if (path && ctx.fs.existsSync(path)) await ctx.git(['worktree', 'remove', '--force', path]).catch(() => ctx.fs.rmSync(path, { recursive: true, force: true }));
   await ctx.git(['worktree', 'prune']).catch(() => {});
   if (outcome === 'merged') await ctx.git(['branch', '-D', job.branch]).catch(() => {});
-  ctx.fs.mkdirSync(ctx.root, { recursive: true, mode: 0o700 });
-  ctx.fs.appendFileSync(ctx.dirs.history, JSON.stringify({ at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null }) + '\n', { mode: 0o600 });
-  ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true });
+  for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log'))) ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true });
+  try {
+    ctx.fs.mkdirSync(ctx.root, { recursive: true, mode: 0o700 });
+    ctx.fs.appendFileSync(ctx.dirs.history, JSON.stringify({ at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null }) + '\n', { mode: 0o600 });
+  } finally { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
 }
 
 // ---- One job per tick step ------------------------------------------------------------------------------
@@ -468,14 +476,14 @@ export async function tickCore(input, ports) {
     }
   }
   const hold = rows ? await intake(ctx, rows) : 'intake skipped: the issue list is unavailable';
-  const busy = readJobs(ctx.fs, ctx.root).filter(job => job.phase !== 'ending').length, c = ctx.counts;
+  const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
   return { exitCode: 0, message: `Autopilot core: ${c.started} started, ${c.merged} merged, ${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.` };
 }
 
 // ---- Status (local files only) --------------------------------------------------------------------------
 export function coreStatus({ state, settings }, ports) {
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), held = readJson(fs, folders(ports.root).machine, {});
-  const busy = jobs.filter(job => job.phase !== 'ending').length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
+  const busy = jobs.filter(holdsSlot).length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
   const lines = [`Autopilot engine core (${settings.mode}): ${state.repo ?? 'repository unknown'} in ${state.cwd} · base ${state.baseBranch ?? 'unknown'} · agent ${state.agent?.kind ?? 'none'}`,
     `Jobs: ${busy} of ${settings.runs} slots busy; job time limit ${settings.jobTimeoutMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${settings.label ? `; only issues with ${settings.label}` : ''}`];
   if (held.heldUntil > now) lines.push(`Intake paused until ${new Date(held.heldUntil).toISOString()}: ${STRIKES} jobs in a row ended with no result.`);

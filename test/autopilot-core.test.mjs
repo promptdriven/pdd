@@ -398,3 +398,31 @@ test('an agent other than Codex or Claude holds intake without a claim', async t
   const result = await w.tick();
   assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex or Claude/);
 });
+
+test('an ended job holds no slot after a restart, and END and merge remove its per-issue files', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18);
+  await w.tick();
+  const first = w.job(17, 'build');
+  w.kill(17, 'build');                                   // the machine restarted; the job process is gone
+  let down = true;
+  const gh = w.gh;
+  w.gh = async (args, options) => down && args.includes('POST') && args.some(a => /\/issues\/17\/comments$/.test(a))
+    ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' } : gh(args, options);
+  await w.tick();                                        // END cannot post its comment yet
+  assert.equal(JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).phase, 'ending');
+  assert.ok(w.job(18, 'build'), 'a job that is only finishing its END holds no slot');
+  down = false;
+  await w.tick();
+  assert.equal(endComments(w, 17).length, 1);
+  const left = name => readdirSync(join(w.root, name)).filter(file => /^17(?:[-.]|$)/.test(file));
+  assert.deepEqual(left('jobs'), []); assert.deepEqual(left('worktrees'), []);
+  assert.deepEqual(left('logs'), [first.log.split('/').at(-1)], 'only the log named in the END comment stays');
+  // A merged job leaves nothing either, and its slot is free for the next issue.
+  w.issue(19);
+  w.build(18); await w.tick(); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
+  assert.deepEqual(w.github.merges.length, 1);
+  const merged = name => readdirSync(join(w.root, name)).filter(file => /^18(?:[-.]|$)/.test(file) && !file.endsWith('.log'));
+  assert.deepEqual([...merged('jobs'), ...merged('worktrees'), ...merged('logs')], []);
+  assert.ok(w.job(19, 'build'), 'the merged slot is free in the same tick');
+});

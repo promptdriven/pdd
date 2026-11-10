@@ -49,6 +49,13 @@ restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `deadline`, the started `agent` job, and in phase `pr` also `pr`, `head`,
 `runtime`, `review` and `suite`.
 
+Slots come only from these job files, never from workflow allocation or other
+local records. A job holds a slot while its process runs or its outcome is not yet
+handled (phase `running` or `pr`). A job in phase `ending` has its outcome decided
+and only finishes its GitHub writes, so it holds no slot. Each tick advances every
+job before intake, so a job whose process died, for example after a restart, is
+ended or moved to the merge check before free slots are counted.
+
 ## Tick
 
 `tickCore({state, settings, budget}, ports)` returns `{exitCode: 0, message}`.
@@ -191,8 +198,7 @@ error came from a GitHub or Git call, else a `job` cause `checks-timeout`. Each 
    refusal ends `base-check`.
 7. `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
    waits for the next tick. A confirmed merge closes the issue when it is open,
-   removes `pdd:working`, removes the worktrees and the local branch, and records
-   `merged`.
+   removes `pdd:working`, cleans up locally (see END) and records `merged`.
 
 ## END
 
@@ -212,7 +218,14 @@ task, a time limit, red checks). It stops the job's processes and saves phase
    `<!-- pdd:autopilot-core:end:N:STARTED -->` makes a retry after an uncertain
    post find the earlier comment instead of posting twice.
 4. Add `pdd:stuck`, remove `pdd:working` (an absent label is fine).
-5. Only then remove the worktrees; keep the local branch. Record `ended`.
+5. Only then clean up locally (below). Record `ended`.
+
+Local cleanup, after END, a merge, a hand-over or a person's stop: stop the job's
+processes; remove every `worktrees/N…` folder of the issue; remove every
+`logs/N-…` file except the `.log` files that the END comment and the history name;
+append the history line; remove `jobs/N.json` last, also when an earlier cleanup step
+failed. A merge also deletes the local branch; other outcomes keep it, because the
+agent's commits may exist only there.
 
 ## Status
 
