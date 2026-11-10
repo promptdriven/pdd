@@ -5,12 +5,12 @@ import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession, finishedChats} from './workflow-chat.mjs';
 import {WORKFLOW_CAPABILITIES, sweepIdleRuns, recoverAutomaticRunOwner, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
 import { readMachineResources } from './machine-resources.mjs';
-import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
+import { configureCheckCapacity, releaseCheckCapacity, readAutopilotSuiteLoad, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b6234d5e49c1a9198dc02afe7c4ef9c3b5b6f32b154310ee276d115d1820d6fe).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: dcdc6ef51e007bbca1a59a51c5205bea9e6f62d8a6e7e3e0f813de61340f73e7).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -696,9 +696,14 @@ function healthLine(health) {
 }
 async function observeHealth(state, p) {
   const old = state.health;
-  let resource, usage = { state: 'not-applicable', resetAt: null, usedPercent: null };
+  let resource, autopilotLoad = 0, usage = { state: 'not-applicable', resetAt: null, usedPercent: null };
   try { resource = await (p.machineHealth ?? (input => machineHealth(input, { machineResources: p.machineResources ?? (input => readMachineResources(input, {includeChecks:true,env:p.env})) })))({ cwd: state.cwd }); }
   catch { resource = { healthy: false, causes: ['Machine resources cannot be read'], resources: null }; }
+  if (state.coordinatorId && state.machine) {
+    try { autopilotLoad = readAutopilotSuiteLoad({env:p.env, coordinatorId:state.coordinatorId, machine:state.machine}, p.checkCapacityPorts ?? p); }
+    catch { /* Unknown ownership keeps measured load outside. */ }
+    if (resource?.resources) resource = {...resource, resources:{...resource.resources, autopilotLoad}};
+  }
   if (state.agent.kind === 'codex') {
     const definition = launchDefinition(state, p), profile = profileBinding(state, p);
     const env = { ...p.env, ...definition.env, HOME: profile.home };
@@ -709,6 +714,7 @@ async function observeHealth(state, p) {
   const paused = resource?.healthy !== true || !['healthy', 'not-applicable'].includes(usage?.state);
   state.health = { at: p.now(), paused, resource, usage, incidents: old?.incidents ?? {},
     recoveryPending: paused ? null : old?.recoveryPending ?? (old?.paused ? p.now() : null) };
+  return autopilotLoad;
 }
 async function healthAlerts(state, p, stateRoot) {
   const health = state.health, issues = [...new Set([
@@ -1615,10 +1621,10 @@ async function runTick(stateFile, ports, completion) {
       } finally { release(); }
     };
     p.scanGuard = scanGuard;
-    await observeHealth(state, p);
+    const autopilotLoad = await observeHealth(state, p);
     if (!await scanGuard(latest => { latest.health = state.health; })) return await outcome('inactive', 'Autopilot changed.');
     let capacity;
-    if (!await scanGuard(async latest => { capacity = await configureCheckCapacity({env:p.env,checks:state.checks,runs:state.runs,owner:stateFile,resources:state.health?.resource?.resources}, p.checkCapacityPorts ?? p); latest.checkCapacity = capacity; })) return await outcome('inactive', 'Autopilot control changed.');
+    if (!await scanGuard(async latest => { capacity = await configureCheckCapacity({env:p.env,checks:state.checks,runs:state.runs,autopilotLoad,owner:stateFile,resources:state.health?.resource?.resources}, p.checkCapacityPorts ?? p); latest.checkCapacity = capacity; })) return await outcome('inactive', 'Autopilot control changed.');
     state.checkCapacity = capacity;
     p.scanAction = async (action, cleanup = '') => {
       const release = await claimAdmission(state, p);

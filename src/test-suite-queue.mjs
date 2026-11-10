@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 798a0c3fd2183ae4958fedb1b5eb2e10be5d269fccf31335dbef3a4d6efbae62).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 560aaa327edd3261dc99e5e543e9f4c5e748ee0b6d6080f5f89b87ebf1e267da).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -238,6 +238,36 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
     queuedAt: row.queuedAt, startedAt: row.startedAt, finishedAt: row.finishedAt, reason: row.reason,
     pausedMs: pausedTime(own, since, p.now()),
     ...Object.fromEntries(['command','commandFingerprint','evidence','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','counts','outcome','timeoutMinutes'].map(key=>[key,row[key] ?? null])) };
+}
+function automaticRunFor(cwd, p) {
+  try {
+    const top = p.git(['rev-parse','--show-toplevel'], cwd); if (top.status !== 0) return null;
+    const root = resolve(top.stdout.trim()), common = p.git(['rev-parse','--git-common-dir'], root);
+    if (common.status !== 0) return null;
+    const runs = join(resolve(root, common.stdout.trim()), 'pdd', 'runs');
+    const matches = p.fs.readdirSync(runs).map(name => {
+      try { return JSON.parse(p.fs.readFileSync(join(runs,name,'status.json'),'utf8')); } catch { return null; }
+    }).filter(run => run?.root === root);
+    return matches.length === 1 ? matches[0] : null;
+  } catch { return null; }
+}
+export function readAutopilotSuiteLoad({env = process.env, coordinatorId, machine}, ports = {}) {
+  if (typeof coordinatorId !== 'string' || !coordinatorId || typeof machine !== 'string' || !machine) return 0;
+  let p, rows;
+  try { p = portsFor(env, ports); rows = records(p); } catch { return 0; }
+  let total = 0;
+  for (const row of rows) {
+    if (row.state !== 'running' || !Number.isSafeInteger(row.coresPerCheck) || row.coresPerCheck < 1) continue;
+    const run = automaticRunFor(row.cwd, p), origin = run?.automaticOrigin;
+    if (run?.v !== 1 || run.state !== 'running' || typeof run.root !== 'string'
+      || !origin || Object.keys(origin).length !== 4 || typeof origin.repository !== 'string' || !origin.repository
+      || origin.coordinatorId !== coordinatorId || origin.machine !== machine
+      || !origin.claim || Object.keys(origin.claim).length !== 2 || typeof origin.claim.commentId !== 'string' || !origin.claim.commentId
+      || typeof origin.claim.labelEventId !== 'string' || !origin.claim.labelEventId) continue;
+    if (total > Number.MAX_SAFE_INTEGER - row.coresPerCheck) return 0;
+    total += row.coresPerCheck;
+  }
+  return total;
 }
 export function suiteStatusWords(suite) {
   return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`

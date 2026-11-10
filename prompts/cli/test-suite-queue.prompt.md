@@ -283,6 +283,8 @@ Queue admission uses the saved snapshot when present, otherwise computes from
 ports. A malformed snapshot fails closed. This machine-wide snapshot is shared
 across repositories; the most recent active tick supplies its selected override.
 
+`readAutopilotSuiteLoad({env, coordinatorId, machine}, ports)` is the native observation for the current launcher. It reads the same shared queue records and considers only running tickets. For each candidate, read the saved workflow status for the ticket cwd. Count its `coresPerCheck` only when that status proves an automatic origin with this exact coordinator ID and machine. Sum these recorded CPU reservations; do not estimate CPU load from a ticket count or process count. A missing, malformed, ambiguous, manual, operator, worker, transferred, or different-coordinator status proves no owned reservation, so it remains measured outside load. An unavailable queue or run-status read returns zero owned load, which keeps all observed load outside. The reader is read-only and does not change ticket, run, queue, or process state.
+
 On Linux with taskset, allocate a free, disjoint list from the current usable CPU
 IDs for each slot; store it as `cpuIds` on the running ticket. Existing tickets
 without this field keep their slot; new affinity admissions wait until those
@@ -326,8 +328,8 @@ timeout or interrupted runner has its own reason; it is not a stuck issue.
 
 `configureCheckCapacity` accepts optional input `resources`, the current shared
 machine observation. Use its load and available memory with its check profile
-for capacity; do not read the host again. Legacy observations without check metadata
-retain injected check adapters for affinity. Native synchronous fallback adapters
+and verified `autopilotLoad` for capacity; do not read the host again. Legacy
+observations without check metadata retain injected check adapters for affinity.
 come from the machine resource owner.
 
 ## Dependencies

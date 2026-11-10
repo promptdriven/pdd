@@ -1,5 +1,5 @@
 import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
-import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
+import { calculateCheckCapacity, readAutopilotSuiteLoad } from '../src/test-suite-queue.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -262,4 +262,18 @@ test('suite time limit follows this machine recent successful suite durations fo
   f.clock += 7 * 60_000;
   f.started[6].finish(0);
   assert.equal(await seventh, 0);
+});
+test('owned Autopilot suite load uses recorded core reservations and current run origin', t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-autopilot-suite-load-'));
+  const queue = join(root, 'queue'), common = join(root, 'common'), owned = join(root, 'owned'), other = join(root, 'other'), unknown = join(root, 'unknown');
+  for (const path of [queue, owned, other, unknown, join(common, 'pdd', 'runs', '17'), join(common, 'pdd', 'runs', '18')]) mkdirSync(path, {recursive:true});
+  const ticket = (number, cwd, coresPerCheck) => ({ticket:number,pid:process.pid,childPid:null,cwd,state:'running',queuedAt:1,startedAt:2,finishedAt:null,coresPerCheck});
+  writeFileSync(join(queue, 'ticket-1.json'), JSON.stringify(ticket(1, owned, 12)));
+  writeFileSync(join(queue, 'ticket-2.json'), JSON.stringify(ticket(2, other, 12)));
+  writeFileSync(join(queue, 'ticket-3.json'), JSON.stringify(ticket(3, unknown, 12)));
+  writeFileSync(join(common, 'pdd', 'runs', '17', 'status.json'), JSON.stringify({v:1,number:17,state:'running',root:owned,automaticOrigin:{repository:'owner/repo',coordinatorId:'coordinator-a',machine:'machine-a',claim:{commentId:'c',labelEventId:'e'}}}));
+  writeFileSync(join(common, 'pdd', 'runs', '18', 'status.json'), JSON.stringify({v:1,number:18,state:'running',root:other,automaticOrigin:{repository:'owner/repo',coordinatorId:'coordinator-a',machine:'other-machine',claim:{commentId:'c',labelEventId:'e'}}}));
+  t.after(() => rmSync(root, {recursive:true,force:true}));
+  const git = (args, cwd) => args[1] === '--show-toplevel' ? {status:0,stdout:cwd} : {status:0,stdout:common};
+  assert.equal(readAutopilotSuiteLoad({env:{PDD_SUITE_QUEUE:queue},coordinatorId:'coordinator-a',machine:'machine-a'},{git,alive:()=>true}),12);
 });

@@ -765,3 +765,22 @@ test('factory 6c: high machine load from outside processes reduces check slots f
   put(w.base,'outside-load-release','release');await holder;await waiter;
   await a.finish();await a.merge();assert.deepEqual(w.leadActions,[]);
 });
+test('factory 6d: an active suite with this coordinator origin does not reduce its own check slots',async t=>{
+  const w=await factoryWorld(t);w.checks=null;
+  w.machine={count:48,load:0,taskset:join(w.base,'bin/taskset')};
+  await w.begin();const a=scriptedAgent(w);await a.until(r=>Boolean(r.done.change));
+  const release=join(w.base,'owned-load-release'),started=join(w.base,'owned-load-started');
+  put(w.base,'hold-owned.mjs',`import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(started)},'started');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)}))clearInterval(timer);},10);`);
+  t.after(()=>put(w.base,'owned-load-release','release'));
+  const holder=w.command(['workflow','suite','--command',`${JSON.stringify(process.execPath)} ${JSON.stringify(join(w.base,'hold-owned.mjs'))}`],{actor:'worker',cwd:w.record().root});
+  await eventually(()=>existsSync(started),'owned suite starts through the shared queue');
+  const ticket=queueRows(w.env.PDD_SUITE_QUEUE).find(row=>row.state==='running');
+  assert.equal(ticket.coresPerCheck,12,'the queue records the reserved CPU cores');
+  w.machine={count:48,load:12,taskset:join(w.base,'bin/taskset')};
+  await w.tick();
+  assert.equal(w.state().checkCapacity.autopilotLoad,12,'the launcher reads the owned reservation from its ticket and run status');
+  assert.equal(w.state().checkCapacity.outsideLoad,0);
+  assert.equal(w.state().checkCapacity.checks,4,'owned suite load does not lower the next slot count');
+  put(w.base,'owned-load-release','release');await holder;
+  await a.finish();await a.merge();assert.deepEqual(w.leadActions,[]);
+});

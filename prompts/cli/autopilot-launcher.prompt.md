@@ -1178,7 +1178,7 @@ reconcile and wake boundaries; injected substitutes reach this same path.
 
 Share one `machineResources({cwd})` observation between health, check capacity and
 validation retry in each tick. Native reads include the check affinity profile.
-Observe health before configuring capacity, then pass its resources to the queue.
+Observe health before configuring capacity. Before passing that same resource snapshot to the queue, use the shared suite queue's read-only `readAutopilotSuiteLoad({env, coordinatorId, machine})` observation and attach its verified reserved-core count as `autopilotLoad`. It matches running tickets to their saved automatic run origin for this coordinator and machine; it does not treat a ticket count as measured CPU load. Unknown, operator, worker, and other-coordinator suites remain outside load. If this ownership observation is unavailable, attach zero so measured load stays outside. Then pass the enriched resources to the queue.
 Pass the chosen check count as `suiteLimit` to validation retry preflight.
 Injected legacy machineHealth/checkCapacityPorts remain supported.
 
