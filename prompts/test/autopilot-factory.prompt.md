@@ -21,8 +21,10 @@ approval fields or invent a runtime receipt. Scripted checker/merge behavior
 follows the bundled skills; it is a deterministic policy actor, not an AI check.
 
 Exercise a mixed intake batch with a trusted assigned issue and a free issue.
-The free issue must receive a saved dependency review and sort, and start in the
-same intake cycle. The assigned issue receives no sort, route, group or workflow.
+The free issue must receive exactly one saved dependency review and one sort,
+and start after exactly one dependency completion in the same intake cycle.
+The completion wake must expose eligible free work without another tick or
+coordinator analysis. The assigned issue receives no sort, route, group or workflow.
 Expose synthetic assignees through both REST and GraphQL fake observations.
 
 Exercise these independently, with an asserted final merge or a real decision

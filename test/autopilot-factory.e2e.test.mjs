@@ -1,4 +1,4 @@
-// Generated from prompts/test/autopilot-factory.prompt.md.
+// Generated from prompts/test/autopilot-factory.prompt.md (sha256: f0910848bafcfb9efc519e752ac37fe83591991961637b1375a8a18d8b09b781).
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
