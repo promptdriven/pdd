@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 2c6071800fd9cabb454eb6e1cbf0a8727cf4f838c7a8950d135470f9d652bdf1).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 5b76b12ab5b2e8e517eb30d8f7c3cb7251a10a74cce45a09fd5011eb89ea287b).
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -31,6 +31,8 @@ export function startAgentJob({ id, dir, cwd, command, args = [], input = '', en
   writeFileSync(job.input, input, { mode: 0o600 });
   writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
+  // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
+  child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } });
   child.unref?.();
   return { ...job, pid: child.pid, started: now() };
 }
@@ -42,6 +44,7 @@ function nativeAlive(pid, token) {
 }
 
 export function readAgentJob(job, ports = {}) {
+  if (!object(job)) return { state: 'dead', exit: null, result: null };
   const alive = Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token);
   const exit = readJson(job.exit), result = readJson(job.result);
   return { state: alive ? 'running' : object(exit) ? 'exited' : 'dead', exit: object(exit) ? exit : null,

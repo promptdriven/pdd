@@ -33,14 +33,18 @@ record is simply dead. There is no "uncertain custody" state.
   `dir/ID.input` (the prompt, mode 0600) and `dir/ID.spec.json`, then starts
   `node src/agent-job.mjs --wrapper SPEC` detached in its own process group, with
   `env` and no inherited stdio, and returns at once with
-  `{id, pid, token, log, exit, result, input, started}`. `token` is the spec path;
+  `{id, pid, token, log, exit, result, input, started}`. A spawn that fails later
+  (an `error` event: a cwd that is gone, EAGAIN, ENOMEM) writes the exit record
+  `{code: 127, signal: null, at, error}` and is never an uncaught error; the job then
+  reads as exited with no result. `token` is the spec path;
   `log`, `exit` and `result` are `dir/ID.log`, `dir/ID.exit.json` and
   `dir/ID.result.json`. `id` must match `[A-Za-z0-9._-]+`.
 - The wrapper starts `command args` in `cwd` with the input file as stdin and the
   log as stdout and stderr (append). When the child ends, it writes
   `{code, signal, at}` to the exit file with a temporary file and a rename. On
   SIGTERM, SIGINT or SIGHUP it stops the child and still writes the exit record.
-- `readAgentJob(job, ports)` returns `{state, exit, result}`:
+- `readAgentJob(job, ports)` returns `{state, exit, result}`; a missing job record
+  is `dead`:
   - `state` is `running` when `ports.alive(pid, token)` is true; else `exited` when
     the exit record parses; else `dead`.
   - `exit` is the parsed exit record or null.

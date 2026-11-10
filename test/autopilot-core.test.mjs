@@ -66,18 +66,22 @@ test('easy issue: claim, build, review, suite, CI and base check lead to one mer
   assert.match(result.message, /1 merged/);
 });
 
-test('a job that dies ends with one comment, pdd:stuck and a free slot', async t => {
+test('a job that dies releases its claim with no mark and frees the slot; a 2nd death on the issue ends it', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); w.issue(18);
   await w.tick();
   assert.ok(w.job(17, 'build')); assert.equal(w.job(18), undefined, 'one slot');
   w.kill(17, 'build');
   await w.tick();
+  assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), []);
+  assert.ok(w.job(18, 'build'), 'the next issue starts in the same tick');
+  w.build(18); await w.tick(); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
+  assert.ok(w.job(17, 'build') !== w.started.find(job => job.issue === 17), '#17 starts again');
+  w.kill(17, 'build'); await w.tick();
   const ends = endComments(w, 17);
   assert.equal(ends.length, 1);
   assert.match(ends[0], /no result/i); assert.match(ends[0], /\.log/); assert.match(ends[0], /remove `?pdd:stuck`?/i);
   assert.deepEqual(w.labels(17).sort(), ['pdd:stuck']);
-  assert.ok(w.job(18, 'build'), 'the next issue starts in the same tick');
   assert.equal(w.reports.calls.length, 0, 'a job failure files no report');
   await w.tick();
   assert.equal(endComments(w, 17).length, 1, 'no repeat');
@@ -257,18 +261,6 @@ test('a PR whose head moved, a red CI check and a Runtime FAIL line each go to r
   assert.equal(w.github.merges.length, 0);
 });
 
-test('Runtime not run with a Runtime cause files a report and the PR says Runtime: not run (#N)', async t => {
-  const w = await coreWorld(t, { settings: { report: 'file' } });
-  w.issue(17);
-  await w.tick();
-  const { pr } = w.build(17, { body: 'Fix.\n\nRuntime: not run (no verdict)', runtime: { state: 'not-run', kind: 'runtime', component: 'pdd test', code: 'no-verdict', cause: 'no verdict' } });
-  await w.tick();
-  assert.equal(w.reports.issues.size, 1);
-  assert.match(pr.body, /Runtime: not run \(promptdriven\/pdd#1\)/);
-  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number], 'not run does not block the merge');
-});
-
 test('a person who closes the issue or removes pdd:working stops the local job without GitHub writes', async t => {
   const w = await coreWorld(t);
   w.issue(17); w.issue(18);
@@ -292,18 +284,6 @@ test('observe mode reads only; no agent ready holds intake without touching issu
   assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(held.message, /agent/i);
 });
 
-test('three jobs in a row without a result pause intake on this machine for one hour', async t => {
-  const w = await coreWorld(t, { settings: { runs: 1 } });
-  for (const n of [17, 18, 19, 20]) w.issue(n);
-  for (const n of [17, 18, 19]) { await w.tick(); w.finish(n, 'build', { code: 1 }); }
-  const paused = await w.tick();
-  assert.equal(w.job(20), undefined);
-  assert.match(paused.message, /paused/i);
-  w.advance(61 * MIN);
-  await w.tick();
-  assert.ok(w.job(20, 'build'));
-});
-
 test('status shows jobs, slots and the last END causes', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } });
   w.issue(17); w.issue(18);
@@ -312,7 +292,7 @@ test('status shows jobs, slots and the last END causes', async t => {
   assert.match(text, /engine core/i);
   assert.match(text, /1 of 2 slots/);
   assert.match(text, /#17 build running/);
-  assert.match(text, /#18 ended .*no result/i);
+  assert.match(text, /#18 released .*no result/i);
 });
 
 test('doctor does not require Herdr when the engine is core', async () => {
@@ -404,7 +384,7 @@ test('an ended job holds no slot after a restart, and END and merge remove its p
   w.issue(17); w.issue(18);
   await w.tick();
   const first = w.job(17, 'build');
-  w.kill(17, 'build');                                   // the machine restarted; the job process is gone
+  w.finish(17, 'build', { result: { outcome: 'failed', kind: 'job', code: 'unclear', cause: 'the issue is unclear' } });
   let down = true;
   const gh = w.gh;
   w.gh = async (args, options) => down && args.includes('POST') && args.some(a => /\/issues\/17\/comments$/.test(a))
@@ -456,7 +436,7 @@ test('a Runtime END in another repository falls back to the hidden marker that t
   assert.match(endComments(w, 17)[0], /<!-- pdd:core-blocked-by:promptdriven\/pdd#1:runtime\.pdd-test\.no-verdict\.0\.1 -->/);
   assert.ok(!w.labels(17).includes('pdd:stuck'));
   assert.ok(w.job(18, 'build'));
-  w.kill(18, 'build'); await w.tick();
+  w.finish(18, 'build', { result: { outcome: 'failed', kind: 'job', code: 'unclear', cause: 'the issue is unclear' } }); await w.tick();
   assert.equal(w.started.filter(j => j.issue === 17).length, 1, '#17 waits while promptdriven/pdd#1 is open');
   assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), []);
   w.reports.close(1);
@@ -633,7 +613,7 @@ test('R5 should-fix: a cleared tool error, a dead suite, a restart, a partial cl
   assert.equal(w.job(17), undefined); assert.deepEqual(w.labels(17), []);
   // S5: an END that keeps failing is dropped after 6 tries with one alert.
   w = await coreWorld(t);
-  w.issue(17); await w.tick(); w.kill(17, 'build');
+  w.issue(17); await w.tick(); w.finish(17, 'build', { result: { outcome: 'failed', kind: 'job', code: 'unclear', cause: 'the issue is unclear' } });
   const gh3 = w.gh, alerts = [];
   w.gh = async (args, o) => args.includes('POST') && args.some(x => /\/issues\/17\/comments$/.test(x)) ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' } : gh3(args, o);
   for (let i = 0; i < 8; i++) { await w.tick({ alert: async input => alerts.push(input) }); w.advance(30 * MIN); }
@@ -682,7 +662,8 @@ test('R7 a job file with no agent record, or one whose advance keeps failing, en
   const job = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
   delete job.agent; writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(job));
   await w.tick({ jobs: { ...w.jobs, read: spec => readAgentJob(spec) } });
-  assert.equal(endComments(w, 17).length, 1); assert.match(endComments(w, 17)[0], /no agent record/);
+  assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), [], 'a job with no agent record releases its claim');
+  assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /no agent record/);
   assert.ok(w.job(18, 'build'), 'the slot is free');
   // Advance throws on every tick: at the deadline plus 2 ticks the job ends; after the deadline it gets no heartbeat.
   const v = await coreWorld(t, { settings: { runs: 1, jobTimeoutMinutes: 60 } });
@@ -692,7 +673,8 @@ test('R7 a job file with no agent record, or one whose advance keeps failing, en
   const beats = [];
   const heartbeat = async job => { if (job.issue === 17) beats.push(v.now()); return { state: 'refreshed' }; };
   for (let i = 0; i < 6; i++) { v.advance(20 * MIN); await v.tick({ jobs: broken, heartbeat }); }
-  assert.equal(endComments(v, 17).length, 1, 'ended within the deadline plus 2 ticks');
+  assert.equal(existsSync(join(v.root, 'jobs', '17.json')), false, 'ended within the deadline plus 2 ticks');
+  assert.ok(!v.labels(17).includes('pdd:working'), 'its claim is released');
   assert.ok(beats.every(at => at < Date.parse('2026-11-10T12:00:00Z') + 60 * MIN), 'no heartbeat after the deadline');
   assert.ok(v.job(18, 'build'));
 });
@@ -827,4 +809,106 @@ test('R14 a machine engine and label saved by start win over pdd.json; status na
   const status = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env }, ports);
   assert.match(status.message, /engine core \(this machine: pdd autopilot start --engine core\)/);
   assert.match(status.message, /only issues with pdd:autopilot \(this machine\)/);
+});
+
+// ---- Review 3 regressions (each failed on f35571720) ----------------------------------------------------
+test('R15 a machine-level agent failure releases issues without marks, holds intake after 3 strikes, alerts once, and resumes on a passing probe', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  for (let n = 1; n <= 20; n++) w.issue(n);
+  const alerts = [];
+  let ready = false;
+  const extra = { alert: async input => alerts.push(input), agentProbe: async () => ready };
+  for (let i = 0; i < 16; i++) {                       // 8 hours of 30-minute ticks; every job exits with no result
+    await w.tick(extra);
+    for (const job of w.started) if (w.alive.has(job.pid)) w.finish(job.issue, job.role, { code: 1 });
+    w.advance(30 * MIN);
+  }
+  const held = await w.tick(extra);
+  const touched = [...w.github.issues.values()].filter(issue => issue.labels.length || issue.comments.some(c => !c.body.includes('"labelEventId"')));
+  assert.equal([...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:stuck')).length, 0, 'no healthy issue gets pdd:stuck');
+  assert.equal([...w.github.issues.keys()].filter(n => endComments(w, n).length).length, 0, 'no END comment');
+  assert.ok(touched.length <= 1, `issues left with labels or comments: ${touched.map(i => i.number)}`);
+  assert.ok(w.started.length <= 4, `only the jobs before the hold started: ${w.started.length}`);
+  assert.match(held.message, /intake held/i);
+  assert.equal(alerts.length, 1, 'one alert when the hold starts');
+  ready = true;
+  await w.tick(extra);
+  assert.ok(w.started.length > 3, 'intake resumes when the readiness probe passes');
+});
+
+test('R15b the 2nd no-result in a row on one issue ends it normally; a result resets the counts', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick(); w.finish(17, 'build', { code: 1 }); await w.tick();
+  assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), [], 'the first no-result only releases the claim');
+  assert.equal(w.comments(17).filter(c => c.includes('"labelEventId"')).length, 0, 'the claim comment is removed');
+  await w.tick();
+  assert.equal(w.started.filter(job => job.issue === 17).length, 2, 'the released issue is ready again on the next tick');
+  w.finish(17, 'build', { code: 1 }); await w.tick();
+  assert.equal(endComments(w, 17).length, 1); assert.ok(w.labels(17).includes('pdd:stuck'), 'the 2nd no-result in a row is a normal END');
+  const machine = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
+  assert.equal(machine.strikes, 2);
+  w.issue(18); await w.tick(); w.build(18); await w.tick();
+  assert.equal(JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8')).strikes, 0, 'a job with a result resets the strikes');
+});
+
+test('R16 a PR number written as a string is read as a number; a non-number is no result', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); w.issue(18); await w.tick();
+  const { pr } = w.build(17);
+  const job = w.job(17, 'build'), r = JSON.parse(readFileSync(job.result, 'utf8'));
+  writeFileSync(job.result, JSON.stringify({ ...r, pr: String(r.pr), head: r.head.toUpperCase() }));
+  w.finish(18, 'build', { result: { outcome: 'pr', pr: 'the PR', head: 'a'.repeat(40) } });
+  await w.tick();
+  const saved = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  assert.equal(saved.phase, 'pr'); assert.equal(saved.pr, pr.number); assert.equal(saved.head, r.head);
+  assert.equal(existsSync(join(w.root, 'jobs', '18.json')), false, 'a non-number PR is no result');
+  assert.deepEqual(w.labels(18), []);
+});
+
+test('R17 "Runtime: not run" never files a Runtime report by itself', async t => {
+  const w = await coreWorld(t, { settings: { report: 'file' } });
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (no prompt changed)', runtime: { state: 'not-run', kind: 'runtime', component: 'pdd test', code: 'no-verdict', cause: 'no prompt changed' } });
+  await w.tick();
+  assert.equal(w.reports.issues.size, 0); assert.equal(w.reports.calls.length, 0);
+  assert.match(pr.body, /Runtime: not run \(no prompt changed\)$/, 'the PR body is not rewritten');
+  assert.doesNotMatch(w.job(17, 'build').input, /"kind":"runtime\|pdd\|job","component"[^}]*"code"[^}]*\}\}/, 'the success template has no Runtime kind');
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+test('R18 a failed asynchronous spawn ends that job as no result and never crashes the tick', async t => {
+  const { startAgentJob, readAgentJob } = await import('../src/agent-job.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-r18-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  let uncaught = null;
+  const listener = error => { uncaught = error; };
+  process.on('uncaughtException', listener);
+  t.after(() => process.off('uncaughtException', listener));
+  const job = startAgentJob({ id: 'x-build-1', dir, cwd: join(dir, 'gone'), command: 'true' });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(uncaught, null);
+  const seen = readAgentJob(job);
+  assert.equal(seen.state, 'exited'); assert.equal(seen.exit.code, 127); assert.equal(seen.result, null);
+});
+
+test('R19 a suite checkout with a lockfile installs dependencies first; an install failure is a runner failure', async t => {
+  const w = await coreWorld(t, { settings: { report: 'draft' } });
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', scripts: { test: 'node --test' }, devDependencies: { leftpad: '1.0.0' } }));
+  w.baseCommit('package-lock.json', JSON.stringify({ name: 'x', lockfileVersion: 3, packages: {} }));
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  const suite = w.job(17, 'suite');
+  assert.equal(suite.command, '/bin/sh');
+  assert.match(suite.args.join(' '), /npm ci --ignore-scripts/);
+  assert.deepEqual(suite.args.slice(-5), ['suite', '--command', 'npm test', '--timeout', '120']);
+  w.review(17, 'PASS');
+  for (let i = 0; i < 3; i++) { writeFileSync(w.job(17, 'suite').log, 'Autopilot core: dependency install failed\n'); w.suite(17, 86); await w.tick(); }
+  assert.equal(w.job(17, 'repair'), undefined, 'an install failure never uses a repair');
+  assert.match(endComments(w, 17)[0], /Cause: pdd \/ suite-broken/);
+  const v = await coreWorld(t);
+  v.issue(17); await v.tick(); v.build(17); await v.tick();
+  assert.equal(v.job(17, 'suite').command, process.execPath, 'no lockfile, no install');
 });

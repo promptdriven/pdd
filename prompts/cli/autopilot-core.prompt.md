@@ -163,16 +163,30 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    its worktree and starts nothing. Two machines with one GitHub login therefore
    agree on one winner. A claim that fails partway leaves nothing: this machine's
    comment is deleted, and the label is removed unless another claim won.
-3. Save the job file, then start the build job (below). A start error ends the job
-   with a `pdd` cause `start-failed`.
+3. Save the job file, then start the build job (below). A start error, also one that
+   the spawn reports later, ends the job as `no-result` and is a strike; it never
+   stops the tick.
 
 Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
-Codex usage limit), or while `core.json` holds it: after 3 jobs in a row
-end with no result (`no-result`: the agent crashed, was signed out or reached a
-limit), intake pauses for one hour on this machine. A job whose process is gone with
-no exit record (a restart or a sleep) is not a strike. A job that reaches a PR resets
-the count. Status shows the hold.
+Codex usage limit), or while `core.json` holds it.
+
+**No result is a machine fault first.** An agent that exited with no result, a start
+failure, a dead process (a restart or a sleep), a job with no agent record and a job
+that cannot advance past its deadline all end as `no-result`. The first `no-result`
+on an issue only releases it: delete this machine's claim comment, remove
+`pdd:working`, leave the issue with no comment and no `pdd:stuck`, mark this job's
+own open PR as draft with a note, record `released` in the history, and skip the
+issue for the rest of the tick. `core.json` counts `no-result` ends per issue; the
+2nd in a row on the same issue is a normal END (comment and `pdd:stuck`), so one
+issue that always breaks the agent cannot loop. Agent failures (exited with no
+result, start failures; not a restart, a missing record or a stalled advance) are
+machine strikes. After 3 strikes in a row, intake is held on this machine (`held`
+with its start time) and one `usage-limit` alert goes out through `ports.alert`.
+While held, each tick runs `ports.agentProbe()` (else `agentReady`) once; intake goes
+on when it passes. Only a job that produced a result (a PR or a reported failure)
+resets the strikes and the issue's count, and clears a hold; the probe and the passing
+of time do not reset the strikes. Status shows the hold.
 
 ## Jobs
 
@@ -190,7 +204,7 @@ Jobs run through the [headless job runner](agent-job.prompt.md) with
   branch and open one PR against BASE with `Fixes #N`; never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
   file is JSON: `outcome` `pr` with `pr`, `head`, `promptChanged` (Boolean) and
-  optional `runtime {state, kind, component, code, cause}`, or `outcome`
+  optional `runtime {state, cause}`, or `outcome`
   `failed` with `kind` (`runtime`, `pdd` or `job`), `component`, `code`, `cause`
   and a short `detail` without repository code.
 - **Repair** (same worktree and branch): the red findings, then the build rules;
@@ -210,12 +224,20 @@ Jobs run through the [headless job runner](agent-job.prompt.md) with
   execution timeout", "Test suite could not start", "Test suite ended by SIG…",
   "Test suite descendants could not be confirmed", "Supply a suite command"). It
   starts again in the same checkout, at most twice, and then ends the job with a
-  `pdd` cause `suite-broken`. It never uses a repair.
+  `pdd` cause `suite-broken`. It never uses a repair. A fresh checkout has no
+  installed dependencies: when it has `package-lock.json` and `package.json` lists
+  dependencies (`dependencies`, `devDependencies` or `optionalDependencies`), the suite
+  job is `/bin/sh -c 'npm ci --ignore-scripts --no-audit --no-fund || …exit 86; exec
+  "$@"'` before the same suite command. An install failure (exit 86 or the line
+  "Autopilot core: dependency install failed") is a runner failure, not a red suite.
+  A repository with no dependencies installs nothing.
 
 A running build or repair job past its `deadline` (start plus `jobTimeoutMinutes`)
-is stopped and ends with `timeout`. An exited or dead job: a valid `pr` result
-(safe-integer PR, 40-hex head) moves to the merge check in the same tick; a
-`failed` result ends with the agent's cause; anything else ends with `no-result`.
+is stopped and ends with `timeout`. An exited or dead job: a valid `pr` result moves
+to the merge check in the same tick. The PR number may be a number or a string of
+digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digits in
+any case and is saved in lower case. Any other PR value is no result. A `failed`
+result ends with the agent's cause; anything else ends with `no-result`.
 
 ## Merge check
 
@@ -227,9 +249,9 @@ Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in 
    came from a GitHub or Git call, else a `job` cause `checks-timeout`. Closed: end
    `pr-closed`. The PR head SHA, head branch or base differs from the job: end
    `head-moved`.
-2. A `runtime` result with state `not-run` and kind `runtime` files one report
-   (below) and, when the report has a GitHub reference, rewrites the PR body line
-   `Runtime: not run (…)` to `Runtime: not run (REF)`. It does not block the merge.
+2. `Runtime: not run (…)` is allowed and files no report by itself, and the PR body
+   is not rewritten. A Runtime report comes only from a failed job whose cause kind
+   is `runtime` (END).
 3. Red findings. The Runtime gate is an allowlist (fail closed). A Runtime line is a
    PR body line that, after heading, list, quote, table, bold and code marks go,
    starts with "Runtime" or holds "Runtime:". Its value, after leading signs such as
@@ -346,7 +368,7 @@ or `(pdd.json)`.
 `gh(args, {input})` and `git(args, {cwd})` return `{code, stdout, stderr}`; GitHub
 REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
-`trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text})`, and the replaceable `jobs`
+`trusted(row)`, `agentReady()`, `agentProbe()`, `warn(text)`, `alert({issue, kind, text})`, and the replaceable `jobs`
 (`start`, `read`, `stop`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
 
