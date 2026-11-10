@@ -1413,8 +1413,10 @@ Each tick, without AI calls:
 When a job ends, the issue gets one comment with the cause and the log path and
 loses `pdd:working`. Nothing else waits on it. A job with no result (the agent
 crashed, was signed out or hit a usage limit, or the machine restarted) only
-releases the issue the first time in 24 hours: no comment and no `pdd:stuck`; a 2nd
-no-result on the same issue in 24 hours ends it as below. When the agent failed the task, the
+releases the issue: no comment and no label, and its own open PR is closed with a
+short note (the branch stays). The issue then waits 24 hours before Autopilot takes
+it again. The 3rd job with no result on the same issue within 7 days ends it as
+below. When the agent failed the task, the
 issue gets `pdd:stuck`; to retry, remove `pdd:stuck`. When a Runtime or PDD
 problem ended it and a report was filed, the issue is blocked by that report (a
 GitHub issue dependency, or a hidden marker in the comment when the report is in
@@ -1423,16 +1425,13 @@ problem comes back after its report closed, the issue gets `pdd:stuck`. An open 
 of an ended job stays open as a draft, with the cause in a PR comment. A PR whose
 head has no CI check 10 minutes after it was opened merges on the full suite and
 the fresh review alone; its merge comment says `CI: none`. To stop a running job, close the issue, assign it or add
-`pdd:stuck`. After three jobs in a row end with no result, a breaker pauses new
+`pdd:stuck`. After three jobs in a row end with no result, Autopilot pauses new
 jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs for
 1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that
-already run go on. After the pause, one trial job starts, on an issue that had no
-job without a result in the last day when there is one: a result closes the
-breaker, and no result pauses new jobs again for twice as long (2, 4, then 8 hours
-at most), with a new alert. While the breaker is open or in its trial, a job with
-no result only releases its issue and never counts toward `pdd:stuck`. `pdd autopilot status` shows the jobs, the busy slots,
-the breaker and the time it lets a job start again, and the last results from
-local files.
+already run go on. After the pause, intake goes on as usual; if jobs still end with
+no result, the next pause is twice as long (2, 4, then 8 hours at most), with a new
+alert. A job with a result sets the pause length back to 1 hour. `pdd autopilot status` shows the jobs, the busy slots,
+a pause and the time it ends, and the last results from local files.
 
 A Runtime problem (no verdict, lint or binding refusal, interpreter error) or a PDD
 problem (CLI error, crash, claim or merge-check tool error) also gets one report

@@ -66,7 +66,7 @@ test('easy issue: claim, build, review, suite, CI and base check lead to one mer
   assert.match(result.message, /1 merged/);
 });
 
-test('a job that dies releases its claim with no mark and frees the slot; a 2nd death on the issue ends it', async t => {
+test('a job that dies releases its claim with no mark, closes its own PR and cools the issue down; the 3rd no-result in 7 days ends it', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); w.issue(18);
   await w.tick();
@@ -76,15 +76,17 @@ test('a job that dies releases its claim with no mark and frees the slot; a 2nd 
   assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), []);
   assert.ok(w.job(18, 'build'), 'the next issue starts in the same tick');
   w.build(18); await w.tick(); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
-  assert.ok(w.job(17, 'build') !== w.started.find(job => job.issue === 17), '#17 starts again');
-  w.kill(17, 'build'); await w.tick();
+  assert.equal(w.started.filter(job => job.issue === 17).length, 1, '#17 cools down for 24 hours');
+  for (let round = 2; round <= 3; round++) {
+    w.advance(25 * HOUR); await w.tick();
+    assert.equal(w.started.filter(job => job.issue === 17).length, round, `#17 runs again after the cooldown (${round})`);
+    w.kill(17, 'build'); await w.tick();
+  }
   const ends = endComments(w, 17);
-  assert.equal(ends.length, 1);
+  assert.equal(ends.length, 1, 'the 3rd no-result in 7 days is a normal END');
   assert.match(ends[0], /no result/i); assert.match(ends[0], /\.log/); assert.match(ends[0], /remove `?pdd:stuck`?/i);
   assert.deepEqual(w.labels(17).sort(), ['pdd:stuck']);
   assert.equal(w.reports.calls.length, 0, 'a job failure files no report');
-  await w.tick();
-  assert.equal(endComments(w, 17).length, 1, 'no repeat');
 });
 
 test('a job that runs past its time limit is stopped and ended', async t => {
@@ -813,60 +815,60 @@ test('R14 a machine engine and label saved by start win over pdd.json; status na
 });
 
 // ---- Review 3 regressions (each failed on f35571720) ----------------------------------------------------
-test('R15 the machine breaker: 3 no-result ends open it for 1 h with one alert; half-open allows one job; a result closes it', async t => {
+test('R15 the machine pause: 3 no-result ends in a row pause new jobs for 1 h with one alert; then intake resumes; again 2 h; a result resets', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } });
   for (let n = 1; n <= 20; n++) w.issue(n);
   const alerts = [], extra = { alert: async input => alerts.push(input) };
   const failAll = () => { for (const job of w.started) if (w.alive.has(job.pid)) w.finish(job.issue, job.role, { code: 1 }); };
   await w.tick(extra); failAll();                       // #1, #2 start and fail
   await w.tick(extra); failAll();                       // both released (2 in a row); #3, #4 start and fail
-  const opened = await w.tick(extra);                   // #3 released: 3 in a row, the breaker opens
+  const opened = await w.tick(extra);                   // #3 released: 3 in a row, the pause starts
   assert.match(opened.message, /paused/);
   assert.equal(w.started.length, 4);
   assert.equal(alerts.length, 1);
   assert.match(alerts[0].text, /Autopilot paused new jobs for 1 h: the agent ended \d+ jobs with no result\. Check sign-in and limits\./);
-  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Breaker open until \S+ \(1 h\)/);
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /New jobs paused until \S+ \(1 h\)/);
   w.advance(30 * MIN); await w.tick(extra);
-  assert.equal(w.started.length, 4, 'no new job while open');
+  assert.equal(w.started.length, 4, 'no new job while paused');
   w.advance(31 * MIN); await w.tick(extra);
-  assert.equal(w.started.length, 5, 'half-open: exactly one new job');
-  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Breaker half-open/);
-  await w.tick(extra);
-  assert.equal(w.started.length, 5, 'no second job while the test job runs');
-  failAll(); await w.tick(extra);                       // the test job ends with no result: open again for 2 h
+  assert.equal(w.started.length, 6, 'after the pause, intake resumes normally (both slots)');
+  assert.ok(w.started.slice(4).every(job => job.issue > 4), 'released issues cool down for 24 hours');
+  failAll(); await w.tick(extra);                       // still no result: the next pause is 2 h
   assert.equal(alerts.length, 2); assert.match(alerts[1].text, /paused new jobs for 2 h/);
   w.advance(121 * MIN); await w.tick(extra);
-  assert.equal(w.started.length, 6, 'half-open again after 2 h');
-  const trial = w.started.at(-1);
-  w.build(trial.issue); await w.tick(extra);            // the test job produces a result: closed, H back to 1
-  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Breaker closed/);
-  assert.equal(w.started.filter(job => job.role === 'build').length, 7, 'the free slot fills again at once');
+  assert.equal(w.started.length, 8);
+  w.build(w.started.at(-1).issue); await w.tick(extra);  // a result resets the streak and the pause length
   const machine = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
-  assert.deepEqual([machine.breaker.state, machine.breaker.hours, machine.streak], ['closed', 1, 0]);
+  assert.deepEqual([machine.streak, machine.hours], [0, 1]);
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /No pause: 0 no-result end\(s\) in a row/);
   assert.equal([...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:stuck')).length, 0, 'no healthy issue is stuck during the outage');
 });
 
-test('R15b the per-issue count is the history of the last 24 hours, and a result in between does not reset it', async t => {
+test('R15b the per-issue rule: 24 h cooldown after a no-result, the 3rd no-result in 7 days ends the issue, older ones do not count', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17);
   await w.tick(); w.finish(17, 'build', { code: 1 }); await w.tick();
   assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), [], 'the first no-result only releases the issue');
   assert.equal(w.comments(17).filter(c => c.includes('"labelEventId"')).length, 0, 'the claim comment is removed');
-  await w.tick();
-  w.build(17); await w.tick();                           // a PR result in between
+  assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), [], 'cooldown: not ready for 24 hours');
+  w.advance(25 * HOUR);
+  assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), [17]);
+  await w.tick(); w.build(17); await w.tick();           // a PR result in between does not reset the count
   w.review(17, 'FAIL', ['fix']); w.suite(17, 0); await w.tick();
-  w.finish(17, 'repair', { code: 1 }); await w.tick();   // a repair with no result: the 2nd no-result in 24 h
-  assert.equal(endComments(w, 17).length, 1); assert.ok(w.labels(17).includes('pdd:stuck'));
-  // A no-result more than 24 hours ago does not count.
+  w.finish(17, 'repair', { code: 1 }); await w.tick();   // the 2nd no-result: still a release
+  assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), []);
+  w.advance(25 * HOUR); await w.tick(); w.finish(17, 'build', { code: 1 }); await w.tick();
+  assert.equal(endComments(w, 17).length, 1, 'the 3rd no-result in 7 days is a normal END'); assert.ok(w.labels(17).includes('pdd:stuck'));
+  // No-result ends older than 7 days do not count.
   const v = await coreWorld(t, { settings: { runs: 1 } });
   v.issue(17);
-  await v.tick(); v.kill(17, 'build'); await v.tick();
-  v.advance(25 * 60 * MIN);
+  for (let i = 0; i < 2; i++) { await v.tick(); v.kill(17, 'build'); await v.tick(); v.advance(25 * HOUR); }
+  v.advance(6 * 24 * HOUR);
   await v.tick(); v.finish(17, 'build', { code: 1 }); await v.tick();
   assert.equal(endComments(v, 17).length, 0); assert.deepEqual(v.labels(17), []);
 });
 
-test('Q1 regression: with every job failing for 16 hours, the breaker bounds the damage', async t => {
+test('Q1 regression: with every job failing for 16 hours, the pause bounds the damage and marks no issue', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } });
   for (let n = 1; n <= 20; n++) w.issue(n);
   const alerts = [];
@@ -876,26 +878,31 @@ test('Q1 regression: with every job failing for 16 hours, the breaker bounds the
     w.advance(30 * MIN);
   }
   const stuck = [...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:stuck'));
-  assert.ok(w.started.length <= 8, `jobs started: ${w.started.length}`);
+  assert.ok(w.started.length <= 10, `jobs started: ${w.started.length}`);
   assert.equal(stuck.length, 0, `issues stuck: ${stuck.map(issue => issue.number)}`);
   assert.ok(alerts.length >= 3 && alerts.length <= 5, `alerts: ${alerts.length}`);
   assert.match(alerts.at(-1).text, /paused new jobs for 8 h/);
 });
 
-test('Q2 regression: a repair that always ends with no result ends the issue after at most 2 builds', async t => {
+test('Q2 regression: a repair that always ends with no result runs at most 3 times, keeps at most one open PR, then ends', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17);
-  for (let cycle = 0; cycle < 4; cycle++) {
+  let openMax = 0;
+  for (let cycle = 0; cycle < 5; cycle++) {
     await w.tick();
-    if (!w.job(17, 'build') || !w.alive.has(w.job(17, 'build').pid)) continue;
-    w.build(17); await w.tick();
-    w.review(17, 'FAIL', ['fix the bug']); w.suite(17, 0); await w.tick();
-    w.finish(17, 'repair', { code: 1 }); await w.tick();
-    w.advance(30 * MIN);
+    if (w.job(17, 'build') && w.alive.has(w.job(17, 'build').pid)) {
+      w.build(17); await w.tick();
+      w.review(17, 'FAIL', ['fix the bug']); w.suite(17, 0); await w.tick();
+      w.finish(17, 'repair', { code: 1 }); await w.tick();
+    }
+    openMax = Math.max(openMax, [...w.github.prs.values()].filter(pr => pr.state === 'open').length);
+    w.advance(25 * HOUR);
   }
   const builds = w.started.filter(j => j.issue === 17 && j.role === 'build').length;
-  assert.ok(builds <= 2, `builds: ${builds}`);
+  assert.ok(builds <= 3, `builds: ${builds}`);
   assert.equal(endComments(w, 17).length, 1); assert.ok(w.labels(17).includes('pdd:stuck'));
+  assert.ok(openMax <= 1, `open PRs at most ${openMax}`);
+  assert.ok([...w.github.prs.values()].slice(0, -1).every(pr => pr.state === 'closed'), 'released runs close their own PR');
 });
 
 test('R16 a PR number written as a string is read as a number; a non-number is no result', async t => {
@@ -960,60 +967,51 @@ test('R19 a suite checkout with a lockfile installs dependencies first; an insta
 });
 
 // ---- Review 5 regressions (each failed on 90ce9a05) ----------------------------------------------------
-test('R20 a 5-hour agent outage marks no healthy issue stuck, and the trial takes an issue with no recent no-result', async t => {
+test('R20 a 5-hour agent outage marks no healthy issue stuck, and work starts again after it', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } });
   for (let n = 1; n <= 20; n++) w.issue(n);
   const start = w.now(), down = () => w.now() - start < 5 * HOUR;
-  const trials = [];
   for (let i = 0; i < 24; i++) {
     await w.tick();
-    const b = existsSync(join(w.root, 'core.json')) ? JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8')).breaker ?? {} : {};
-    if (b.state === 'half-open' && b.trial) trials.push(w.started.at(-1).issue);
     for (const job of [...w.started]) if (w.alive.has(job.pid) && job.role === 'build') { if (down()) w.finish(job.issue, job.role, { code: 1 }); else w.build(job.issue); }
     w.advance(30 * MIN);
   }
-  // (After the outage the test never finishes reviews, so a PR may end later by its own time limit; that is not counted.)
   assert.equal([...w.github.issues.keys()].filter(n => endComments(w, n).some(c => c.includes('/ no-result'))).length, 0, 'no issue ends with no-result');
-  const counted = readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.noResult).map(row => row.issue);
-  assert.ok(trials.length >= 1, 'at least one trial ran');
-  assert.ok(trials.every(n => !counted.slice(0, 3).includes(n)), `the trials (${trials}) avoid the issues counted before the breaker opened (${counted})`);
   assert.ok(w.started.some(job => job.started >= start + 5 * HOUR), 'work starts again after the outage');
 });
 
-test('R21 one bad line in history.jsonl is skipped; the per-issue rule still ends a repair loop', async t => {
-  const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.issue(17);
-  mkdirSync(w.root, { recursive: true });
-  writeFileSync(join(w.root, 'history.jsonl'), '{"at":1,"issue":5,"outcome":"mer\n');
-  for (let cycle = 0; cycle < 4; cycle++) {
-    await w.tick();
-    if (!w.job(17, 'build') || !w.alive.has(w.job(17, 'build').pid)) continue;
-    w.build(17); await w.tick();
-    w.review(17, 'FAIL', ['fix the bug']); w.suite(17, 0); await w.tick();
-    w.finish(17, 'repair', { code: 1 }); await w.tick();
-    w.advance(30 * MIN);
+test('R21 a cut history line, with or without a newline, is skipped; the per-issue rule still ends a repair loop', async t => {
+  for (const cut of ['{"at":1,"issue":5,"outcome":"mer\n', '{"at":1,"issue":5,"outcome":"mer']) {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.issue(17);
+    mkdirSync(w.root, { recursive: true });
+    writeFileSync(join(w.root, 'history.jsonl'), cut);
+    for (let cycle = 0; cycle < 5; cycle++) {
+      await w.tick();
+      if (w.job(17, 'build') && w.alive.has(w.job(17, 'build').pid)) {
+        w.build(17); await w.tick();
+        w.review(17, 'FAIL', ['fix the bug']); w.suite(17, 0); await w.tick();
+        w.finish(17, 'repair', { code: 1 }); await w.tick();
+      }
+      w.advance(25 * HOUR);
+    }
+    assert.ok(w.started.filter(j => j.issue === 17 && j.role === 'build').length <= 3, JSON.stringify(cut));
+    assert.equal(endComments(w, 17).length, 1, JSON.stringify(cut));
+    assert.doesNotThrow(() => coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }));
   }
-  assert.ok(w.started.filter(j => j.issue === 17 && j.role === 'build').length <= 2);
-  assert.equal(endComments(w, 17).length, 1);
-  assert.doesNotThrow(() => coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }));
 });
 
-test('R22 half-open allows one claim; a start that throws is the trial and blocks other claims until it resolves', async t => {
+test('R22 a start that throws is a no-result end: 3 in a row pause intake at once; no issue is marked', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } });
   for (let n = 1; n <= 20; n++) w.issue(n);
-  const failAll = () => { for (const job of w.started) if (w.alive.has(job.pid)) w.finish(job.issue, job.role, { code: 1 }); };
-  await w.tick(); failAll(); await w.tick(); failAll(); await w.tick();
-  w.advance(61 * MIN);
   const lines = () => existsSync(join(w.root, 'history.jsonl')) ? readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').length : 0;
-  const before = lines();
-  await w.tick({ jobs: { ...w.jobs, start: () => { throw Error('ENOSPC: no space left on device'); } } });
-  assert.equal(lines() - before, 1, 'one trial claim in the half-open tick');
-  const breaker = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8')).breaker;
-  assert.equal(breaker.state, 'open'); assert.equal(breaker.hours, 2, 'the failed trial start reopens the breaker');
-  assert.equal([...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:stuck')).length, 0);
+  const r = await w.tick({ jobs: { ...w.jobs, start: () => { throw Error('ENOSPC: no space left on device'); } } });
+  assert.ok(lines() <= 3, `at most 3 claims before the pause: ${lines()}`);
+  assert.match(r.message, /paused/);
+  assert.equal([...w.github.issues.values()].filter(issue => issue.labels.length).length, 0, 'no label stays');
 });
 
-test('R23 a reviewer that ends with no result is a no-result end: release, never pdd:stuck by itself', async t => {
+test('R23 a reviewer that ends with no result is a no-result end: release and close its own PR, never pdd:stuck by itself', async t => {
   const w = await coreWorld(t);
   w.issue(17); await w.tick();
   const { pr } = w.build(17); await w.tick();
@@ -1021,18 +1019,19 @@ test('R23 a reviewer that ends with no result is a no-result end: release, never
   w.finish(17, 'review', { code: 1 }); await w.tick();                         // and again no verdict
   assert.equal(endComments(w, 17).length, 0); assert.ok(!w.labels(17).includes('pdd:stuck'));
   assert.ok(!w.labels(17).includes('pdd:working'), 'the issue is released');
-  assert.equal(pr.draft, true, 'the PR becomes a draft');
+  assert.equal(pr.state, 'closed', 'its own PR is closed');
+  assert.ok(pr.comments.some(c => /closed/i.test(c.body)), 'with one short note');
   assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /"outcome":"released"/);
 });
 
-test('R24 a core.json that is null, not an object or not JSON reads as closed; a clock that goes back never holds longer than the pause', async t => {
-  for (const text of ['null\n', '[1,2]\n', '{"breaker":null,"streak":"x"}\n', '{not json']) {
+test('R24 a core.json that is null, not an object or not JSON reads as not paused; a pause far in the future is broken', async t => {
+  for (const text of ['null\n', '[1,2]\n', '{"pausedUntil":"x","streak":"x","hours":3}\n', '{not json', '{"breaker":{"state":"paused"}}\n']) {
     const w = await coreWorld(t, { settings: { runs: 1 } });
     w.issue(17);
     mkdirSync(w.root, { recursive: true }); writeFileSync(join(w.root, 'core.json'), text);
     const r = await w.tick();
     assert.ok(w.job(17, 'build'), `${text}: ${r.message}`);
-    assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Breaker closed/);
+    assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /No pause/);
   }
   const w = await coreWorld(t, { settings: { runs: 2 } });
   for (let n = 1; n <= 20; n++) w.issue(n);
@@ -1043,4 +1042,62 @@ test('R24 a core.json that is null, not an object or not JSON reads as closed; a
   let paused = 0;
   for (let i = 0; i < 40; i++) { const r = await w.tick(); if (/paused/.test(r.message)) paused++; w.advance(30 * MIN); }
   assert.ok(paused <= 3, `paused ticks after the clock went back: ${paused}`);
+});
+
+// ---- Review 6 regressions (each failed on e5c69aca) ----------------------------------------------------
+const outage = async (t, { runs, until, poison = () => false, ticks = 24, prepare } = {}) => {
+  const w = await coreWorld(t, { settings: { runs } });
+  for (let n = 1; n <= 20; n++) w.issue(n);
+  if (prepare) await prepare(w);
+  const start = w.now(), alerts = [];
+  w.down = at => until(at);
+  for (let i = 0; i < ticks; i++) {
+    await w.tick({ alert: async a => alerts.push(a) });
+    const at = (w.now() - start) / HOUR;
+    for (const job of [...w.started]) if (w.alive.has(job.pid) && job.role === 'build') {
+      if (until(at) || poison(job, at)) {
+        if (poison(job, at)) w.github.openPr({ branch: job.branch, head: 'a'.repeat(40), body: `Fixes #${job.issue}` });
+        w.finish(job.issue, job.role, { code: 1 });
+      } else w.build(job.issue);
+    }
+    w.advance(30 * MIN);
+  }
+  return { w, start, alerts };
+};
+const stuckByNoResult = w => [...w.github.issues.values()].filter(i => i.labels.includes('pdd:stuck') && endComments(w, i.number).some(c => c.includes('/ no-result'))).map(i => i.number);
+
+test('M1a runs 1, one 5-hour outage: no healthy issue becomes stuck', async t => {
+  const { w } = await outage(t, { runs: 1, until: at => at < 5 });
+  assert.deepEqual(stuckByNoResult(w), []);
+});
+
+test('M1b runs 2 with one slot held by a PR whose suite runs: the outage marks no issue', async t => {
+  const { w } = await outage(t, { runs: 2, until: at => at < 5, prepare: async w => { await w.tick(); w.build(1); await w.tick(); w.kill(2, 'build'); } });
+  assert.deepEqual(stuckByNoResult(w), []);
+});
+
+test('M1c two outages in one day (and a third two days later) mark no healthy issue stuck', async t => {
+  const { w } = await outage(t, { runs: 2, ticks: 120, until: at => at < 5 || at >= 11 && at < 16 || at >= 40 && at < 45 });
+  assert.deepEqual(stuckByNoResult(w), []);
+});
+
+test('M2 one issue that always ends with no result runs at most 3 times, then one END; the pause always ends', async t => {
+  let poisonIssue = null;
+  const { w, start } = await outage(t, { runs: 2, ticks: 6 * 24, until: at => at < 3,
+    poison: (job, at) => { if (poisonIssue === null && at >= 3) poisonIssue = job.issue; return job.issue === poisonIssue; } });
+  assert.ok(poisonIssue);
+  assert.ok(w.started.filter(j => j.issue === poisonIssue && j.role === 'build').length <= 3);
+  assert.equal(endComments(w, poisonIssue).length, 1); assert.ok(w.labels(poisonIssue).includes('pdd:stuck'));
+  const healthy = w.started.filter(j => j.role === 'build' && j.issue !== poisonIssue && j.started >= start + 3 * HOUR);
+  assert.ok(healthy.length && (healthy[0].started - start) / HOUR < 6, `a healthy job starts soon after the outage: ${healthy[0] && (healthy[0].started - start) / HOUR}`);
+  assert.ok([...w.github.prs.values()].filter(pr => pr.branch.startsWith(`pdd/core-${poisonIssue}-`) && pr.state === 'open').length <= 1);
+});
+
+test('M2b a 30-hour outage and an oldest issue that always fails: the pause ends, other work runs, the bad issue ends after 3 runs', async t => {
+  const { w, start } = await outage(t, { runs: 2, ticks: 2 * 24 * 5, until: at => at < 30, poison: (job, at) => job.issue === 1 && at >= 30 });
+  const after = w.started.filter(j => j.role === 'build' && j.started >= start + 30 * HOUR);
+  assert.ok(after.some(j => j.issue !== 1), 'other issues run after the outage');
+  assert.ok(w.started.filter(j => j.issue === 1 && j.role === 'build').length <= 3);
+  assert.equal(endComments(w, 1).length, 1); assert.ok(w.labels(1).includes('pdd:stuck'));
+  assert.ok([...w.github.prs.values()].filter(pr => pr.branch.startsWith('pdd/core-1-') && pr.state === 'open').length <= 1, 'at most one open core PR for the issue');
 });

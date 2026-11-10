@@ -42,7 +42,7 @@ It holds `jobs/N.json` (one file per issue in progress), `logs/` (job inputs,
 logs, exit records and result files), `worktrees/` (`N` for the job branch,
 `N-review` and `N-suite` for clean checkouts of the PR head), `history.jsonl`
 (one line per finished job: time, issue, outcome, text, PR, log) and `core.json`
-(the intake hold). The job file and the GitHub labels are the whole state; a
+(the machine pause). The job file and the GitHub labels are the whole state; a
 restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
 (`running`, `pr` or `ending`), `role` (`build` or `repair`), `repairs`, `started`,
@@ -118,7 +118,8 @@ flowchart TD
 
 `readyIssues({state, settings}, ports, rows)` returns the issue numbers in intake
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
-assignee; it has no `pdd:stuck`; it has neither report label (`pdd:runtime`,
+assignee; it has no `pdd:stuck`; it is not cooling down (no `noResult` history
+line of the last 24 hours on this machine); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
 opt-in label when `label` is set; no
 local job holds it; its author is trusted (`ports.trusted(row)`, the launcher's
@@ -169,45 +170,39 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
 
 Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
-Codex usage limit), or while `core.json` holds it.
+Codex usage limit), or while a machine pause runs (below).
 
 **No result is a machine fault first.** An agent that exited with no result, a start
 failure (also one that the spawn reports later), a dead process (a restart or a
 sleep), a job with no agent record, a job that cannot advance past its deadline, a
-reviewer that twice gives no valid verdict and a suite run that died three times all
-end as `no-result`. Any job kind follows the same rules; it is never `pdd:stuck` by
-itself.
+reviewer that twice gives no valid verdict and a suite runner that died 3 times all
+end as `no-result`. Every job kind follows the same rules, in every machine state.
 
-- Per issue: count the `no-result` ends of the issue in `history.jsonl` (lines with
-  `noResult: true`) of the last 24 hours. A result in between (a PR, a review, a
-  repair) does not reset this count. The first `no-result` in 24 hours only releases
-  the issue: delete this machine's claim comment, remove `pdd:working`, leave the issue
-  with no comment and no `pdd:stuck`, mark this job's own open PR as draft with a note,
-  record `released` in the history, and skip the issue for the rest of the tick. The
-  2nd in 24 hours is a normal END (comment and `pdd:stuck`). This covers repair jobs
-  too, so a repair that always gives no result ends after 2 builds. A `no-result` end
-  while the breaker is open or half-open (the trial included) only releases the issue
-  and does not count for it: its history line has `machine: true`, not `noResult`.
-  The history file is read line by line; a line that does not parse is skipped.
-- Machine breaker, saved in `core.json` as `breaker {state, hours, until, trial}` and
-  `streak`, so it survives restarts. Each `no-result` end adds 1 to `streak`; a job that
-  produced a result (a PR or a reported failure) sets it to 0 and closes the breaker
-  with `hours` 1. Closed: 3 `no-result` ends in a row open it for 1 hour. Open: start
-  no new job until `until`; jobs that already run go on. When the pause has passed:
-  half-open, and at most one issue is claimed: the trial (its job id is `trial`). It is
-  the oldest ready issue with no `noResult` line in the last 24 hours, else the oldest
-  ready issue. A start that throws is the trial too, and its END can open the breaker
-  again at once; then no other claim follows in that tick. While the trial runs, no
-  other new job starts, and a vanished trial (for example a person stop) lets the next
-  tick start another. A pause never outlasts its own length: when the saved end is
-  more than `hours` (at most 8) away, for example because the clock went back, the
-  pause starts again from now. A trial that ends with no result opens the breaker again with
-  `hours` doubled (1, 2, 4, then 8 at most). Each opening sends one `usage-limit` alert
-  through `ports.alert` with `update` and the text "Autopilot paused new jobs for H h:
-  the agent ended N jobs with no result. Check sign-in and limits." (the machine and
-  the end time follow). There is no readiness probe. A `core.json` that is missing,
-  `null`, not an object or not JSON reads as a closed breaker with `streak` 0 (one
-  warning per tick); it never stops a tick or status.
+1. A `no-result` end releases the issue: delete this machine's claim comment, remove
+   `pdd:working`, post no issue comment and add no label. Close this job's own open PR
+   (found by its number, or by its branch through `pulls?state=open&head=OWNER:BRANCH`)
+   with one short note; the branch stays. So at most one core PR per issue is open.
+   Record `released` with `noResult: true` in the history and skip the issue for the
+   rest of the tick. The issue is not ready again for 24 hours after its last
+   `noResult` line (a cooldown in the ready rule).
+2. The 3rd `no-result` end of the same issue within 7 days (two earlier `noResult`
+   lines) is a normal END: one comment and `pdd:stuck`. Nothing else marks an issue
+   stuck for no result. A result in between does not reset this count.
+3. Machine pause, saved in `core.json` as `streak`, `hours` (the next pause length),
+   `pausedUntil` and `pausedHours`. Each `no-result` end adds 1 to `streak`. When no
+   pause runs and `streak` is 3 or more, no new job starts for `hours` hours (1, then 2,
+   4 and 8 at most) and one `usage-limit` alert goes out through `ports.alert` with
+   `update` and the text "Autopilot paused new jobs for H h: the agent ended N jobs with
+   no result. Check sign-in and limits." (the machine and the end time follow). When
+   the pause ends, intake goes on as usual. Any job that produces a result (a PR or a
+   reported failure) sets `streak` to 0 and `hours` to 1. Jobs that already run always
+   go on. Unknown or broken saved state (a missing, `null`, non-object or non-JSON
+   file, or a pause end that is not within its length from now, for example after the
+   clock went back) reads as not paused, `streak` 0, `hours` 1; it never stops a tick
+   or status.
+4. `history.jsonl` is read line by line and a line that does not parse is skipped.
+   Before each append, the file gets a newline when it does not end with one, so a cut
+   line never swallows the next record.
 
 ## Jobs
 
@@ -244,7 +239,8 @@ Jobs run through the [headless job runner](agent-job.prompt.md) with
   all, or a runner line in the log ("Shared test suite queue failed", "Test suite
   execution timeout", "Test suite could not start", "Test suite ended by SIG…",
   "Test suite descendants could not be confirmed", "Supply a suite command"). It
-  starts again in the same checkout, at most twice, and then ends the job with a
+  starts again in the same checkout, at most twice. On the 3rd failure, a runner that
+  died each time is a `no-result` end; any other runner failure ends the job with a
   `pdd` cause `suite-broken`. It never uses a repair. A fresh checkout has no
   installed dependencies: when it has `package-lock.json` and `package.json` lists
   dependencies (`dependencies`, `devDependencies` or `optionalDependencies`), the suite
@@ -362,8 +358,8 @@ agent's commits may exist only there.
 
 `coreStatus({state, settings}, {root, reportRoot, now, fs})` returns text from local
 files only: the engine line (mode, repository, folder, base, agent), the slot line
-(`B of R slots busy`, time limit, repairs, report mode, opt-in label), an intake
-hold, one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
+(`B of R slots busy`, time limit, repairs, report mode, opt-in label), the pause
+line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`) and the count
 of local report drafts.
 

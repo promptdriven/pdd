@@ -50,6 +50,10 @@ function extend(f, w) {
       const base = decodeURIComponent(m[1]), behind = count(`${m[2]}..refs/heads/${base}`), ahead = count(`refs/heads/${base}..${m[2]}`);
       return ok(200, { behind_by: behind, ahead_by: ahead, status: behind ? (ahead ? 'diverged' : 'behind') : ahead ? 'ahead' : 'identical' });
     }
+    if (route === '/pulls' && method === 'GET') {
+      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), state = params.get('state') ?? 'open';
+      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head)).map(restPr));
+    }
     if ((m = /^\/pulls\/(\d+)$/.exec(route))) {
       const pr = f.prs.get(Number(m[1])); if (!pr) return ok(404, { message: 'Not Found' });
       const tip = spawnSync('git', ['--git-dir', w.remote, 'rev-parse', '--verify', '-q', `refs/heads/${pr.branch}`], { encoding: 'utf8' }).stdout.trim();
