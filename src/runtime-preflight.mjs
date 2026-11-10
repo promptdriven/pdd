@@ -1639,8 +1639,10 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     // handling. Authored readers and raw hashes retain the local classification.
     for (const [path, file] of footprintPayload) {
       if (!path.endsWith('.prompt.md') || unavailable.has(path)) continue;
-      const text = bytes(file).toString('utf8'), projected = executableInterfaceText(text);
-      if (projected === text) continue;
+      const original = bytes(file), text = original.toString('utf8'), projected = executableInterfaceText(text);
+      // Invalid source must retain its original refusal, not become valid text
+      // through UTF-8 replacement while removing unrelated metadata.
+      if (projected === text || !original.equals(Buffer.from(text, 'utf8'))) continue;
       const content = Buffer.from(projected, 'utf8'), next = { ...file, bytes: content, size: content.length };
       footprintPayload.set(path, next); effective.set(path, next);
       if (payload.has(path)) payload.set(path, next);

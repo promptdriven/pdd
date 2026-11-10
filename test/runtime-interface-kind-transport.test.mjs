@@ -120,6 +120,10 @@ const actions = {
     const raw = textFor(JSON.stringify(d).replace('"max_steps":1', '"max_steps":9007199254740993123456789').replace('"type":"string"', '"type":"string","minLength":1e0').replace('é', '\\u00e9'));
     write(root, SUBJECT, raw); const got = projected(root);
     for (const literal of ['9007199254740993123456789', '1e0', '\\u00e9', '\\"kind\\"']) assert.ok(got.includes(literal), literal);
+    const malformed = Buffer.concat([Buffer.from(raw.slice(0, 4)), Buffer.from([0xff]), Buffer.from(raw.slice(4))]);
+    write(root, SUBJECT, malformed);
+    assert.deepEqual(capture(root).sources.find(file => file.path === SUBJECT).bytes, malformed,
+      'projection must not repair invalid UTF-8 outside the interface');
   },
   async 'preview-and-upload-consistency'(t) {
     const root = fixture(t), expected = capture(root).tar, raw = readFileSync(join(root, SUBJECT));
