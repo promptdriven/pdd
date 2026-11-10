@@ -427,6 +427,7 @@ test('the core engine timer fires every 10 minutes, the full engine every 30; st
     const core = await f.invoke('start', { env, engine: 'core' });
     assert.equal(core.exitCode, 0, core.message);
     assert.equal(minutes(), 10, `${platform}: the switch rewrites the timer`); assert.equal(f.state().timerMinutes, 10);
+    assert.equal(f.state().startedAt, new Date(f.time).toISOString(), 'a core start saves its time (the auto-mode approval)');
     assert.ok(serviceCalls.length > reloads, 'the new timer definition is loaded');
     assert.ok(f.state().nextTick <= f.time + 10 * 60000, 'the next tick is at most 10 minutes away');
     const status = await f.invoke('status', { env });

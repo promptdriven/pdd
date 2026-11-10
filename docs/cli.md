@@ -1436,6 +1436,11 @@ report for that cause. The `Evidence:` line has a fixed form, for example
 Autopilot keeps only the known parts, saves them in its local history and repeats
 them in the merge comment.
 
+When a job needs a person's decision, Autopilot posts its one question on the issue,
+adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment
+and remove `pdd:needs-decision`: removing the label is the signal. The next job gets
+the question and the comments of trusted people after it.
+
 When a job ends, the issue gets one comment with the cause and the log file name
 and loses `pdd:working`. Comments show no absolute path, user name or host name. Nothing else waits on it. A job with no result (the agent
 crashed, was signed out or hit a usage limit, or the machine restarted) only

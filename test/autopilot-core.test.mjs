@@ -1744,3 +1744,42 @@ test('I3 observe mode never approves: a draft prompt is listed in the "would mer
   assert.match(note, /- Draft prompts \(observe mode does not approve\): prompts\/words\.prompt\.md/);
   assert.equal(w.job(17, 'repair'), undefined);
 });
+
+// ---- D (#3188): a job asks a person; the answer and the label removal bring the issue back ---------------------
+test('J1 needs-person: the question is posted, pdd:needs-decision added, the claim and slot are freed; a trusted answer plus the label removal reach the next job', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18);
+  await w.tick();
+  assert.match(w.job(17, 'build').input, /"outcome":"needs-person","question"/);
+  w.finish(17, 'build', { result: { outcome: 'needs-person', question: 'Should the total count hyphenated words as one word or two?' } });
+  await w.tick();
+  const question = w.comments(17).find(body => body.includes('<!-- pdd:autopilot-core:question:17:'));
+  assert.match(question, /^Autopilot needs a decision from a person/); assert.match(question, /> Should the total count hyphenated words as one word or two\?/);
+  assert.ok(w.labels(17).includes('pdd:needs-decision')); assert.ok(!w.labels(17).includes('pdd:stuck')); assert.ok(!w.labels(17).includes('pdd:working'));
+  assert.equal(endComments(w, 17).length, 0);
+  assert.ok(w.job(18, 'build'), 'the slot is free for the next issue');
+  assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /"issue":17,"outcome":"needs-person"/);
+  // A comment alone does not bring the issue back; the label removal does. An untrusted comment is not an answer.
+  w.github.comment(17, 'Two words, please.', 'stranger');
+  w.github.comment(17, 'One word: "well-known" counts once.', 'acme');
+  w.finish(18, 'build', { result: { outcome: 'failed', kind: 'job', code: 'unclear', cause: 'unclear' } }); await w.tick();
+  await w.tick();
+  assert.equal(w.started.filter(j => j.issue === 17).length, 1, 'still waiting while the label is on');
+  w.github.unlabel(17, 'pdd:needs-decision');
+  await w.tick();
+  const next = w.job(17, 'build');
+  assert.notEqual(next.id, w.started.find(j => j.issue === 17).id);
+  assert.match(next.input, /Question: Should the total count hyphenated words as one word or two\?/);
+  assert.match(next.input, /acme: One word: "well-known" counts once\./); assert.doesNotMatch(next.input, /Two words, please/);
+  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+test('J2 the label removed with no comment after the question: the next job gets the question with "no written answer"', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  w.finish(17, 'build', { result: { outcome: 'needs-person', question: 'Which locale is the default?' } }); await w.tick();
+  w.github.unlabel(17, 'pdd:needs-decision'); await w.tick();
+  assert.match(w.job(17, 'build').input, /Question: Which locale is the default\?/);
+  assert.match(w.job(17, 'build').input, /no written answer/);
+});

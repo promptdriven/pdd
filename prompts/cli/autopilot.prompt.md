@@ -21,7 +21,7 @@ Autopilot config optionally accepts `parking: {hours,maxParked}`. Positive finit
 Preserve it on settings writes. The audit owner reads it from the source checkout.
 
 `autopilot.engine` (`full`, the default, or `core`) and the core keys `runs`,
-`label`, `jobTimeoutMinutes`, `report`, `repairs` and `testCommand` belong to the
+`label`, `quietMinutes`, `report`, `reports`, `repairs` and `testCommand` belong to the
 [Autopilot core](autopilot-core.prompt.md), which reads and validates them. This
 module does not add them to its result; settings writes preserve them like other
 unknown Autopilot keys.

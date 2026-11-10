@@ -147,7 +147,7 @@ flowchart TD
 
 `readyIssues({state, settings}, ports, rows)` returns the issue numbers in intake
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
-assignee; it has no `pdd:stuck`; it is not cooling down (no `noResult` history
+assignee; it has no `pdd:stuck` and no `pdd:needs-decision`; it is not cooling down (no `noResult` history
 line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
 opt-in label when `label` is set; no
@@ -290,7 +290,8 @@ any other pdd (for example an older global install).
   file is JSON: `outcome` `pr` with `pr`, `head`, `promptChanged` (Boolean),
   `evidence` and optional `runtime {state, cause, kind, component, code, detail}`, or
   `outcome` `failed` with `kind` (`pdd` or `job`), `component`, `code`, `cause`
-  and a short `detail` without repository code. A Runtime check that could not run is
+  and a short `detail` without repository code, or `outcome` `needs-person` with one
+  clear `question`, only when the job cannot go on without a person's decision. A Runtime check that could not run is
   never a failure.
 - **Evidence** (for metrics): one fixed line, `Evidence: runtime=<pass|fail|not-run>
   (<n>/<m>); vectors=<pass|fail|not-run> (<n>/<m>); formal=<proved|bounded|failed|not-run|not-applicable>;
@@ -337,6 +338,23 @@ to the merge check in the same tick. The PR number may be a number or a string o
 digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digits in
 any case and is saved in lower case. Any other PR value is no result. A `failed`
 result ends with the agent's cause; anything else ends with `no-result`.
+
+**Needs a person.** A result `{"outcome": "needs-person", "question"}` with a nonblank
+question counts as a job result (`produced`) and goes through the resumable END
+steps with a question instead of a cause: read the claim again before each write
+(hand over when another machine owns it); post one issue comment `Autopilot needs a
+decision from a person to go on with this issue:`, the question as a `> ` quote line,
+and "Please answer in a comment, then remove the `pdd:needs-decision` label. The next
+Autopilot job reads this question and your answer.", with the marker
+`<!-- pdd:autopilot-core:question:N:JOB-ID -->` (found again after an uncertain post);
+add `pdd:needs-decision` (never `pdd:stuck`); delete this machine's claim comment and
+remove `pdd:working`; clean up locally with outcome `needs-person`. The slot is free.
+The person answers and removes the label; **the label removal is the signal**, a
+comment alone changes nothing. When the core claims an issue with comments, it reads
+the latest question marker and the comments after it by trusted people
+(`ports.trusted`), leaving out comments with a `<!-- pdd:` marker and claim comments.
+The next build prompt then has the question and those answers as data, or "no written
+answer" when there is none.
 
 ## Merge check
 
