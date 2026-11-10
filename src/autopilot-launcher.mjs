@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 70128b5290341b787d0a826467e22baad812e19eecc3972e507e71a0687b047e).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b8e3bfd63de4055ae0c8368cd5ad3f9fdeaf8523d6d5c7b5fa54b8cc86d669cc).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1958,7 +1958,9 @@ async function runTick(stateFile, ports, completion) {
       for (const item of [...fresh]) {
         const group = (state.githubIntake?.groups ?? []).find(group => group.members?.some(key => Number(/\/issues\/(\d+)$/.exec(key)?.[1]) === item.number));
         const retained = group && existing.find(run => !['completed', 'cancelled'].includes(run.state) && group.members.includes(run.issue?.url));
-        if (!retained && !state.parking?.wakePending?.length) continue;
+        const {working, limit} = state.parking ?? {};
+        const wakeBlocksFresh = state.parking?.wakePending?.length && (!Number.isSafeInteger(working) || !Number.isSafeInteger(limit) || working < 0 || limit < 1 || working >= limit);
+        if (!retained && !wakeBlocksFresh) continue;
         if (retained) {
           const request = `Issue #${item.number} belongs to this run's root-cause group. Keep it with this run and its saved work.\n${JSON.stringify(item)}`;
           await p.scanAction(() => changeRun({ref: String(retained.number), cwd: state.cwd, packageRoot: state.packageRoot, text: request}, {...p, queueOnly: Boolean(retained.parking), requestKey: `group:${retained.runId}:${item.number}`, execFile: p.execFile ?? (async (file, args, options) => p.execute(file, args, options))}));

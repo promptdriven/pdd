@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
-import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
@@ -116,7 +116,7 @@ for (const [kind,field] of [['interface-missing','/interface'],['undefined-call-
   });
 
 test('3091 repair 2 person park becomes one stable inferred interpreter wait', async t => {
-  const {f, tick, ports, stateFile, warnings} = await setup(t);
+  const {f, tick, ports, stateFile} = await setup(t);
   fullTicks(f, stateFile, ports);
   ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
   const held = f.record(); held.state = 'waiting';
@@ -423,7 +423,12 @@ test('3091 confirmed parked occupancy backfills native admission and refuses a d
   };
   assert.equal((await checkDependencyStart({repository, issue, coordinator}, ports)).allowed, true);
   ports.settings.read = async () => ({mode: 'auto', activation: 1, runs: 1, parkingWakePending: [17]});
-  assert.equal((await checkDependencyStart({repository, issue, coordinator}, ports)).reason, 'runs', 'ready parked wakes must precede native fresh admission');
+  assert.equal((await checkDependencyStart({repository, issue, coordinator}, ports)).allowed, true, 'pending wakes do not consume confirmed free capacity');
+  owners.runs.push({runId: 'full', issue: 'https://github.com/example/project/issues/99', working: true});
+  assert.equal((await checkDependencyStart({repository, issue, coordinator}, ports)).reason, 'runs', 'the full working cap refuses fresh admission');
+  owners.runs.pop(); owners.runsKnown = false;
+  assert.equal((await checkDependencyStart({repository, issue, coordinator}, ports)).reason, 'runs', 'unknown owner occupancy refuses fresh admission');
+  owners.runsKnown = true;
   ports.settings.read = async () => ({mode: 'auto', activation: 1, runs: 1});
   // Its own run is already saved. It must go through resume, even with a free slot.
   ports.owners.read = async () => ({json: JSON.stringify({...owners, localOwner: 'park-owner', claims: [{issue: held.issue.url, owner: 'park-owner', coordinatorId: 'park-owner', machine: 'park-machine', commentId: '1', labelEventId: '2', active: true}]})});
@@ -1372,3 +1377,37 @@ for(const facts of [{reason:{code:'binding-missing'}},{refusals:[{code:'binding-
     await tick();assert.equal(f.record().parking?.blocker.kind,'binding','3135_SAVED_RESULT_BINDING');
     f.tick();await tick();assert.equal(f.record().parking?.blocker.kind,'binding');
   });
+test('wake admission offers unrelated work after oldest failed wakes leave capacity', async t => {
+  const {f, tick, ports, stateFile, warnings} = await setup(t);
+  const first = f.record(); first.state = 'paused'; first.blockedOn = {kind: 'pdd', until: 'capability:fixture-fix'}; save(f, first);
+  await tick(); assert.equal(f.record().parking?.phase, 'parked');
+  const second = await anotherRun(f, 18); f.tick(1000); await tick();
+  assert.equal(second().parking?.phase, 'parked');
+  const state = JSON.parse(readFileSync(stateFile)); state.runs = 10; delete state.retryAt; writeFileSync(stateFile, JSON.stringify(state));
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: ['owner']}}));
+  const candidate = {number: 3156, html_url: 'https://github.com/example/project/issues/3156', title: 'Independent work', body: 'Start this independent work.', user: {login: 'owner'}, state: 'open', labels: [], assignee: null, assignees: [], comments: 0, created_at: new Date(f.clock).toISOString(), updated_at: new Date(f.clock).toISOString()};
+  const herdr = ports.herdr, wakeAttempts = [];
+  ports.herdr = async args => {
+    if (args[0] === "pane" && args[1] === "get") { const pane = f.herdr.panes.find(pane => pane.pane_id === args[2]); if (!pane) throw Object.assign(Error("pane not found"), {code: "pane_not_found"}); return {result: {type: "pane_info", pane: {...pane, foreground_cwd: pane.cwd, ...pane.agent}}}; }
+    if (args[0] === "pane" && args[1] === "run" && wakeAttempts.length < 2) { wakeAttempts.push(args); throw Object.assign(Error("controlled wake failure"), {code: "agent_not_found"}); }
+    return herdr(args); };
+  const run = ports.run;
+  ports.run = async (file, args, options) => {
+    if (file === 'gh' && args[0] === 'api') {
+      const endpoint = args.find(arg => arg.includes('repos/example/project/issues'));
+      if (endpoint?.startsWith("repos/example/project/issues?")) return {code: 0, stdout: "HTTP/2.0 200\r\n\r\n" + JSON.stringify([candidate])};
+      if (endpoint === "repos/example/project/issues/3156") return {code: 0, stdout: "HTTP/2.0 200\r\n\r\n" + JSON.stringify(candidate)};
+    }
+    return run(file, args, options);
+  };
+  ports.reconcileDependencyIntake = async () => ({eligible: [candidate.html_url], queued: [], skipped: []});
+  ports.installedPddCapabilities = ['fixture-fix'];
+  f.herdr.calls.length = 0;
+  await tick();
+  const summary = JSON.parse(readFileSync(stateFile)).parking;
+  assert.deepEqual([summary.working, summary.limit, summary.wakePending], [2, 10, [17, 18]]);
+  assert.equal(wakeAttempts.length, 2, 'both ready wakes are attempted before fresh work');
+  const decisionRoot = join(f.source, f.git(f.source, "rev-parse", "--git-common-dir"), "pdd", "metrics", "decisions");
+  const decision = readdirSync(decisionRoot).map(name => JSON.parse(readFileSync(join(decisionRoot, name), "utf8"))).find(row => row.issue === 3156);
+  assert.equal(decision?.offered, true, "the independent issue is offered after the wake pass");
+});

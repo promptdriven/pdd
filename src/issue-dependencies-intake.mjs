@@ -1,5 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: f3694d1de1cd8e93f6746ca135359fb0322d793ee767ba5780ff5bffb97f8a75).
+// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: e74b3b11ea9af71c4eab8d4107f4ae032350a70832e68f7ad0938b39fcb36156).
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -125,7 +125,6 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
     const owners = json(ownerReply.json); const snapshot = read.snapshot;
     if (settings.mode === 'off') return { allowed: false, reason: 'off' };
     if (settings.healthPaused === true) return { allowed: false, reason: 'health' };
-    if (settings.parkingWakePending?.length) return {allowed: false, reason: 'runs'};
     const key = issueKey(issue);
     const selected = key && root(key, repository) ? key : null;
     const claim = selected && (owners.claims || []).find(x => issueKey(x.issue) === selected && x.active);
