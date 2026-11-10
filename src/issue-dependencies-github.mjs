@@ -2,7 +2,7 @@ import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 3df39bc770d5f90f8ba763aa258e64386127309e8f0b9820f1730d626c5ca5bd).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: ec884bf65755c1c6766660675a0f2ac1228590d0958cc1ad4ce046710b0c72b9).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -965,9 +965,9 @@ export function withoutClaimHeartbeat(body) {
   return text;
 }
 
-async function winningClaim(repository, key, github, authority, now = NaN, safety = false) {
+async function winningClaim(repository, key, github, authority, now = NaN, safety = false, observedIssue = null) {
   // Claim checks are their own purpose in the GitHub call ledger; a live claim check is a safety read.
-  const i = info(key), raw = parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', ...(safety ? { safety } : {}) })).json);
+  const i = info(key), raw = observedIssue ?? parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', ...(safety ? { safety } : {}) })).json);
   if (raw.error) throw Error('Current claim issue unavailable');
   const labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
   if (!labels.includes('pdd:working')) return null;
@@ -1188,10 +1188,11 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
         || typeof run.repo !== 'string' || !repositoryName(run.repo) || typeof run.state !== 'string'
         || !Array.isArray(run.areas) || !Array.isArray(run.chats)) throw Error('Invalid run');
     } catch { runsKnown = false; continue; }
-    if (!sameRepo(run.repo, repository) || ['completed', 'cancelled'].includes(run.state)) continue;
+    if (!sameRepo(run.repo, repository)) continue;
     const runId = run.runId || run.runDir;
     if (typeof runId !== 'string' || !runId) { runsKnown = false; continue; }
     seen.add(runId);
+    if (['completed', 'cancelled'].includes(run.state)) continue;
     const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
     const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports));
     const working = parkingSummary([{...run, checkHeld}], 1).working > 0;
@@ -1681,21 +1682,91 @@ export async function applyDependencyChanges({ cwd = '', repository, issue, revi
 
 // One guarded release of a long-parked claim. The marker in the existing claim
 // makes a lost label-removal acknowledgement recoverable without touching a new owner.
-export async function releaseParkedClaim({cwd = '', repository, claim, coordinatorId, machine, runId, branch}, ports = {}) {
+export async function releaseParkedClaim({cwd = '', repository, claim, coordinatorId, machine, runId, branch, reason}, ports = {}) {
   const skipped = {state: 'skipped'}, i = info(claim?.issue);
-  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !runId || !branch
-    || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !claim.commentId || !claim.labelEventId) return skipped;
-  const live = createDependencyReadPorts({cwd}, ports), fresh = {...live, githubCache: null, dependencyReads: undefined};
-  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, fresh), s = service(cwd, fresh);
+  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !machine) return skipped;
+  if (ports.githubFloor?.blocked?.('core') || ports.githubFloor?.blocked?.('graphql')) return skipped;
+  const live = createDependencyReadPorts({cwd}, ports);
+  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, live), s = service(cwd, live);
+  const winner = observedIssue => winningClaim(repository, i.key, github, live.authority, (ports.now ?? Date.now)(), true, observedIssue);
+  const removeLabel = async encoded => {
+    try { await s.api(`repos/${repository}/issues/${i.issue}/labels/${encoded}`, 'DELETE', undefined, 'claims', repository); }
+    catch (error) { if (!/\b404\b/.test(String(error?.message ?? ''))) throw error; }
+  };
+  if (['cancel', 'release', 'expired', 'lost'].includes(reason)) {
+    const raw = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
+    if (raw.error) throw Error('Current claim issue unavailable');
+    let labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
+    const hasWorking = labels.includes('pdd:working');
+    let current = hasWorking ? await winner(raw) : null;
+    if (hasWorking && !current) return reason === 'release' ? {state: 'refused', machine: 'unknown'} : skipped;
+    const firstClaim = current;
+    const suppliedIdentity = {
+      coordinatorId: claim?.coordinatorId ?? coordinatorId,
+      machine: claim?.machine ?? machine,
+      commentId: claim?.commentId,
+      labelEventId: claim?.labelEventId,
+    };
+    const identityMatches = observed => Object.entries(suppliedIdentity).every(([key,value]) =>
+      value === undefined || value === null || value === '' || String(observed?.[key] ?? '') === String(value));
+    if (reason === 'release' && current?.active === true && (!current.machine || current.machine !== machine))
+      return {state: 'refused', machine: current.machine || 'unknown'};
+    if (reason === 'release' && current && !identityMatches(current)) return skipped;
+    if (reason !== 'release' && current) {
+      const expectedCoordinator = claim?.coordinatorId ?? coordinatorId;
+      if (current.active === true && (!current.machine || current.machine !== machine)) return skipped;
+      if (current.machine && current.machine !== machine || !expectedCoordinator
+        || current.coordinatorId !== String(expectedCoordinator)
+        || !claim?.commentId || !claim?.labelEventId
+        || current.commentId !== String(claim.commentId) || current.labelEventId !== String(claim.labelEventId)) return skipped;
+    }
+    // Clear the old stuck marker while the saved working claim still owns it.
+    if (labels.includes('pdd:stuck')) await removeLabel('pdd%3Astuck');
+    const beforeWorking = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
+    if (beforeWorking.error) throw Error('Current claim issue unavailable');
+    labels = beforeWorking.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
+    current = labels.includes('pdd:working') ? await winner(beforeWorking) : null;
+    if (labels.includes('pdd:working') && !current) return reason === 'release' ? {state: 'refused', machine: 'unknown'} : skipped;
+    if (current) {
+      if (reason === 'release' && current.active === true && (!current.machine || current.machine !== machine))
+        return {state: 'refused', machine: current.machine || 'unknown'};
+      if (reason === 'release' && !identityMatches(current)) return skipped;
+      if (reason === 'release' && (!firstClaim || ['coordinatorId', 'machine', 'commentId', 'labelEventId']
+        .some(key => String(current[key] ?? '') !== String(firstClaim[key] ?? '')))) return skipped;
+      if (reason !== 'release') {
+        const expectedCoordinator = claim?.coordinatorId ?? coordinatorId;
+        if (current.active === true && (!current.machine || current.machine !== machine)) return skipped;
+        if (current.machine && current.machine !== machine || !expectedCoordinator
+          || current.coordinatorId !== String(expectedCoordinator)
+          || !claim?.commentId || !claim?.labelEventId
+          || current.commentId !== String(claim.commentId) || current.labelEventId !== String(claim.labelEventId)) return skipped;
+      }
+    }
+    if (labels.includes('pdd:working')) await removeLabel('pdd%3Aworking');
+    // The working-label deletion is the final label write. A later read confirms
+    // the result but must never delete a label from a replacement claim era.
+    const after = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
+    if (after.error) throw Error('Claim label cleanup is not confirmed');
+    labels = after.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
+    if (labels.includes('pdd:working') || labels.includes('pdd:stuck')) return skipped;
+    return {state: 'released'};
+  }
+  if (!runId || !branch || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !claim.commentId || !claim.labelEventId) return skipped;
   const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`;
   const comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value, record = claimRecord(comment?.body);
   if (!record || String(comment.id) !== String(claim.commentId) || record.value.coordinatorId !== coordinatorId
     || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return skipped;
   const matches = current => current && current.coordinatorId === coordinatorId && current.machine === machine
     && current.commentId === String(claim.commentId) && current.labelEventId === String(claim.labelEventId);
-  const winner = () => winningClaim(repository, claim.issue, github, live.authority, (ports.now ?? Date.now)(), true);
-  let current = await winner();
-  if (current && !matches(current)) return skipped;
+  const readIssue = async () => {
+    const observed = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
+    if (observed.error) throw Error('Claim label cleanup is not confirmed');
+    return observed;
+  };
+  const labelsOf = observed => observed.labels?.map(label => typeof label === 'string' ? label : label.name) ?? [];
+  let observed = await readIssue(), labels = labelsOf(observed);
+  let current = labels.includes('pdd:working') ? await winner(observed) : null;
+  if ((labels.includes('pdd:working') && !current) || (current && !matches(current))) return skipped;
   if (!current && record.value.parkRelease?.runId !== runId) return skipped;
   if (record.value.parkRelease?.runId !== runId) {
     const body = editClaimRecord(comment.body, record, {...record.value, parkRelease: {runId, branch}}, 'parkRelease');
@@ -1703,9 +1774,21 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
     const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({body}), 'claims', repository)).value;
     if (claimRecord(saved?.body)?.value.parkRelease?.runId !== runId) return skipped;
   }
-  current = await winner();
-  if (current && !matches(current)) return skipped;
-  if (current) await s.api(`repos/${repository}/issues/${i.issue}/labels/pdd%3Aworking`, 'DELETE', undefined, 'claims', repository);
+  observed = await readIssue(); labels = labelsOf(observed);
+  current = labels.includes('pdd:working') ? await winner(observed) : null;
+  if ((labels.includes('pdd:working') && !current) || (current && !matches(current))) return skipped;
+  const parkedStuck = current?.stuckSince !== undefined;
+  // If working was removed by an earlier attempt, the saved marker can identify
+  // its leftover stuck label. Remove stuck before working in every release era.
+  if (labels.includes('pdd:stuck') && (parkedStuck
+    || !current && record.value.parkRelease?.runId === runId)) await removeLabel('pdd%3Astuck');
+  observed = await readIssue(); labels = labelsOf(observed);
+  const beforeWorking = labels.includes('pdd:working') ? await winner(observed) : null;
+  if (labels.includes('pdd:working') && (!beforeWorking || !matches(beforeWorking))) return skipped;
+  if (labels.includes('pdd:working')) await removeLabel('pdd%3Aworking');
+  // After working is released, only read back. Never delete a replacement label.
+  observed = await readIssue(); labels = labelsOf(observed);
+  if (labels.includes('pdd:working') || labels.includes('pdd:stuck')) return skipped;
   const marker = `<!-- pdd:park-release:${runId} -->`;
   const comments = await allPages(github, repository, 'comments', i.issue, 'claims', true);
   if (!comments.some(row => row.body?.includes(marker)))

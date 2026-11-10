@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: a08d183c39f2d4fab908deb833af12df5fe54d42581a586e2a4eb14e021bd56e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1a0336c40f0f5173e81259827dd85adb927bb8ea2474f2ccb5a770be7fb7a611).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -36,6 +36,8 @@ const routes = [
     forms: [form('pdd autopilot status [--all] [--json]', "Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.")] },
   { id: 'autopilot.add', prefix: ['autopilot', 'add'], local: 'autopilot-add', operands: [{name:'issue',type:'issue',repeat:true}], options: [],
     forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
+  { id: 'autopilot.release', prefix: ['autopilot', 'release'], local: 'autopilot-release', operands: [{name:'issue',type:'issue'}], options: [],
+    forms: [form('pdd autopilot release ISSUE', "Release this machine's claim and remove pdd:working and pdd:stuck; keep the run folder, branch and PRs.")] },
   { id: 'autopilot.alert', prefix: ['autopilot', 'alert'], local: 'autopilot-alert', operands: [],
     options: [{name:'--issue',kind:'text'},{name:'--kind',kind:'value',choices:['usage-limit','resource','interpreter','interpreter-access','access','decision','stuck','test-suite','long-running','recovered']},{name:'--input',kind:'text'},{name:'--update',kind:'flag'}],
     forms: [form('pdd autopilot alert --issue N --kind usage-limit|resource|interpreter|interpreter-access|access|decision|stuck|test-suite|long-running|recovered --input - [--update]', 'For the coordinator: record one alert for a real human need or incident and send it to this machine\'s destination. Reads {"cause","tried","need"} JSON from stdin. usage-limit, resource, interpreter and interpreter-access are one alert per repository and machine for all blocked issues; access, decision, stuck, test-suite and long-running are one alert per issue. A repeat sends nothing unless the last send failed; --update sends a changed cause, decision or issue list, never attempt notes alone; one digest of open work per repository and machine is sent at most every 6 hours; recovered sends one recovery and closes the matching alerts.')] },

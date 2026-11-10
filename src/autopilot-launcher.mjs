@@ -3,13 +3,13 @@ import {auditMerge, pendingAudits} from './autopilot-audit.mjs';
 import {collectRouteQuestions, idleParkingBlocker, blockerFor, interpreterWaitFor, reconcileParking, parkingSummary, parkingWords} from './autopilot-parking.mjs';
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession, finishedChats} from './workflow-chat.mjs';
-import {WORKFLOW_CAPABILITIES, sweepIdleRuns, recoverAutomaticRunOwner, parkBlockedRun, wakeParkedRun, releaseParkedRun, changeRun, hasParkedReply} from './workflow-runner.mjs';
+import {WORKFLOW_CAPABILITIES, sweepIdleRuns, recoverAutomaticRunOwner, parkBlockedRun, wakeParkedRun, releaseParkedRun, releaseRunClaim, changeRun, hasParkedReply} from './workflow-runner.mjs';
 import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b8e3bfd63de4055ae0c8368cd5ad3f9fdeaf8523d6d5c7b5fa54b8cc86d669cc).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 77bb67d1d5916395aa067321ed8d035f2e6eaa46ed57160168ca003935e38119).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1684,7 +1684,7 @@ async function runTick(stateFile, ports, completion) {
     // uses the last eligible list and claims. Heartbeats of live claims keep their priority.
     const savedIntake = state.githubIntake;
     // One ETag cache for the reads of this tick: the intake's and the tick's own comment, PR and permission reads.
-    const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now }); p.etags = etags;
+    const etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now }); p.etags = etags; p.githubCache = etags;
     let githubFloor;
     try { githubFloor = githubFloorGuard({ floor: githubBudgetSettings(config.github).floor, entries: githubMachineEntries({ root: p.githubRoot }), now: p.now }); } catch { githubFloor = undefined; }
     p.githubFloor = githubFloor;
@@ -1724,16 +1724,66 @@ async function runTick(stateFile, ports, completion) {
     if (paneHold) { intake.eligible = []; state.githubIntake = {...state.githubIntake,eligible:[]}; p.warn(`Autopilot waits: panes. ${paneHold}`); }
     // Claims observed by the intake: refresh this coordinator's own live claims
     // (no AI call) and let expired claims of any owner become selectable work.
+    const claimsFresh = !deferIntake && Array.isArray(intake.claims) && !(intake.pending === true && intake.claims.length === 0);
     const observedClaims = (Array.isArray(intake.claims) ? intake.claims : []).filter(claim => claim && typeof claim.issue === 'string');
     const recoveredRuns = new Set();
+    const allKnownRuns = await (p.listRuns ?? listRuns)({ cwd: state.cwd, cancelled: true }, { ...p, execFile: async (file, args, options) => p.execute(file, args, options) });
+    const sameIssue = (a,b) => a?.issue?.url?.toLowerCase() === b?.issue?.url?.toLowerCase()
+      && a?.repo?.toLowerCase() === b?.repo?.toLowerCase() && samePath(a?.sourceRoot,b?.sourceRoot);
+    const sameClaimEra = (claim,origin) => Boolean(origin?.claim?.commentId && origin?.claim?.labelEventId
+      && String(claim.commentId) === String(origin.claim.commentId) && String(claim.labelEventId) === String(origin.claim.labelEventId));
     // Adopt only admitted claims backed by this checkout's unfinished local runs.
     // Remote proof permits retry if the process died before the local custody write.
-    for (const candidate of await (p.listRuns ?? listRuns)({ cwd: state.cwd }, { ...p, execFile: async (file, args, options) => p.execute(file, args, options) })) {
+    for (const candidate of allKnownRuns) {
       const origin = candidate.automaticOrigin;
-      if (!origin || ['completed', 'cancelled'].includes(candidate.state) || origin.machine !== state.machine
-        || origin.coordinatorId === state.coordinatorId || origin.repository?.toLowerCase() !== state.repo.toLowerCase()
+      if (!origin || origin.machine !== state.machine
+        || origin.repository?.toLowerCase() !== state.repo.toLowerCase()
         || candidate.repo?.toLowerCase() !== state.repo.toLowerCase() || !samePath(candidate.sourceRoot, state.cwd)
         || !candidate.runDir || !candidate.root || !existsSync(candidate.runDir) || !existsSync(candidate.root)) continue;
+      const issueClaims = observedClaims.filter(claim => claim.issue?.toLowerCase() === candidate.issue?.url?.toLowerCase());
+      const claimIndex = observedClaims.findIndex(claim => claim.issue?.toLowerCase() === candidate.issue?.url?.toLowerCase()
+        && claim.machine === state.machine && sameClaimEra(claim,origin));
+      const liveReplacement = allKnownRuns.some(run => run.runId !== candidate.runId
+        && !['completed','cancelled'].includes(run.state) && sameIssue(run,candidate));
+      if (candidate.state === 'cancelled') {
+        if (liveReplacement || !origin.claim?.commentId || !origin.claim?.labelEventId
+          || candidate.claimRelease?.state !== 'pending' && (!claimsFresh || claimIndex < 0)) continue;
+        const newerLiveClaim = issueClaims.some(claim => claim.active === true && !sameClaimEra(claim,origin));
+        if (newerLiveClaim || githubFloor?.blocked('core') || githubFloor?.blocked('graphql')) continue;
+        try {
+          const releasePorts = {...workflowCleanupPorts(p,ports),
+            execFile: async (file,args,options={}) => p.execute(file,args,file === 'gh'
+              ? {...options,purpose:options.purpose ?? 'claims'} : options),
+            githubCache:etags, ...(githubFloor ? {githubFloor} : {})};
+          const released = await (p.releaseRunClaim ?? releaseRunClaim)({
+            ref:String(candidate.number),cwd:state.cwd,repository:state.repo,
+            machine:state.machine,coordinatorId:origin.coordinatorId,
+          },releasePorts);
+          if (released?.recovery === 'released' && released.exitCode === 0) {
+            if (claimIndex >= 0) observedClaims.splice(claimIndex, 1);
+          } else if (released?.message) p.warn(`Cancelled-run claim cleanup deferred for ${candidate.issue?.url}: ${line(released.message)}`);
+        } catch (error) { p.warn(`Cancelled-run claim cleanup deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
+        continue;
+      }
+      if (candidate.state === 'completed' || liveReplacement) continue;
+      if (origin.coordinatorId === state.coordinatorId) {
+        const matching = claimIndex >= 0 ? observedClaims[claimIndex] : null;
+        const active = issueClaims.filter(claim => claim.active === true);
+        const expired = Boolean(matching?.expired === true && matching.active === false);
+        const lost = Boolean(claimsFresh && !active.length && !matching);
+        const changed = Boolean(claimsFresh && active.length && !matching);
+        if (expired || lost || changed) {
+          const claimObservation = {localOwner:state.coordinatorId,claims:issueClaims.map(claim => claim.issue === candidate.issue.url ? claim : {...claim,issue:candidate.issue.url})};
+          const releaseReason = expired ? 'expired' : 'lost';
+          try {
+            const result = await p.scanAction(() => recoverAutomaticRunOwner({ref:String(candidate.number),cwd:state.cwd,
+              coordinatorId:state.coordinatorId,machine:state.machine,releaseUnowned:true,
+              claimObservation,releaseReason}, {...workflowCleanupPorts(p,ports),githubCache:etags,autopilotStateFile:stateFile}));
+            if (result.recovery === 'released' && claimIndex >= 0) observedClaims.splice(claimIndex, 1);
+          } catch (error) { p.warn(`Expired or lost-claim cleanup deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
+        }
+        continue;
+      }
       try {
         const result = await p.scanAction(() => recoverAutomaticRunOwner({ref:String(candidate.number),cwd:state.cwd,
           coordinatorId:state.coordinatorId,machine:state.machine}, {...workflowCleanupPorts(p,ports),autopilotStateFile:stateFile}));
@@ -1743,6 +1793,7 @@ async function runTick(stateFile, ports, completion) {
         recoveredRuns.add(candidate.runDir);
       } catch (error) { p.warn(`Claim recovery deferred for ${candidate.issue?.url}: ${line(error.message)}`); }
     }
+    etags.save();
     if (config.mode === 'auto' && recoveredRuns.size) await resumeStoppedWorkers(state, p, recoveredRuns);
     // After 3 takeovers an expired claim is not offered for a 4th: it stays a hold (#3041).
     // Taking back this coordinator's own expired claim is a re-claim, not a takeover.
@@ -2373,7 +2424,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       try { costs = '\n' + costStatusLines(await localCosts(input, ports, state)); } catch {}
       const readiness = await workflowReadiness(state, p);
       const local = parkingPorts(state, p);
-      const runs = (await local.list()).filter(run => run.automaticOrigin?.coordinatorId === state.coordinatorId);
+      const runs = (await local.list()).filter(run => run.automaticOrigin?.coordinatorId === state.coordinatorId && !['completed', 'cancelled'].includes(run.state));
       const observed = await Promise.all(runs.map(async run => ({...run, checkHeld: await local.checkProgress(run)})));
       const capacityLine = checkCapacityWords(state, p) + '\n' + parkingWords(parkingSummary(observed, state.runs ?? state.checkCapacity?.runs ?? 1, p.now()), state.interpreterPattern);
       const workflows = readiness.state === 'ready' ? '' : `\nWorkflows cannot start in this folder: ${line(readiness.message)}`;
@@ -2410,7 +2461,26 @@ export async function runAutopilotLauncher(input, ports = {}) {
       for (const number of numbers) await p.checked('gh', ['api', '--method', 'POST', `repos/${state.repo}/issues/${number}/labels`, '-f', 'labels[]=pdd:autopilot']);
       return ok(`Marked ${issues.length} issue(s) with pdd:autopilot.`);
     }
-    if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status or add.' };
+    if (command === 'release') {
+      const result = await releaseRunClaim({
+        ref: issues[0], cwd: state.cwd, repository: state.repo,
+        machine: state.machine, coordinatorId: state.coordinatorId,
+      }, { ...workflowCleanupPorts(p, ports), execFile: async (file, args, options) => {
+        const reply = await p.execute(file, args, { purpose: 'claims', ...options });
+        if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
+        return reply;
+      } });
+      if (result.exitCode === 0 && previous) {
+        const issueUrl = `https://github.com/${state.repo.toLowerCase()}/issues/${result.number}`;
+        if (Array.isArray(state.githubIntake?.claims))
+          state.githubIntake.claims = state.githubIntake.claims.filter(claim => claim?.issue?.toLowerCase() !== issueUrl);
+        if (Array.isArray(state.parkedNumbers))
+          state.parkedNumbers = state.parkedNumbers.filter(n => n !== result.number);
+        save(stateFile, state);
+      }
+      return { exitCode: result.exitCode, message: result.message };
+    }
+    if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status, add or release.' };
     const readiness = await workflowReadiness(state, p);
     if (readiness.state !== 'ready') return bad(`Autopilot did not start: pdd workflows cannot start in ${state.cwd}. ${readiness.message} Nothing was started or claimed, and every timer is unchanged.`);
     const priorBase = state.baseBranch;
