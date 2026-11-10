@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6d73620aaeb8fda641459af7c5b2da946599211ab1dcfc4d3012d1756b3b5db8).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f0e236ded3e057a5a7dd7d7d5c75d2263ca976f187d8eb678ddab96d577c221e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -163,11 +163,11 @@ export function acquireRunLock(runDir, filename = 'chat-replacement.lock') {
   }
   return () => { try { if (sameOwner(owner, readLock(path))) unlinkSync(path); } catch { /* Never remove another or unreadable owner. */ } };
 }
-async function lockedMutation(args, ports, action) {
+async function lockedMutation(args, ports, action, filename) {
   const p = deps(ports), found = await resolveRun(args.ref, { cwd: args.cwd }, p);
   if (!found.run) return action(args, ports);
   let release;
-  try { release = acquireRunLock(found.run.runDir); return await action(args, { ...ports, releaseRunLock: release }); }
+  try { release = acquireRunLock(found.run.runDir, filename); return await action(args, { ...ports, releaseRunLock: release }); }
   catch (error) { if (error.code === 'run_busy') return fail(error.message); throw error; }
   finally { release?.(); }
 }
@@ -2470,7 +2470,7 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
   publicationGate = structuredClone(run.gate);
   p.inspectProgress();
   return automaticPr1(run, area, 'check', p, [], check, packageRoot, progressRecorded);
-}));
+}, 'automatic-pr1.lock'));
 async function automaticPr1(run, area, step, p, lines, check, packageRoot, progressRecorded = () => {}) {
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
@@ -4268,11 +4268,7 @@ async function cancelRunCommand({ ref, cwd }, ports, expectedIdentity = null) {
   const run = found.run;
   if (expectedIdentity && runIdentity(run) !== expectedIdentity) return fail('The selected workflow run changed. Retry cancellation.');
   const automatic = !ports?.claimReleased && validSavedAutomaticOrigin(run);
-  p.say('Closing the chat tabs in Herdr…');
-  const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
-  const at = p.now(), held = automatic && !kept.length ? await releaseWorkerHeld(readRun(run.runDir) ?? run,p) : null;
-  if (!kept.length) removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
-  commitRun(run,p,latest=>{
+  const recordCancellation = at => commitRun(run,p,latest=>{
     latest.state='cancelled';
     latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:{state:'cancelled',at};
     latest.gate=null; delete latest.parking; delete latest.blockedOn; delete latest.parkReason;
@@ -4280,6 +4276,14 @@ async function cancelRunCommand({ ref, cwd }, ports, expectedIdentity = null) {
     for(const chat of latest.chats ?? []) chat.endedAt ??= at;
     if (automatic) latest.claimRelease = {state:'pending',reason:'cancel',at};
   });
+  // The automatic cancellation lock is held by cancelRun. Persist the terminal
+  // blocker before an awaited Herdr cleanup lets a publication continue.
+  if (automatic) recordCancellation(p.now());
+  p.say('Closing the chat tabs in Herdr…');
+  const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
+  const held = automatic && !kept.length ? await releaseWorkerHeld(readRun(run.runDir) ?? run,p) : null;
+  if (!kept.length) removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
+  if (!automatic) recordCancellation(p.now());
   const cleanupNotes = [];
   if (automatic) {
     const latest = readRun(run.runDir) ?? run;
