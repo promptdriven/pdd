@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-capture.prompt.md.
+// Generated from prompts/cli/metrics-capture.prompt.md (sha256: cbcd6af128926fb406aeb19d5bd133a814d7a86c0d88496945291b4e164c787d).
 const choices = {
   launch: { origin: ['autopilot', 'manual', 'unknown'], status: ['attempted', 'confirmed', 'uncertain', 'failed'] },
   start: { origin: ['autopilot', 'manual', 'unknown'], requiredOutcome: ['code', 'prompt-only', 'unknown'] },
