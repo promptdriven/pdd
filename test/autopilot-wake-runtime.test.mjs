@@ -8,7 +8,7 @@ import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
 import {runStatus} from '../src/workflow-runner.mjs';
-import {classifyRuntimeFailure, reconcileRuntimeIncidents} from '../src/autopilot-runtime.mjs';
+import {classifyRuntimeFailure, reconcileRuntimeIncidents, runtimeEvidence} from '../src/autopilot-runtime.mjs';
 const save=(f,run)=>writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
 const deliveries=f=>f.herdr.calls.filter(a=>a[0]==='agent'&&a[1]==='prompt');
 async function setup(t, agent = 'claude', name = 'small-change') {
@@ -272,6 +272,46 @@ test('3147 failed issue reopen cannot leave the cause recovered',async()=>{
   await reconcileRuntimeIncidents(state,ports,{},[run]);
   assert.equal(state.runtimeIncidents.causes['runner-stopped'].recoveredAt,null,'3147_FAILED_REOPEN_MUST_CANCEL_RECOVERY');
   assert.equal(state.runtimeIncidents.causes['runner-stopped'].dirty,true);
+});
+
+test('3147 dirty Runtime report cannot use an old closed issue to wake',async t=>{
+  const {f,tick,ports,issues,stateFile}=await world(t),held=f.record();
+  held.state='stuck';held.parkReason='Runtime no verdict';held.done.check={batch:'20261101-120000-abcd',summary:'saved check'};
+  held.parking={phase:'parked',at:f.clock,blocker:{kind:'runtime',until:'501',cause:'runner-stopped',batch:'20261101-120000-abcd',
+    checkKind:'pdd test',evidence:runtimeEvidence(held),repository:'example/project'}};save(f,held);
+  const issue={number:501,url:'https://github.com/example/project/issues/501',repository:'example/project',state:'closed',body:''};issues.set(501,issue);
+  const state=JSON.parse(readFileSync(stateFile));state.runtimeIncidents={seen:{},causes:{'runner-stopped':{
+    cause:'runner-stopped',checkKind:'pdd test',lastFailureAt:f.clock-100,failures:{},runs:{},issue:{number:501,url:issue.url,repository:issue.repository},dirty:true,recoveredAt:null,
+  }}};writeFileSync(stateFile,JSON.stringify(state));
+  ports.readRunResults=()=>[];ports.reportRuntimeCause=async()=>{throw Error('reopen not confirmed');};
+  const delivered=deliveries(f).length;
+  await tick();
+  assert.equal(f.record().parking?.phase,'parked','3147_DIRTY_CAUSE_IGNORES_OLD_CLOSED_ISSUE');
+  assert.equal(f.record().parking?.blocker.until,'501');
+  assert.deepEqual(f.record().done.check,held.done.check,'3147_DIRTY_CAUSE_PRESERVES_SAVED_CHECK');
+  assert.equal(JSON.parse(readFileSync(stateFile)).runtimeIncidents.causes['runner-stopped'].dirty,true);
+  assert.equal(deliveries(f).length,delivered,'3147_DIRTY_CAUSE_DOES_NOT_DELIVER_WAKE');
+});
+
+test('3147 later terminal Runtime verdict wakes even while report update is dirty',async t=>{
+  const {f,tick,ports,issues,stateFile}=await world(t),held=f.record();
+  held.state='stuck';held.parkReason='Runtime no verdict';held.done.check={batch:'20261101-120000-abcd',summary:'saved check'};
+  held.parking={phase:'parked',at:f.clock,blocker:{kind:'runtime',until:'501',cause:'runner-stopped',batch:'20261101-120000-abcd',
+    checkKind:'pdd test',evidence:runtimeEvidence(held),repository:'example/project'}};save(f,held);
+  const issue={number:501,url:'https://github.com/example/project/issues/501',repository:'example/project',state:'open',body:''};issues.set(501,issue);
+  const state=JSON.parse(readFileSync(stateFile));state.runtimeIncidents={seen:{},causes:{'runner-stopped':{
+    cause:'runner-stopped',checkKind:'pdd test',lastFailureAt:f.clock-100,failures:{},runs:{},issue:{number:501,url:issue.url,repository:issue.repository},dirty:true,recoveredAt:null,
+  }}};writeFileSync(stateFile,JSON.stringify(state));
+  ports.readRunResults=()=>[{kind:'pdd test',batch:'20261101-120001-abcd',at:f.clock-50,states:[{test:'tests/value.json',state:'passed'}]}];
+  ports.reportRuntimeCause=async()=>{throw Error('report update not confirmed');};
+  const beforeDeliveries=deliveries(f).length;
+  await tick();
+  assert.equal(f.record().parking,undefined,'3147_AUTHORITATIVE_VERDICT_WAKES_DIRTY_CAUSE');
+  assert.deepEqual(f.record().done.check,held.done.check,'3147_HEALTHY_WAKE_PRESERVES_SAVED_CHECK');
+  assert.match(deliveries(f).at(-1)[3],/pdd test --read 20261101-120000-abcd/);
+  assert.doesNotMatch(deliveries(f).at(-1)[3],/--cache-clear/);
+  assert.equal(deliveries(f).length,beforeDeliveries+1,'3147_HEALTHY_WAKE_DELIVERS_ONE_READ_NOTICE');
+  assert.equal(JSON.parse(readFileSync(stateFile)).runtimeIncidents.causes['runner-stopped'].dirty,true);
 });
 
 test('3147 one shared report receives all runs with the same cause',async()=>{

@@ -11,7 +11,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ddb28754a77ccb266389480dfac3b17780fa8f77e08ee91de193d4a89aafc072).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d8c869a2ed4c9caadd553166f3516a950bc29c0e70b0d47ad3f1d96b2b86481b).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -516,8 +516,11 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         const snapshot = await bindingBase(run, state, p, blocker.paths, !localOnly);
         return Boolean(blocker.revision && snapshot?.revision && blocker.revision !== snapshot.revision);
       }
-      if (blocker.kind === 'runtime') return Boolean(state.runtimeIncidents?.causes?.[blocker.cause]?.recoveredAt)
-        || !localOnly && await namedIssueClosed(blocker.until, state, p, blocker.repository ?? state.repo);
+      if (blocker.kind === 'runtime') {
+        const cause = state.runtimeIncidents?.causes?.[blocker.cause];
+        return Boolean(cause?.recoveredAt)
+          || !localOnly && cause?.dirty !== true && await namedIssueClosed(blocker.until, state, p, blocker.repository ?? state.repo);
+      }
       if (['account', 'github'].includes(blocker.kind)) return Number.isFinite(Date.parse(blocker.until)) && p.now() >= Date.parse(blocker.until);
       if (['pdd', 'pdd-route'].includes(blocker.kind)) {
         const required = blocker.until === '#2897' ? 'capability:prompt-reentry'
