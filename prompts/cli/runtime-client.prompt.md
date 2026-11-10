@@ -806,6 +806,8 @@ owner API binding for this raise is pending the planner's contract; do not inven
 
 `runTry` owns simulation selection; preserve its public signature, session identity, budgets,
 source pins, authentication and saved-case behavior. These rules refine the former default page.
+Run local preflight and bounded source capture for the selected Stories before interaction-kind eligibility. In particular,
+a bounded workspace refusal retains its exit and reason before any mode choice, sign-in or HTTP.
 Read Story entry interfaces through preflight, including shared-schema references. A CLI entry
 has both CLI conventions; an HTTP entry has the declared `HTTP METHOD /path` input title.
 Do not infer kinds from filenames, operation names or test results.

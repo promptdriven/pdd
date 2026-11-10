@@ -1,7 +1,7 @@
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21b0ca49eb99eedb74f9dd1a6841d9557e9a1045180834135913786c2418c39e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0fa47e4fb6a3b3abd8c0de3d06f3fd8e1de38e44f7d97d031f64da953b45fb40).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -3504,6 +3504,13 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
+    const localSelected = normalized.length ? [oneTest(found, normalized, root)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
+    const checked = preflight({ root, found, selected: localSelected }), rows = localRows(checked.rows);
+    const refused = rows.find(row => row.state === 'refused');
+    if (refused) {
+      if (options['--cli'] || options['--shell'] || options['--serve'] !== undefined) throw new Stop(125, refused.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
+      line(ports.stdout, renderText({ rows: [refused], exitCode: 4 })); return 4;
+    }
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     if (options['--serve'] !== undefined && normalized.length && !options['--new']) {
       const priorTest = oneTest(found, normalized, root), prior = store.repo(root).tries?.[priorTest.path];
@@ -3512,6 +3519,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         if (problem) throw new Stop(125, `${problem} Run pdd simulate STORY --serve --new.`);
       }
     }
+    const boundedCapture = loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap }) : null;
     const { test, selected, tab, typed } = simulationSelection(root, found, normalized, appMap, options);
     context.typedForm = typed;
     context.doorMode = !!(options['--cli'] || options['--serve'] !== undefined);
@@ -3525,12 +3533,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     const repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), simulationTests: selected, seedTest: { path: test.path, storyPath: test.storyPath } });
-    const checked = preflight({ root, found, selected }), rows = localRows(checked.rows), row = rows.find(row => row.state === 'refused') ?? rows.find(row => row.test === test.path) ?? rows[0];
-    if (row.state === 'refused') {
-      if (options['--cli'] || options['--serve'] !== undefined) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
-      line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
-    }
-    const capture = ports.captureSource(root, { tests: selected.map(item => item.path), appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    const row = rows.find(row => row.test === test.path) ?? rows[0];
+    const capture = boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap }), note = otherNote(otherFiles(capture.files, found).length);
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     if(context.agentConnection&&loadRuntimeWorkspace({root}).configured)throw new Stop(5,'Bounded agent connection is unavailable: installed CLI controls do not establish packet-only context. Use the ordinary simulator without an agent connection.');
     const identity = signIn(ports.gh, context.store);
