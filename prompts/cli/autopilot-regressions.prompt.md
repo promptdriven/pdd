@@ -27,6 +27,9 @@ includes raw process output. Never turn unavailable evidence into an ok verdict.
 Read all pages of check runs (filter all), commit statuses, timelines on the PR
 and recorded issue, repository issues updated since the earliest merge, repository
 PRs (all states), and commits on the default branch since the earliest merge.
+Validate check identity/app, status context, conclusion/state, PR/issue identity
+and event shapes; malformed observations make the affected merge incomplete.
+Keep already-read pages if a later page fails.
 Follow GitHub next links only within that repository's REST namespace; cycles,
 invalid links and failed pages are errors rather than successful truncation.
 Use explicit GET for every GitHub call. Do not use search's limited result set.
@@ -84,7 +87,8 @@ JSON from stateRoot/HASH.json, default stateRoot HOME/.local/state/pdd/autopilot
 and scan HASH-core. No folder creation, timer, sign-in probe or launcher call.
 Require its repo, or, for no saved state, resolve origin with the shared GitHub
 origin parser. An explicit ports.root bypasses state discovery but still requires
-ports.repo. GitHub uses the counted process adapter by default.
+ports.repo. GitHub uses a plain process adapter by default: no accounting, cache, cost ledger
+or other Autopilot state writes. A core caller owns its supplied gh port.
 
 JSON mode prints the scan object. Text starts with the counts and one line per
 merge with classification and signals, plus any errors. Zero means a complete
@@ -99,19 +103,28 @@ File errors give exit 1. Successful file output still prints the report.
 
 - [Core engine](autopilot-core.prompt.md), State: required generation/verification
   context for history records and root layout; the scanner does not invoke ticks.
-- [GitHub calls](github-calls.prompt.md): required native adapter context for
-  counted GitHub process calls.
+- [GitHub calls](github-calls.prompt.md): required native context only for
+  parsing `githubReply`; this command does not use its write-capable counter.
 - [Workflow worktree](workflow-worktree.prompt.md): required native context for
   `githubOriginRepository` parsing of origin in CLI discovery.
 - [Secret redaction](secret-redaction.prompt.md): required for diagnostic and
   displayed external names. Node fs/path/crypto and the native process adapter
   supply local I/O, path resolution and deterministic SHA256 identity.
 
+The partial Runtime entry covers `regressionScan`; command discovery/output are
+native-test coverage. Transport root/repo bind the same ports; numeric now binds
+`now()`. Resource `fs.readFileSync` binds the actual UTF-8 read: `{text,code}`
+wraps returned text with code empty, or a failed read with code ENOENT/other and
+empty text, which the adapter raises as that filesystem error. Resource
+`github.gh` binds the actual gh port arguments and process reply. These are
+adapter shapes, not additional production exports. No live Runtime check is
+claimed by this draft.
+
 <details>
 <summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"","entries":[],"calls":[],"resources":[],"limits":{"max_steps":10,"max_model_calls":12},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"","entries":[{"operation":"regressionScan","input_schema":{"type":"object","properties":{"root":{"type":"string"},"repo":{"type":"string"},"now":{"type":"number"}},"required":["root","repo","now"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"schema":{"type":"string","const":"pdd.autopilot-regressions.v1"},"scannedAt":{"type":"string"},"complete":{"type":"boolean"},"merges":{"type":"array","items":{"type":"object","properties":{"repo":{"type":"string"},"pr":{"type":"integer"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"mergeCommit":{"oneOf":[{"type":"string"},{"type":"null"}]},"parent":{"oneOf":[{"type":"string"},{"type":"null"}]},"mergedAt":{"oneOf":[{"type":"string"},{"type":"null"}]},"classification":{"type":"string","enum":["ok","suspect","proven"]},"provenAt":{"oneOf":[{"type":"string"},{"type":"null"}]},"signals":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["ci","revert","reopened","reference","unavailable"]},"level":{"type":"string","enum":["suspect","proven"]},"at":{"oneOf":[{"type":"string"},{"type":"null"}]},"url":{"oneOf":[{"type":"string"},{"type":"null"}]},"detail":{"type":"string"},"parentUrl":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["kind","level","at","url","detail","parentUrl"],"additionalProperties":false}}},"required":["repo","pr","issue","mergeCommit","parent","mergedAt","classification","provenAt","signals"],"additionalProperties":false}},"counts":{"type":"object","properties":{"ok":{"type":"integer"},"suspect":{"type":"integer"},"proven":{"type":"integer"}},"required":["ok","suspect","proven"],"additionalProperties":false},"days":{"type":"array","items":{"type":"object","properties":{"date":{"type":"string"},"proven":{"type":"integer"}},"required":["date","proven"],"additionalProperties":false}},"errors":{"type":"array","items":{"type":"string"}}},"required":["schema","scannedAt","complete","merges","counts","days","errors"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"fs","kind":"port","access":"read","operations":[{"name":"readFileSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"},"encoding":{"type":"string","const":"utf8"}},"required":["path","encoding"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"text":{"type":"string"},"code":{"type":"string"}},"required":["text","code"],"additionalProperties":false}}]},{"name":"github","kind":"port","access":"read","operations":[{"name":"gh","access":"read","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}}},"required":["args"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["code","stdout","stderr"],"additionalProperties":false}}]}],"limits":{"max_steps":10,"max_model_calls":12},"conventions":[]}
 ```
 
 </details>

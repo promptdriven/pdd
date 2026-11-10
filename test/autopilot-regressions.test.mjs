@@ -189,3 +189,49 @@ test('command discovery errors are finite, and text explains suspect signals', a
   const r = await runAutopilotRegressions({ cwd: f.root, env: {} }, f.ports); assert.equal(r.exitCode, 0); assert.match(r.message, /1 suspect/); assert.match(r.message, /#12 suspect/);
   const bad = await runAutopilotRegressions({ cwd: f.root, env: {} }, { run: async () => { throw Error('DO_NOT_PRINT_TOKEN'); } }); assert.equal(bad.exitCode, 1); assert.ok(!bad.message.includes('DO_NOT_PRINT_TOKEN'));
 });
+
+test('malformed CI rows mark the scan incomplete rather than silently yielding ok', async t => {
+  const f = fixture(t);
+  for (const field of ['check-runs?filter=all&per_page=100', 'statuses?per_page=100']) {
+    const key = `commits/${M}/${field}`, prior = f.routes.get(key);
+    f.routes.set(key, field.startsWith('check') ? { check_runs: [{}] } : [{}]);
+    const r = await f.scan(); assert.equal(r.complete, false); assert.equal(r.merges[0].classification, 'suspect');
+    f.routes.set(key, prior);
+  }
+});
+test('a failed later page retains earlier exact attribution', async t => {
+  const f = fixture(t); issues(f, [newIssue('Regressed by #12')]);
+  const key = [...f.routes.keys()].find(k => k.startsWith('issues?'));
+  f.links.set(key, `<https://api.github.com/repos/${repo}/${key}&page=2>; rel="next"`);
+  f.routes.set(`${key}&page=2`, Error('Unavailable'));
+  const r = await f.scan(); assert.equal(r.complete, false); assert.equal(r.merges[0].classification, 'proven');
+});
+test('native command process substitution does no filesystem writes without --file', async t => {
+  const f = fixture(t), checkout = '/fixture/checkout';
+  const id = createHash('sha256').update(checkout).digest('hex').slice(0, 20), folder = '/fixture/state';
+  const files = {
+    readFileSync: path => {
+      if (path === `${folder}/${id}.json`) return JSON.stringify({ repo });
+      if (path === `${folder}/${id}-core/history.jsonl`) return '';
+      assert.fail(`Unexpected read: ${path}`);
+    },
+    writeFileSync: () => assert.fail('No local writes'), mkdirSync: () => assert.fail('No local writes'), appendFileSync: () => assert.fail('No ledger writes'),
+  };
+  const result = await runAutopilotRegressions({ cwd: checkout, env: {} }, { stateRoot: folder, fs: files, now: f.ports.now,
+    run: async (file, args) => { assert.equal(file, 'git'); assert.deepEqual(args, ['rev-parse', '--show-toplevel']); return { code: 0, stdout: checkout }; } });
+  assert.equal(result.exitCode, 0);
+});
+
+test('default native process adapter reads fake gh without changing an existing accounting ledger', async t => {
+  const f = fixture(t); f.save();
+  const bin = join(f.root, 'bin'), ledgerFolder = join(f.root, '.local', 'state', 'pdd', 'autopilot', 'github');
+  fs.mkdirSync(bin); fs.mkdirSync(ledgerFolder, { recursive: true });
+  const ledger = join(ledgerFolder, createHash('sha256').update(repo).digest('hex').slice(0, 20) + '.jsonl');
+  fs.writeFileSync(ledger, 'sentinel\n');
+  const routes = join(f.root, 'routes.json'); fs.writeFileSync(routes, JSON.stringify(Object.fromEntries(f.routes)));
+  const program = `#!${process.execPath}\nimport {readFileSync} from 'node:fs';\nconst args = process.argv.slice(2);\nif (args.slice(0,4).join(' ') !== 'api --include --method GET') process.exit(8);\nconst key = args[4].slice(${JSON.stringify(`repos/${repo}/`)}.length);\nconst routes = JSON.parse(readFileSync(${JSON.stringify(routes)}, 'utf8'));\nif (!(key in routes)) process.exit(9);\nprocess.stdout.write('HTTP/2 200 OK\\r\\n\\r\\n' + JSON.stringify(routes[key]));\n`;
+  fs.writeFileSync(join(bin, 'gh'), program, { mode: 0o700 });
+  const result = await runAutopilotRegressions({ cwd: f.root, env: { HOME: f.root, PATH: bin }, json: true }, { root: f.root, repo, now: f.ports.now });
+  assert.equal(result.exitCode, 0, result.message); assert.equal(JSON.parse(result.message).merges[0].classification, 'ok');
+  assert.equal(fs.readFileSync(ledger, 'utf8'), 'sentinel\n');
+});
