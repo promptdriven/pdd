@@ -1,7 +1,7 @@
 # Local Autopilot metrics observations
 
 `src/autopilot-metrics-source.mjs` owns read-only native collection and a small
-hook core may call later. It never starts work, records approvals or edits core.
+durable hook used by core lifecycle transitions. The reader never starts work or records approvals.
 
 `readAutopilotMetrics({timezone,observedAt},ports={})` returns the scorecard.
 Ports: synchronous `fs`, `env`, `homedir`, `stateRoot`, async
@@ -13,37 +13,35 @@ named 20 lowercase hex digits + `.json`, including stopped records. Each supplie
 files, malformed records and partial JSONL lines. Other filesystem failures
 propagate. Never follow saved cwd/worktree/log paths or symlinks.
 
-History accepts `{metric: event}` from the hook and existing core rows
-`{at,issue,outcome,pr?}`: outcomes are work, `merged` is also an Autopilot merge.
-Never infer removed jobs' starts from ends. Active `pdd.core-job.v1` files provide
-`started`, `prAt` and agent/review.agent/suite.agent `started` work timestamps;
-their fixed `evidence` line uses `prAt`. No evidence line means no recorded pass.
+History accepts `{metric: event}` from the hook. Existing core rows
+`{at,issue,outcome,pr?}` establish work and PR association only: even `merged`
+can mean core observed a person's merge, so ambiguous historical outcomes never
+establish Autopilot attribution. Active `pdd.core-job.v1` files provide `started`,
+`prAt` and agent/review.agent/suite.agent `started` work timestamps.
 
-For locally associated PRs only, make GitHub GETs for PR, comments and exact
-merge-commit checks. Native pagination must retain every page. PR body evidence
-uses `updated_at` and `head.sha`; a body without an Evidence line supplies no
-work observation. Core merge comments need both exact
-`<!-- pdd:autopilot-core:merge:HEAD -->` and
-`Autopilot merge check passed for head HEAD.` with the PR's head SHA, at
-`created_at`. Evidence can come from that comment. Validation additionally needs
-fixed-line tests pass and lines `- Full test suite: pass`,
-`- Review: PASS from a fresh reviewer`, `- CI: green (N check(s))`, N > 0.
-Those core attestations establish fresh independent review, suite and CI on
-that exact head; CI none, missing lines and stale heads count zero.
-Only local merged history or a merged hook event establishes an Autopilot merge.
-A merge-check comment precedes the attempt, so a later PR merged_at plus that
-comment cannot by itself attribute a merge to Autopilot.
-For a locally recorded merge associated with a PR, its valid merged_at refines
-the history timestamp (which can reflect cleanup). Count the PR's actual merge
-day once, rather than two days when cleanup crosses 09:00.
-For a recorded Autopilot merge, a completed failure/timed_out/action_required
-check with head_sha equal to merge_commit_sha records `merge-ci-red` at
-completed_at. Reverts and BAD audits require explicit hook records with their
-discovery time. GitHub failure supplies no unrecorded success. Do not emit raw
-bodies, names or commands. Native calls use the counted gh runner, purpose other.
+Pass evidence and validation come only from durable local hook events recorded
+by core at the owning transition. PR bodies and public comments are mutable and
+unauthenticated: neither their text nor their timestamps establishes a check,
+validation or merge. Missing local evidence counts zero, even when public text
+claims success. Core owns stable per-head observations and exact-head gate
+attestations; historical reports must not move when a PR or comment is edited.
+
+For locally associated PRs only, make GitHub GETs for PR and exact merge-commit
+check runs and commit statuses (`commits/SHA/statuses`). Native pagination retains
+every page. Only a local merged metric establishes Autopilot attribution; never
+move its occurrence time using mutable PR metadata. For a recorded Autopilot
+merge, a completed check run with matching `head_sha` and conclusion `failure`,
+`timed_out`, `action_required`, `startup_failure`, `cancelled` or `stale` records
+`merge-ci-red` at `completed_at`. A commit status with matching `sha` and state
+`failure` or `error` records it at `created_at` (a status is an immutable occurrence).
+A missing or foreign SHA supplies no evidence. Check/status observations dedupe
+by issue and reporting day through the scorecard. Reverts and BAD audits require
+explicit hook records with discovery time. Independent GitHub read failures stay
+local and do not suppress the other CI source. Do not emit raw bodies, names or
+commands. Native calls use the counted gh runner, purpose other.
 
 `recordAutopilotMetric({root,repo,issue,kind,at,pr,head,evidence,validation,reason},
-ports={})` is the future integration hook: validate the scorecard event domain
+ports={})` is the lifecycle integration hook: validate the scorecard event domain
 and any supplied PR/SHA or throw `Invalid Autopilot metric`. Keep only named
 fields, lowercase repo/head, append `{metric:event}` to root/history.jsonl.
 Repair a cut trailing line with newline first. Directory/file modes: 0700/0600.

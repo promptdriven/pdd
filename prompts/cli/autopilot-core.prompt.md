@@ -371,6 +371,36 @@ append the history line. Each step has its own error boundary and only warns.
 `jobs/N.json` goes last in a `finally`, so a failed step never keeps the job. A merge also deletes the local branch; other outcomes keep it, because the
 agent's commits may exist only there.
 
+## Durable metrics
+
+Use the [metrics recorder](autopilot-metrics-source.prompt.md) on the same injected
+filesystem and core root. Each measurement failure warns locally and never blocks
+work, a merge, or cleanup. Record `started` at job creation, `worked` when starting
+a build/review/suite/repair, advancing a job, and cleaning it up. Before deleting a
+job also preserve its actual `started` and saved agent/PR work timestamps, so
+upgrading a surviving job retains known work without inventing earlier steps.
+
+After confirming the PR matches the job head, record only allowlisted fixed
+Evidence lines from the result/PR body at first local observation. Keep the
+observed `(head, evidence)` signatures on the job: unchanged lines never create
+new check events on later ticks. Newly observed evidence has the current time,
+never a mutable PR/comment timestamp or a caller-supplied backdated time. No line
+means zero; other body content is never copied into metric history.
+
+When fresh review PASS, the full suite pass and green CI coincide on this head,
+record a `validated` event with `head`, and `validation` containing
+`review: {head, verdict: "PASS", fresh: true}`, `tests: {head, state: "pass"}` and
+`ci: {head, state: "pass"}`. Keep `metricValidatedHead` on the job to preserve its
+first occurrence time through retries. CI none never establishes validation.
+
+Only a successful core-issued merge command sets and saves
+`autopilotMerge: {head, at}` on the job. After confirming the merge, record
+`merged` only when this attribution matches the head; use the confirmed immutable
+`merged_at` when present, otherwise the saved successful-command time. Merely
+observing a merged PR, including during END or person-stop cleanup, never creates
+attribution. Job cleanup preserves the durable events and never infers a merge
+from the generic `merged` outcome.
+
 ## Status
 
 `coreStatus({state, settings}, {root, reportRoot, now, fs})` returns text from local
@@ -407,6 +437,9 @@ REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 with the native defaults named above.
 
 ## Dependencies
+
+- [Metrics recorder](autopilot-metrics-source.prompt.md): required durable event
+  schema and append boundary for the lifecycle observations above.
 
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome and stop.
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the
