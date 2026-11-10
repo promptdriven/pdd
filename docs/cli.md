@@ -1429,7 +1429,13 @@ Each tick, without AI calls:
 5. Fill free slots: claim the oldest ready issue with `pdd:working` and a claim
    comment, make a worktree and start one headless job. The job runs the same pdd
    as the tick (it goes first on the job's `PATH`). It makes one PR with prompt,
-   tests and code, and writes one `Runtime:` line and one `Evidence:` line in the PR
+   tests and code where the files are owned by a prompt, and changes other files
+   directly: a file is owned when `pdd-bindings.json`, a `Generated from` header or a
+   prompt's opening paragraph names it. The job gets this owner table and writes one
+   `Path:` line per path in the PR body; Autopilot checks the lines against the table.
+   Existing code that no prompt owns changes directly with a regression test, and
+   Autopilot files one report that proposes adopting PDD for it. The job writes one
+   `Runtime:` line and one `Evidence:` line in the PR
    body. It writes no review verdict: only the fresh reviewer gives one. In `auto`
    mode your `pdd autopilot start` is the approval of the job's prompt changes: the
    job records it for each changed prompt with `pdd approve PROMPT --said -` and the

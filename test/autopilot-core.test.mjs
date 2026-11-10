@@ -1007,7 +1007,7 @@ test('R17 "Runtime: not run" with no Runtime cause kind (for example no prompt c
   const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (no prompt changed)', runtime: { state: 'not-run', cause: 'no prompt changed' } });
   await w.tick();
   assert.equal(w.reports.issues.size, 0); assert.equal(w.reports.calls.length, 0);
-  assert.match(pr.body, /Runtime: not run \(no prompt changed\)$/, 'the PR body is not rewritten');
+  assert.match(pr.body, /Runtime: not run \(no prompt changed\)$/m, 'the PR body is not rewritten');
   assert.doesNotMatch(w.job(17, 'build').input, /"kind":"runtime\|pdd\|job","component"[^}]*"code"[^}]*\}\}/, 'the success template has no Runtime kind');
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
@@ -1704,7 +1704,11 @@ test('H2 a Runtime report goes to the configured Runtime repository when readabl
 
 // ---- B (#3185): the operator's start approves the prompt changes in auto mode ---------------------------------
 const promptWith = status => `# Words\n\nCount the words of a text.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ status, operations: [] })}\n\`\`\`\n</details>\n`;
-const writePrompt = (w, n, role, status) => { const dir = join(w.job(n, role).cwd, 'prompts'); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'words.prompt.md'), promptWith(status)); };
+const writePrompt = (w, n, role, status) => {
+  const cwd = w.job(n, role).cwd; mkdirSync(join(cwd, 'prompts'), { recursive: true }); mkdirSync(join(cwd, 'src'), { recursive: true });
+  writeFileSync(join(cwd, 'prompts', 'words.prompt.md'), promptWith(status));
+  writeFileSync(join(cwd, 'src', 'words.js'), '// Generated from prompts/words.prompt.md\nexport const words = s => s.split(" ").length;\n');   // the new code that the new prompt owns
+};
 const WORDS = `Operator action: pdd autopilot start --engine core in auto mode for acme/widgets on m-${createHash('sha256').update('machine-a').digest('hex').slice(0, 12)} at 2026-11-10T11:00:00.000Z`;
 
 test('I1 in auto mode the job records the operator approval for each changed prompt; observe mode does not approve', async t => {
@@ -2044,6 +2048,7 @@ test('N1 the prompt gate uses pdd\'s own checks: a stale edit, a broken block, a
   w.issue(17); await w.tick();
   const text = approvedText('Count the new words.');
   writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', text); recordApproval(w, 'prompts/new.prompt.md', text);
+  writeIn(w.job(17, 'build').cwd, 'src/new.js', '// Generated from prompts/new.prompt.md\nexport const n = 1;\n');
   const { pr } = w.build(17); await greenTick(w, 17);
   assert.deepEqual(w.github.merges, [pr.number], 'an approval recorded with pdd approve merges');
 });
@@ -2150,4 +2155,75 @@ test('N7 a question resets the streak; a quiet job gets no heartbeat', async t =
   const beats = [];
   for (let i = 0; i < 6; i++) { v.advance(10 * MIN); await v.tick({ heartbeat: async job => { beats.push(v.now()); return { state: 'refreshed' }; } }); }
   assert.ok(beats.length <= 4, `a quiet job (45 minutes, no progress) gets no heartbeat: ${beats.length}`);
+});
+
+// ---- Debate A (A-VERDICT.md section 6): the path comes from file ownership --------------------------------------
+const bindings = modules => JSON.stringify({ schema_version: 'pdd.bindings.v1', modules: modules.map(([module, prompt]) => ({ module, stories: ['user_stories/s.md'], prompt })) });
+const editIn = (w, n, path, text, role = 'build') => writeIn(w.job(n, role).cwd, path, text);
+
+test('O1 the build brief has the owner table (binding, header in the first 4 KiB, opening paragraph) and the path rules', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('pdd-bindings.json', bindings([['src/words.js', 'prompts/words.prompt.md']]));
+  w.baseCommit('src/late.js', `${'// filler line\n'.repeat(30)}// Generated from prompts/late.prompt.md (sha256: x)\n`);
+  w.baseCommit('prompts/money.prompt.md', '# Money\n\nOwn `src/money.js`: format cents as money.\n\nLater text names src/other.js, which is not the opening paragraph.\n');
+  w.issue(17); await w.tick();
+  const input = w.job(17, 'build').input;
+  assert.match(input, /- src\/words\.js: prompts\/words\.prompt\.md \(binding\)/);
+  assert.match(input, /- src\/late\.js: prompts\/late\.prompt\.md \(header\)/, 'a header past the first 10 lines, in the first 4 KiB');
+  assert.doesNotMatch(input, /- src\/other\.js:/, 'only the opening paragraph counts');
+  assert.match(input, /e\. Existing code that no prompt owns: change it directly, with a regression test/);
+  assert.match(input, /The prompt and the code may be in one commit\. Never rewrite history/);
+  assert.match(input, /"adopt":\[/);
+});
+
+test('O2 #42: a package.json field on path d passes the native checks and merges; the reviewer gets the owner table and does not judge commit order', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', private: true }));
+  w.baseCommit('prompts/readme.prompt.md', '# Readme\n\nOwn `README.md`: the project page.\n\nThe package.json repository field is https://github.com/acme/widgets.\n');
+  w.issue(17); await w.tick();
+  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', private: true, repository: 'https://github.com/acme/widgets' }));
+  const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (no prompt changed)\nPath: d — package.json — unowned — no contract change — Test: done check', result: { promptChanged: false } });
+  await w.tick();
+  const review = w.job(17, 'review').input;
+  assert.match(review, /- package\.json: unowned/); assert.match(review, /Do not judge commit order/); assert.match(review, /Do not ask for a new prompt for an unowned file/);
+  assert.match(review, /prompts\/readme\.prompt\.md mentions package\.json/, 'R5 is a hint for the reviewer');
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+test('O3 native reds: an owned file on path d (R1), a new prompt with no new code (R3), ownership added for an existing file (R4), no Path line (R6)', async t => {
+  const cases = [
+    ['R1', w => editIn(w, 17, 'src/words.js', 'export const words = s => s.split(/\\s+/);\n'), 'Path: d — src/words.js — unowned — no contract change — Test: done check', /src\/words\.js is owned by prompts\/words\.prompt\.md \(binding\), so it cannot take path d/],
+    ['R3', w => editIn(w, 17, 'prompts/package.prompt.md', '# Package\n\nThe test:vectors script is exactly node --test.\n'), 'Path: d — package.json — unowned — new prompt — Test: test/package.test.js', /prompts\/package\.prompt\.md is a new prompt that owns no new code file/],
+    ['R4', w => editIn(w, 17, 'src/util.js', '// Generated from prompts/util.prompt.md (sha256: x)\nexport const util = 1;\n'), 'Path: e — src/util.js — unowned — no contract change — Test: test/util.test.js', /src\/util\.js exists on the base with no owner, and this PR adds a header for it/],
+    ['R6', () => {}, null, /The PR body has no Path line/]];
+  for (const [name, edit, line, finding] of cases) {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.baseCommit('pdd-bindings.json', bindings([['src/words.js', 'prompts/words.prompt.md']]));
+    w.baseCommit('src/words.js', 'export const words = s => s.split(" ");\n');
+    w.baseCommit('src/util.js', 'export const util = 0;\n');
+    w.issue(17); await w.tick(); edit(w);
+    w.build(17, line ? { body: `Fixes #17\n\nRuntime: PASS\n${line}` } : { body: 'Fixes #17\n\nRuntime: PASS', pathLine: false });
+    await w.tick();
+    const repair = w.job(17, 'repair');
+    assert.ok(repair, `${name}: red`); assert.match(repair.input, finding, name);
+  }
+  // An issue that asks to adopt PDD may add the header.
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('src/util.js', 'export const util = 0;\n');
+  w.issue(17, { title: 'Adopt PDD for src/util.js' }); await w.tick();
+  editIn(w, 17, 'src/util.js', '// Generated from prompts/util.prompt.md (sha256: x)\nexport const util = 0;\n');
+  editIn(w, 17, 'prompts/util.prompt.md', '# Util\n\nOwn `src/util.js`.\n');
+  w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: c — src/util.js, prompts/util.prompt.md — prompts/util.prompt.md — new prompt — Test: done check' }); await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined, 'adopting PDD is allowed when the issue asks');
+});
+
+test('O4 path e: the job result proposes adopting PDD; the tick files one deduped PDD report', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18); await w.tick();
+  w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: e — change-17.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-17.txt'] } }); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
+  w.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: e — change-18.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-18.txt'] } }); await w.tick();
+  const drafts = listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
+  assert.equal(drafts.length, 1); assert.equal(drafts[0].count, 2); assert.match(drafts[0].body, /^Autopilot changed existing code that no prompt owns/); assert.match(drafts[0].body, /change-18\.txt/);
 });

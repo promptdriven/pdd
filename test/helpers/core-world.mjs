@@ -18,7 +18,7 @@ function extend(f, w) {
   const prefix = `repos/${f.repo}`;
   const restPr = pr => ({ number: pr.number, state: pr.state, merged: pr.merged, body: pr.body, title: pr.title, html_url: `https://github.com/${f.repo}/pull/${pr.number}`,
     head: { sha: pr.head, ref: pr.branch, repo: { full_name: f.repo } }, base: { ref: pr.base, repo: { full_name: f.repo } }, merge_commit_sha: pr.mergeSha ?? null, draft: Boolean(pr.draft) });
-  f.openPr = ({ branch, head, body = 'Fixes the issue.\n\nRuntime: PASS', base = 'main', title = 'Change' }) => {
+  f.openPr = ({ branch, head, body = 'Fixes the issue.\n\nRuntime: PASS\nPath: d — change.txt — unowned — no contract change — Test: done check', base = 'main', title = 'Change' }) => {
     const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, comments: [], labels: [] };
     f.prs.set(pr.number, pr); return pr;
   };
@@ -166,8 +166,10 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.progress = (issue, role) => appendFileSync(w.job(issue, role).log, `progress at ${w.now()}\n`);
   w.kill = (issue, role) => { const job = w.job(issue, role); w.alive.delete(job.pid); return job; };
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.
-  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {} } = {}) => {
+  // A scripted PR body gets a debate-A Path line unless it has one or the test asks for none (pathLine: false).
+  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true } = {}) => {
     const job = w.job(issue, role);
+    if (body && pathLine && !/^[\s>*-]*Path:/m.test(body)) body = `${body}\nPath: d — change-${issue}.txt — unowned — no contract change — Test: done check`;
     writeFileSync(join(job.cwd, `change-${issue}.txt`), `change ${job.id}\n`);
     git(job.cwd, 'add', '.'); git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
     const head = git(job.cwd, 'rev-parse', 'HEAD');

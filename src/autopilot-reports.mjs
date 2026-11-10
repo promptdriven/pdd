@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 4bfba90e4c75b09fa121dc97e3d14bc3fd9ff40f35013f0303b9697710294417).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 7f258ee616d3fd96d7fec4ef57de0c5095a652f6604139fe5c1a6dfa1236847c).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -36,7 +36,8 @@ function draftFor({ cause, versions, step, words }) {
   const kind = cause.kind === 'runtime' ? 'runtime' : 'pdd';
   const title = `Autopilot report: ${kind === 'runtime' ? 'Runtime' : 'PDD'} ${slug(cause.component) || 'unknown'} ${slug(cause.code) || 'unknown'} (PDD ${minor(versions.pdd)})`;
   const tail = safeTail(cause.detail || cause.text, words);
-  const body = [cause.shipped ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
+  const body = [cause.code === 'adopt-pdd' ? 'Autopilot changed existing code that no prompt owns (path e, a direct change with a regression test). Please adopt PDD for these modules: give each one a prompt and a binding or header.'
+    : cause.shipped ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
     : `Autopilot ended one job because of a ${kind === 'runtime' ? 'Runtime' : 'PDD'} problem. The job did not wait for a fix.`, '',
     `- Kind: ${kind}`, `- Component: ${slug(cause.component) || 'unknown'}`, `- Error code: ${slug(cause.code) || 'unknown'}`, `- Step: ${slug(step) || 'unknown'}`,
     `- Versions: PDD ${versions.pdd ?? 'unknown'}, Node ${versions.node ?? 'unknown'}, ${versions.platform ?? 'unknown'}, agent ${versions.agent ?? 'unknown'}`, `- Seen on this machine: ${COUNT}`,
@@ -108,7 +109,7 @@ export function reportKind(cause) {
   return cause?.kind === 'runtime' && PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) ? 'pdd' : cause?.kind;
 }
 // Stable fingerprints: an agent writes the code and the component as free text, so each is mapped to a fixed word.
-const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['no-verdict', /verdict/],
+const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/],
   ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
   ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['interpreter-error', /interpreter/],
   ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],

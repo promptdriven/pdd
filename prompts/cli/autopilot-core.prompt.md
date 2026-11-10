@@ -281,7 +281,23 @@ any other pdd (for example an older global install).
   author, and these rules: choose pdd-small-change, pdd-bug or pdd-feature, but make
   ONE PR with prompt, Story, tests and code; this is not a `pdd workflow run`, so no
   `pdd workflow` command, no Herdr, no person wait and no `steps/autopilot.md`;
-  prompts first; focused tests, with the full test command named; when a prompt
+  **the path from file ownership** (debate A, the exact text of A-VERDICT section 6.1):
+  the brief has the owner table of the job worktree (`ownerTable`, below; up to 400
+  owned files), and the rules say: a file is owned when pdd-bindings.json, a
+  `Generated from` header or a prompt's opening paragraph names it (not sure = owned);
+  path a (owned code, the contract changes: the owning prompt first, in the issue's
+  words, then Story, tests, code), b (owned code, the contract stays: prompt unchanged;
+  quote the restored line or "no contract change"), c (a new code file with new
+  behavior: its prompt first, with a binding or header; moved code keeps its owner), d
+  (any other file: direct, never a new prompt; a value that a prompt states must agree
+  with it; docs take facts from the owning prompt), e (existing unowned code: direct,
+  with a regression test, and the file in the result's `adopt` list); never add a
+  binding or header for a file of the base unless the issue asks to adopt PDD; tests
+  only for a change of the public surface (a test that fails on base), else the done
+  check; one `Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote
+  file:line | no contract change | new prompt> — Test: <file | done check>` line per
+  path in the PR body; prompt and code may share a commit; never rewrite history;
+  focused tests, with the full test command named; when a prompt
   changed, run `pdd test` for the changed Stories and put exactly one `Runtime: PASS`,
   `Runtime: FAIL (…)` or `Runtime: not run (…)` line in the PR body. **Only a real
   Runtime FAIL verdict is a failure** (fix the code until it passes). When Runtime
@@ -326,9 +342,16 @@ any other pdd (for example an older global install).
   the build rules; push to the same branch, no new PR, and update the `Runtime:` and
   `Evidence:` lines when they change.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
-  that did not write the change. It checks the issue fit, prompt-first agreement,
-  tests that fail without the fix, no weakened test, an honest Runtime line and no
-  unrelated or unsafe change. A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
+  that did not write the change. It gets the base owner table of the PR's changed files
+  and the R5 hints (below), and checks the issue fit; (2) Path and (3) Tests with the
+  exact text of A-VERDICT section 6.2 (the Path lines match the owner table, disputed
+  only by naming a missed binding, header or prompt line; a and c trace to the issue; b
+  keeps the contract; d agrees with any prompt that states a changed value;
+  must-fixes: a new prompt for a non-code file, a binding or header added for an
+  unowned file of the base, owned code that disagrees with its prompt; never a new
+  prompt for an unowned file; never commit order; a missing test is a must-fix only
+  with the surface and the result named; no test that only copies a value from the
+  diff); an honest Runtime line and no unrelated or unsafe change. A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
   result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`.
 - **Suite** (in `worktrees/N-suite`): `node bin/pdd.mjs workflow suite --command
   TEST --timeout MIN` through the [shared full-suite queue](test-suite-queue.prompt.md),
@@ -381,6 +404,14 @@ its claim (claim comment and `pdd:working`) and starts nothing. The next build p
 then has the question and those answers as data, or "no written answer" when there
 is none.
 
+**Owner table** (`ownerTable(fs, root, files)`, the one owner function; it can call
+`pdd owner PATH` when pdd ships it): bindings first (`pdd-bindings.json` modules: module
+to prompt), then a `Generated from PROMPT.prompt.md` header anywhere in the first 4 KiB
+of a file, then the first paragraph of each prompt that is not a heading or a comment,
+for each path in it that is a file of the tree (uncertain = owned). The first owner
+found wins. **Path e** results carry `adopt` (file paths): the tick files them as one
+deduped PDD report (`autopilot-core` / `adopt-pdd`), and it never blocks the job.
+
 ## Merge check
 
 Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
@@ -423,7 +454,15 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    repository (strict_approvals): …", the PR stays open with one note
    `<!-- pdd:autopilot-core:needs-approval:P -->`; in other repositories they are red,
    with the approval command and words in the finding (one repair, then END as usual).
-   Observe mode never approves: it lists the problems in its "would merge" note. Then a
+   Observe mode never approves: it lists the problems in its "would merge" note.
+   **Path checks** (debate A section 6.3, no AI, once per head and PR body, saved as
+   `paths`): from clean checkouts of the base tip and the head, the owner tables before
+   and after, and the changed files (`--name-status --find-renames`). Red: R1 a file in
+   a path d or e line that the base owns; R3 an added prompt that owns no added code file
+   of the PR (with an issue that asks to "adopt PDD", any changed file); R4 a file of the
+   base with no owner that the head gives a binding or header (unless the issue asks to
+   adopt PDD); R6 no `Path:` line. R5 is only a hint for the reviewer: prompts at the head
+   that mention a changed unowned file. Then a
    failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass); else
    a review FAIL or a failed suite. With no red finding yet, start the review and

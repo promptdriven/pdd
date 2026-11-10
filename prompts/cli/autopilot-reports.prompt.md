@@ -15,7 +15,8 @@ most once a day.
 - Only causes of kind `runtime` and `pdd` produce reports. Kind `job` and mode `off`
   return `{state: "off"}` and write nothing.
 - Stable causes: before the fingerprint, the code becomes one fixed word
-  (`stableCode`): merge-check-tool, suite-broken, no-verdict, scenario-limit,
+  (`stableCode`): merge-check-tool, suite-broken, adopt-pdd (its body asks to adopt
+  PDD for the listed modules), no-verdict, scenario-limit,
   vector-replay, runtime-case, lint-refusal, interface-refusal, binding-refusal,
   interpreter-error, server-incompatible, crash, claim-error, not-run, timeout,
   cli-error (matched in this order on the slug), else `other-HASH`: the first 8 hex
