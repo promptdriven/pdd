@@ -124,8 +124,9 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
 3. Save the job file, then start the build job (below). A start error ends the job
    with a `pdd` cause `start-failed`.
 
-Intake is held, and nothing is claimed, while `ports.agentReady()` is false (for
-example a Codex usage limit) or while `core.json` holds it: after 3 jobs in a row
+Intake is held, and nothing is claimed, when the saved agent is not Codex or
+Claude, when `ports.agentReady()` is false at the first ready issue (for example a
+Codex usage limit), or while `core.json` holds it: after 3 jobs in a row
 end with no result (`no-result`: the agent crashed, was signed out or reached a
 limit), intake pauses for one hour on this machine. A job that reaches a PR resets
 the count. Status shows the hold.
@@ -167,7 +168,8 @@ is stopped and ends with `timeout`. An exited or dead job: a valid `pr` result
 ## Merge check
 
 Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`); past it, stop the
-checks and end with `checks-timeout` and the last error. Each tick, in order:
+checks and end with the last error: a `pdd` cause `merge-check-tool` when the last
+error came from a GitHub or Git call, else a `job` cause `checks-timeout`. Each tick, in order:
 
 1. Read the PR. Merged by someone: finish as merged. Closed: end `pr-closed`. The PR
    head SHA, head branch or base differs from the job: end `head-moved`.

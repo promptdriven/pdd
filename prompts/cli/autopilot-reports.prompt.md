@@ -23,7 +23,8 @@ by the cause kind, the text is safe, and each machine has a daily limit.
   `pdd:autopilot-report` and no assignee.
 - Safe text: the title names the kind, component, code and PDD minor version. The
   body has the kind, component, error code, step, the PDD, Node, platform and agent
-  versions, and a redacted detail tail of at most 20 lines of 200 characters:
+  versions, how many times this machine saw the cause (1, or the draft's count),
+  and a redacted detail tail of at most 20 lines of 200 characters:
   [secret redaction](secret-redaction.prompt.md) first, then URLs become `[url]`,
   absolute paths become `[path]`, and the repository's full name, owner and name
   become `[repository]`. It never includes the issue text or repository code.
