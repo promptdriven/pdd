@@ -230,9 +230,11 @@ async function intake(ctx, rows) {
   let free = settings.runs - busy, tries = 0;
   if (free <= 0) return null;
   if (held.heldUntil > ctx.now()) return `intake paused until ${new Date(held.heldUntil).toISOString()}: ${STRIKES} jobs in a row ended with no result; check the agent with pdd autopilot doctor`;
-  if (!await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
+  let agentChecked = false;
   for await (const row of readyRows(ctx, rows)) {
     if (free <= 0 || tries++ >= CLAIM_TRIES) break;
+    if (!agentChecked && !await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
+    agentChecked = true;
     const n = row.number, stamp = ctx.now().toString(36), branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
     try {
       ctx.fs.mkdirSync(ctx.dirs.worktrees, { recursive: true, mode: 0o700 });
@@ -435,7 +437,7 @@ export async function tickCore(input, ports) {
   const ctx = context(input, ports), { settings, state } = ctx;
   if (settings.mode === 'off') return { exitCode: 0, message: 'Autopilot is off.' };
   let rows = null;
-  try { rows = await ports.listIssues(); } catch (error) { ctx.warn(`Autopilot core could not list issues: ${error.message}`); }
+  if (input.budget?.state !== 'reserve') try { rows = await ports.listIssues(); } catch (error) { ctx.warn(`Autopilot core could not list issues: ${error.message}`); }
   if (settings.mode === 'observe') {
     const ready = rows ? await readyIssues(input, ports, rows) : [];
     return { exitCode: 0, message: `Autopilot core (observe): ${ready.length} issue(s) ready${ready.length ? `: #${ready.join(', #')}` : ''}; nothing was claimed.` };
@@ -470,7 +472,7 @@ export function coreStatus({ state, settings }, ports) {
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), held = readJson(fs, folders(ports.root).machine, {});
   const busy = jobs.filter(job => job.phase !== 'ending').length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
   const lines = [`Autopilot engine core (${settings.mode}): ${state.repo ?? 'repository unknown'} in ${state.cwd} · base ${state.baseBranch ?? 'unknown'} · agent ${state.agent?.kind ?? 'none'}`,
-    `Slots: ${busy} of ${settings.runs} slots busy; job time limit ${settings.jobTimeoutMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${settings.label ? `; only issues with ${settings.label}` : ''}`];
+    `Jobs: ${busy} of ${settings.runs} slots busy; job time limit ${settings.jobTimeoutMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${settings.label ? `; only issues with ${settings.label}` : ''}`];
   if (held.heldUntil > now) lines.push(`Intake paused until ${new Date(held.heldUntil).toISOString()}: ${STRIKES} jobs in a row ended with no result.`);
   for (const job of jobs) {
     if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}, suite ${job.suite ? 'started' : '-'}, repairs ${job.repairs}${job.lastError ? `; last error: ${job.lastError}` : ''}`);

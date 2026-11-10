@@ -34,6 +34,8 @@ const routes = [
     forms: [form('pdd autopilot stop', "Stop this machine's timer; let the current agent step finish.")] },
   { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [{name:'--all',kind:'flag'},{name:'--json',kind:'flag'}],
     forms: [form('pdd autopilot status [--all] [--json]', "Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.")] },
+  { id: 'autopilot.report', prefix: ['autopilot', 'report'], local: 'autopilot-report', operands: [{name:'action',type:'choice:send',optional:true},{name:'fingerprint',type:'text',optional:true}], options: [],
+    forms: [form('pdd autopilot report', 'List the local Autopilot report drafts of this machine; no GitHub call.'), form('pdd autopilot report send FINGERPRINT', 'File one local report draft to promptdriven/pdd, or count it on the matching open report.')] },
   { id: 'autopilot.add', prefix: ['autopilot', 'add'], local: 'autopilot-add', operands: [{name:'issue',type:'issue',repeat:true}], options: [],
     forms: [form('pdd autopilot add N...', 'Mark named old issues with pdd:autopilot so Autopilot may take them.')] },
   { id: 'autopilot.release', prefix: ['autopilot', 'release'], local: 'autopilot-release', operands: [{name:'issue',type:'issue'}], options: [],

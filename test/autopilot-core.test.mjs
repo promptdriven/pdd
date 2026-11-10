@@ -314,3 +314,53 @@ test('status shows jobs, slots and the last END causes', async t => {
   assert.match(text, /#17 build running/);
   assert.match(text, /#18 ended .*no result/i);
 });
+
+test('doctor does not require Herdr when the engine is core', async () => {
+  const { runAutopilotDoctor } = await import('../src/autopilot-doctor.mjs');
+  const { doctorFixture } = await import('./helpers/doctor-fixture.mjs');
+  const f = doctorFixture();
+  f.paths.set('/project/pdd.json', JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core' } }));
+  const run = f.ports.run;
+  f.ports.run = (file, args, options) => file === 'herdr' ? assert.fail('Herdr must not be called') : run(file, args, options);
+  const result = await runAutopilotDoctor(f.input, f.ports);
+  assert.match(result.message, /PASS herdr: Not needed: autopilot\.engine is core/);
+  assert.doesNotMatch(result.message, /herdr-room/);
+  const full = doctorFixture(), shown = await runAutopilotDoctor(full.input, full.ports);
+  assert.match(shown.message, /PASS herdr: Herdr installation/); assert.match(shown.message, /herdr-room/);
+});
+
+test('launcher: engine core ticks without Herdr or a coordinator; status and report read local files', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { createHash } = await import('node:crypto');
+  const { spawnSync } = await import('node:child_process');
+  const { mkdirSync } = await import('node:fs');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test' } }));
+  w.issue(17);
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a',
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
+  const seen = [];
+  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
+    run: async (command, args, options = {}) => {
+      seen.push(command);
+      if (command === 'gh') return w.gh(args, options);
+      if (command !== 'git') assert.fail(`unexpected program ${command}`);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+  const result = await tickAutopilot(stateFile, ports);
+  assert.match(result.message, /Autopilot core: 1 started/);
+  assert.ok(w.job(17, 'build'));
+  assert.ok(!seen.includes('herdr'));
+  const saved = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.match(saved.core.message, /1 started/); assert.ok(Array.isArray(saved.cachedIssues));
+  const status = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env }, ports);
+  assert.equal(status.exitCode, 0, status.message);
+  assert.match(status.message, /Autopilot enabled; timer active/); assert.match(status.message, /engine core/); assert.match(status.message, /#17 build running/);
+  assert.ok(!seen.includes('herdr'));
+  const report = await runAutopilotLauncher({ command: 'report', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [] }, ports);
+  assert.equal(report.message, 'No local Autopilot report drafts.');
+});

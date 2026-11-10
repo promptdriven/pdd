@@ -41,6 +41,8 @@ import { lookupRepositoryParent, githubOriginRepository } from './workflow-workt
 import { costReport, costStatusLines } from './cost-ledger.mjs';
 
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
+import { autopilotEngine, readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
+import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -1510,6 +1512,47 @@ function workflowCleanupPorts(p, ports) {
     return reply;
   })};
 }
+// The small native engine (autopilot.engine "core"): no coordinator chat, Herdr, parking or AI scheduling.
+const engineAt = cwd => { try { return autopilotEngine(JSON.parse(readFileSync(join(cwd, 'pdd.json'), 'utf8'))); } catch { return 'full'; } };
+const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
+const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
+async function coreTick(stateFile, state, p, ports) {
+  const core = readCoreSettings(state.cwd);
+  if (core.mode === 'off') return ok('Autopilot is off.');
+  await automaticBase(state, p);
+  let budget = { state: 'normal' };
+  try { budget = githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(read(join(state.cwd, 'pdd.json'), {})?.autopilot?.github) }); }
+  catch { /* An unreadable ledger leaves the budget normal. */ }
+  p.etags = githubEtagCache({ root: p.githubRoot, repository: state.repo, now: p.now });
+  const listIssues = async () => {
+    const result = await queryIssues(state, p);
+    if (result.reserveBlocked || result.rateLimited) throw Error('GitHub limit is low; the issue list waits for the reset.');
+    if (result.status !== 304) { state.cachedIssues = result.issues; state.etag = result.etag; }
+    if (result.pages) state.pages = result.pages;
+    if (typeof result.since === 'string') state.issuesSince = result.since; else if (Number.isFinite(result.fullAt)) delete state.issuesSince;
+    if (Number.isFinite(result.fullAt)) state.issuesFullAt = result.fullAt;
+    return state.cachedIssues ?? [];
+  };
+  const agent = state.agent ?? {};
+  const result = await tickCore({ state, settings: core, budget }, {
+    gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, ...options }),
+    git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
+    now: p.now, env: p.env, warn: p.warn, root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env),
+    version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
+    trusted: row => trusted(row, state, { trust: core.trust }, p),
+    agentReady: async () => agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env })).state !== 'limited',
+    ...p.corePorts,
+  });
+  const release = await claimAdmission(state, p);
+  if (release) try {
+    const latest = read(stateFile);
+    if (latest?.enabled) {
+      for (const key of ['defaultBranch', 'baseBranch', 'cachedIssues', 'etag', 'pages', 'issuesSince', 'issuesFullAt']) if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
+      latest.core = { at: p.now(), message: result.message }; latest.nextTick = p.now() + INTERVAL; save(stateFile, latest);
+    }
+  } finally { release(); }
+  return result;
+}
 async function runTick(stateFile, ports, completion) {
   let deferredWakes = null;
   const outcome = async (status, message) => {await deferredWakes?.(); return completion ? {state: status} : ok(message);};
@@ -1527,6 +1570,7 @@ async function runTick(stateFile, ports, completion) {
       try { state = read(stateFile); if (!state?.enabled) return await outcome('inactive', 'Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state); }
       finally { release(); }
     }
+    if (engineAt(state.cwd) === 'core') return completion ? { state: 'inactive' } : await coreTick(stateFile, state, p, ports);
     try { await (ports.tidyRuns ?? tidyRuns)({timeBudgetMs:5000}, workflowCleanupPorts(p, ports)); }
     catch (error) { p.warn(`Finished chat cleanup waits (${error.code ?? 'unavailable'}).`); }
     const config = await settings(state, p);
@@ -2342,6 +2386,13 @@ export async function runAutopilotLauncher(input, ports = {}) {
   let p = portsFor(state, { ...ports, env: input.env });
   let controlLock, releaseAdmission;
   try {
+    if (command === 'report') {
+      const root = coreReports(ports, p.env);
+      if (issues[0] === 'send' && issues[1]) return await sendReportDraft({ root, fingerprint: issues[1], machine: hostname() }, { gh: (args, options) => p.execute('gh', args, { timeoutMs: 60000, ...options }), now: p.now });
+      if (issues.length) return { exitCode: 2, message: 'Use pdd autopilot report, or pdd autopilot report send FINGERPRINT.' };
+      const drafts = listReportDrafts({ root });
+      return ok(drafts.length ? [...drafts.map(d => `${d.fingerprint}: ${d.title}; seen ${d.count} time(s), last ${new Date(d.lastAt).toISOString()}`), 'Send one with pdd autopilot report send FINGERPRINT.'].join('\n') : 'No local Autopilot report drafts.');
+    }
     if (command === 'audit') {
       const found = await resolveRun(issues[0], {cwd:input.cwd}, {...ports,env:p.env,execFile:async(file,args,options)=>({stdout:await p.checked(file,args,options)})});
       if(found.error) return bad(found.error);
@@ -2390,6 +2441,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
       CODEX_HOME:startSelection.env.CODEX_HOME,CLAUDE_CONFIG_DIR:startSelection.env.CLAUDE_CONFIG_DIR,GEMINI_CLI_HOME:startSelection.env.GEMINI_CLI_HOME} : input.env;
     p = portsFor(state, { ...ports, env: invocationEnv });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
+    if (command === 'status' && engineAt(state.cwd) === 'core') {
+      const timerActive = Boolean(await timer('status', state, p));
+      return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerActive ? 'active' : 'inactive'}; next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}\n`
+        + coreStatus({ state, settings: readCoreSettings(state.cwd) }, { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
+        + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
+    }
     if (command === 'status') {
       const timerActive = Boolean(await timer('status', state, p));
       let serverRunning = false;
@@ -2481,13 +2538,14 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return { exitCode: result.exitCode, message: result.message };
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status, add or release.' };
-    const readiness = await workflowReadiness(state, p);
+    const core = engineAt(state.cwd) === 'core';
+    const readiness = core ? { state: 'ready' } : await workflowReadiness(state, p);
     if (readiness.state !== 'ready') return bad(`Autopilot did not start: pdd workflows cannot start in ${state.cwd}. ${readiness.message} Nothing was started or claimed, and every timer is unchanged.`);
     const priorBase = state.baseBranch;
     await automaticBase(state, p);
     if (priorBase !== state.baseBranch) state.recipeDelivered = false;
     if ((await p.execute('gh', ['auth', 'status'])).code !== 0) return bad('GitHub is not signed in; run gh auth login.');
-    try { if ((await p.execute('herdr', ['--version'])).code !== 0) throw Error(); }
+    if (!core) try { if ((await p.execute('herdr', ['--version'])).code !== 0) throw Error(); }
     catch { return bad('Herdr is missing or unavailable; install Herdr, then run herdr --help.'); }
     if (resumeCustody && !previous) return bad('Original coordinator recovery needs saved local state.');
     const previousProfile = !resumeCustody ? savedProfile(previous,p.env) : null;
@@ -2517,7 +2575,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (runs !== undefined) state.runs = Number(runs); else if (!pendingCustody) delete state.runs;
     if (checks !== undefined) state.checks = Number(checks); else if (!pendingCustody) delete state.checks;
     const priorRevision = initialRevision;
-    if (!pendingCustody && !resumeCustody) await openWorkspace(state, p);
+    if (!pendingCustody && !resumeCustody && !core) await openWorkspace(state, p);
     releaseAdmission = await claimAdmission(state, p);
     if (!releaseAdmission) return bad('Timed out waiting for the current Autopilot operation; retry.');
     if ((read(stateFile)?.controlRevision ?? null) !== priorRevision) return bad('Autopilot changed while starting; retry.');
@@ -2559,7 +2617,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       }
     }
     catch (e) { warning += ` Warning: ${line(e.message)}; next tick will retry.`; }
-    return ok(`${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: herdr session attach ${SESSION}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
+    return ok(`${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: ${core ? 'pdd autopilot status' : `herdr session attach ${SESSION}`}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
   } catch (e) { return bad(e.exact ? e.message : `Autopilot: ${e.code === 'ENOENT' ? 'install git, gh and Herdr, and sign in to your agent, then retry.' : line(e.message)}`); }
   finally { releaseAdmission?.(); controlLock?.(); }
 }

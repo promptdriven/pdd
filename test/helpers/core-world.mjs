@@ -78,7 +78,7 @@ function extend(f, w) {
   return f;
 }
 
-const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }).trim();
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }).trim();
 
 export async function coreWorld(t, { repository = 'acme/widgets', settings = {}, machine = 'machine-a', coordinatorId = 'coord-a', shared } = {}) {
   const dir = shared?.dir ?? mkdtempSync(join(tmpdir(), 'pdd-core-world-'));
