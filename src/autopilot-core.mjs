@@ -359,7 +359,7 @@ async function finishMerge(ctx, job) {
 // ---- END ------------------------------------------------------------------------------------------------
 async function report(ctx, job, why, step) {
   const [owner, name] = ctx.repo.split('/');
-  return fileReport({ cause: why, mode: ctx.settings.report, root: ctx.ports.reportRoot, machine: ctx.state.machine, step, words: [ctx.repo, owner, name],
+  return fileReport({ cause: why, mode: ctx.settings.report, root: ctx.ports.reportRoot ?? join(ctx.root, 'reports'), machine: ctx.state.machine, step, words: [ctx.repo, owner, name],
     versions: { pdd: ctx.ports.version, node: process.version, platform: process.platform, agent: ctx.state.agent?.kind } }, { gh: ctx.ports.gh, now: ctx.now, warn: ctx.warn, fs: ctx.fs });
 }
 async function end(ctx, job, why) {
