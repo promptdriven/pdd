@@ -43,6 +43,16 @@ written a result. Persist its reservation before launch, then job and result in
 calls and restarts reuse that record; failed checks also stay cached. A launch
 interrupted before its handle was saved stays pending rather than launching twice.
 Stop jobs beyond `timeout` milliseconds (default 120 minutes); cache the failure.
+Reconcile saved running checks independently of the current version: before a
+replacement launch, stop obsolete versions and cache `Intake check superseded`.
+The hook sweeps saved checks for the whole repository before candidate handling,
+including issues absent from rows, to enforce timeouts. Stop checks for held rows
+and cache `Intake issue held` before skipping them. Timeout wins over cancellation
+and uses `Intake agent timed out`. A stop or persistence error prevents a
+replacement launch; leave the running record available for reconciliation.
+Completed and failed inputs remain cached, including cancelled inputs; returning
+to an old version never relaunches it. Pending augmented checks of the same issue
+version survive reads of the completed initial check.
 Errors are `Error` objects whose messages describe the failed check or invalid
 input; ports' errors propagate. No automatic retries or expiry start another job.
 
@@ -110,7 +120,13 @@ ready even in shadow. Do not modify the core to wire the hook.
   contract for agentCommand, jobEnvironment and the start/read/stop operations.
   Use ctx.jobs/ports.jobs when injected, otherwise those native operations.
 - [Secret redaction](secret-redaction.prompt.md): required implementation contract
-  for sanitizing comment text before truncation and GitHub writes.
+  for sanitizing comment text before truncation and GitHub writes. Include the
+  effective child environment (`jobEnvironment(ports.env ?? process.env)`) in
+  the secret inventory, even when its values are absent from the host environment.
+  Redact result text before saving completed checks, acceptance drafts and question
+  episodes, so resumed writes remain safe after a restart or credential rotation.
+  Redact again with the current inventory before every comment write, including
+  retries from saved records. Never persist the credential inventory.
 - Node fs/path provide local state with an injected `fs` compatible with sync
   methods; use atomic private JSON files. Node crypto provides deterministic
   SHA-256. The injected clock `now()` returns epoch milliseconds.

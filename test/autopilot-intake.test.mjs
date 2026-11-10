@@ -227,9 +227,12 @@ test('direct improvement reuses its comment and augmented check, with isolated r
 
 test('native agent-job wrapper runs a scripted process and the next check reads its saved result', async t => {
   const w = world(t), jobs = [];
+  const release = join(w.root, 'release-scripted-job');
   const script = `let input=''; process.stdin.on('data', x=>input+=x); process.stdin.on('end',()=>{
     const p=JSON.parse(input.split('\\n').find(x=>x.startsWith('INTAKE_PACKET ')).slice(14));
-    require('fs').writeFileSync(p.result, JSON.stringify(${JSON.stringify(ready)}));
+    const wait=setInterval(()=>{if(require('fs').existsSync(${JSON.stringify(release)})) {
+      clearInterval(wait); require('fs').writeFileSync(p.result, JSON.stringify(${JSON.stringify(ready)}));
+    }}, 10);
   });`;
   w.ctx.jobs = {
     start(spec) { const job = startAgentJob({ ...spec, command: process.execPath, args: ['-e', script] }); jobs.push(job); return job; },
@@ -237,6 +240,7 @@ test('native agent-job wrapper runs a scripted process and the next check reads 
   };
   t.after(() => jobs.forEach(job => stopAgentJob(job)));
   assert.equal(await checkIssue(w.issue, w.ports()), null);
+  fs.writeFileSync(release, 'continue');
   const deadline = Date.now() + 10000;
   let result = null;
   while (!result && Date.now() < deadline) {
@@ -254,4 +258,90 @@ test('overlapping improvement and question calls post each marked comment once',
   await Promise.all([askPerson(w.issue, ask, w.ports()), askPerson(w.issue, ask, w.ports())]);
   assert.equal(comments(w).length, 2);
   assert.equal(w.writes.filter(x => x[0] === 'label').length, 1);
+});
+
+for (const kind of ['improve', 'ask']) {
+  test(`child-only credential is redacted in ${kind} comments and cached results resumed after rotation`, async t => {
+    const canary = `opaque-${kind}-fixture-47019`;
+    assert.equal(Object.values(process.env).includes(canary), false);
+    const output = kind === 'improve' ? { ...improve, acceptance: [`Print ${canary} safely.`] }
+      : { ...ask, question: `Should ${canary} be accepted?` };
+    const w = world(t, [output, ready]);
+    w.ctx.env = { CUSTOM_TOKEN: canary };
+    await intakeGate({ ...w.ctx, shadow: true }, [w.issue]);
+    assert.equal(w.started[0].env.CUSTOM_TOKEN === canary, true, 'child receives the override');
+    // New context, no old credential inventory: the saved result must already be safe.
+    const resumed = { ...w.ctx, env: {} };
+    await intakeGate(resumed, [w.issue]);
+    assert.equal(comments(w).length, 1);
+    assert.equal(comments(w)[0].includes(canary), false, 'cached result must not publish the credential');
+    assert.equal(comments(w)[0].includes('[redacted]'), true);
+  });
+
+  test(`direct ${kind} comment retry redacts the effective child environment before saving`, async t => {
+    const canary = `opaque-${kind}-retry-fixture-47020`;
+    const w = world(t, [ready]), original = w.ctx.gh.all;
+    w.ctx.env = { CUSTOM_TOKEN: canary };
+    let fail = true;
+    w.ctx.gh.all = async path => {
+      if (fail && path.includes('/comments?')) { fail = false; throw Error('temporary read failure'); }
+      return original(path);
+    };
+    const output = kind === 'improve' ? { ...improve, acceptance: [`Print ${canary} safely.`] }
+      : { ...ask, question: `Should ${canary} be accepted?` };
+    const operation = kind === 'improve' ? improveIssue : askPerson;
+    await assert.rejects(operation(w.issue, output, w.ports()), /temporary read failure/);
+    await operation(w.issue, output, { ...w.ports(), env: {} });
+    assert.equal(comments(w).length, 1);
+    assert.equal(comments(w)[0].includes(canary), false, 'saved write must already be redacted');
+    assert.equal(comments(w)[0].includes('[redacted]'), true);
+  });
+}
+
+test('editing a pending issue stops the superseded check before launching and never repeats old inputs', async t => {
+  const w = world(t, [ready, ready]);
+  w.ctx.jobs.read = () => ({ state: 'running', exit: null, result: null });
+  const initial = clone(w.issue);
+  assert.equal(await checkIssue(initial, w.ports()), null);
+  const oldJob = w.started[0].id, start = w.ctx.jobs.start;
+  w.ctx.jobs.start = spec => {
+    assert.ok(w.writes.some(x => x[0] === 'stop' && x[1] === oldJob), 'obsolete job stopped before replacement');
+    return start(spec);
+  };
+  w.issue.body = 'Use the revised requirement.';
+  assert.equal(await checkIssue(w.issue, w.ports()), null);
+  assert.equal(w.started.length, 2);
+  w.advance(10001);
+  await assert.rejects(checkIssue(w.issue, w.ports()), /timed out/);
+  assert.deepEqual(w.writes.filter(x => x[0] === 'stop').map(x => x[1]), w.started.map(x => x.id));
+  await assert.rejects(checkIssue(initial, w.ports()), /superseded/);
+  assert.equal(w.started.length, 2);
+});
+
+for (const hold of [{ state: 'closed' }, { labels: ['pdd:working'] }, { assignees: ['contributor'] }]) {
+  test(`pending check is stopped when issue becomes held: ${Object.keys(hold)[0]}`, async t => {
+    const w = world(t, [ready]);
+    w.ctx.jobs.read = () => ({ state: 'running', exit: null, result: null });
+    const initial = clone(w.issue);
+    assert.equal((await intakeGate(w.ctx, [w.issue])).actions[0].type, 'check');
+    Object.assign(w.issue, hold);
+    const result = await intakeGate({ ...w.ctx }, [w.issue]);
+    assert.deepEqual(result.ready, []); assert.equal(result.actions[0].type, 'held');
+    assert.deepEqual(w.writes, [['stop', w.started[0].id]]);
+    w.advance(10001);
+    await intakeGate(w.ctx, [w.issue]);
+    await assert.rejects(checkIssue(initial, w.ports()), /held/);
+    assert.equal(w.started.length, 1); assert.equal(w.writes.length, 1);
+  });
+}
+
+test('repository sweep times out saved checks even when their issue disappears from candidates', async t => {
+  const w = world(t, [ready]);
+  w.ctx.jobs.read = () => ({ state: 'running', exit: null, result: null });
+  await intakeGate(w.ctx, [w.issue]);
+  w.advance(10001);
+  assert.deepEqual(await intakeGate({ ...w.ctx }, []), { ready: [], actions: [] });
+  assert.deepEqual(w.writes, [['stop', w.started[0].id]]);
+  await assert.rejects(checkIssue(w.issue, w.ports()), /timed out/);
+  assert.equal(w.started.length, 1);
 });
