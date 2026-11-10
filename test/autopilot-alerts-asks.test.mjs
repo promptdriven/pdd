@@ -234,3 +234,57 @@ for(const action of ['alert','recovered','digest'])test(`legacy ${action} log se
   if(action==='digest')await f.digest([{number:1,category:'decision',need:'Choose policy A?'}]);else await f.alert();
   assert.equal(f.requests.length,1);
 });
+
+for (const order of [['resource','access'],['access','resource']]) test(`repair: mixed cause ${order.join(' to ')} joins one incident and separates machine hosts`, async t => {
+  const f=setup(t); await f.config();
+  await f.alert(1,order[0],{...ask,paused:true}); f.time+=15*MINUTE;
+  await f.alert(1,order[0],{...ask,paused:true});
+  await f.alert(2,order[1],{...ask,paused:true});
+  assert.equal(f.requests.length,1); assert.equal(f.incidents().length,1);
+  assert.deepEqual(f.incidents()[0].issues,[1,2]);
+  f.host='machine-b'; await f.alert(3,'resource',{...ask,paused:true});f.time+=15*MINUTE;
+  await f.alert(3,'resource',{...ask,paused:true});assert.equal(f.requests.length,2);
+});
+
+test('repair: complete compact message accepts an ask longer than 160 characters',async t=>{
+  const f=setup(t);await f.config();
+  const need='Choose whether the release should preserve the existing retention period for archived records or apply the shorter period only to records created after the next scheduled deployment?';
+  await f.alert(1,'decision',{...ask,need,tried:'Read policy.',ifNoAnswer:'Release waits.'});
+  assert.equal(f.requests.length,1);assert.ok(f.requests[0].body.text.includes(need));assert.ok(f.requests[0].body.text.length<=480);
+});
+for(const need of ['?','!!!?','Approve the deployment; grant write access.','Approve the deployment, grant write access.','Approve the deployment — grant write access.']) test(`repair: refuse insubstantial or multiple action clauses ${need}`,async t=>{
+  const f=setup(t);await f.config();await f.alert(1,'decision',{...ask,need});assert.equal(f.requests.length,0);
+});
+
+test('repair: actual automaticAttention questions reach digest while parked and gate descriptions stay quiet', async t=>{
+  const {automaticAttention}=await import('../src/workflow-runner.mjs');
+  const f=setup(t);await f.config();
+  const base={repo:f.repo,automaticOrigin:{machine:f.host},state:'waiting'};
+  const attention=automaticAttention({repo:f.repo,machine:f.host},{readRuns:()=>[
+    {...base,number:1,question:{text:'Choose policy A?',at:2}},
+    {...base,number:2,gate:{kind:'approve-pr',at:1}},
+    {...base,number:3,state:'paused',parkReason:'No supported route'},
+    {...base,number:4,state:'paused',question:{text:'Grant repository access?',at:2}},
+  ]});
+  await f.digest(attention);assert.equal(f.requests.length,1);
+  const text=f.requests[0].body.text;assert.match(text,/issues\/1 — Choose policy A\?/);assert.match(text,/issues\/4 — Grant repository access\?/);
+  assert.doesNotMatch(text,/issues\/[23]|approve-pr|No supported route/);
+});
+
+test('repair: person classification joins its own machine cause before a different host person cause', async t=>{
+  const f=setup(t);await f.config();await f.alert(1,'access');
+  f.host='machine-b';await f.alert(2,'resource',{...ask,paused:true});f.time+=15*MINUTE;await f.alert(2,'resource',{...ask,paused:true});
+  await f.alert(3,'access');
+  const own=f.incidents().find(item=>item.host==='machine-b');
+  assert.deepEqual(own.issues,[2,3]);assert.equal(f.requests.length,2);
+});
+
+for(const kind of ['test-suite','long-running','stuck'])test(`repair: ${kind} stays quiet when it shares an existing person cause`,async t=>{
+  const f=setup(t);await f.config();await f.alert();f.time+=DAY;
+  await f.alert(1,kind,{...ask,need:'Choose a different policy?'},{update:true});assert.equal(f.requests.length,1);
+  assert.equal(f.incidents()[0].fields.need,ask.need);
+});
+test('repair: a recorded suite cause can acquire its first real person ask',async t=>{
+  const f=setup(t);await f.config();await f.alert(1,'test-suite');
+  await f.alert(2,'decision');assert.equal(f.requests.length,1);
+});

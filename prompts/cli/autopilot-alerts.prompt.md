@@ -146,11 +146,11 @@ consequence remain recorded and are not sent.
 
 An eligible ask is a single line containing one question ending in `?`, or one
 imperative sentence beginning Approve, Choose, Grant, Provide, Supply, Sign,
-Release, Review, Restore, Renew, Increase, Allow or Run. Reject multiple questions,
+Release, Review, Restore, Renew, Increase, Allow or Run. Require substantive words in a question; punctuation alone is not an ask. Reject multiple action clauses separated by semicolons, commas, colons or dashes as well as conjunctions. Reject multiple questions,
 multiple sentences or coordinated actions (such as "approve and grant"), blank/generic needs (including "Identify the blocker" and
 "No named blocker is saved"), and informational/no-action wording in any need.
 This is structural validation; the coordinator owns whether only a person can
-answer. A sendable message must retain its full ask and all issue links.
+answer. A sendable message must retain its full ask and all issue links. There is no separate ask-length limit: measure the complete message.
 
 | Kind | Chat eligibility |
 | --- | --- |
@@ -161,7 +161,7 @@ answer. A sendable message must retain its full ask and all issue links.
 | recovered | Close matching incidents, but notify only for a confirmed delivered alert that remained open at least 15 minutes from delivery and passes the message budgets |
 
 Incident identity is lowercase repository + code, shared across issues and
-checkouts. Machine kinds additionally use the saved stable machine name. Missing
+checkouts. Machine kinds additionally use the saved stable machine name. Prefer a same-host cause over a person cause on another host. Reconcile the same code on the same host across person/machine classifications with the existing incident, retaining its kind and delivery route; a classification change cannot create a second send. Record-only observations cannot send or replace an existing person ask; an unsent record-only cause may acquire its first eligible ask. Distinct machine hosts remain separate. Missing
 code falls back to issue/kind only for local record identity. Issues join an
 open incident without another send. `--update` can resend only when need or owner
 changes; changed cause/tried/issue lists cannot send. Even a changed ask obeys
@@ -241,7 +241,7 @@ the shared record lock for each record update.
 ## Quiet digest and concurrent runs
 
 Native `digest` takes cwd, env and optional attention rows `{number, category,
-need}` (legacy cause-only rows are not person asks). Keep only decision/access
+need}` (the workflow projection supplies need only for an actual open question). Keep only decision/access
 rows with a concrete need. Save each repo/host attention snapshot so calls from
 other checkouts can combine it with all locally visible open decision/access
 incidents routed to the same destination. Do not show machine causes, suite

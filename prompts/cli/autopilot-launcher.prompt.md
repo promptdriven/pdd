@@ -1371,8 +1371,21 @@ stays `full`. The full engine below is unchanged; this section only adds a branc
   launcher's counted `gh` and `git` process port, its issue list (`queryIssues` with
   the saved ETag pages), its trust rule for authors (`trusted`, with the core trust
   list), the read-only Codex limits as `agentReady` (only `limited` holds intake),
-  the package version, an `alert` port that sends one alert of the given kind for the issue
-through this machine's alert destination with the core's cause, tried and need (and `--update` when the core asks), `ROOT` = the state file path without `.json` plus `-core`,
+  the package version, an `alert` adapter using the alert owner's structured schema.
+  Core exhausted-END `stuck` becomes a `decision` with stable code
+  `core-end-exhausted:ISSUE`, one ask to finish the issue's END by hand, tried
+  naming six failed ticks, issue details, and a consequence that the local job
+  ended while other work continues. Other stuck inputs remain record-only.
+  The core machine pause becomes `usage-limit` with code `core-no-result`,
+  paused true, tick = observation milliseconds, one ask to run the doctor on
+  this machine, tried naming the failed no-result check, and the saved pause
+  deadline as the no-answer consequence. Save `coreAlertPause` (issue, cause,
+  tried) in launcher state. After each core tick read ROOT/core.json: while its
+  pausedUntil is in the future, observe that same incident again, so persistence
+  reaches the alert owner's two-tick/15-minute gate. Repeating the initial tick
+  cannot advance it. When the saved pause expires/clears, send a scoped recovery
+  and remove coreAlertPause. Alert failures warn and do not abort work.
+  `ROOT` = the state file path without `.json` plus `-core`,
   and the machine report folder `core-reports` beside the state files. Tests may
   replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
   only while still enabled, save the issue-list cache, base fields, `nextTick` and

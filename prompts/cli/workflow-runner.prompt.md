@@ -275,7 +275,10 @@ matches ignoring case. Exclude ended runs except completed runs still at an
 `ask-code` gate. Emit `{number, category, cause}` rows: `stuck` with the existing
 stuck reason for stuck runs; otherwise `parked` with runtimeWait.reason or
 parkReason for paused runs; otherwise `decision` with the current open question
-or gate kind for a question or gate. One row per run, sorted by issue number.
+or gate kind for a question or gate. Add `need` containing the question text only
+when there is an actual current open question, including a paused person wait.
+Such a question takes decision precedence over a parked description; stuck
+remains stuck. Gate-only and generic parked rows have no need. One row per run, sorted by issue number.
 Ignore manual runs, other machines and repositories. Do not probe chats, wake,
 approve, mutate, or infer a stop. This supplies the launcher's repository digest
 across parallel runs, without changing run state or ownership.

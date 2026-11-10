@@ -97,8 +97,8 @@ for(const custody of ['local','shared']) for(const damage of ['missing','non-boo
     assert.equal(w.alerts.length,1,'MISSING_RECOMMENDATION_NEEDS_ONE_DECISION_ALERT');
     const alert=JSON.parse(w.alerts[0].text);
     assert.equal(w.alerts[0].kind,'decision');assert.match(alert.cause,/recommendation.*(missing|unavailable)/i);
-    assert.match(alert.need,/inspect/i);assert.match(alert.need,/keep.*merge.*finish/i);
-    assert.ok(alert.need.includes(`git revert -m 1 ${merge}`));assert.ok(alert.need.includes(w.run.baseBranch));
+    assert.match(alert.need,/keep.*merge.*finish/i);assert.match(alert.need,/recommendation unavailable/i);
+    assert.equal(alert.code,`audit-recommendation:23:${merge}`);assert.ok(alert.ifNoAnswer);assert.ok(alert.details.includes(`/issues/${w.run.number}`));
     assert.deepEqual(holds.map(h=>h.cause),['audit-evidence-invalid','audit-evidence-invalid']);
     assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
     assert.equal(readFileSync(file,'utf8'),bytes);assert.deepEqual(readdirSync(folder).sort(),reservations);
@@ -147,7 +147,8 @@ function realAlertPorts(w,http) {
   const config=join(w.ports.env.XDG_CONFIG_HOME,'pdd');mkdirSync(config,{recursive:true});
   const file=join(config,'autopilot-alerts.json');
   const configure=()=>writeFileSync(file,JSON.stringify({v:1,service:'slack',url:'https://hooks.slack.com/services/synthetic/test/fixture'}));
-  return {configure,ports:{sendAlert:undefined,alertPorts:{stateRoot:join(w.base,'alert-state'),hostname:()=> 'test-machine',http}}};
+  let at=Date.parse('2026-11-10T00:00:00Z');
+  return {configure,advanceDay:()=>{at+=24*60*60*1000;},ports:{sendAlert:undefined,alertPorts:{stateRoot:join(w.base,'alert-state'),hostname:()=> 'test-machine',now:()=>at,http}}};
 }
 for(const failure of ['http','not-configured'])test(`3138 repair 2: real alert ${failure} failure retries before journaling sent`,async t=>{
   const w=await world(t),entry=seedRecommendationHold(w);let requests=0;
@@ -155,7 +156,7 @@ for(const failure of ['http','not-configured'])test(`3138 repair 2: real alert $
   if(failure==='http')alert.configure();
   assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
   assert.equal(decisionStates(w)[0].state,'failed','UNDELIVERED_ALERT_MUST_REMAIN_RETRYABLE');
-  alert.configure();
+  alert.configure();if(failure==='http')alert.advanceDay();
   assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
   assert.equal(decisionStates(w)[0].state,'sent');
   assert.equal(requests,failure==='http'?2:1);
@@ -183,10 +184,10 @@ for(const custody of ['local','shared','mixed'])test(`3138 repair 2: ${custody} 
   for(let n=0;n<2;n++) {
     const holds=[];assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[]);
     assert.deepEqual(holds,[{pr:23,cause:'audit-evidence-invalid'},{pr:24,cause:'audit-evidence-invalid'}]);
-    for(const pr of [24,23])assert.equal((await checkHeldAudit(w,pr,alert.ports)).exitCode,1);
+    for(const pr of [24,23]){assert.equal((await checkHeldAudit(w,pr,alert.ports)).exitCode,1);alert.advanceDay();}
   }
   assert.equal(messages.length,2,'EACH_HELD_PR_NEEDS_ITS_OWN_ALERT');
-  for(const entry of entries)assert.equal(messages.filter(text=>text.includes(`PR #${entry.record.pr} (${entry.record.merge})`)).length,1);
+  for(const entry of entries)assert.equal(messages.filter(text=>text.includes(`PR #${entry.record.pr}:`)).length,1);
   assert.deepEqual(decisionStates(w).map(a=>[a.pr,a.state]),[[23,'sent'],[24,'sent']]);assertHeldEvidence(w,entries);
 });
 for(const damage of ['repository','run','merge','filename'])test(`3138 repair 2: another damaged record cannot bypass selected ${damage} identity`,async t=>{
@@ -223,11 +224,11 @@ for(const recommendations of [[false,false],[false,true],[true,false]])test(`313
     return {code:0,stdout:'{}'};
   }};
   const outcomes=[];
-  for(const pr of w.run.pr)outcomes.push(await auditMerge({run:w.run,pr:pr.number},ports));
+  for(const pr of w.run.pr){outcomes.push(await auditMerge({run:w.run,pr:pr.number},ports));alert.advanceDay();}
   assert.equal(messages.length,2,'EACH_VALID_BAD_PR_MUST_DELIVER_ITS_RECOMMENDATION');
   assert.deepEqual(outcomes.map(out=>out.exitCode),[0,0]);
   for(const [i,pr] of w.run.pr.entries()) {
-    const delivered=messages.filter(text=>text.includes(`PR #${pr.number} (${pr.mergeSha})`));
+    const delivered=messages.filter(text=>text.includes(`PR #${pr.number} (revert recommendation:`));
     assert.equal(delivered.length,1);assert.match(delivered[0],new RegExp(`recommendation: ${recommendations[i]}`,'i'));
     assert.equal(w.audit(pr.number).alert.state,'sent');
   }
@@ -252,7 +253,8 @@ for(const state of ['closed','open'])test(`3138 BAD without revert keeps the mer
   assert.equal(w.audit().revert,undefined);assert.equal(w.calls.filter(c=>c.file==='git'&&(c.args.includes('revert')||c.args[0]==='push'||c.args[0]==='switch')).length,0);
   const comment=comments(w)[0].args.find(a=>a.startsWith('body='));
   assert.ok(comment.includes(w.answer.summary));assert.ok(comment.includes(w.answer.evidence));assert.ok(comment.includes(merge));assert.match(comment,/recommendation: false/i);
-  const alert=JSON.parse(w.alerts[0].text);assert.match(alert.need,/default.*keep.*merge.*finish/i);assert.match(alert.need,/git revert -m 1 [a-f0-9]{40}/);assert.ok(alert.need.includes(merge));
+  const alert=JSON.parse(w.alerts[0].text);assert.match(alert.need,/keep.*merge.*finish.*recommended/i);assert.ok(alert.details.includes('/issues/'));
+  assert.ok(comment.includes(`git revert -m 1 ${merge}`));assert.ok(comment.includes(w.run.baseBranch));
   assert.equal(w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.includes(`repos/${w.run.repo}/issues`)).length,0);
   assert.equal((await w.check()).code,0);assert.equal(reopens(w).length,1);assert.equal(comments(w).length,1);assert.equal(w.alerts.length,1);
 });

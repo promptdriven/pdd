@@ -11,11 +11,10 @@ local bare origin. Only external services and agent reasoning are fake.
 Use the real alert owner with private state and injected HTTP delivery. Retain
 its `{exitCode,message}` result, including confirmed failure and unconfirmed
 delivery. Saving an incident can return zero even if delivery fails.
-An audit payload without the alert owner's stable code, concrete single ask and
-no-answer consequence stays record-only, regardless of the configured HTTP
-response. The audit retains unknown alert publication custody and does not retry
-it; the factory must not fabricate missing payload fields in its alert adapter. Keep open
-incident suppression and material updates observable; never confirm every call.
+BAD audit producers supply valid code, single ask and no-answer consequence;
+prove confirmed delivery completes publication and actual failed/unconfirmed
+HTTP attempts leave it unknown without a repeat. Malformed payload suppression
+has a separate alert-owner negative test. Never fabricate fields in the harness.
 GitHub must retain mutations and answer REST, GraphQL, claims, PR head/check readback
 and merge requests. Reject unsupported service operations. The interpreter must
 support verdict, no verdict, refusal and delayed completion. Scripted workers
@@ -72,7 +71,7 @@ repairs the named declaration, a fresh check must reach a verdict.
    the remote base and records one alert. BAD without that recommendation keeps
    the merge, reopens the original issue with one audit comment naming the gaps,
    and records one alert stating the recommendation, default keep-and-finish
-   choice and manual revert command. Repeated commands create no extra PR,
+   choice and useful audit details link. Full manual revert instructions remain on the issue. Repeated commands create no extra PR,
    issue, comment or alert for either form. Save verdict and recommendation
    separately and retain the remote base for both. A failed delivery cannot mark
    an audit alert sent, and a repeat cannot resend an uncertain publication.

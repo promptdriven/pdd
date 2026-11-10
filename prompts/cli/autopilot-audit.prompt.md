@@ -62,16 +62,17 @@ revert PR against the saved base. Clone into private scratch, start a unique rev
 branch from the current base, revert the pinned merge (mainline 1 for a merge
 commit), push only that branch and create a PR; never push to the base, force
 push or merge the revert. Conflicts are a saved failure with one alert for human
-help. Both BAD forms send one decision alert identifying the merge and explicitly
-stating the auditor's Boolean revert recommendation. Request a material update
-for every PR's ordinary BAD decision, so an open decision incident on the same
-issue cannot suppress a later PR's recommendation. Keep the PR and pinned merge
-in the alert and retain each audit's own publication reservation; successful or
-uncertain delivery must still suppress repeats of that audit. With false, name keeping
-the merge and finishing the rest as the default choice, report the issue reopen
-outcome, and offer reverting as the other choice with `git revert -m 1 MERGE_SHA`
-on a review branch and a PR against the saved base. With true, report the revert
-PR or saved failure and ask for review. Preserve earlier revert and alert
+help. Both BAD forms send one structured decision alert through the alert owner,
+subject to its delivery budgets. Use stable code `audit-bad:PR:MERGE`, nonblank
+cause/tried/need/ifNoAnswer, update true, and details linking the saved audit
+comment (fall back to the original issue). The single concise question identifies
+PR and Boolean revert recommendation: with false, choose keeping the merge and
+finishing the rest (recommended) or reverting; with true, ask to review the
+revert PR or saved failure. Keep pinned merge identity and any manual
+`git revert -m 1 MERGE_SHA` review-branch instructions in the saved issue comment,
+not the short ask. Tried reports reopen/comment or revert publication status.
+If unanswered, keep the merge and any revert PR awaiting review; other work
+continues. Never fabricate confirmation when budgets defer delivery. Preserve earlier revert and alert
 reservations from legacy false-recommendation records without repeating them;
 an existing revert is never a reason to create another. Repeated CONCERNs of the same kind from two distinct audited PRs in the
 repository create one process issue in that repository. Serialize repository
@@ -117,9 +118,11 @@ not an accepted verdict or permission for a follow-up publication. Never infer
 false, import, repair or rewrite that evidence or its effect reservations. Keep the
 command nonzero with audit-evidence-invalid; create no revert, issue update,
 comment or auditor. Identify the recommendation as missing or unavailable, ask the
-person to inspect the evidence, and name both choices: keep the merge and finish
-the rest, or revert on a review branch with `git revert -m 1 MERGE_SHA` and a PR
-against the saved base. Share this alert route between held discovery and the
+person one concise choice: keep the merge and finish the rest, or revert. Use
+code `audit-recommendation:PR:MERGE`, tried naming the evidence hold, ifNoAnswer
+explaining the hold continues while other work proceeds, and details linking
+the original issue. Keep the full pinned merge/base identity in cause and the
+saved evidence; never repair damaged evidence to add instructions. Share this alert route between held discovery and the
 audit command. Under repository audit custody, journal the alert separately in
 `decisions/IDENTITY.json` with schema (`pdd.audit-decision.v1`), repository
 (lowercase), runId, pr, merge, state (sending/sent/failed/unknown) and at. Reserve
@@ -133,7 +136,7 @@ Mark sent only when its message confirms an Alert or Update was sent. A message
 reporting delivery failed or no destination leaves the decision failed and eligible
 for the alert module's retry rule. Unconfirmed delivery or any other missing
 confirmation remains unknown. Request material updates so two PR decisions on the
-same issue can each reach the destination. Inspect all local and shared records
+same issue can each reach the destination when the alert owner's budgets permit. Inspect all local and shared records
 despite individual validation failures. Select the diagnostic record for the
 requested PR independently of record order, with its own filename, repository,
 run attempt and pinned merge checks. Keep each PR's hold and alert independent;

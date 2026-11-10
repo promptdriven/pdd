@@ -1955,7 +1955,7 @@ test('native attention digest includes parallel automatic runs without waking th
   assert.deepEqual(digests.at(-1).attention, [
     { number: 41, category: 'stuck', cause: 'Required check unavailable' },
     { number: 42, category: 'parked', cause: 'Interpreter busy' },
-    { number: 43, category: 'decision', cause: 'Choose retention' },
+    { number: 43, category: 'decision', cause: 'Choose retention', need: 'Choose retention' },
     { number: 49, category: 'decision', cause: 'ask-code' }]);
   assert.equal(f.prompts.length, prompts, 'digest collection must not wake an AI agent');
   const saved = JSON.parse(readFileSync(join(common, 'pdd', 'runs', '41', 'status.json'), 'utf8'));
@@ -2197,7 +2197,7 @@ for(const damage of ['missing','non-boolean'])test(`3138 repair 1: discovery ale
   assert.equal(alerts.length,1,'DISCOVERY_MUST_SEND_ONE_RECOMMENDATION_DECISION_ALERT');
   assert.equal(alerts[0].kind,'decision');
   const alert=JSON.parse(alerts[0].text);assert.match(alert.cause,/recommendation.*(missing|unavailable)/i);
-  assert.match(alert.need,/keep.*merge.*finish/i);assert.ok(alert.need.includes(`git revert -m 1 ${record.merge}`));assert.ok(alert.need.includes(run.baseBranch));
+  assert.match(alert.need,/keep.*merge.*finish/i);assert.ok(alert.cause.includes(record.merge));assert.ok(alert.details.includes(`/issues/${run.number}`));assert.ok(alert.ifNoAnswer);
   assert.deepEqual(f.state().auditHolds,[{number:17,pr:23,cause:'audit-evidence-invalid'}]);
   const packets=f.prompts.map(text=>JSON.parse(text.trim().split('\n').at(-1)));
   assert.ok(packets.some(p=>p.issues?.some(i=>i.number===18&&i.eligible)));
