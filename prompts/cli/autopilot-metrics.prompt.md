@@ -26,7 +26,9 @@ Deduplicate each day by lowercase repository + issue, across jobs/retries/PRs.
 
 `normalizeAutopilotMetric(event)` returns a fresh allowlisted event with lowercase
 repo/head and UTC ISO at, or null for an invalid event. Drop unknown fields,
-including inside validation. Evidence and reason must be strings when supplied.
+including inside validation, where only SHA heads, PASS/FAIL/NOT SURE review
+verdicts, boolean freshness and pass/fail/not-run states survive.
+Evidence and reason must be strings when supplied.
 The collector and write hook reuse this normalization.
 
 Days run local 09:00 inclusive to next 09:00 exclusive and use their start date.

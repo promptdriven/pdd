@@ -72,3 +72,9 @@ test('text table uses the same rows, weekday and week labels as JSON',()=>{
   assert.match(text,/Tue\s+Week avg/); assert.match(text,/Issues started\s+2\s+1\.5/); assert.match(text,/Started-to-merged %\s+50%\s+66\.67%/);
   assert.match(renderAutopilotMetrics(score([])),/n\/a/);
 });
+
+test('invalid calendar dates do not become recorded work on another day',()=>{
+  assert.throws(()=>score([],'2026-02-30T12:00:00Z'),/Invalid cutoff/);
+  const event={repo:'owner/repo',issue:1,kind:'started',at:'2026-11-10T24:00:00Z'};
+  assert.equal(counts(score([event])).worked[0],0);
+});

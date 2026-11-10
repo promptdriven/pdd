@@ -5,7 +5,8 @@ hook core may call later. It never starts work, records approvals or edits core.
 
 `readAutopilotMetrics({timezone,observedAt},ports={})` returns the scorecard.
 Ports: synchronous `fs`, `env`, `homedir`, `stateRoot`, async
-`github(repo,path)` returning parsed JSON. Default root matches the launcher:
+`github(repo,path)` returning parsed JSON, or `execFile` for the native gh adapter
+(an injected runner is not wrapped). Default root matches the launcher:
 HOME (homedir fallback) + `.local/state/pdd/autopilot`. Read launcher records
 named 20 lowercase hex digits + `.json`, including stopped records. Each supplies
 `repo` and sibling `<id>-core/history.jsonl` and `jobs/<issue>.json`. Skip missing
@@ -20,7 +21,8 @@ their fixed `evidence` line uses `prAt`. No evidence line means no recorded pass
 
 For locally associated PRs only, make GitHub GETs for PR, comments and exact
 merge-commit checks. Native pagination must retain every page. PR body evidence
-uses `updated_at` and `head.sha`. Core merge comments need both exact
+uses `updated_at` and `head.sha`; a body without an Evidence line supplies no
+work observation. Core merge comments need both exact
 `<!-- pdd:autopilot-core:merge:HEAD -->` and
 `Autopilot merge check passed for head HEAD.` with the PR's head SHA, at
 `created_at`. Evidence can come from that comment. Validation additionally needs
@@ -30,6 +32,9 @@ Those core attestations establish fresh independent review, suite and CI on
 that exact head; CI none, missing lines and stale heads count zero.
 PR merged_at plus a matching preceding core merge comment establishes an
 Autopilot merge; a manual merge without this evidence or merged history does not.
+For a locally recorded merge associated with a PR, its valid merged_at refines
+the history timestamp (which can reflect cleanup). Count the PR's actual merge
+day once, rather than two days when cleanup crosses 09:00.
 For a recorded Autopilot merge, a completed failure/timed_out/action_required
 check with head_sha equal to merge_commit_sha records `merge-ci-red` at
 completed_at. Reverts and BAD audits require explicit hook records with their

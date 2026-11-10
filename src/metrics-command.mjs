@@ -11,6 +11,8 @@ import {backfillRun} from './metrics-capture.mjs';
 import {calculateMetrics} from './metrics-model.mjs';
 import * as ledger from './metrics-store.mjs';
 import {nativeGithubCounter} from './github-calls.mjs';
+import {readAutopilotMetrics} from './autopilot-metrics-source.mjs';
+import {renderAutopilotMetrics} from './autopilot-metrics.mjs';
 
 // gh calls go to the GitHub call ledger of their repository; other programs run unchanged.
 const execFile = nativeGithubCounter(promisify(callback), {purpose:'other'});
@@ -220,7 +222,7 @@ function render(report) {
     for (const entry of issue.deliveryFollowUps ?? []) lines.push(`  Delivery #${entry.delivery.data.pr}: ${Object.entries(entry.followUp).map(([days, v]) => `${days} days ${v.status}`).join(', ')}`);
     for (const event of [issue.candidate, ...(issue.checks ?? []), ...(issue.ci ?? []), ...(issue.deliveries ?? []), ...(issue.reports ?? []), ...(issue.assistance?.events ?? []), ...(issue.coverage ?? [])].filter(Boolean)) lines.push(`  Evidence ${event.type}: ${event.data.status ?? event.data.verdict ?? event.data.classification ?? ''} ${event.data.evidence ?? ''}`.trimEnd());
   }
-  return lines.join('\n') + '\n';
+  return lines.join('\n') + '\n' + (report.autopilot ? '\n'+renderAutopilotMetrics(report.autopilot) : '');
 }
 export async function runMetrics({argv = [], cwd = process.cwd(), stdout = process.stdout, stderr = process.stderr, ports = {}} = {}) {
   try {
@@ -271,6 +273,7 @@ export async function runMetrics({argv = [], cwd = process.cwd(), stdout = proce
       report.selectorObservation = {snapshotId:selectorSnapshot.snapshotId,observedAt:selectorSnapshot.observedAt,limit:'Historical selector observation; current validity unknown',queue:observed.queue,issues:observed.issues.map(({issue,selection}) => ({issue,selection}))};
     }
     if (githubUnavailable && report.coverage && !report.coverage.missingSources.includes(`github:${repo}`)) report.coverage.missingSources.push(`github:${repo}`);
+    report.autopilot = await (ports.autopilot ?? readAutopilotMetrics)({timezone:argv.includes('--timezone') ? opt.timezone : undefined,observedAt:cutoff});
     output(stdout,opt.json ? JSON.stringify(report,null,2)+'\n' : render(report)); return 0;
   } catch (error) { output(stderr,`pdd metrics: ${error.message}\n`); return 1; }
 }

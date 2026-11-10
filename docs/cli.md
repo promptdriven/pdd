@@ -852,6 +852,28 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 - `pdd metrics import FILE`
 - `pdd metrics record FILE`
 
+Reports include an Autopilot scorecard for this user's locally recorded core
+jobs across repositories. It shows distinct issues started, worked on, Runtime
+passed, test vectors passed, formal verification, validation passed, merged by
+Autopilot and regressions, plus started-to-merged percentage. Missing evidence
+counts zero. Validation requires fresh independent review, full suite and CI
+on the same exact head; a merge by itself does not prove validation.
+
+The table's first column is the last finished day's name. Days run 09:00–09:00
+in `--timezone IANA`, defaulting to the machine's timezone for the scorecard.
+Weeks start Monday 09:00. `Week avg` averages the finished days, including zeros;
+before this week's first day finishes it shows the seven-day `Last week` average.
+Started-to-merged is the percentage of the period's distinct started issues
+also merged in that period (`n/a` with no starts). `--json` adds the same data
+under `autopilot`; `--at` sets its cutoff too. Other report sections keep their
+own date/cohort selection and UTC default. Export/import cover the repository
+ledger; they do not transfer the local core scorecard.
+
+Core state is read from `~/.local/state/pdd/autopilot`. Completed core history
+without a recorded start cannot establish a start. The `recordAutopilotMetric`
+hook in `src/autopilot-metrics-source.mjs` lets core preserve starts, steps,
+evidence and regression discoveries in its history before removing job files.
+
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 
 `pdd dependencies prepare [--issue N]` prepares a coordinator packet. Review batches use the stable owner of this machine’s Autopilot for the repository. A replacement coordinator chat can finish the same batch. Ownership is checked before automatic review delivery and again before saving reviews. A different owner leaves the batch pending with `owner-changed`. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
