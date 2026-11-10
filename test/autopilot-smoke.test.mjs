@@ -207,6 +207,17 @@ test('merged evidence wins over an old end marker but an open issue is not merge
     ['merged', 'open', 'open']);
 });
 
+test('reader accepts canonical URL casing and matches full closing references case-insensitively', () => {
+  const w = world();
+  for (const issue of w.issues) issue.html_url = issue.html_url.replace('example/smoke', 'Example/Smoke');
+  w.issues[0].state = 'closed'; w.issues[0].closed_at = createdAt;
+  w.prs.push({number: 8, mergedAt: createdAt,
+    closingIssuesReferences: [{url: 'https://github.com/example/smoke/issues/1'}]});
+  const result = readSmokeResults({repo, fixture: w.fixture}, w.ports);
+  assert.equal(result.issues[0].state, 'merged');
+  assert.equal(result.issues[0].url, 'https://github.com/Example/Smoke/issues/1');
+});
+
 test('reader refuses missing/duplicate smoke issues, invalid dates and failed or malformed gh', () => {
   let w = world(); w.issues.pop();
   assert.throws(() => readSmokeResults({repo, fixture: w.fixture}, w.ports), /missing|exactly one/i);

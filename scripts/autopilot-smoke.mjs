@@ -97,7 +97,8 @@ export function readSmokeResults({repo, fixture} = {}, ports = {}) {
     if (matches.length !== 1) throw Error(`Expected exactly one smoke issue for ${seed.id}; found ${matches.length} (missing or duplicate).`);
     const issue = matches[0];
     if (!Number.isSafeInteger(issue.number) || issue.number < 1 || typeof issue.title !== 'string' ||
-      issue.html_url !== `https://github.com/${repo}/issues/${issue.number}` || !['open', 'closed'].includes(issue.state)) {
+      typeof issue.html_url !== 'string' || issue.html_url.toLowerCase() !== `https://github.com/${repo}/issues/${issue.number}`.toLowerCase() ||
+      !['open', 'closed'].includes(issue.state)) {
       throw Error('Malformed GitHub issue row.');
     }
     return {seed, issue};
@@ -118,7 +119,8 @@ export function readSmokeResults({repo, fixture} = {}, ports = {}) {
       if (typeof comment?.body !== 'string') throw Error('Malformed GitHub comment row.');
       return endPattern.test(comment.body) ? [time(comment.created_at)] : [];
     }).sort();
-    const merged = prs.filter(pr => pr.closingIssuesReferences.some(ref => ref?.url === issue.html_url))
+    const merged = prs.filter(pr => pr.closingIssuesReferences.some(ref =>
+      typeof ref?.url === 'string' && ref.url.toLowerCase() === issue.html_url.toLowerCase()))
       .map(pr => time(pr.mergedAt)).sort();
     let state = 'open', finishedAt = null;
     if (issue.state === 'closed' && merged.length) { state = 'merged'; finishedAt = merged.at(-1); }

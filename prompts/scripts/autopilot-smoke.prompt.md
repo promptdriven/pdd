@@ -44,6 +44,8 @@ future callers; do not wire it into core now.
   `number,url,mergedAt,closingIssuesReferences`. Refuse a saturated 1000-row
   response instead of silently claiming completeness. Match closing references
   by full issue URL, not just number (cross-repo references must not match).
+  Compare repository and URL identity case-insensitively, as GitHub does, while
+  preserving the returned canonical URL in output.
 
 ## Result meaning and interfaces
 
