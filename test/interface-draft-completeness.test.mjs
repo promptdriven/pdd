@@ -26,7 +26,7 @@ const read=f=>readFileSync(join(f.repo,PLACE),'utf8');
 const iface=f=>JSON.parse(interfaceBlocks(read(f))[0][1]);
 async function draft(f,args=[]) {
   const stdout=sink(),stderr=sink();
-  const code=await runPdd(['interface','draft',PLACE,...args,'--json'],{cwd:f.repo,stdout,stderr,env:{HOME:f.home,XDG_CONFIG_HOME:join(f.home,'.config'),PDD_INTERPRETER_QUEUE:join(f.home,'queue')},pathDiagnostic:()=>[]});
+  const code=await runPdd(['interface','draft',PLACE,...args,'--json'],{cwd:f.repo,stdout,stderr,env:{HOME:f.home,XDG_CONFIG_HOME:join(f.home,'.config')},pathDiagnostic:()=>[]});
   assert.ok(stdout.text,stderr.text);
   return {code,row:JSON.parse(stdout.text).rows[0]};
 }

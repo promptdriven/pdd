@@ -22,7 +22,7 @@ export async function nativeFixture(t,{cli=process.env.PDD_NATIVE_CLI||join(pack
   put(source,storyPath,'# Native\n\n## Acceptance criteria\n\n1. Both native effects work.\n\n## Native validation\n\n[Owner](../prompts/native.prompt.md#native-validation-profile-native)\n');
   put(source,promptPath,'# Placeholder\n');put(source,testPath,'test("required A",()=>{});\ntest("required B",()=>{});\n');put(source,'source.mjs','export const value=1;\n');
   git(source,'add','.');git(source,'commit','-qm','native fixture');git(source,'update-ref','refs/remotes/origin/main',git(source,'rev-parse','HEAD'));
-  const env={...process.env,HOME:home,XDG_CONFIG_HOME:join(home,'.config'),PDD_SUITE_QUEUE:join(parent,'suite-queue'),PDD_INTERPRETER_QUEUE:join(parent,'interpreter-queue'),PDD_STATE_DIR:join(parent,'runtime'),PDD_AGENT_SESSION:'1'};
+  const env={...process.env,HOME:home,XDG_CONFIG_HOME:join(home,'.config'),PDD_SUITE_QUEUE:join(parent,'suite-queue'),PDD_STATE_DIR:join(parent,'runtime'),PDD_AGENT_SESSION:'1'};
   const herdr=fakeHerdr();
   const ports={env,layoutDirectory:join(parent,'layout'),herdr:herdr.herdr,isTTY:false,findNativeSessions:stage=>herdr.findNativeSessions(stage),execFile:async(file,args,options)=>{
     if(file==='git'&&args[0]==='fetch')return {stdout:''};

@@ -24,7 +24,7 @@ function world(t, existing) {
   const dir = existing?.base ?? mkdtempSync(join(tmpdir(), 'pdd-restart-claims-'));
   if (!existing) t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cwd = existing?.source ?? join(dir, 'repo'), home = existing?.ports.env.HOME ?? join(dir, 'restart-home'), stateRoot = join(dir, 'autopilot');
-  const env = { HOME: home, PDD_INTERPRETER_QUEUE: existing?.ports.env.PDD_INTERPRETER_QUEUE ?? join(home, 'interpreter-queue') };
+  const env = { HOME: home };
   mkdirSync(home, { recursive: true }); mkdirSync(stateRoot);
   if (!existing) { mkdirSync(cwd); execFileSync('git', ['init', '-q'], { cwd }); execFileSync('git', ['remote', 'add', 'origin', `https://github.com/${repo}.git`], { cwd }); }
   const commonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim();
@@ -294,7 +294,7 @@ for (const legacy of [false, true]) test(`another machine wins a recovery race w
 // Use the existing workflow fake to reach actual workflow done / PR publication.
 test('workflow done publishes finished work after the tick recovers its expired claim', async t => {
   const runner = await runnerFixture(t, { name: 'small-change', agent: 'codex' });
-  runner.ports.env = { HOME: runner.ports.env.HOME, PDD_INTERPRETER_QUEUE: runner.ports.env.PDD_INTERPRETER_QUEUE };
+  runner.ports.env = { HOME: runner.ports.env.HOME };
   assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: runner.source, packageRoot }, runner.ports)).exitCode, 0);
   const run = runner.record(); runner.tick();
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, runner.agentPorts());

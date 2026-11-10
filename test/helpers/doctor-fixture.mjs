@@ -2,7 +2,7 @@ import {join} from 'node:path';
 // Complete synthetic read-only observations. No machine program or file read.
 export function doctorFixture({cwd='/project',home='/home/fake',packageRoot='/install',kind='codex',platform='linux'} = {}) {
   const calls=[], paths=new Map();
-  const input={cwd,packageRoot,env:{HOME:home,PATH:'/tools',XDG_CONFIG_HOME:join(home,'config'),PDD_INTERPRETER_QUEUE:join(home,'queue')}};
+  const input={cwd,packageRoot,env:{HOME:home,PATH:'/tools',XDG_CONFIG_HOME:join(home,'config')}};
   paths.set(join(cwd,'AGENTS.md'),'<!-- pdd:start -->\nUse PDD\n<!-- pdd:end -->');
   paths.set(join(cwd,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',trust:[]}}));
   for (const skill of ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph','pdd-autopilot','pdd-check','pdd-merge']) paths.set(join(home,kind==='claude'?'.claude':'.agents','skills',skill,'SKILL.md'),'skill');

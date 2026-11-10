@@ -31,7 +31,7 @@ const origin = { repository: 'example/project', coordinatorId: 'coordinator-a', 
 // An automatic run at its check step, with a current claim read through a fake gh.
 async function automaticRun(t) {
   const f = await runFixture(t, { name: 'bug', agent: 'codex' });
-  f.ports.env = { HOME: f.ports.env.HOME, PDD_INTERPRETER_QUEUE: join(f.base, 'interpreter-queue') };
+  f.ports.env = { HOME: f.ports.env.HOME };
   assert.equal((await startRun({ name: 'bug', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
   for (const step of ['reproduce', 'prompt-story']) { f.tick(); assert.equal((await stepDone({ step, summary: step, cwd: f.record().root }, f.agentPorts())).exitCode, 0); }
   const run = f.record(); run.automaticOrigin = structuredClone(origin); writeRun(run);
@@ -281,7 +281,7 @@ async function launcher(t) {
     // The real alerts module with a saved Discord webhook and a fake HTTP port.
     alertPorts: { http: async ({ body }) => { f.sent.push(body.content); return { status: 200, text: JSON.stringify({ id: String(f.sent.length), content: body.content }) }; } },
   };
-  const env = { HOME: home, PDD_INTERPRETER_QUEUE: join(dir, 'interpreter-queue'), PATH: process.env.PATH, XDG_CONFIG_HOME: join(home, '.config') };
+  const env = { HOME: home, PATH: process.env.PATH, XDG_CONFIG_HOME: join(home, '.config') };
   mkdirSync(join(home, '.config', 'pdd'), { recursive: true });
   writeFileSync(join(home, '.config', 'pdd', 'autopilot-alerts.json'), JSON.stringify({ v: 1, service: 'discord', url: 'https://discord.com/api/webhooks/1/abc' }));
   const module = await import('../src/autopilot-launcher.mjs');
@@ -508,7 +508,7 @@ test('real path: a parked run record, the real health check over HTTP, a test wa
   delete f.ports.readRuntimeWaits; delete f.ports.runtimeHealth; delete f.ports.readRuntimeProbe;
   const bin = join(f.dir, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nif [ "$1" = "auth" ] && [ "$2" = "token" ]; then echo gho_fake_token; exit 0; fi\nexit 1\n', { mode: 0o755 });
-  f.ports.env = { PDD_INTERPRETER_QUEUE: join(f.dir ?? f.base, 'interpreter-queue'), HOME: f.home, PDD_RUNTIME_URL: `http://127.0.0.1:${server.address().port}`, PATH: `${bin}:${process.env.PATH}`, PDD_STATE_DIR: join(rf.ports.env.HOME, '.pdd', 'runtime') };
+  f.ports.env = { HOME: f.home, PDD_RUNTIME_URL: `http://127.0.0.1:${server.address().port}`, PATH: `${bin}:${process.env.PATH}`, PDD_STATE_DIR: join(rf.ports.env.HOME, '.pdd', 'runtime') };
   await f.start(); f.prompts.length = 0;
   // The launcher reads the parked record from its run folder (the fake git names the checkout as its common dir).
   const folder = join(f.cwd, 'pdd', 'runs', String(record.number)); mkdirSync(folder, { recursive: true });
@@ -548,7 +548,7 @@ test('real pdd test: a posted check that did not run is sent again by the Story 
   // The run waits for the interpreter (its park record, read by the real readRuntimeWaits); the tick wakes it as the test after the outage.
   const f = await launcher(t);
   delete f.ports.readRuntimeWaits; delete f.ports.readRuntimeProbe;
-  f.ports.env = { PDD_INTERPRETER_QUEUE: join(f.dir ?? f.base, 'interpreter-queue'), HOME: f.home, PDD_STATE_DIR: setup.state, PATH: process.env.PATH };
+  f.ports.env = { HOME: f.home, PDD_STATE_DIR: setup.state, PATH: process.env.PATH };
   f.time = Date.parse('2026-10-27T15:00:00Z');
   await f.start(); f.prompts.length = 0;
   const folder = join(f.cwd, 'pdd', 'runs', '12'); mkdirSync(folder, { recursive: true });

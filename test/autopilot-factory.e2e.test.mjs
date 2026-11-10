@@ -333,26 +333,6 @@ test('factory 5b: full check slots queue the second suite and release admits it 
   await a.finish();await a.merge();assert.deepEqual(w.leadActions,[]);
 });
 
-test('factory 5c: a dead interpreter queue holder is reclaimed before checking and merging',async t=>{
-  const w=await factoryWorld(t,{workflow:'feature'});await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
-  await w.command(undefined,{operation:'hold-interpreter',actor:'other-worker'});
-  const holder=queueRows(w.env.PDD_INTERPRETER_QUEUE).find(r=>r.requestId==='dead-holder');assert.equal(holder.state,'running');
-  await a.finish();
-  const recovered=queueRows(w.env.PDD_INTERPRETER_QUEUE).find(r=>r.requestId==='dead-holder');
-  assert.equal(recovered.state,'finished');assert.equal(recovered.releaseReason,'owner-dead');assert.equal(recovered.outcome,'not_sent');
-  await a.merge();assert.deepEqual(w.leadActions,[]);
-});
-
-test('factory 5d: a dead dispatched holder records uncertainty without resending it',async t=>{
-  const w=await factoryWorld(t,{workflow:'bug'});await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
-  await w.command(undefined,{operation:'hold-interpreter-dispatched',actor:'other-worker'});
-  await a.finish();
-  const recovered=queueRows(w.env.PDD_INTERPRETER_QUEUE).find(r=>r.requestId==='dead-holder');
-  assert.equal(recovered.dispatched,true);assert.equal(recovered.state,'finished');assert.equal(recovered.outcome,'unknown');
-  assert.ok(w.interpreter.posts.every(p=>p.request.requestId!=='dead-holder'),'queue recovery cannot resend the uncertain request');
-  await a.merge();assert.deepEqual(w.leadActions,[]);
-});
-
 test('factory 6: another machine takes the claim; the old worker cannot publish',async t=>{
   const w=await factoryWorld(t);await w.begin();const a=scriptedAgent(w);await a.until(r=>r.area===1);
   const before=w.record();w.github.unlabel(17,'pdd:working');w.github.claim(17,{coordinatorId:'another-coordinator',machine:'another-machine'});

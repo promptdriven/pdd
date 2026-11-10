@@ -386,7 +386,7 @@ test('3111 auditor keeps the saved model and removes caller session markers',asy
   w.ports.env.CLAUDECODE='1';w.ports.env.CODEX_THREAD_ID='caller';w.ports.env.HERDR_PANE_ID='caller-pane';w.ports.env.PDD_AUTOPILOT_CONTEXT='caller';
   const out=await w.check();assert.equal(out.code,0,out.text);const launch=w.launches[0];assert.equal(launch.args[launch.args.indexOf('--model')+1],'configured-model');
   for(const key of ['CLAUDECODE','CODEX_THREAD_ID','HERDR_PANE_ID','PDD_AUTOPILOT_CONTEXT'])assert.equal(Object.hasOwn(launch.options.env,key),false);
-  assert.equal(launch.options.env.CODEX_HOME,w.run.configDir);assert.equal(launch.options.env.PDD_INTERPRETER_QUEUE,w.ports.env.PDD_INTERPRETER_QUEUE);
+  assert.equal(launch.options.env.CODEX_HOME,w.run.configDir);
 });
 
 

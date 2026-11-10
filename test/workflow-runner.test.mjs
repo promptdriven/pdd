@@ -119,7 +119,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   }
   f.prompts = [];
   f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, queueRoot: join(base, 'suite-queue'), layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, sleep: async ms => { f.clock += ms; }, findNativeSessions: stage => f.herdr.findNativeSessions(stage),
-    env: { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), PDD_SUITE_QUEUE: undefined, PDD_VM_SUITE_LOCK: undefined, PDD_INTERPRETER_QUEUE: join(base, 'interpreter-queue'), CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
+    env: { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), PDD_SUITE_QUEUE: undefined, PDD_VM_SUITE_LOCK: undefined, CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };
   f.run = () => startRun({ name, issue: '17', agent, cwd: source, packageRoot }, f.ports);
@@ -143,7 +143,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   const first = run.chats[0], pane = f.herdr.paneOf(first);
   assert.equal(pane.commands.length, 1);
   // 2901: the caller has no login variables, so each one is unset and the Herdr server's old copy cannot decide the login.
-  assert.match(pane.commands[0], /^cd '[^']+' && env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX PDD_AGENT_SESSION=1 PDD_BIN=\S+ PDD_INTERPRETER_QUEUE='[^']+' PDD_INTERPRETER_CONCURRENCY='2' CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
+  assert.match(pane.commands[0], /^cd '[^']+' && env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
   assert.ok(pane.commands[0].startsWith(`cd '${run.root}' && `), 'the chat starts in the run worktree (2903)');
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
@@ -283,7 +283,7 @@ for (const name of ['bug', 'feature']) {
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^cd '[^']+' && env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_FEDERATION_RULE_ID -u OPENAI_IDENTITY_TOKEN_FILE -u OPENAI_WORKLOAD_IDENTITY_CONTEXT -u OPENAI_BASE_URL -u CODEX_HOME PDD_AGENT_SESSION=1 PDD_BIN=\S+ PDD_INTERPRETER_QUEUE='[^']+' PDD_INTERPRETER_CONCURRENCY='2' codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' -c 'shell_environment_policy\.set\.PDD_INTERPRETER_QUEUE="[^"]+"' -c 'shell_environment_policy\.set\.PDD_INTERPRETER_CONCURRENCY="2"' -c 'features\.multi_agent_v2\.max_concurrent_threads_per_session=5' "\$\(cat '.+story-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^cd '[^']+' && env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_FEDERATION_RULE_ID -u OPENAI_IDENTITY_TOKEN_FILE -u OPENAI_WORKLOAD_IDENTITY_CONTEXT -u OPENAI_BASE_URL -u CODEX_HOME PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' -c 'features\.multi_agent_v2\.max_concurrent_threads_per_session=5' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       // #3042 red pair: PR 1's CI is red when the code PR opens, so PR 2 carries PR 1 and never says "merge it first".
       if (area === 'code') f.ci = [{ conclusion: 'FAILURE' }];
@@ -2964,19 +2964,4 @@ test('2921: product counts nothing from a generated PR body whose only Prompt te
     assert.equal(status.parts[0].pass, 0, JSON.stringify(status.parts[0]));
     assert.equal(status.runs.find(row => row.run === 'phone-1').fromPr, 61, 'the pdd result line still names the PR as the evidence source');
   }
-});
-
-test('interpreter queue position is visible in detailed and JSON workflow status', async t => {
-  const f = await fixture(t); await f.run();
-  const before = f.record();
-  f.ports.readInterpreterProgress = ({ cwd }) => {
-    assert.equal(cwd, before.root);
-    return { state: 'waiting', position: 3, pausedMs: 120000, requests: [] };
-  };
-  const detail = await runStatus({ ref: '17', cwd: f.source }, f.ports);
-  assert.match(detail.message, /State:.*interpreter slot.*position 3/);
-  const json = await runStatus({ ref: '17', cwd: f.source, json: true }, f.ports);
-  assert.match(JSON.parse(json.message).runs[0].words, /interpreter slot.*position 3/);
-  assert.equal(f.record().state, before.state, 'status must not advance workflow state');
-  assert.equal(f.record().updatedAt, before.updatedAt);
 });

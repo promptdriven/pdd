@@ -7,7 +7,6 @@ export PDD_FACTORY_HERDR_SESSION="pdd-factory-${factory_tmp##*/}"
 export HOME="$factory_tmp/home"
 export XDG_CONFIG_HOME="$factory_tmp/config"
 export PDD_STATE_DIR="$factory_tmp/state"
-export PDD_INTERPRETER_QUEUE="$factory_tmp/interpreter-queue"
 export PDD_SUITE_QUEUE="$factory_tmp/suite-queue"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$PDD_STATE_DIR"
 unset NODE_OPTIONS PDD_AUTOPILOT_CONTEXT PDD_AGENT_SESSION CODEX_HOME CLAUDE_CONFIG_DIR

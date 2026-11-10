@@ -73,7 +73,7 @@ test('fill hash native vectors preserve safety while statusless fixtures only wa
     const state = setup(t, replay.cases), stdout = sink(), stderr = sink();
     const calls = { fetch: 0, gh: 0 };
     const code = await runCheck({ cwd: state.repo, words: [], options: { '--fill-hash': true } }, {
-      env: { HOME: state.home, PDD_INTERPRETER_QUEUE: join(state.home, 'interpreter-queue'), PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, stdout, stderr,
+      env: { HOME: state.home, PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, stdout, stderr,
       fetch: async () => { calls.fetch++; assert.fail('network request'); },
       gh: () => { calls.gh++; assert.fail('sign-in'); },
     });
@@ -91,7 +91,7 @@ test('fill hash CLI replays succeed beside unrelated prompts in every directory'
     symlinkSync(git.stdout.trim(), join(bin, 'git'));
     const result = spawnSync(process.execPath, [cli, 'test', '--fill-hash'], {
       cwd: state.repo, input: '', timeout: 30000, encoding: 'utf8',
-      env: { HOME: state.home, PDD_INTERPRETER_QUEUE: join(state.home, 'interpreter-queue'), PATH: bin, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
+      env: { HOME: state.home, PATH: bin, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
     });
     assert.equal(result.error, undefined); assert.equal(result.signal, null);
     assert.equal(result.status, replay.exit_code, `${replay.name}: ${result.stdout}\n${result.stderr}`);

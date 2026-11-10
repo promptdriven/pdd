@@ -8,7 +8,7 @@ import { fixture as runFixture, packageRoot } from './workflow-runner-fixture.mj
 const origin = { repository: 'example/project', coordinatorId: 'coordinator-a', machine: 'machine-a', claim: { commentId: '11', labelEventId: '12' } };
 export async function environmentRun(t) {
   const f = await runFixture(t, { name: 'small-change', agent: 'codex' });
-  f.ports.env = { HOME: f.ports.env.HOME, PDD_INTERPRETER_QUEUE: f.ports.env.PDD_INTERPRETER_QUEUE };
+  f.ports.env = { HOME: f.ports.env.HOME };
   assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
   const run = f.record();
   // Seed the build area of a synthetic already-approved run. No approval command is called.

@@ -71,7 +71,7 @@ Contributions are under the repository's [MIT license](LICENSE). Retain applicab
 Tests that use default home paths load `test/helpers/test-home.mjs` before
 production modules, either
 in the entrypoint or through a shared fixture. It gives each test process a
-private temporary HOME and PDD_INTERPRETER_QUEUE and clears inherited state and agent config directory
+private temporary HOME and clears inherited state and agent config directory
 overrides. Explicit fixture homes still select their own default state paths.
 It also clears inherited `PDD_SUITE_QUEUE`, `PDD_VM_SUITE_LOCK` and `SUITE`
 before test code runs. Tests can then set their own fixture queue selectors.
@@ -80,10 +80,6 @@ Import the helper first when adding a test without a shared fixture. `npm test`
 also preloads it. The owning process removes its temporary home on exit. OS account-home lookup
 requires an injected `userInfo` fake; an un-injected lookup fails the process
 with `PDD_TEST_ACCOUNT_HOME`, even if the caller catches the error.
-The helper also blocks filesystem access to the default machine interpreter queue
-with `PDD_TEST_INTERPRETER_QUEUE`, even when the error is caught. A test that
-replaces its environment or starts a native pdd check must carry a private queue
-selector. HOME and TMPDIR alone do not isolate the machine queue. Fresh fixture environments and narrowed repair-test environments must keep their own PDD_INTERPRETER_QUEUE selector.
 
 The runtime workspace fixture uses `f.env.HOME` for its private home. It leaves
 `<parent>/home` available for tests that need a separate consumer home.

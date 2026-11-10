@@ -21,7 +21,7 @@ export function fixture(t) {
   for (const dir of [root, bin, join(home, '.codex')]) mkdirSync(dir, {recursive:true});
   const route = `url.file://${remote}.insteadOf=https://github.com/example/project.git`;
   const env = {...process.env, HOME:home, CODEX_HOME:join(home, '.codex'), CLAUDE_CONFIG_DIR:join(home, '.claude'),
-    XDG_CONFIG_HOME:join(home, '.config'), PDD_SUITE_QUEUE:join(base, 'suite-queue'), PDD_INTERPRETER_QUEUE:join(base, 'interpreter-queue'), PATH:`${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, PDD_AGENT_SESSION:'1',
+    XDG_CONFIG_HOME:join(home, '.config'), PDD_SUITE_QUEUE:join(base, 'suite-queue'), PATH:`${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, PDD_AGENT_SESSION:'1',
     GIT_CONFIG_NOSYSTEM:'1', GIT_CONFIG_GLOBAL:join(base, 'gitconfig')};
   writeFileSync(env.GIT_CONFIG_GLOBAL, '');
   const git = (...args) => execFileSync('/usr/bin/git', ['-c', route, ...args], {cwd:root, env, encoding:'utf8', stdio:['ignore','pipe','pipe']}).trim();

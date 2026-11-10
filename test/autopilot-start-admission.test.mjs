@@ -26,8 +26,7 @@ async function setup(t, {working = 1, maxParked} = {}) {
     writeFileSync(join(runDir, 'status.json'), JSON.stringify(run)); runs.push(run);
   }
   const readPorts = {...f.ports, autopilotStateRoot: stateRoot,
-    readSuiteProgress: () => ({state: 'idle'}),
-    readInterpreterProgress: () => ({state: 'idle'})};
+    readSuiteProgress: () => ({state: 'idle'})};
   const native = createDependencyReadPorts({cwd: f.source}, readPorts);
   const owners = JSON.parse((await native.owners.read({repository, issues: []})).json);
   const settings = await native.settings.read({cwd: f.source, repository});

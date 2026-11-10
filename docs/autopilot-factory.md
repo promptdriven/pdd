@@ -54,7 +54,7 @@ the same merge.
 | Stuck dependency | The run yields its panes, keeps its work and wakes after merge evidence. |
 | Closing capacity | Absent starting panes gain confirmed close records. A working agent defers parking. A done current chat saves its screen and session before close. Retained cleanup names its retry cause, and a closing reservation blocks new starts at the run cap. |
 | Stopped panes across repositories | A full shared pane budget is reclaimed from stopped runs without saved session IDs or workspace-creation fields. Same-machine coordinator claims are recovered. A second repository starts its coordinator and first workflow run. Every held run then resumes its own current session. |
-| Capacity and queues | Pane and check-slot waits recover; dead holders release reservations without resending an uncertain request. |
+| Capacity | Pane and check-slot waits recover without losing work; release admits deferred runs. |
 | Claim transfer | The old coordinator cannot continue the current chat or publish after another machine takes the claim. |
 | Base integration | A clean base merge uses the separate bounded integration counter, retains failed evidence and needs fresh validation before merge. |
 | PR 1 re-entry | The corrected prompt survives code entry and merge; expected values stay fixed. |

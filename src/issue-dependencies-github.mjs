@@ -1,9 +1,8 @@
 import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
-import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: aebc28170168922209050d353dc52ddc80632f6592d9804dfdb7a685c56d8959).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 3df39bc770d5f90f8ba763aa258e64386127309e8f0b9820f1730d626c5ca5bd).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1194,8 +1193,7 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     if (typeof runId !== 'string' || !runId) { runsKnown = false; continue; }
     seen.add(runId);
     const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
-    const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports))
-      || held((ports.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: ports.env}, {now: ports.now ?? Date.now, ...ports.interpreterQueuePorts}));
+    const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports));
     const working = parkingSummary([{...run, checkHeld}], 1).working > 0;
     if (run.parking?.phase === 'parked' && run.layout?.phase === 'closed'
       && run.chats.every(chat => Number.isFinite(chat.closed?.confirmedAt))) {

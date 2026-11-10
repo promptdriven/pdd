@@ -25,7 +25,7 @@ function setup(t,text,files={}) {
 }
 function draft(f,args=[]) {
   const r=spawnSync(process.execPath,[join(root,'bin/pdd.mjs'),'interface','draft',PLACE,...args,'--json'],{
-    cwd:f.repo,encoding:'utf8',env:{...process.env,HOME:f.home,PDD_STATE_DIR:f.state,PDD_INTERPRETER_QUEUE:join(f.home,'queue')}
+    cwd:f.repo,encoding:'utf8',env:{...process.env,HOME:f.home,PDD_STATE_DIR:f.state}
   });
   assert.equal(r.signal,null);assert.ok(r.stdout,r.stderr);
   const report=JSON.parse(r.stdout),text=readFileSync(join(f.repo,PLACE),'utf8');

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: b1e53593c12693d9f4394249e176c5e5aa93c22d6adda8960d7b35a30c4ff516).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: f372251fc1f0bc0fc3c23cfd8a61822bbb46d2af1501320e4e0b702faea9efe3).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -277,7 +277,6 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     for (const [folder, names] of [
       ['home', ['HOME', 'USERPROFILE']], ['state', ['PDD_STATE_DIR']],
       ['config', ['XDG_CONFIG_HOME']], ['tmp', ['TMPDIR', 'TMP', 'TEMP']],
-      ['interpreter-queue', ['PDD_INTERPRETER_QUEUE']],
     ]) {
       const path = join(environmentRoot, folder);
       p.fs.mkdirSync(path, {mode:0o700});

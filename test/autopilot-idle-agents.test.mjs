@@ -499,11 +499,10 @@ test('3072 manual run resume continues once and starts a fresh idle interval', a
   assert.equal(f.record().chats.at(-1).idleSince, f.clock);
 });
 
-for (const queue of ['interpreter', 'suite']) for (const state of ['waiting', 'running', 'unavailable']) for (const mode of ['idle', 'resume']) {
-  test(`3072 integration: ${queue} ${state} holds ${mode} notices`, async t => {
+for (const state of ['waiting', 'running', 'unavailable']) for (const mode of ['idle', 'resume']) {
+  test(`3072 integration: suite ${state} holds ${mode} notices`, async t => {
     const {f, ports, idle, pane} = await setup(t);
-    const read = queue === 'interpreter' ? 'readInterpreterProgress' : 'readSuiteProgress';
-    ports[read] = () => ({state, position: 1});
+    ports.readSuiteProgress = () => ({state, position: 1});
     if (mode === 'idle') {
       const args = {ref: '17', cwd: f.source, packageRoot, coordinatorId: 'idle-owner', machine: 'idle-machine'};
       idle(); await nudgeIdleRun(args, ports); f.tick(WAIT);
@@ -521,12 +520,12 @@ for (const queue of ['interpreter', 'suite']) for (const state of ['waiting', 'r
   });
 }
 
-for (const queue of ['interpreter', 'suite']) for (const phase of ['journal', 'submission']) {
-  test(`3072 integration: ${queue} wait arriving during ${phase} prevents idle delivery`, async t => {
+for (const phase of ['journal', 'submission']) {
+  test(`3072 integration: suite wait arriving during ${phase} prevents idle delivery`, async t => {
     const {f, ports, idle} = await setup(t);
     const args = {ref: '17', cwd: f.source, packageRoot, coordinatorId: 'idle-owner', machine: 'idle-machine'};
     let held = false;
-    ports[queue === 'interpreter' ? 'readInterpreterProgress' : 'readSuiteProgress'] = () => held ? {state: 'waiting', position: 1} : null;
+    ports.readSuiteProgress = () => held ? {state: 'waiting', position: 1} : null;
     idle(); await nudgeIdleRun(args, ports); f.tick(WAIT);
     if (phase === 'journal') ports.deliveryFiles = {mkdirSync: (path, options) => {
       if (path.endsWith('/.delivery-journal.lock')) held = true;

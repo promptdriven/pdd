@@ -21,7 +21,7 @@ const entry = operation => ({operation,input_schema:object({value:{type:'number'
 const contract = operation => ({entries:[entry(operation)],calls:[],resources:[],limits:{max_steps:4,max_model_calls:2},conventions:[]});
 async function draft(setup, args=[]) {
   const stdout=sink(),stderr=sink();
-  const code=await runPdd(['interface','draft',PLACE,...args,'--json'],{cwd:setup.repo,stdout,stderr,env:{HOME:setup.home,XDG_CONFIG_HOME:join(setup.home,'.config'),PDD_INTERPRETER_QUEUE:join(setup.home,'queue')},pathDiagnostic:()=>[]});
+  const code=await runPdd(['interface','draft',PLACE,...args,'--json'],{cwd:setup.repo,stdout,stderr,env:{HOME:setup.home,XDG_CONFIG_HOME:join(setup.home,'.config')},pathDiagnostic:()=>[]});
   return {code,stderr:stderr.text,report:stdout.text ? JSON.parse(stdout.text) : null};
 }
 function formatter(t,name) {
@@ -225,7 +225,7 @@ test('3130 printed recovery command works from a subdirectory',async t=>{
   const setup=harbor(t,repo=>{writeFileSync(join(repo,PLACE),'# Unclear\n\nExport `measure(value)`.\n');save(repo,contract('measure'));});
   const invoke=async args=>{
     const stdout=sink(),stderr=sink();
-    const code=await runPdd(args,{cwd:join(setup.repo,'prompts'),stdout,stderr,env:{HOME:setup.home,XDG_CONFIG_HOME:join(setup.home,'.config'),PDD_INTERPRETER_QUEUE:join(setup.home,'queue')}});
+    const code=await runPdd(args,{cwd:join(setup.repo,'prompts'),stdout,stderr,env:{HOME:setup.home,XDG_CONFIG_HOME:join(setup.home,'.config')}});
     return {code,out:stdout.text,err:stderr.text};
   };
   const first=await invoke(['interface','draft','place_order.prompt.md','--json']);assert.equal(first.code,4);

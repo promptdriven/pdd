@@ -33,18 +33,7 @@ selectors after isolation loads. Keep the assigned `PDD_CHECK_CPUS` execution
 hint. Cover both entry routes with synthetic caller controls, verify child
 processes cannot inherit them, and leave the caller's environment and queue
 files unchanged.
-Each isolated process also sets a private `PDD_INTERPRETER_QUEUE` under its
-allocated temporary home, replacing inherited selectors. Checks using a fresh
-injected environment or a native child must explicitly carry a fixture queue.
-The shared runtime ports fixture supplies that queue when absent, including after
-environment replacement. Workspace-evidence and workflow step-result fixtures supply private queue selectors in their fresh environments. Repair-ceiling and automatic-continuation fixtures retain the private selector when they narrow their environment to HOME. Exercise those public fixture consumers with the machine-queue guard still active. Never use the machine default interpreter queue in tests.
-Extend the leak guard to queue access: reject reads and writes to the default
-`/tmp/pdd-interpreter-UID` path or its children before I/O, with diagnostic
-`PDD_TEST_INTERPRETER_QUEUE`. Fail the owning test process even when the error is
-caught. Cover synchronous, callback and promise filesystem access, and renames
-into the queue. A synthetic caller queue must keep the same entries and bytes
-after real fake-runtime checks and native children. Also cover the npm preload
-without an explicit helper import and cleanup on success and failure. Remove only the allocated
+Remove only the allocated
 temporary directory when its owning process exits. Do not add a dependency.
 
 The regression guard runs real fixture tests with a synthetic caller home and
@@ -66,7 +55,7 @@ no owned test home after an ordinary success or test failure.
 The named launcher, runtime-slots and product saved-checks regressions must
 also work under a synthetic agent caller. Launcher fixtures explicitly mask an
 absent CODEX_HOME at the injected launcher boundary, including later ticks.
-Concurrent native runtime fixtures use a private interpreter queue and a real
+Concurrent native runtime fixtures use a real
 clock with real asynchronous waits for native filesystem locks; a rapidly
 advancing shared fake clock cannot stand in for elapsed lock time. Construct
 these fixture environments explicitly so caller job limits, queue selectors and
@@ -94,7 +83,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"a2b78ce2e7b9640958a3678c3bcbb45b2872bf386d3d3cc0e93dd151476db9a3","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"35f830d16449e7f44e261cfad857f187c79cca5d13db236d0b9a58c7f534602e","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>
