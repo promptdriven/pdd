@@ -2,6 +2,10 @@
 
 Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
 
+## Runtime interface refusal diagnostics
+
+For Runtime interface refusals, preserve a server-provided field or JSON pointer and its rule in lint and check output, in text and JSON. If `invalid-interface` has no field or pointer, show any supported local schema findings for the named prompt as local advice, without claiming they caused the server refusal. If none are available, say the Runtime did not identify the field and ask the person to inspect the interface or request a detailed Runtime diagnostic. Always retain the supplied Runtime rule text, including when no field pointer exists. Show the rule together with a field-unknown note and any separately labeled local findings in text and JSON. Never guess a rejected field.
+
 ## Native lint selection and display (draft)
 
 For explicit `pdd lint STORY` (including `--local` without `--timeout`,
@@ -339,7 +343,7 @@ handling and the existing [saved Check intent and continuation policy](#continue
 including its legacy classification; passing lint alone never establishes Check intent.
 
 Order:
-1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A estimates declared work for each step: one entry execution, one use of each declared saved-data resource operation, and prompt-call max_calls multiplied by the target prompt estimate (including its resource operations and calls); cut dependency cycles rather than recursing forever. Conditional operations may use fewer calls. Bound the estimate by the unchanged hard cap; M = the sum of the tests' `max_calls` (cli 12b).
+1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before Check dispatch, use the check scope plan defined below.
 2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). Allocate one new `crypto.randomUUID()` for lint at batch creation and write `batch.json`. Allocate each test's first check UUID only at its first authorized dispatch after the applicable dispatch gates; pending lint allocates no check UUID. Print to stderr `If pdd stops, read the results with: pdd test --read <batch>` after lint passes and right before the first check POST, and again at the end of an exit 3. A pending lint also has a saved result to read: name its batch when the wait limit ends.
 3. Lint: write `<id>.posted` (exclusive create), then POST `/v1/lint` multipart (`request` = `{requestId, source_sha256, complete: true}`, no `paths`; `source` = the tar). When the last `/v1/capacity` answer of this command lists `"lint-tests"` in its `features` array, the request also carries `tests` (the selected test paths that are sent, sorted; never a test refused locally) and `app_maps` (the sorted, distinct union of maps named by the CLI and `app_maps` declared by the selected tests that are sent, or `[]` when neither names a map), so the interpreter lints exactly the tests that pdd found by the [test name rule](runtime-preflight.prompt.md#test-name-rule). Without that feature (an older interpreter, or no capacity answer) the request stays as it is; such an interpreter refuses fields it does not know, and it finds tests in the upload by itself. Read until terminal within the caller wait defined below; there is no independent 120-second lint cap. Judge selected tests through the Outcome contract below.
 4. Checks: validate an explicit --max-calls as a whole number from1 through1000 before sign-in, capture or network effects, including direct runCheck callers. For each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or the preflight default (12 for each step, 18 to 1000). Each remote lint, test and new Simulator setup uses the shared local admission contract below. Hold remaining tests locally only when an explicit local job cap, the per-process upload setting below or confirmed server backpressure requires it; do not reserve a batch slot while its child jobs wait for slots. POST timeout is the earlier 90 s and remaining command budget. Reuse one immutable source Blob per packed tar across all its lint, test, retry and Simulator setup POSTs, preserving exact tar bytes and source hash; multipart request metadata remains distinct for each attempt. Reuse must not copy the source per upload or impose a default job cap.
@@ -655,6 +659,8 @@ Local waiting, maintenance, HTTP, queue reads and all backoffs share the caller 
 
 ## One replacement after a confirmed runtime restart
 
+The workflow resend child sets PDD_CHECK_SINGLE_ATTEMPT=1. For that invocation, persist single_attempt:true in batch.json and restore it on saved reads and retries. It prohibits automatic restart replacement at the recovery dispatch boundary: retain the structured unknown receipt, IDs and usage, return the ordinary nonzero no-verdict result and send no replacement. Later reads or retries retain this restriction even without the environment setting. Confirmed unstarted capacity recovery keeps its existing rules. Ordinary test invocations retain the replacement rule below.
+
 Only a same-ID, correct-command terminal check receipt with state unknown and structured reason code service-restarted in result.refusals or result.report.refusal authorizes one automatic replacement for that original Story row. result.why is display text, never an authority inferred by matching message text. A generic unknown, lost POST, wrong ID/command, expired/unverifiable receipt or another reason never authorizes it. This exception can follow read-only same-ID recovery; the receipt, not an error message, authorizes dispatch.
 
 Persist the consumed replacement allowance across reads/retries and capacity attempts. Before allocating the replacement UUID, require the [shared lint gate](#outcome) on the saved lint, saved owner, repository, identical recaptured source and original per-row max_calls, a live caller wait and an exclusive per-row replacement claim. Overlapping readers cannot both send. Print `The interpreter restarted during this check. pdd sends it again (1 of 1).` Keep both IDs, raw receipts and their known/unknown call accounting; do not reset usage or enlarge the row ceiling. Apply ordinary admission to the replacement. A second restarted receipt ends unknown with read/report advice, never a second replacement. UUID call reads and paid Try calls remain GET-only. A deadline-ended eligible replacement stays saved for guarded recovery; approval is never inferred. Source identity validation remains mandatory, but reuse one captured identical archive for a recovery decision instead of packing and hashing it twice per scheduler turn. Repeated visits to the same pending replacement without a new dispatch decision do not recapture source. An actual later recovery invocation or newly authorized replacement still validates against the saved source before sending.
@@ -765,7 +771,7 @@ budget changes must not be reported as success; an unsupported raise fails befor
 owner API binding for this raise is pending the planner's contract; do not invent a mutation path.
 
 - STORY as for `pdd test`. No STORY and one test: use it. Many tests: list them, exit 2. Then preflight, capture and lint as for `pdd test`, for this one test.
-- If `repos/<key>.json` has a Try for this test and GET says `result.session.state` `running` with a valid link, open that link again. For `paused`, validate the same-origin link, then explicitly send one authenticated JSON `{}` POST to `/v1/try/<id>/reopen`. Keep the same ID and original seed identity. Read that ID until its session is running before showing/opening the link. Restore consumes no AI calls, creates no new Try and keeps the original expiry and remaining allowance. A lost reopen answer is read by the same ID; never automatically repeat the POST. A busy/refused/missing reopen or unconfirmed restore keeps the record and returns nonzero with its reason and retry advice naming the exact authored test path, shell-quoted when needed; never print a paused link as ready. `--new` stops the paused Try and creates a new one through its normal route, without reopening it. Options that apply only to a new Try remain refused before reopening. After interruption, send nothing new. `--new`: stop the old Try first, then make a new one. A plain repeat never replaces any saved setup, including a confirmed ended session; a separate setup requires explicit `--new`. A missing (404), expired (410), unknown setup or unknown session is not proof that its original intent did not execute. Without explicit `--new`, keep its complete saved record and request ID, exit 3, and make no lint, setup, stop or reopen submission. Name the original UUID, the authenticated read-only `GET <origin>/v1/runs/<UUID>` status endpoint, and an exact `pdd simulate <test path> --no-open --no-wait` repeat command (shell-quote the path when needed). Explain that a separate Try requires deliberate `--new` after reconciling the original outcome. Never infer zero AI calls or external effects from a setup receipt. A new setup that ends `unknown` also keeps its original record and gives this same recovery advice; subsequent reads must not silently replace it. A Try that is still starting, or a GET with no answer, remains exit 3 with no new Try unless explicitly replaced through `--new`.
+- If `repos/<key>.json` has a Try for this test and GET says `result.session.state` `running` with a valid link, open that link again. For `paused`, validate the same-origin link, then explicitly send one authenticated JSON `{}` POST to `/v1/try/<id>/reopen`. Keep the same ID and original seed identity. Read that ID until its session is running before showing/opening the link. Restore consumes no AI calls, creates no new Try and keeps the original expiry and remaining allowance. A lost reopen answer is read by the same ID; never automatically repeat the POST. A busy/refused/missing reopen or unconfirmed restore keeps the record and returns nonzero with its reason and retry advice naming the exact authored test path, shell-quoted when needed; never print a paused link as ready. `--new` stops the paused Try and creates a new one through its normal route, without reopening it. Options that apply only to a new Try remain refused before reopening. After interruption, send nothing new. `--new`: stop the old Try first, then make a new one. A plain repeat never replaces any saved setup, including a confirmed ended session; a separate setup requires explicit `--new`. A missing (404), expired (410), unknown setup or unknown session is not proof that its original intent did not execute. Without explicit `--new`, keep its complete saved record and request ID, exit 3, and make no lint, setup, stop or reopen submission. Name the original UUID, the authenticated read-only `GET <origin>/v1/runs/<UUID>` status endpoint, and an exact `pdd simulate <test path> --no-open --no-wait` repeat command (shell-quote the path when needed). Explain that a separate Try requires deliberate `--new` after reconciling the original outcome. Never infer zero AI calls or external effects from a setup receipt. A new setup that ends `unknown`, or first reports a passed job whose session is `unknown`, `stopped` or `stopping`, also keeps its complete original record, exits 3 and gives this same recovery advice. This applies both to a direct setup reply and the first status read; subsequent reads must not silently replace it. A Try that is still starting, or a GET with no answer, remains exit 3 with no new Try unless explicitly replaced through `--new`.
 - After Ctrl-C, pdd sends nothing new: no POST starts after the interrupt.
 - App map: `--app-map PATH`, else `app-map.json` at the repo root, else `app/app-map.json`. An app map is a Git-visible JSON object with `"schema_version": "prompt-runtime.app-map.v1"` and a nonempty `name` (the engine's first checks). A bad `--app-map` is exit 2 with the reason (`not a Git-visible file`, `not JSON`, wrong `schema_version`, no `name`) and `See RUNBOOK.md §13.`; a bad found file is skipped with a note. With an open Try, `--app-map` or `--tab` without `--new` is exit 2: they apply only to a new Try. POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, app_map, tab}`: `app_map` only when there is one; `tab` = `--tab`, else `screen` with an app map, else `call`; `max_calls` is the explicit budget or400. Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check, with one exception.
 - A Try setup that the server refuses (the POST or the job; runtime team, Oct 27) is not a check: no table and no `pdd test` advice, exit 4. Two plain lines: `The Try could not start: the app map was refused (<code>: <reason>).` and `Fix <app map path> (RUNBOOK §13), then run pdd simulate <story> --new.` It is the app map when one was sent and the code is `ambiguous-handler`, `template-reference-schema` or `app-map-*`, or the section names the app map. Else `the server refused it (…)` and `Fix what it names, then run pdd simulate <story> --new.`, with ` Details: <report link>` when there is one. Many refusals join with `; `; a refusal with a `where` (prompt-runtime #379) adds `; at <where>` after its reason. The reason is the server's `reason` (on each `result.refusals[]` item, or on `result.report.refusal` with the same code), else pdd's plain rule (`ambiguous-handler`: on one screen, all taps of one kind must match by the same key; `template-reference-schema`: a field that gets a value from the screen (`$ref`) must be a plain {"type": "string"}), else the engine message, else the server message unless it is the generic `The runtime refused this job…`. A server `fix` takes the place of pdd's fix words: `<fix> Then run pdd simulate <story> --new.` A Try that is ready but has an invalid link is exit 3 with one line and no table: `Try link refused: it points at <link origin>, not <configured address>. The server's address setting may be wrong; tell the PDD team.` (or `Try link refused: it is not a valid Try link. Tell the PDD team.` when the origin matches). pdd keeps its record so `pdd simulate --stop` can end it, a later `pdd simulate` says the same, and pdd never prints that link.
@@ -838,30 +844,80 @@ The GET-only `--request UUID` route reads known criterion coverage from an ownin
 
 Explicit lint JSON uses the deciding selected row for its aggregate public state, reason and lint_state, including a locally broken capture. Local broken tests keep internal refusal recovery and exit 4, but all public and saved projections use `not run` with `broken-test` and retain their original refusal details. Apply the same projection in files preview.
 
-## Machine interpreter admission
+## Missing and native-only interfaces
 
-Every lint and check POST also uses [machine admission](interpreter-queue.prompt.md),
-after ordinary profile admission and before immutable dispatch evidence, including
-the permanent Check claim and restart fuse. Expired or interrupted machine waits
-leave no Check claim or sent request ID, so a new process can retry that unsent
-work from the saved batch with zero charged calls. Waiting
-must not send a request or poll its unsent ID. Already dispatched checks keep
-being read while another check waits for the machine queue. Register the allocated ID, mark possible dispatch before
-POST and hold the machine ticket until a matching terminal receipt or confirmed
-unsent refusal. A lost reply, command return or interruption records unknown and
-keeps capacity; same-ID reads can later release it. Use existing capacity proof
-rules for retry authority. Machine busy feedback never grants retry permission,
-including when a capacity reply has uncertain accounting. Feed successful verdicts,
-busy, unknown and refused outcomes from POST and subsequent same-ID reads into
-the request ledger, including the documented `pdd test --request ID` read. A
-matching terminal request read releases retained machine capacity without sending
-a new POST or granting replay authority. Incomplete accounting stays unknown. Never record a request
-as not sent after its POST may have started. Private queue file identities do not allocate interpreter request IDs; saved reads
-keep the existing zero-new-request-ID promise. Ledger/queue failures stop new sends
-with a local-state-unavailable error; recovery advice remains read-only. Retain
-existing per-profile cap defaults and Simulator setup policy.
+Use the preflight owner's missing-block, kind, native-reason and draft-gap findings in local lint, even without Stories. Preserve server ownership of other schema/hash diagnostics in explicit lint, and retain the existing local limits gate, its hints and selected rows. Keep SVG advice separate. Server lint reports these local findings before authentication or upload. Checks and lint omit native-only scenarios from uploads even when criteria, checks or reached declarations are invalid. Preserve local refusals and native-only paths/reasons; internal recovery keeps invalid rows refused and valid rows not_run, including called prompts. Public output uses the outcome owner state and reason. Mixed selections still run the other scenarios. Save the exact source selection as source_selection {tests, exclude_fixture_projects}, and separately save native_source {tests, sha256} for omitted native-only scenarios. Neither the native capture nor its scenarios enter uploads. Preserve native_only [{path, reason}] in batch rows. Saved reads retain both source identities. A selection with only native-only scenarios still saves local check/lint evidence, coverage, refusals and reasons without authentication or Runtime requests; mark that batch local_only true and every row unsent, and allow its saved read without authentication or Runtime requests. This also applies when other selected rows are refused locally and no row is ready. An unavailable native capture keeps sha256 null and freshness unknown. Native-only is never a pass and does not silently turn a partial result into success. Each test summary shows repository Runtime coverage: N of M prompts checkable, K native-only. Count valid current full/partial blocks as checkable, valid current native-only declarations separately, and include missing/invalid/stale prompts in M. Keep this separate from module binding coverage.
+
+Saved lint refresh and check continuation apply only to rows prepared for Runtime
+lint. Exclude local rows and rows with native_only declarations from every
+pending, unknown and completed lint mutation and continuation. Preserve their
+state, refusals, native paths and reasons across saved reads. When local lint
+stops a mixed selection before upload, save its native-only omissions and local
+refusals through the shared local-result path. Text, JSON, saved reads and
+workflow evidence retain coverage and reasons. Preserve the public lint state/reason projection and
+exit 4 for a local lint refusal beside a native-only omission, including its
+saved read.
+
+Repository-wide lint without Story operands has the same local evidence rules.
+Build selected rows and coverage before returning global interface findings;
+retain selected refusals and native-only omissions in the local batch. Keep
+global findings in `lint.problems` so saved reads retain diagnostics and exit 4
+even when the finding is outside every selected scenario. A repository with no
+Story tests still reports global interface findings locally with exit 4 and
+empty rows. These paths require neither authentication nor Runtime requests.
+
+## Native selection and no-verdict lint
+
+The files preview uses the same native omission selection as a check. Exclude
+native-only scenario closures from its upload inventory, retaining each local
+path, reason, refusal and coverage in text/JSON. A valid native omission is not a
+broken test and does not itself fail a files preview; a malformed native scenario
+keeps exit 4. Ordinary preview discovery and per-test capture isolation remain
+unchanged. The preview makes no Runtime request and does not claim execution.
+
+Construct every negotiated named lint request from the exact executable source
+selection used for that upload. Every named test must be present in the archive.
+Exclude local refusals and native-only omissions. Preserve this selection in
+saved batches and reconstruct it from saved eligible rows for continuation and
+recovery when older records lack selection metadata. Never replace a native-only
+row with a server verdict or continuation state.
+
+Render immediate lint no-verdict responses with the shared lint result formatter.
+Retain native-only paths, reasons, local refusals and Runtime coverage in text and
+JSON, alongside the server error. A temporary service refusal sends no checks,
+returns exit 5, and leaves locally omitted rows not run. Unknown service results
+do not hide local evidence or turn it into a pass. All-local lint with a refused
+row returns exit 4; a valid native omission alone returns exit 5. Public results
+use the outcome owner vocabulary, including `not run` and `broken-test` for local
+refusals. Saved recovery states remain separate from public states.
+
+## Binding plan (#3135)
+
+`pdd test --explain-bindings [STORY...] [--json]` is a read-only mode. Use the
+binding-plan owner and the same safe source capture as Check. Print every edge,
+its step, prompt, resource/operation, candidates, causes and smallest repair.
+JSON returns `{schema_version:"pdd.binding-plans.v1",plans:[...]}`. Exit 4 for
+missing bindings, otherwise 0; syntax/source failures keep existing exits.
+Never authenticate, query capacity, send HTTP, create a queue ticket or save a
+batch in this mode. It is a local selection plan, not a service verdict.
+Before ordinary paid checks, retain this plan on each row as `binding_plan` and
+print missing-edge details. A service binding refusal must retain the local
+plan beside its authoritative compatibility evidence; a locally matched fixture
+is evidence of disagreement, never permission to turn a refusal into a pass.
+
+Canonical lint problems and legacy refused-prompt aliases for the same code,
+file and original section are one problem. Preserve the canonical JSON pointer,
+rule and other richer fields. Diagnostic display may replace section with a
+pointer, but deduplication must retain the original location identity.
 
 ## Dependencies
+
+- [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.
+
+- [Check planning](runtime-check-plan.prompt.md): required for affected Story
+  selection, bounded work, saved scope and target/baseline recovery guidance.
+
+- [Local interface inventory](interface-draft.prompt.md#inventory-results): required generation and verification context for `interfaceFindings` and Runtime coverage. This selection owns the local inventory APIs; automatic approval is a caller of this module and supplies no admission policy here.
 
 - Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
 
@@ -883,7 +939,6 @@ existing per-profile cap defaults and Simulator setup policy.
 - [References](contract-refs.prompt.md): required generation and verification
   context for canonical provenance and explicit-lint copy comparison.
 
-- [Machine interpreter queue](interpreter-queue.prompt.md): required context for machine admission, waiting progress and request ledger.
 - [Runtime slots](runtime-slots.prompt.md): required generation and verification context for shared local admission and jobs. Runtime listing binds its own files port; native process exclusion remains a native verification obligation.
 
 - [Local bindings](runtime-bindings.prompt.md): required generation/runtime context for the local inventory helper.
@@ -1076,6 +1131,31 @@ run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
 
+## Check scope plan
+
+Before normal Check dispatch, build the local plan owned by
+[check planning](runtime-check-plan.prompt.md), using the unique same-worktree
+workflow run's baseSha when available. Print its text to stderr once before
+sign-in and lint. Save it as `check_plan` in batch.json and summary.json; restore
+it on saved reads and retries rather than recomputing against later edits.
+JSON results include `check_scope` from that owner's result projection. Text
+results show its separate group states and recovery guidance. Local full-check
+prerequisites stop every paid Check with exit 4 and zero calls; keep existing
+refusals, mark other rows not run and show the named prerequisite once in the
+plan. Preserve all selected rows and existing full-batch gate requirements.
+Give every blocked nonpassing row the local note code `check-plan-prerequisite`, with the
+planning owner's named repair guidance in their note/reason. Preserve this cause
+through saved rows and JSON/text reads. It is issue work, never a service failure.
+A quiet local-only read returns rows to its caller. Retry of a local-only batch
+returns its saved result (exit 4 for full-check prerequisites), names the repair
+and asks for a fresh check. It neither signs in nor dispatches work, replaces the
+batch, or changes its historical plan/rows.
+Replace the old all-Story cost line with this plan's estimate and ceiling.
+The planning owner is required dependency context for these uses.
+Save every selected row, including reused passes with their `cached`,
+`passed_at`, `checks` and `criteria` fields. Saved reads preserve that reuse
+classification without dispatching it again or inventing a sent receipt.
+
 ## Named check results
 
 Use the public result projection from runtime-outcome for every emitted lint or
@@ -1111,3 +1191,15 @@ Early local-limit refusals also use the shared projection and text formatter for
 every selected row, including unaffected not-run siblings with no-server-verdict.
 A partial lint cannot
 admit Check or Try, including saved continuation and retry.
+
+## Candidate compatibility boundaries
+
+Request `includeRuntime: true` from bindingCoverage for command reports; direct inventory consumers retain their original shape. A lint access/transport stop with no native omissions keeps its original stderr-only exit 5. With native omissions, retain their reasons and coverage in the immediate and saved report. Exit-5 check reports without native declarations keep the prior module-only coverage shape; a transport/access failure is not an interpreter coverage verdict.
+
+For named Runtime Story `lint --local`, keep the SVG-only advisory: captured dependency prompts are layout context, not a request to admit every dependency as a Runtime program. Default `lint --local` checks workspace interface declarations as well. Named nonlocal lint and checks retain executable interface admission. Native-validation Story selection keeps its separate saved-evidence route.
+
+Local lint findings use a local heading; server findings retain interpreter attribution. Intentional native-only omissions count separately from malformed unsent tests in lint summaries. Native omissions never supply a pass.
+
+User diagnostics name the PDD interpreter as the service; Runtime interface names the declaration. Preserve machine identifiers and server gate text.
+
+When a generic refusal does not identify a field, explain that the PDD interpreter did not identify the Runtime interface field. Preserve the supplied rule, null field and local findings without guessing a field.

@@ -88,8 +88,6 @@ test('agy run starts and reopens the same Herdr chat with its folders; recorded 
   assert.ok(line.startsWith(`cd '${run.root}' && env `), line);
   assert.ok(line.includes(`PDD_AGENT_SESSION=1 `), line);
   assert.ok(line.includes(` agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":[${JSON.stringify(run.root)}]}' --add-dir `), line);
-  assert.ok(line.includes(`PDD_INTERPRETER_QUEUE='${f.ports.env.PDD_INTERPRETER_QUEUE}'`), line);
-  assert.match(line, /PDD_INTERPRETER_CONCURRENCY='2'/);
   for (const dir of [join(run.commonDir, 'pdd/runs'), `${run.sourceRoot}.pdd-worktrees`]) assert.ok(line.includes(`--add-dir '${dir}'`), line);
   assert.match(line, /PDD_BIN='/);
   assert.ok(run.chats[0].messageFile.startsWith(dirname(run.runDir)));

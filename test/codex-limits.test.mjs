@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { readCodexLimits, parseCodexLimits } from '../src/codex-limits.mjs';
 const window = (usedPercent, resetsAt = 1800000000) => ({ usedPercent, resetsAt });
 const limits = (primary, secondary = null) => ({ rateLimits: { primary, secondary } });
@@ -19,11 +20,11 @@ test('Codex limit normalization handles both windows and explicit reached types 
     assert.deepEqual(parseCodexLimits(row), { state: 'unknown', resetAt: null, usedPercent: null });
 });
 
-function fakeServer(reply, { earlyExit = false, badInitialize = false, flood = false } = {}) {
+function fakeServer(reply, { earlyExit = false, badInitialize = false, flood = false, closeOnKill = true } = {}) {
   const calls = [], process = new EventEmitter();
   process.stdin = new PassThrough(); process.stdout = new PassThrough(); process.stderr = new PassThrough();
-  let killed = 0;
-  process.kill = () => { killed++; queueMicrotask(() => process.emit('close', 0)); return true; };
+  const signals = [];
+  process.kill = signal => { signals.push(signal); if (closeOnKill) queueMicrotask(() => process.emit('close', 0)); return true; };
   process.stdin.on('data', bytes => {
     for (const line of bytes.toString().trim().split('\n')) {
       const row = JSON.parse(line); calls.push(row);
@@ -38,7 +39,7 @@ function fakeServer(reply, { earlyExit = false, badInitialize = false, flood = f
       });
     }
   });
-  return { calls, process, killed: () => killed };
+  return { calls, process, signals, killed: () => signals.length };
 }
 
 test('read-only app-server handshake sends exactly three allowed methods, binds profile and closes child', async () => {
@@ -56,8 +57,152 @@ test('bounded transport refuses startup error, early exit, invalid handshake and
   for (const options of [{ earlyExit: true }, { badInitialize: true }, { flood: true }]) {
     const f = fakeServer({}, options);
     assert.equal((await readCodexLimits({}, { spawn: () => f.process })).state, 'unknown');
+    assert.equal(f.killed(), options.earlyExit ? 0 : 1);
   }
   assert.equal((await readCodexLimits({}, { spawn: () => { throw Error('synthetic-private'); } })).state, 'unknown');
+});
+
+test('transport escalates after 500 milliseconds and still waits for close', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fakeServer(limits(window(4)), { closeOnKill: false });
+  let settled = false;
+  const pending = readCodexLimits({}, { spawn: () => f.process }).then(value => { settled = true; return value; });
+  try {
+    await setImmediate();
+    assert.deepEqual(f.signals, ['SIGTERM']);
+    t.mock.timers.tick(499);
+    assert.deepEqual(f.signals, ['SIGTERM']);
+    t.mock.timers.tick(1);
+    assert.deepEqual(f.signals, ['SIGTERM', 'SIGKILL']);
+    assert.equal(settled, false);
+  } finally {
+    f.process.emit('close', 0);
+    await pending;
+  }
+  assert.deepEqual(await pending, { state: 'healthy', resetAt: null, usedPercent: 4 });
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(f.signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('transport waits for child close before returning a response or failure', async () => {
+  for (const options of [{}, { badInitialize: true }, { flood: true }]) {
+    const f = fakeServer(limits(window(4)), { ...options, closeOnKill: false });
+    let settled = false;
+    const pending = readCodexLimits({}, { spawn: () => f.process }).then(value => { settled = true; return value; });
+    try {
+      await setImmediate();
+      assert.equal(f.killed(), 1);
+      assert.equal(settled, false, 'result must wait for child close');
+    } finally {
+      f.process.emit('close', 0);
+      await pending;
+    }
+    assert.deepEqual(await pending, options.badInitialize || options.flood
+      ? { state: 'unknown', resetAt: null, usedPercent: null }
+      : { state: 'healthy', resetAt: null, usedPercent: 4 });
+  }
+});
+
+for (const row of [
+  { name: 'response', options: {}, expected: { state: 'healthy', resetAt: null, usedPercent: 4 } },
+  { name: 'protocol failure', options: { badInitialize: true }, expected: { state: 'unknown', resetAt: null, usedPercent: null } },
+  { name: 'exited child with inherited pipes', options: { badInitialize: true }, exited: true, expected: { state: 'unknown', resetAt: null, usedPercent: null } },
+]) {
+  test(`transport bounds cleanup after ${row.name}`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const f = fakeServer(limits(window(4)), { ...row.options, closeOnKill: false });
+    let settled = false, unrefs = 0;
+    f.process.unref = () => { unrefs++; };
+    const pending = readCodexLimits({}, { spawn: () => f.process }).then(value => { settled = true; return value; });
+    try {
+      await setImmediate();
+      if (row.exited) { f.process.exitCode = 0; f.process.emit('exit', 0); }
+      t.mock.timers.tick(999);
+      await setImmediate();
+      assert.equal(settled, false);
+      assert.equal(f.process.stdout.destroyed, false);
+      t.mock.timers.tick(1);
+      await setImmediate();
+      assert.equal(settled, true, 'cleanup must finish without child close');
+      assert.deepEqual(await pending, row.expected);
+      assert.deepEqual([f.process.stdin, f.process.stdout, f.process.stderr].map(stream => stream.destroyed), [true, true, true]);
+      assert.equal(unrefs, 1);
+      assert.deepEqual(f.signals, row.exited ? ['SIGTERM'] : ['SIGTERM', 'SIGKILL']);
+      const signals = [...f.signals];
+      t.mock.timers.tick(10_000);
+      assert.deepEqual(f.signals, signals);
+    } finally {
+      f.process.emit('close', 0);
+      await pending;
+    }
+  });
+}
+
+test('transport bounds cleanup after the exchange times out', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fakeServer({}, { closeOnKill: false });
+  f.process.stdin.removeAllListeners('data');
+  let settled = false;
+  const pending = readCodexLimits({}, { spawn: () => f.process }).then(value => { settled = true; return value; });
+  try {
+    t.mock.timers.tick(9_999);
+    assert.deepEqual(f.signals, []);
+    t.mock.timers.tick(1);
+    assert.deepEqual(f.signals, ['SIGTERM']);
+    t.mock.timers.tick(1_000);
+    await setImmediate();
+    assert.equal(settled, true, 'timeout cleanup must finish without child close');
+    assert.deepEqual(await pending, { state: 'unknown', resetAt: null, usedPercent: null });
+    assert.deepEqual(f.signals, ['SIGTERM', 'SIGKILL']);
+  } finally {
+    f.process.emit('close', 0);
+    await pending;
+  }
+});
+
+test('native transport finishes while a descendant holds inherited output pipes', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-health-inherited-'));
+  const ready = join(dir, 'ready'), release = join(dir, 'release'), stopped = join(dir, 'stopped');
+  const file = join(dir, 'codex'), descendant = join(dir, 'descendant.cjs');
+  t.after(async () => {
+    writeFileSync(release, 'release');
+    const deadline = performance.now() + 5_000;
+    while (existsSync(ready) && !existsSync(stopped) && performance.now() < deadline) await delay(10);
+    assert.equal(existsSync(ready) && !existsSync(stopped), false, 'owned descendant must stop');
+    rmSync(dir, { recursive: true, force: true });
+  });
+  writeFileSync(descendant, `
+const fs = require('node:fs');
+const stop = () => {
+  clearInterval(hold); clearTimeout(safety);
+  fs.writeFileSync(${JSON.stringify(stopped)}, 'stopped');
+};
+const hold = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) stop(); }, 10);
+const safety = setTimeout(stop, 15000);
+fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
+process.send('ready');
+`);
+  writeFileSync(file, `#!${process.execPath}
+const { spawn } = require('node:child_process');
+const child = spawn(process.execPath, [${JSON.stringify(descendant)}], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+child.once('message', () => {
+  child.disconnect(); child.unref();
+  process.stdout.write('null\\n');
+  process.stdin.destroy();
+});
+`, { mode: 0o755 });
+  const pending = readCodexLimits({ command: file, cwd: dir, env: { HOME: dir, XDG_CONFIG_HOME: dir, PATH: process.env.PATH } });
+  let deadline;
+  try {
+    const result = await Promise.race([pending, new Promise(resolve => { deadline = setTimeout(() => resolve('pending'), 5_000); })]);
+    assert.deepEqual(result, { state: 'unknown', resetAt: null, usedPercent: null }, 'inherited pipes must not block the health result');
+    assert.equal(existsSync(ready), true);
+    assert.equal(existsSync(stopped), false);
+  } finally {
+    clearTimeout(deadline);
+    writeFileSync(release, 'release');
+    await pending;
+  }
 });
 
 test('native fake app-server process reads limits without creating a thread or a turn', async t => {

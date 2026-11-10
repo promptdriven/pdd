@@ -294,3 +294,23 @@ whether those boundaries remain stable across the error envelope and names any
 permitted variation in decisions.
 
 </details>
+
+## Runtime interface declarations
+
+A behavior prompt ends with one Runtime interface block. Declare `kind: full` for
+its checkable contract, or `kind: partial` for a declared subset. A block without
+kind means full; the drafter uses this implicit full spelling for strict Runtime
+admission. Use `kind: native-only` only with a nonblank `reason` that names
+the effect that bound ports cannot fake (RUNBOOK §21). A checker confirms the
+reason. Approval records it; checks show not run and preserve the reason.
+
+`pdd interface draft PROMPT` drafts a missing block locally from explicit contract
+schemas. `pdd interface draft --all` drafts the repository and lints each result.
+Unresolved facts include field questions and a `--contract FILE` recovery command.
+Use `--extend --contract FILE` to add operations while preserving existing
+declarations, or `--refresh [--contract FILE]` to reopen a stale or changed block
+as draft. File, network and program ports use RUNBOOK §21 resources. A clean local
+lint is not a Runtime check; run `pdd lint STORY` for admission.
+The automatic-check-pass approval route needs unchanged committed behavior, passing
+existing native tests and a full prompt check on current source. New behavior and
+strict approval mode require a person.

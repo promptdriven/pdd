@@ -1,7 +1,9 @@
 import './helpers/test-home.mjs';
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import {healthyDoctorPorts} from './helpers/doctor-fixture.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
+import * as nativeFs from 'node:fs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -31,11 +33,26 @@ async function fixture(t, options = {}) {
     warn: text => { (f.warnings ??= []).push(text); },
     selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex', env: {} }),
     pathDiagnostic: () => [],
-    run: async (command, args) => {
+    run: async (command, args, options = {}) => {
       f.runs.push([command, args]);
       if (command === 'git') return { code: 0, stdout: (args.includes('--git-common-dir') ? join(cwd, '.git') : cwd) + '\n', stderr: '' };
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"trunk"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
+      if (command === 'gh' && args[0] === 'api' && args.includes('graphql')) {
+        const {query,variables} = JSON.parse(options.input ?? '{}');
+        if (typeof query === 'string' && !/\bmutation\b/.test(query)) {
+          const rows = {};
+          for (const [name,number] of Object.entries(variables ?? {})) if (/^n\d+$/.test(name)) {
+            const row = f.issues.find(row=>row.number===number);
+            rows[`i${name.slice(1)}`] = row ? {url:row.html_url,number:row.number,labels:{nodes:row.labels.map(label=>({name:typeof label==='string'?label:label.name})),pageInfo:{hasNextPage:false}}} : null;
+          }
+          return {code:0,stdout:JSON.stringify({data:{repository:rows}}),stderr:''};
+        }
+      }
+      if (command === 'gh' && args[0] === 'api' && /^repos\/[^/]+\/[^/]+\/issues\/[1-9]\d*$/.test(args.find(arg => String(arg).startsWith('repos/')) ?? '')) {
+        const number = Number(args.find(arg => String(arg).startsWith('repos/')).split('/').at(-1));
+        return {code:0,stdout:'HTTP/2.0 200 OK\r\n\r\n'+JSON.stringify(f.issues.find(row => row.number === number) ?? {number,labels:[]}),stderr:''};
+      }
       if (command === 'gh' && args[0] === 'api') { if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' }; if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' }; f.ack.push(args); return { code: 0, stdout: '{}', stderr: '' }; }
       if (command === 'herdr') return { code: 0, stdout: '1.0', stderr: '' };
       throw Error(`unexpected process ${command} ${args}`);
@@ -48,6 +65,7 @@ async function fixture(t, options = {}) {
       f.herdrCalls ??= []; f.herdrCalls.push(args);
       if (args[0] === 'status') return { running: f.serverRunning !== false };
       const live = { pane_id:'p1', workspace_id:'w1', cwd, foreground_cwd:cwd, tab_id:'t1', terminal_id:'term1', agent:'codex', agent_status:f.agentStatus ?? 'idle', agent_session:'session' };
+      if (args[0] === 'pane' && args[1] === 'list') return {result:{type:'pane_list',panes:f.agentStarted?[live]:[]}};
       if (args[0] === 'workspace') return { result: { type:'workspace_info', workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
       if (args[0] === 'pane' && args[1] === 'get') return { result: { type:'pane_info', pane:live } };
       if (args[0] === 'agent' && args[1] === 'get') {
@@ -62,6 +80,27 @@ async function fixture(t, options = {}) {
       }
       return {};
     },
+  };
+  // Use the same selected definition and fake account as launcher admission.
+  f.ports.doctorPorts=input=>{
+    const ports=healthyDoctorPorts(input),run=ports.run;
+    let definitions=[];
+    ports.agentDefinitions=async ({env})=>definitions=f.ports.selectAgent
+      ? [await f.ports.selectAgent({cwd}, {...f.ports,env}) ?? {id:'codex',kind:'codex',command:'codex',env:{}}]
+      : loadAgentDefinitions({cwd,env});
+    const read=ports.files.readFileSync;
+    ports.files.readFileSync=path=>path.includes('/skills/')?'skill':path.endsWith('/.gemini/oauth_creds.json')?(f.ports.selectAgent?'{"refresh_token":"fixture"}':nativeFs.readFileSync(path,'utf8')):read(path);
+    ports.run=async(file,args,options)=>{
+      if (!f.ports.selectAgent && ['codex','claude','agy','gemini'].includes(file)) return f.ports.run(file,args,options);
+      if (args[0]==='models' || args[0]==='--version' && file!=='git' && file!=='gh' && file!=='herdr' && !file.endsWith('/pdd')) return {code:definitions.some(def=>def.command===file)?0:1,stdout:'fixture',stderr:''};
+      if (args.join(' ')==='login status' || args.join(' ')==='auth status --json') {
+        (f.doctorAccounts??=[]).push({...options.env});
+        const ready=!f.accountReady || f.accountReady(options.env);
+        return {code:ready?0:1,stdout:args[0]==='auth'?JSON.stringify({loggedIn:ready}):ready?'Logged in using ChatGPT':'Not logged in',stderr:''};
+      }
+      return run(file,args,options);
+    };
+    return ports;
   };
   f.module = await import('../src/autopilot-launcher.mjs');
   f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
@@ -225,6 +264,9 @@ test('autopilot routes parse and dispatch without setup or a runtime call', asyn
 
 test('start installs a timer and runs the recipe immediately; unchanged empty ticks wake no AI', async t => {
   const f = await fixture(t);
+  const profile=join(f.home,'original-profile');
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{CODEX_HOME:profile}});
+  f.accountReady=env=>env.CODEX_HOME===profile;
   assert.equal((await f.invoke('start')).exitCode, 0);
   assert.equal(f.polls.length, 1); assert.equal(f.prompts.length, 1);
   assert.match(f.prompts[0], /"recipeFirst":true/);
@@ -256,7 +298,8 @@ test('start installs a timer and runs the recipe immediately; unchanged empty ti
     if(args[0]==='agent'&&args[1]==='get')return {result:{type:'agent_info',agent:live}};
     return oldHerdr(args);
   };
-  const recovered=await f.invoke('start',{resumeCustody:artifact}); assert.equal(recovered.exitCode,0,recovered.message);
+  const recovered=await f.invoke('start',{resumeCustody:artifact,env:{HOME:f.home,PATH:process.env.PATH,CODEX_HOME:join(f.dir,'signed-out-caller')}}); assert.equal(recovered.exitCode,0,recovered.message);
+  assert.ok(f.doctorAccounts.length>=3);assert.ok(f.doctorAccounts.every(env=>env.CODEX_HOME===profile));
   const restored=f.state(); assert.equal(restored.coordinatorId,original.coordinatorId); assert.equal(restored.agent.kind,'codex'); assert.deepEqual(restored.uncertainDeliveryHistory,history); assert.equal(restored.runs,undefined);
   f.ports.listRuns=async()=>[]; const semanticOnly=await f.invoke('start',{resumeCustody:artifact}); assert.equal(semanticOnly.exitCode,0,semanticOnly.message); assert.equal(f.state().coordinatorId,original.coordinatorId); assert.deepEqual(f.state().uncertainDeliveryHistory,history); assert.equal(f.state().runs,undefined);
 });
@@ -414,6 +457,9 @@ test('native HTTP tick uses ETags and revalidates cached later pages, including 
   const run = f.ports.run;
   f.ports.run = async (command, args, opts) => {
     if (command === 'gh' && args[0] === 'api' && args.includes('--include')) {
+      const endpoint = args.find(arg => String(arg).startsWith('repos/'));
+      if (/\/issues\/31$/.test(endpoint ?? '')) return {code:0,stderr:'',stdout:'HTTP/2.0 200 OK\r\n\r\n'+JSON.stringify(issue(31))};
+      if (!/^repos\/owner\/repo\/issues\?/.test(endpoint ?? '')) return run(command,args,opts);
       queries.push(args);
       const second = args[4]?.includes('page=2');
       if (phase === 0) return { code: 0, stderr: '', stdout: second
@@ -1008,7 +1054,8 @@ test('time rules retry failed delivery and discard refreshed pending events', as
 });
 
 test('time rule uses cached comment activity and never adds a GitHub query on unchanged ticks', async t => {
-  const f = await fixture(t); const changedAt = f.time;
+  const f = await fixture(t);
+  const changedAt = f.time;
   f.issues = [issue(105, { labels: [{ name: 'pdd:working' }], comments: 1, updated_at: new Date(changedAt).toISOString() })];
   f.issueComments = { 105: [{ id: 1, body: 'Claim refreshed on this machine', user: { login: 'owner' }, created_at: new Date(changedAt).toISOString(), updated_at: new Date(changedAt + hour / 2).toISOString() }] };
   await f.invoke('start'); f.prompts.length = 0; f.status = 304;
@@ -1030,7 +1077,7 @@ test('time rule revalidates trust on a cached due claim without forwarding stran
 
 test('time rules read active status file modification times from the Git common directory', async t => {
   const f = await fixture(t); delete f.ports.readRunProgress;
-  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue')};
   const invoke = f.invoke;
   f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra});
   const changedAt = f.time;
@@ -1099,6 +1146,7 @@ async function relaunchFixture(t, options = {}) {
     f.herdrCalls ??= []; f.herdrCalls.push(args);
     const [group, action, id] = args;
     if (group === 'status') return { running: true };
+    if (group === 'pane' && action === 'list') return {result:{type:'pane_list',panes:[...panes.values()].filter(p=>!p.closed)}};
     if (group === 'workspace' && action === 'create') {
       const n = ++workspaces, pane = { pane_id: `w${n}:p1`, workspace_id: `w${n}`, tab_id: `w${n}:t1`, terminal_id: `term${n}`, session: `session-${n}`, agent: false, closed: false, shell: f.elsewhere ?? null, agentCwd: null };
       panes.set(pane.pane_id, pane);
@@ -1892,7 +1940,7 @@ test('digest runs before rate-limit retry and its failure does not stop the laun
 });
 for (const state of ['running', 'waiting']) test(`cost polling cannot postpone the native stalled-run rule for ${state} runs`, async t => {
   const f = await fixture(t); delete f.ports.readRunProgress;
-  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
+  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue')};
   const invoke = f.invoke;
   f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra}); f.ports.skipMetricsDelivery = true;
   const { updateRun } = await import('../src/workflow-runs.mjs');
@@ -1924,42 +1972,9 @@ for (const state of ['running', 'waiting']) test(`cost polling cannot postpone t
   await f.tick(); assert.equal(f.prompts.length, 1);
   f.time++; await f.tick(); assert.equal(f.prompts.length, 2);
 });
-test('interpreter queue waiting and unavailable ownership cannot trigger the stuck rule', async t => {
-  const f = await fixture(t), changedAt = f.time;
-  f.runProgress = [{ number: 3066, changedAt, interpreter: { state: 'waiting', position: 2, pausedMs: 0 } }];
-  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
-  f.time += 2 * hour; await f.tick();
-  assert.equal(f.prompts.length, 0, 'machine queue waiting must pause the stuck rule');
-  f.runProgress[0].interpreter.state = 'unavailable'; await f.tick();
-  assert.equal(f.prompts.length, 0, 'unreadable queue ownership cannot prove no progress');
-  f.runProgress[0] = { number: 3066, changedAt: f.time - hour / 2, interpreter: { state: 'finished', pausedMs: 1.5 * hour } };
-  await f.tick(); assert.equal(f.prompts.length, 0);
-  f.time += hour / 2; await f.tick();
-  assert.deepEqual(packet(f).timeRules.filter(row => row.kind === 'stuck-run').map(row => row.number), [3066]);
-});
-
-test('native run progress subtracts saved interpreter waiting after a launcher restart', async t => {
-  const f = await fixture(t); delete f.ports.readRunProgress;
-  f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue'), PDD_INTERPRETER_QUEUE: join(f.dir, 'interpreter-queue')};
-  const invoke = f.invoke;
-  f.invoke = (command, extra = {}) => invoke(command, {env: f.ports.env, ...extra});
-  const changedAt = f.time, folder = join(f.cwd, '.git', 'pdd', 'runs', '3066'); mkdirSync(folder, { recursive: true });
-  const file = join(folder, 'status.json');
-  writeFileSync(file, JSON.stringify({ v: 1, number: 3066, repo: 'owner/repo', state: 'running', root: f.cwd }));
-  utimesSync(file, new Date(changedAt), new Date(changedAt));
-  f.ports.readInterpreterProgress = ({ cwd, since }) => {
-    assert.equal(cwd, f.cwd); assert.equal(since, changedAt);
-    return { state: 'finished', position: null, pausedMs: hour };
-  };
-  await f.invoke('start'); f.prompts.length = 0; f.status = 304;
-  f.time += hour; await f.tick();
-  assert.equal(f.prompts.length, 0, 'saved interpreter wait must be excluded after restart');
-  f.time += hour; await f.tick();
-  assert.deepEqual(packet(f).timeRules.filter(row => row.kind === 'stuck-run').map(row => row.number), [3066]);
-});
 test('2709: a full pane budget holds fresh intake and the next tick can release the hold', async t => {
   const f = await fixture(t), warnings = [];
-  let count = 56, sweeps = 0;
+  let count = 55, sweeps = 0;
   f.ports.warn = text => warnings.push(text);
   f.ports.tidyRuns = async () => {sweeps++; return {closed:0,kept:0,exitCode:0,message:'sweep'};};
   f.ports.workflowHerdr = async args => {
@@ -1968,6 +1983,7 @@ test('2709: a full pane budget holds fresh intake and the next tick can release 
   };
   f.issues = [issue(2709)];
   assert.equal((await f.invoke('start')).exitCode,0);
+  count = 56; await f.tick();
   assert.deepEqual(f.state().githubIntake.eligible,[]);
   assert.ok(warnings.some(text=>text.includes('panes'))); assert.ok(sweeps >= 1);
   count = 1; f.status = 304;
@@ -2100,4 +2116,347 @@ test('3071 repair refreshed packet base agrees with automatic workflow startup',
   assert.equal(workflow.record().baseBranch, 'new-default');
   assert.equal(packet.baseBranch, workflow.record().baseBranch);
   assert.equal(workflow.record().baseSha, workflow.git(workflow.source, 'rev-parse', 'refs/remotes/origin/new-default'));
+});
+
+// #3091 native discovery must not turn incomplete saved rows into a tick failure.
+for (const [name, root] of [['absent', undefined], ['null', null], ['number', 42], ['object', {}]])
+  test(`3091 integration verdict scan keeps incomplete ${name} root rows unknown`, async t => {
+    const f = await fixture(t);
+    f.ports.env = {HOME: f.home, PDD_SUITE_QUEUE: join(f.dir, 'suite-queue')};
+    assert.equal((await f.invoke('start', {env: f.ports.env})).exitCode, 0);
+    const folder = join(f.cwd, '.git', 'pdd', 'runs', '901'); mkdirSync(folder, {recursive: true});
+    const file = join(folder, 'status.json');
+    const bytes = JSON.stringify({v: 1, number: 901, repo: 'owner/repo', state: 'running', root});
+    writeFileSync(file, bytes);
+    const before = f.prompts.length;
+    f.time += 30 * 60 * 1000;
+    await assert.doesNotReject(async () => {assert.equal((await f.tick()).exitCode, 0);});
+    assert.equal(f.prompts.length, before);
+    assert.equal(f.state().interpreterPattern.streak, 0);
+    assert.equal(f.state().interpreterPattern.verdictAt, undefined);
+    assert.equal(readFileSync(file, 'utf8'), bytes);
+  });
+
+
+for(const damage of ['missing','non-boolean'])test(`3138 repair 1: discovery alerts once for ${damage} recommendation and keeps intake`,async t=>{
+  const f=await fixture(t);assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(),runDir=join(f.dir,'audit-run'),folder=join(runDir,'audits'),file=join(folder,'23.json');
+  mkdirSync(folder,{recursive:true});
+  const record={schema:'pdd.audit.v1',runId:'audit-run',pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),at:f.time,state:'recorded',completedAt:f.time,
+    chat:{agent:'codex',configDir:null,startedAt:f.time,session:{id:'11111111-1111-4111-8111-111111111111'}},
+    result:{verdict:'BAD',kind:'',summary:'Synthetic gap',evidence:'Missing scope',...(damage==='non-boolean'?{revert:'false'}:{})},
+    comment:{state:'unknown',at:f.time},revert:{state:'unknown',at:f.time}};
+  const bytes=JSON.stringify(record);writeFileSync(file,bytes);writeFileSync(`${file}.revert`,'');
+  const run={number:17,repo:state.repo,commonDir:join(f.cwd,'.git'),sourceRoot:f.cwd,root:f.cwd,baseBranch:'trunk',runDir,runId:record.runId,
+    state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:state.coordinatorId},pr:[{number:23,state:'merged'}]};
+  f.ports.listRuns=async()=>[run];f.ports.auditStateRoot=join(f.dir,'audit-state');
+  const alerts=[];f.ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0,message:`Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`};};
+  f.issues=[issue(18)];f.time+=1000;
+  for(let n=0;n<2;n++)assert.equal((await f.tick()).exitCode,0);
+  assert.equal(alerts.length,1,'DISCOVERY_MUST_SEND_ONE_RECOMMENDATION_DECISION_ALERT');
+  assert.equal(alerts[0].kind,'decision');
+  const alert=JSON.parse(alerts[0].text);assert.match(alert.cause,/recommendation.*(missing|unavailable)/i);
+  assert.match(alert.need,/keep.*merge.*finish/i);assert.ok(alert.need.includes(`git revert -m 1 ${record.merge}`));assert.ok(alert.need.includes(run.baseBranch));
+  assert.deepEqual(f.state().auditHolds,[{number:17,pr:23,cause:'audit-evidence-invalid'}]);
+  const packets=f.prompts.map(text=>JSON.parse(text.trim().split('\n').at(-1)));
+  assert.ok(packets.some(p=>p.issues?.some(i=>i.number===18&&i.eligible)));
+  assert.equal(packets.some(p=>p.timeRules?.some(r=>r.kind==='post-merge-audit')),false);
+  assert.equal(readFileSync(file,'utf8'),bytes);assert.deepEqual(readdirSync(folder).sort(),['23.json','23.json.revert']);
+  assert.equal(f.runs.filter(([command,args])=>command==='git'&&args.includes('revert')||command==='gh'&&args.includes('create')).length,0);
+});
+
+test('3138 repair 2: discovery retains each damaged PR hold and sends each decision once',async t=>{
+  const f=await fixture(t);assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(),runDir=join(f.dir,'audit-run'),folder=join(runDir,'audits');mkdirSync(folder,{recursive:true});
+  const run={number:17,repo:state.repo,commonDir:join(f.cwd,'.git'),sourceRoot:f.cwd,root:f.cwd,baseBranch:'trunk',runDir,runId:'audit-run',
+    state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:state.coordinatorId},
+    pr:[23,24].map(number=>({number,state:'merged',mergeSha:String(number===23?'a':'c').repeat(40)}))};
+  const originals=run.pr.map(pr=>{
+    const record={schema:'pdd.audit.v1',runId:run.runId,pr:pr.number,merge:pr.mergeSha,parent:'b'.repeat(40),at:f.time,state:'recorded',completedAt:f.time,
+      chat:{agent:'codex',configDir:null,startedAt:f.time,session:{id:'11111111-1111-4111-8111-111111111111'}},
+      result:{verdict:'BAD',kind:'',summary:'Synthetic gap',evidence:'Missing scope'}};
+    const file=join(folder,`${pr.number}.json`),bytes=JSON.stringify(record);writeFileSync(file,bytes);writeFileSync(`${file}.revert`,'');return {file,bytes};
+  });
+  f.ports.listRuns=async()=>[run];f.ports.auditStateRoot=join(f.dir,'audit-state');
+  const alerts=[];f.ports.sendAlert=async input=>{alerts.push(input);return {exitCode:0,message:`Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`};};
+  f.issues=[issue(18)];f.time+=1000;
+  for(let n=0;n<2;n++)assert.equal((await f.tick()).exitCode,0);
+  assert.equal(alerts.length,2,'DISCOVERY_NEEDS_EACH_PR_DECISION_ALERT');
+  for(const pr of run.pr)assert.equal(alerts.filter(a=>JSON.parse(a.text).cause.includes(`PR #${pr.number} (${pr.mergeSha})`)).length,1);
+  assert.deepEqual(f.state().auditHolds,run.pr.map(pr=>({number:17,pr:pr.number,cause:'audit-evidence-invalid'})));
+  const packets=f.prompts.map(text=>JSON.parse(text.trim().split('\n').at(-1)));
+  assert.ok(packets.some(p=>p.issues?.some(i=>i.number===18&&i.eligible)));
+  assert.equal(packets.some(p=>p.timeRules?.some(r=>r.kind==='post-merge-audit')),false);
+  for(const {file,bytes} of originals){assert.equal(readFileSync(file,'utf8'),bytes);assert.equal(readFileSync(`${file}.revert`,'utf8'),'');}
+  assert.equal(f.runs.filter(([command,args])=>command==='git'&&args.includes('revert')||command==='gh'&&args.includes('create')).length,0);
+});
+
+for (const damage of ['json','schema','attempt','file','folder']) test(`3111 repair 2: ${damage} audit evidence holds without blocking tick delivery`, async t => {
+  const f = await fixture(t);await f.invoke('start');
+  const state=f.state(),runDir=join(f.dir,'audit-run'),folder=join(runDir,'audits'),file=join(folder,'23.json');
+  mkdirSync(folder,{recursive:true});
+  const record={schema:'pdd.audit.v1',runId:'audit-run',pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),at:f.time,state:'recorded',completedAt:f.time,chat:{agent:'codex',configDir:null,startedAt:f.time,session:{id:'11111111-1111-4111-8111-111111111111'}},result:{verdict:'OK',kind:'',summary:'Observed',evidence:'Synthetic evidence',revert:false},comment:{state:'sent',at:f.time,value:'confirmed'}};
+  writeFileSync(file,JSON.stringify(record));
+  if(damage==='json')writeFileSync(file,'{');
+  if(damage==='schema')writeFileSync(file,'null');
+  if(damage==='attempt')writeFileSync(file,JSON.stringify({...record,runId:'other-attempt'}));
+  f.ports.fs={...nativeFs,
+    readFileSync:(path,...args)=>{if(damage==='file' && path===file)throw Object.assign(Error('synthetic denied'),{code:'EACCES'});return nativeFs.readFileSync(path,...args);},
+    readdirSync:(path,...args)=>{if(damage==='folder' && path===folder)throw Object.assign(Error('synthetic denied'),{code:'EACCES'});return nativeFs.readdirSync(path,...args);},
+  };
+  f.ports.listRuns=async()=>[{number:17,repo:state.repo,sourceRoot:f.cwd,runDir,runId:'audit-run',state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:state.coordinatorId},pr:[{number:23,state:'merged'},{number:24,state:'merged'}]}];
+  const cause=damage==='file'?'audit-evidence-unreadable':damage==='folder'?'audit-folder-unreadable':damage==='attempt'?'audit-attempt-mismatch':'audit-evidence-invalid';
+  const expected=[{number:17,pr:23,cause},...(damage!=='attempt'?[{number:17,pr:24,cause}]:[])];
+  f.issues=[issue(18)];f.time+=1000;
+  for(let n=0;n<2;n++) {
+    const tick=await f.tick().catch(error=>({exitCode:1,message:error.message}));
+    assert.equal(tick.exitCode,0,'AUDIT_SCAN_INTAKE: evidence damage must not abort the tick');
+    assert.deepEqual(f.state().auditHolds,expected);
+  }
+  const packets=f.prompts.flatMap(text=>{try{return [JSON.parse(text.trim().split('\n').at(-1))];}catch{return [];}});
+  assert.ok(packets.some(p=>p.issues?.some(i=>i.number===18 && i.eligible)));
+  const rules=packets.flatMap(p=>p.timeRules??[]).filter(r=>r.kind==='post-merge-audit');
+  assert.ok(rules.every(r=>r.pr!==23));
+  assert.equal(rules.some(r=>r.pr===24),damage==='attempt');
+  for(const options of [{},{all:true}]) {
+    const status=await f.invoke('status',options);assert.equal(status.exitCode,0);assert.ok(status.message.includes(cause));
+  }
+  const json=await f.invoke('status',{json:true});
+  assert.deepEqual(JSON.parse(json.message).auditHolds,[{repository:state.repo,cwd:f.cwd,holds:expected}]);
+  assert.equal(readFileSync(file,'utf8'),damage==='json'?'{':damage==='schema'?'null':JSON.stringify({...record,...(damage==='attempt'?{runId:'other-attempt'}:{})}));
+  f.ports.fs=nativeFs;writeFileSync(file,JSON.stringify(record));
+  await f.tick();assert.deepEqual(f.state().auditHolds,[]);
+});
+
+for (const owner of ['current','previous']) for(const saved of [false,true]) test(`review: pending completed audit survives ${owner} coordinator with saved verdict ${saved}`,async t=>{
+  const f=await fixture(t);assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(),runDir=join(f.dir,'completed-run');mkdirSync(runDir);
+  f.ports.listRuns=async()=>[{number:17,repo:state.repo,sourceRoot:f.cwd,root:f.cwd,runDir,runId:'previous-completed-run',state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:owner==='current'?state.coordinatorId:'previous-coordinator'},pr:[{number:23,state:'merged'}]}];
+  if(saved) {
+    mkdirSync(join(runDir,'audits'));
+    writeFileSync(join(runDir,'audits','23.json'),JSON.stringify({schema:'pdd.audit.v1',repository:state.repo.toLowerCase(),runId:'previous-completed-run',pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),at:f.time,state:'recorded',completedAt:f.time,chat:{agent:'codex',configDir:null,startedAt:f.time,session:{id:'11111111-1111-4111-8111-111111111111'}},result:{verdict:'BAD',kind:'',summary:'Synthetic defect',evidence:'Native assertion fails',revert:true},comment:{state:'sent',at:f.time,value:'confirmed'}}));
+  }
+  f.issues=[issue(18)];f.time+=1000;
+  assert.equal((await f.tick()).exitCode,0);
+  const packets=f.prompts.flatMap(text=>{try{return [JSON.parse(text.trim().split('\n').at(-1))];}catch{return [];}});
+  const rules=packets.flatMap(p=>p.timeRules??[]).filter(r=>r.kind==='post-merge-audit');
+  assert.ok(rules.some(r=>r.number===17&&r.pr===23),'PREVIOUS_COORDINATOR_MUST_NOT_LOSE_COMPLETED_AUDIT');
+});
+
+for(const boundary of ['disabled','foreign-repository','foreign-checkout','foreign-machine','shared-reservation']) test(`completed audit replacement retains ${boundary} guard`,async t=>{
+  const f=await fixture(t);assert.equal((await f.invoke('start')).exitCode,0);
+  const state=f.state(),runDir=join(f.dir,'completed-run');mkdirSync(runDir);
+  const run={number:17,repo:state.repo,sourceRoot:f.cwd,root:f.cwd,runDir,runId:'previous-completed-run',state:'completed',automaticOrigin:{repository:state.repo,machine:state.machine,coordinatorId:'previous-coordinator'},pr:[{number:23,state:'merged'}]};
+  if(boundary==='disabled')writeFileSync(join(f.cwd,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',audit:false}}));
+  if(boundary==='foreign-repository')run.automaticOrigin.repository='other/repo';
+  if(boundary==='foreign-checkout')run.sourceRoot=join(f.dir,'other-checkout');
+  if(boundary==='foreign-machine')run.automaticOrigin.machine='other-machine';
+  let authority;
+  if(boundary==='shared-reservation') {
+    const record={schema:'pdd.audit.v1',repository:state.repo.toLowerCase(),runId:run.runId,pr:23,merge:'a'.repeat(40),parent:'b'.repeat(40),at:f.time,state:'unknown',chat:{agent:'codex',configDir:null,startedAt:f.time}};
+    const folder=join(f.dir,'shared-audits');f.ports.auditStateRoot=folder;mkdirSync(join(folder,'records'),{recursive:true});
+    authority=join(folder,'records',createHash('sha256').update(JSON.stringify([record.runId,record.pr,record.merge])).digest('hex')+'.json');
+    writeFileSync(authority,JSON.stringify(record));
+  }
+  const before=authority?readFileSync(authority,'utf8'):null;
+  f.ports.listRuns=async()=>[run];f.issues=[issue(18)];f.time+=1000;
+  assert.equal((await f.tick()).exitCode,0);
+  const packets=f.prompts.flatMap(text=>{try{return [JSON.parse(text.trim().split('\n').at(-1))];}catch{return [];}});
+  assert.equal(packets.flatMap(p=>p.timeRules??[]).some(r=>r.kind==='post-merge-audit'),false);
+  if(authority)assert.equal(readFileSync(authority,'utf8'),before);
+});
+
+
+test('audit tick discovers completed runs through the injected Git executor', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.invoke('start')).exitCode, 0);
+  const state = f.state(), commonDir = join(f.cwd, '.git'), runDir = join(commonDir, 'pdd', 'runs', '17');
+  mkdirSync(runDir, {recursive: true});
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify({v: 1, number: 17,
+    repo: state.repo, sourceRoot: f.cwd, root: f.cwd, commonDir, runDir,
+    runId: 'synthetic-completed-audit', state: 'completed', areas: [], chats: [],
+    automaticOrigin: {repository: state.repo, coordinatorId: 'previous', machine: state.machine},
+    pr: [{number: 23, state: 'merged'}]}));
+  f.prompts.length = 0;
+  const before = f.runs.length;
+  assert.equal((await f.tick()).exitCode, 0);
+  const rules = f.prompts.flatMap(text => JSON.parse(text.trim().split('\n').at(-1)).timeRules ?? []);
+  assert.ok(rules.some(row => row.kind === 'post-merge-audit' && row.number === 17 && row.pr === 23));
+  assert.ok(f.runs.slice(before).some(([file, args]) => file === 'git' && args.includes('--git-common-dir')));
+  assert.equal(f.runs.slice(before).filter(([file]) => file === 'gh').length, 0, 'local audit discovery needs no GitHub read');
+});
+
+
+test('start: custody preflight uses the original healthy profile with a signed-out caller',async t=>{
+  const f=await fixture(t),profile=join(f.home,'original-profile');
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{CODEX_HOME:profile}});
+  f.accountReady=env=>env.CODEX_HOME===profile;
+  assert.equal((await f.invoke('start')).exitCode,0);
+  const original=f.state(),launch=original.ownerLaunch,artifact=join(f.dir,'custody.json');
+  writeFileSync(artifact,JSON.stringify({repository:original.repo,sourceRoot:f.cwd,coordinatorId:original.coordinatorId,machine:original.machine,activation:original.activatedAt,paneId:original.paneId,workspaceId:original.workspaceId,agent:launch.profile.agent,home:launch.profile.home,definitionHome:launch.profile.definitionHome,configHome:launch.profile.configHome,launchStartedAt:launch.startedAt}));
+  f.ports.listRuns=async()=>[];
+  f.ports.selectAgent=async()=>({id:'codex',kind:'codex',command:'codex',env:{}});
+  const r=await f.invoke('start',{resumeCustody:artifact,env:{HOME:f.home,PATH:process.env.PATH,CODEX_HOME:join(f.dir,'signed-out-caller')}});
+  assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().coordinatorId,original.coordinatorId);assert.equal(f.state().environment.CODEX_HOME,profile);
+  assert.ok(f.doctorAccounts.every(env=>env.CODEX_HOME===profile));
+});
+
+test('start: a custom Claude definition supplies HOME and config environment to doctor and startup checks',async t=>{
+  const f=await fixture(t),home=join(f.dir,'invocation home'),config=join(f.dir,'Claude config');
+  mkdirSync(join(f.home,'.config','pdd'),{recursive:true});
+  writeFileSync(join(f.home,'.config','pdd','agents.json'),JSON.stringify({include_defaults:false,agents:[{name:'Claude profile',kind:'claude',command:'claude',env:{HOME:home,CLAUDE_CONFIG_DIR:config,CODEX_HOME:join(home,'codex')}}]}));
+  delete f.ports.selectAgent;
+  const run=f.ports.run;
+  f.ports.run=async(file,args,options)=>{
+    if(file==='claude')return {code:0,stdout:'{"loggedIn":true}',stderr:''};
+    if(file==='gh' && args[0]==='auth') {assert.equal(options.env.HOME,home);assert.equal(options.env.CLAUDE_CONFIG_DIR,config);}
+    return run(file,args,options);
+  };
+  const r=await f.invoke('start');assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().agent.kind,'claude');assert.equal(f.state().environment.HOME,home);assert.equal(f.state().environment.CLAUDE_CONFIG_DIR,config);assert.equal(f.state().definitionHome,f.home);
+});
+
+
+test('start: an absent selected provider directory masks an unrelated ambient profile',async t=>{
+  const f=await fixture(t),ambient=process.env.CODEX_HOME;
+  process.env.CODEX_HOME=join(f.dir,'ambient-profile');
+  t.after(()=>{if(ambient===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=ambient;});
+  const run=f.ports.run;
+  f.ports.run=async(file,args,options)=>{
+    if(file==='gh' && args[0]==='auth')assert.equal(options.env.CODEX_HOME,undefined);
+    return run(file,args,options);
+  };
+  const r=await f.invoke('start');assert.equal(r.exitCode,0,r.message);
+  assert.equal(f.state().environment.CODEX_HOME,undefined);
+});
+
+// Native-start outcomes are the preservation contract. An optional disposable
+// base checkout repeats the same states against its real public launcher too.
+const admissionStates=[
+  {name:'fresh with room',baseAdmitted:true},
+  ...['observe','auto'].flatMap(mode=>[
+    {name:`different PATH install in ${mode}`,mode,prerequisite:'path',baseAdmitted:true},
+    {name:`read-only repository in ${mode}`,mode,prerequisite:'github-permission',baseAdmitted:true},
+    {name:`disabled merge methods in ${mode}`,mode,prerequisite:'merge-method',baseAdmitted:true},
+  ]),
+  {name:'fresh with full workflow session',panes:1,budget:'1',baseAdmitted:false},
+  {name:'fresh with unlimited workflow session',panes:2,budget:'0',baseAdmitted:true},
+  {name:'fresh with invalid budget',budget:'invalid',baseAdmitted:false},
+  {name:'fresh with malformed workflow inventory',invalidInventory:true,baseAdmitted:false},
+  {name:'fresh with unreadable status but native inventory available',statusUnavailable:true,baseAdmitted:true},
+  {name:'saved idle coordinator and full workflow session',restart:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'saved working coordinator and overfull workflow session',restart:true,status:'working',panes:2,budget:'1',baseAdmitted:true},
+  {name:'saved blocked coordinator and invalid budget',restart:true,status:'blocked',budget:'invalid',baseAdmitted:true},
+  {name:'saved coordinator and unreadable workflow inventory',restart:true,invalidInventory:true,baseAdmitted:true},
+  {name:'saved target observation unavailable',restart:true,unavailable:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'optional capacity endpoint returns JSON 404',runtime404:true,baseAdmitted:true},
+  {name:'saved coordinator with JSON 404 and full workflow session',restart:true,runtime404:true,panes:1,budget:'1',baseAdmitted:true},
+  {name:'missing sign-in is the new preflight refusal',signedOut:true,baseAdmitted:true},
+];
+for(const row of admissionStates)test(`start admission parity: ${row.name}`,async t=>{
+  const prepare=async module=>{
+    const f=await fixture(t,{mode:row.mode});if(module)f.module=module;
+    if(row.prerequisite) {
+      const run=f.ports.run;
+      f.ports.run=async(file,args,options)=>file==='gh'&&args[0]==='repo'
+        ? {code:0,stdout:JSON.stringify({nameWithOwner:'owner/repo',defaultBranchRef:{name:'trunk'},url:'https://github.com/owner/repo',viewerPermission:row.prerequisite==='github-permission'?'READ':'WRITE',mergeCommitAllowed:row.prerequisite!=='merge-method'}),stderr:''}
+        : run(file,args,options);
+    }
+    f.ports.allRuns=()=>[];
+    f.ports.tidyRuns=async()=>({closed:0});
+    f.ports.workflowHerdr=async args=>{
+      if(args[0]==='status') {
+        if(row.statusUnavailable)throw Object.assign(Error('unreadable'),{code:'transport_error'});
+        return {running:true};
+      }
+      assert.deepEqual(args.filter(a=>a!=='--json'),['pane','list']);
+      return {result:{type:'pane_list',panes:f.workflowPanes??[]}};
+    };
+    const original=f.ports.doctorPorts;
+    f.ports.doctorPorts=input=>{
+      const p=original(input),run=p.run;
+      if(row.prerequisite==='path')p.files.realpathSync=path=>path;
+      p.run=async(file,args,options)=>{
+        if(file==='herdr'&&args[0]==='--session') {
+          assert.ok(['pdd','pdd-autopilot'].includes(args[1]));
+          (f.sessionReads??=[]).push(args);
+          try {
+            const value=await (args[1]==='pdd'?f.ports.workflowHerdr:f.ports.herdr)(args.slice(2));
+            return {code:0,stdout:JSON.stringify(value),stderr:''};
+          } catch(error) {return {code:1,stdout:'',stderr:JSON.stringify({error:{code:error.code}})};}
+        }
+        if(file==='gh'&&args[0]==='repo')return {code:0,stdout:JSON.stringify({nameWithOwner:'owner/repo',defaultBranchRef:{name:'trunk'},viewerPermission:row.prerequisite==='github-permission'?'READ':'WRITE',mergeCommitAllowed:row.prerequisite!=='merge-method'}),stderr:''};
+        if(file==='git'&&args[0]==='remote')return {code:0,stdout:'https://github.com/owner/repo.git',stderr:''};
+        return run(file,args,options);
+      };
+      if(row.runtime404)p.fetch=async()=>new Response('{"error":{"code":"not-found"}}',{status:404});
+      return p;
+    };
+    const env={HOME:f.home,PATH:'/synthetic/bin'};
+    if(row.restart)assert.equal((await f.invoke('start',{env})).exitCode,0);
+    const prior=row.restart?f.state():null;
+    f.agentStatus=row.status;
+    if(row.unavailable) {
+      const herdr=f.ports.herdr;
+      f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get')throw Object.assign(Error('unreadable'),{code:'transport_error'});return herdr(args);};
+    }
+    f.workflowPanes=row.invalidInventory?[{}]:Array.from({length:row.panes??0},(_,i)=>({pane_id:`personal-${i}`,workspace_id:'personal',tab_id:`tab-${i}`,terminal_id:`terminal-${i}`}));
+    if(row.signedOut)f.accountReady=()=>false;
+    const result=await f.invoke('start',{env:{...env,...(row.budget===undefined?{}:{PDD_HERDR_PANE_BUDGET:row.budget})}});
+    if(prior&&result.exitCode===0) {
+      assert.equal(f.state().paneId,prior.paneId);assert.equal(f.state().coordinatorId,prior.coordinatorId);
+    }
+    if(result.exitCode===0)assert.ok(f.timers.some(([action])=>action==='start'),'admitted start must start its timer');
+    return result;
+  };
+  let baseAdmitted=row.baseAdmitted;
+  if(process.env.PDD_ADMISSION_BASE_ROOT) {
+    const {pathToFileURL}=await import('node:url');
+    const base=await import(pathToFileURL(join(process.env.PDD_ADMISSION_BASE_ROOT,'src/autopilot-launcher.mjs')));
+    const result=await prepare(base);
+    baseAdmitted=result.exitCode===0;
+    assert.equal(baseAdmitted,row.baseAdmitted,`native base: ${result.message}`);
+  }
+  const result=await prepare();
+  assert.equal(result.exitCode===0,baseAdmitted&&!row.signedOut,result.message);
+  if(row.prerequisite)assert.match(result.message,new RegExp(`(?:^|\\n)WARN ${row.prerequisite}:.*; fix: .+`));
+  t.diagnostic(JSON.stringify({state:row.name,base:baseAdmitted,candidate:result.exitCode===0,exception:Boolean(row.signedOut)}));
+});
+
+
+test('start: guarded cleanup reclaims a finished workflow shell after its chat has closed',async t=>{
+  const {fixture:workflowFixture}=await import('./helpers/workflow-runner-fixture.mjs');
+  const {tidyRuns}=await import('../src/workflow-runner.mjs');
+  const {allRuns}=await import('../src/workflow-runs.mjs');
+  const w=await workflowFixture(t);
+  assert.equal((await w.run()).exitCode,0);
+  const run=w.record();run.state='completed';run.chats[0].endedAt=w.clock;
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  w.tick(16*60_000);w.herdr.idle();
+  const shell=w.herdr.paneOf(run.layout);shell.agent={agent:'codex',agent_status:'working'};
+  const cleaned=await tidyRuns({},w.ports);
+  assert.equal(cleaned.closed,1);assert.equal(cleaned.kept,1);
+  assert.ok(!w.herdr.paneOf(run.chats[0]));assert.ok(w.herdr.paneOf(run.layout));
+  shell.agent=null;
+  const paneCount=w.herdr.panes.length;
+  assert.ok(paneCount>0);
+  const f=await fixture(t);
+  f.ports.stateDir=w.state;
+  assert.equal(allRuns({cancelled:true},{stateDir:w.state}).length,1);
+  f.ports.tidyRuns=options=>tidyRuns(options,w.ports);
+  f.ports.workflowHerdr=w.herdr.herdr;
+  const original=f.ports.doctorPorts;
+  f.ports.doctorPorts=input=>{
+    const p=original(input),read=p.run;
+    p.run=async(file,args,options)=>{
+      if(file==='herdr'&&args[0]==='--session'&&args[1]==='pdd')return {code:0,stdout:JSON.stringify(await w.herdr.herdr(args.slice(2))),stderr:''};
+      return read(file,args,options);
+    };
+    return p;
+  };
+  const result=await f.invoke('start',{env:{HOME:f.home,PATH:process.env.PATH,PDD_HERDR_PANE_BUDGET:String(paneCount)}});
+  assert.equal(result.exitCode,0,result.message);
+  assert.equal(w.herdr.panes.length,paneCount-1);
+  assert.ok(!w.herdr.paneOf(run.layout));
 });

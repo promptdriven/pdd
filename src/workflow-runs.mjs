@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: d464bcf23c87667206f9b23c632564a341fe782565a0c6ef31c7f4a017ae8f36).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 15c2ed51f64c3123dc8edcb6e87084beb70f34ffa94ccf74298b0114a67af0ed).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -252,11 +252,11 @@ function deliverMetrics(run, ports) {
   }).catch(() => { metricsWarning(ports,'Metrics journal delivery incomplete; retained events can be retried.'); });
 }
 
-function publishRun(run, ports, fs, { costOnly = false } = {}) {
+function publishRun(run, ports, fs, { costOnly = false, preserveProgress = false } = {}) {
   if (!costOnly) {
     run.journalSeq = (Number.isSafeInteger(run.journalSeq) ? run.journalSeq : 0) + 1;
     run.updatedAt = (ports.now ?? Date.now)();
-    delete run.progressAt;
+    if (!preserveProgress) delete run.progressAt;
     Object.assign(run, statusView(run));
   }
   const temporary = join(run.runDir, `.status.json.${randomBytes(6).toString('hex')}.tmp`);
@@ -284,7 +284,7 @@ export function updateRun(runDir, update, ports = {}) {
     const result=update(run);
     if (!object(result) || typeof result.then==='function' || !sameIdentity(original,result)) throw Error('An ordinary update must return the same run identity synchronously');
     captureMutation(original,result,ports,fs);
-    return publishRun(result,ports,fs);
+    return publishRun(result,ports,fs,{preserveProgress:ports.preserveProgress === true});
   });
   deliverMetrics(committed,ports);
   return indexed(committed,ports);

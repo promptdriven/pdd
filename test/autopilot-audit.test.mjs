@@ -1,0 +1,556 @@
+import './helpers/test-home.mjs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import * as nativeFs from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,readdirSync,unlinkSync} from 'node:fs';
+import {join} from 'node:path';
+import {createHash,randomUUID} from 'node:crypto';
+import {auditMerge,pendingAudits} from '../src/autopilot-audit.mjs';
+import {runPdd} from '../src/pdd-cli.mjs';
+import {captureCosts} from '../src/cost-ledger.mjs';
+import {updateRunCosts} from '../src/workflow-runs.mjs';
+import {fixture} from './helpers/workflow-runner-fixture.mjs';
+
+const merge='a'.repeat(40),parent='b'.repeat(40);
+const result = (verdict='OK') => ({verdict,kind:verdict==='CONCERN'?'missing-reproduction':'',summary:'Synthetic audit observation',evidence:'1. Parent fails and merge passes.\n2. Scope retained.\n3. Observable cases.\n4. Old test fails.\n5. Native evidence.\n6. Checks retained.\n7. Gates confirmed.',revert:verdict==='BAD'});
+// runAutopilotAlerts saves incidents with exitCode 0 even when delivery fails.
+const alertReply=(w,input)=>({exitCode:0,message:w.alertFailure
+  ? `Alert recorded for #${input.issue} ${input.kind}; delivery failed (HTTP 503). pdd autopilot status shows it. Continue other work.`
+  : w.uncertain==='alert'
+    ? `Alert recorded for #${input.issue} ${input.kind}; delivery unconfirmed (no reply). It may have arrived, so it is not sent again. pdd autopilot status shows it. Continue other work.`
+    : `Alert sent for #${input.issue} ${input.kind}; the webhook confirmed it.`});
+async function world(t) {
+  const f=await fixture(t);f.ports.skipMetricsDelivery=true;assert.equal((await f.run()).exitCode,0);
+  const run=f.record();run.agent='codex';delete run.launchProfile;run.configDir=join(f.ports.env.HOME,'.codex');run.runId??=randomUUID();run.baseBranch='main';run.automaticOrigin={coordinatorId:'factory',machine:'test'};
+  run.pr=[{number:23,state:'merged',stage:'change'}];
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  writeFileSync(join(f.source,'pdd.json'),JSON.stringify({autopilot:{mode:'auto'}}));
+  const w={...f,run,agent:'codex',calls:[],launches:[],alerts:[],answer:result(),session:randomUUID(),limit:'healthy',usage:{known:true,total:0},merged:true,issueState:'closed'};
+  w.concernFolder=()=>join(w.ports.stateDir,'autopilot-audits',createHash('sha256').update(w.run.repo.toLowerCase()).digest('hex').slice(0,20),'concerns');
+  w.file=n=>join(run.runDir,'audits',`${n??23}.json`);
+  w.audit=n=>JSON.parse(readFileSync(w.file(n),'utf8'));
+  const execute=async(file,args,options={})=>{
+    w.calls.push({file,args,options});
+    if(file==='gh' && args[0]==='api') {
+      const path=args.find(a=>a.startsWith('repos/'));
+      if(args.includes('PATCH') && path===`repos/${run.repo}/issues/${run.number}`) {
+        assert.ok(args.includes('state=open'));w.issueState='open';
+        if(w.uncertain==='reopen')throw Error('unconfirmed issue reopen');
+        return {code:0,stdout:JSON.stringify({state:w.issueState})};
+      }
+      if(args.includes('POST')) {
+        if(w.writeFailure) throw Error('synthetic uncertain write');
+        return {code:0,stdout:JSON.stringify({html_url:'https://github.com/example/project/issues/99'})};
+      }
+      if(/\/pulls\//.test(path))return {code:0,stdout:JSON.stringify({number:Number(path.split('/').at(-1)),merged:w.merged,merge_commit_sha:merge,base:{ref:w.targetBase??'main',repo:{full_name:w.repo??run.repo}}})};
+      if(/\/commits\//.test(path))return {code:0,stdout:JSON.stringify({sha:merge,parents:[{sha:parent}]})};
+    }
+    if(file==='gh' && args[0]==='pr' && args[1]==='create' && w.uncertain==='revert-pr')throw Error('unconfirmed PR');
+    if(file==='git' && args[0]==='push' && w.uncertain==='push')throw Error('unconfirmed push');
+    if(file==='gh' && args[0]==='pr' && args[1]==='create')return {code:0,stdout:'https://github.com/example/project/pull/99\n'};
+    if(file==='git' && ['clone','checkout','switch','push'].includes(args[0]))return {code:0,stdout:''};
+    if(file==='git' && args[0]==='rev-list')return {code:0,stdout:merge+' '+parent+(w.squash?'':' '+'c'.repeat(40))};
+    if(file==='git' && args.includes('revert')) {if(w.conflict) return {code:1,stdout:'',stderr:'conflict'};return {code:0,stdout:''};}
+    const reply=await f.ports.execFile(file,args,options);return {code:reply.code??0,...reply};
+  };
+  w.check=async(pr=23)=>{
+    const stdout={text:'',write(s){this.text+=s;}},stderr={text:'',write(s){this.text+=s;}};
+    const code=await runPdd(['autopilot','audit','17',String(pr)],{cwd:f.source,env:f.ports.env,stdout,stderr,autopilotLauncherPorts:{...f.ports,...(w.fs?{fs:w.fs}:{}),run:execute,
+      agentDefinitions:()=>[{kind:w.agent,name:w.agent,command:'configured-codex',env:{}}],codexLimits:async()=>({state:w.limit}),...(w.nativeUsage?{}:{dailyUsage:async()=>w.usage}),...(w.refreshCosts?{refreshCosts:w.refreshCosts}:{}),
+      runAuditor:async(command,args,options)=>{w.launches.push({command,args,options});await w.delay?.();if(w.agent==='claude') return {code:0,stdout:JSON.stringify({session_id:w.session,result:JSON.stringify(w.answer)})};return {code:w.providerExit??0,stdout:JSON.stringify({type:'thread.started',thread_id:w.session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:w.raw??JSON.stringify(w.answer)}})+'\n'};},
+      sendAlert:async input=>{w.alerts.push(input);return alertReply(w,input);},
+    }});
+    return {code,text:stdout.text+stderr.text};
+  };
+  w.config=value=>writeFileSync(join(f.source,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',...value}}));
+  return w;
+}
+async function atLaunch(ready,pending) {
+  assert.equal(await Promise.race([ready.then(()=>true),pending.then(()=>false)]),true,'an automatic merge must start its auditor');
+}
+const comments = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.some(a=>a.endsWith('/comments')));
+const reopens = w=>w.calls.filter(c=>c.file==='gh'&&c.args.includes('PATCH')&&c.args.includes('state=open'));
+const newPrs = w=>w.calls.filter(c=>c.file==='gh'&&c.args[0]==='pr'&&c.args[1]==='create');
+
+const checkHeldAudit=(w,pr=23,ports={})=>auditMerge({run:w.run,pr},{...w.ports,fs:w.fs??nativeFs,
+  execFile:async(file,args)=>{w.calls.push({file,args});throw Error('held audit must not execute a program');},
+  sendAlert:async input=>{w.alerts.push(input);return alertReply(w,input);},...ports,
+});
+
+// The recommendation is the only damaged field. No saved effect may run.
+for(const custody of ['local','shared']) for(const damage of ['missing','non-boolean'])
+  test(`3138 repair 1: ${custody} ${damage} recommendation holds and alerts once`,async t=>{
+    const w=await world(t),record={schema:'pdd.audit.v1',repository:w.run.repo.toLowerCase(),runId:w.run.runId,pr:23,
+      merge,parent,at:1,state:'recorded',completedAt:2,chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},
+      result:result('BAD'),comment:{state:'unknown',at:2},revert:{state:'unknown',at:2}};
+    if(damage==='missing')delete record.result.revert;else record.result.revert='false';
+    const folder=custody==='local'?join(w.run.runDir,'audits'):join(w.concernFolder(),'..','records');
+    mkdirSync(folder,{recursive:true});
+    const identity=createHash('sha256').update(JSON.stringify([record.runId,record.pr,record.merge])).digest('hex');
+    const file=custody==='local'?w.file():join(folder,`${identity}.json`);
+    writeFileSync(file,JSON.stringify(record));writeFileSync(`${file}.revert`,'');
+    const bytes=readFileSync(file,'utf8'),reservations=readdirSync(folder).sort(),holds=[];
+    for(let n=0;n<2;n++) {
+      assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[]);
+      const out=await checkHeldAudit(w);assert.equal(out.exitCode,1);assert.match(out.message,/audit-evidence-invalid/);
+    }
+    assert.equal(w.alerts.length,1,'MISSING_RECOMMENDATION_NEEDS_ONE_DECISION_ALERT');
+    const alert=JSON.parse(w.alerts[0].text);
+    assert.equal(w.alerts[0].kind,'decision');assert.match(alert.cause,/recommendation.*(missing|unavailable)/i);
+    assert.match(alert.need,/inspect/i);assert.match(alert.need,/keep.*merge.*finish/i);
+    assert.ok(alert.need.includes(`git revert -m 1 ${merge}`));assert.ok(alert.need.includes(w.run.baseBranch));
+    assert.deepEqual(holds.map(h=>h.cause),['audit-evidence-invalid','audit-evidence-invalid']);
+    assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+    assert.equal(readFileSync(file,'utf8'),bytes);assert.deepEqual(readdirSync(folder).sort(),reservations);
+    assert.equal(readFileSync(`${file}.revert`,'utf8'),'');
+  });
+
+for(const failure of ['failed','uncertain'])test(`3138 repair 1: recommendation alert ${failure} custody survives restart`,async t=>{
+  const w=await world(t),record={schema:'pdd.audit.v1',runId:w.run.runId,pr:23,merge,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:result('BAD')};
+  delete record.result.revert;mkdirSync(join(w.run.runDir,'audits'),{recursive:true});writeFileSync(w.file(),JSON.stringify(record));
+  const bytes=readFileSync(w.file(),'utf8');
+  // The first response either confirms failure or leaves delivery uncertain.
+  w.alertFailure=true;
+  if(failure==='uncertain')w.fs={...nativeFs,renameSync(from,to) {
+    if(String(to).includes('/decisions/') && JSON.parse(readFileSync(from,'utf8')).state==='failed')throw Error('crash before final journal');
+    return nativeFs.renameSync(from,to);
+  }};
+  assert.equal((await checkHeldAudit(w)).exitCode,1);assert.equal(w.alerts.length,1);
+  delete w.fs;delete w.alertFailure;
+  assert.equal((await checkHeldAudit(w)).exitCode,1);assert.equal((await checkHeldAudit(w)).exitCode,1);
+  assert.equal(w.alerts.length,failure==='failed'?2:1);
+  assert.equal(readFileSync(w.file(),'utf8'),bytes);assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+});
+
+function seedRecommendationHold(w,pr=23,custody='local',change=()=>{}) {
+  const record={schema:'pdd.audit.v1',repository:w.run.repo.toLowerCase(),runId:w.run.runId,pr,merge,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:result('BAD'),
+    comment:{state:'unknown',at:2},revert:{state:'unknown',at:2}};
+  delete record.result.revert;change(record);
+  const folder=custody==='local'?join(w.run.runDir,'audits'):join(w.concernFolder(),'..','records');
+  mkdirSync(folder,{recursive:true});
+  const identity=createHash('sha256').update(JSON.stringify([record.runId,record.pr,record.merge])).digest('hex');
+  const file=custody==='local'?w.file(pr):join(folder,`${identity}.json`),bytes=JSON.stringify(record);
+  writeFileSync(file,bytes);writeFileSync(`${file}.revert`,'');
+  return {file,bytes,record};
+}
+const decisionStates=w=>readdirSync(join(w.concernFolder(),'..','decisions')).map(name=>
+  JSON.parse(readFileSync(join(w.concernFolder(),'..','decisions',name),'utf8'))).sort((a,b)=>a.pr-b.pr);
+function assertHeldEvidence(w,entries) {
+  for(const {file,bytes} of entries) {
+    assert.equal(readFileSync(file,'utf8'),bytes);assert.equal(readFileSync(`${file}.revert`,'utf8'),'');
+  }
+  assert.equal(w.calls.length,0);assert.equal(w.launches.length,0);
+}
+function realAlertPorts(w,http) {
+  const config=join(w.ports.env.XDG_CONFIG_HOME,'pdd');mkdirSync(config,{recursive:true});
+  const file=join(config,'autopilot-alerts.json');
+  const configure=()=>writeFileSync(file,JSON.stringify({v:1,service:'slack',url:'https://hooks.slack.com/services/synthetic/test/fixture'}));
+  return {configure,ports:{sendAlert:undefined,alertPorts:{stateRoot:join(w.base,'alert-state'),hostname:()=> 'test-machine',http}}};
+}
+for(const failure of ['http','not-configured'])test(`3138 repair 2: real alert ${failure} failure retries before journaling sent`,async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let requests=0;
+  const alert=realAlertPorts(w,async()=>({status:++requests===1&&failure==='http'?503:200,text:'ok'}));
+  if(failure==='http')alert.configure();
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'failed','UNDELIVERED_ALERT_MUST_REMAIN_RETRYABLE');
+  alert.configure();
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'sent');
+  assert.equal(requests,failure==='http'?2:1);
+  assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(requests,failure==='http'?2:1);
+  assertHeldEvidence(w,[entry]);
+});
+test('3138 repair 2: real unconfirmed delivery stays unknown without another HTTP request',async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let requests=0;
+  const alert=realAlertPorts(w,async()=>{requests++;return {status:200,text:''};});alert.configure();
+  for(let n=0;n<2;n++)assert.equal((await checkHeldAudit(w,23,alert.ports)).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'unknown');assert.equal(requests,1);assertHeldEvidence(w,[entry]);
+});
+test('3138 repair 2: exitCode alone cannot confirm alert delivery',async t=>{
+  const w=await world(t),entry=seedRecommendationHold(w);let sends=0;
+  for(let n=0;n<2;n++)assert.equal((await checkHeldAudit(w,23,{sendAlert:async()=>{sends++;return {exitCode:0};}})).exitCode,1);
+  assert.equal(decisionStates(w)[0].state,'unknown');assert.equal(sends,1);assertHeldEvidence(w,[entry]);
+});
+for(const custody of ['local','shared','mixed'])test(`3138 repair 2: ${custody} damaged PR records each alert once through the real alert module`,async t=>{
+  const w=await world(t);w.run.pr.push({number:24,state:'merged',mergeSha:'c'.repeat(40)});
+  w.run.pr[0].mergeSha=merge;
+  const entries=[seedRecommendationHold(w,23,custody==='shared'?'shared':'local'),
+    seedRecommendationHold(w,24,custody==='local'?'local':'shared',a=>{a.merge='c'.repeat(40);})];
+  const messages=[],alert=realAlertPorts(w,async input=>{messages.push(input.body.text);return {status:200,text:'ok'};});alert.configure();
+  for(let n=0;n<2;n++) {
+    const holds=[];assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[]);
+    assert.deepEqual(holds,[{pr:23,cause:'audit-evidence-invalid'},{pr:24,cause:'audit-evidence-invalid'}]);
+    for(const pr of [24,23])assert.equal((await checkHeldAudit(w,pr,alert.ports)).exitCode,1);
+  }
+  assert.equal(messages.length,2,'EACH_HELD_PR_NEEDS_ITS_OWN_ALERT');
+  for(const entry of entries)assert.equal(messages.filter(text=>text.includes(`PR #${entry.record.pr} (${entry.record.merge})`)).length,1);
+  assert.deepEqual(decisionStates(w).map(a=>[a.pr,a.state]),[[23,'sent'],[24,'sent']]);assertHeldEvidence(w,entries);
+});
+for(const damage of ['repository','run','merge','filename'])test(`3138 repair 2: another damaged record cannot bypass selected ${damage} identity`,async t=>{
+  const w=await world(t);w.run.pr.push({number:24,state:'merged',mergeSha:merge},{number:25,state:'merged',mergeSha:merge});
+  const entries=[seedRecommendationHold(w),seedRecommendationHold(w,24,'shared',a=>{
+    if(damage==='repository')a.repository='other/repo';
+    if(damage==='run')a.runId='other-run';
+    if(damage==='merge')a.merge='c'.repeat(40);
+  })];
+  if(damage==='filename') {
+    const entry=entries[1],file=join(w.concernFolder(),'..','records','invalid.json');
+    nativeFs.renameSync(entry.file,file);nativeFs.renameSync(`${entry.file}.revert`,`${file}.revert`);entry.file=file;
+  }
+  entries.push(seedRecommendationHold(w,25));
+  assert.equal((await checkHeldAudit(w,24)).exitCode,1);assert.equal(w.alerts.length,0);
+  assert.equal((await checkHeldAudit(w,23)).exitCode,1);assert.equal(w.alerts.length,1);
+  assert.equal((await checkHeldAudit(w,25)).exitCode,1);assert.equal(w.alerts.length,2,'VALID_PR_ALERT_MUST_SURVIVE_OTHER_RECORD_DAMAGE');
+  assertHeldEvidence(w,entries);
+});
+
+for(const recommendations of [[false,false],[false,true],[true,false]])test(`3138 integration: two valid BAD PRs on one issue deliver ${recommendations} recommendations once`,async t=>{
+  const w=await world(t);
+  w.run.pr=[23,24].map((number,i)=>({number,state:'merged',mergeSha:(i?'c':'a').repeat(40)}));
+  mkdirSync(join(w.run.runDir,'audits'),{recursive:true});
+  for(const [i,pr] of w.run.pr.entries())writeFileSync(w.file(pr.number),JSON.stringify({
+    schema:'pdd.audit.v1',runId:w.run.runId,pr:pr.number,merge:pr.mergeSha,parent,at:1,state:'recorded',completedAt:2,
+    chat:{agent:'codex',configDir:null,startedAt:1,session:{id:randomUUID()}},result:{...result('BAD'),revert:recommendations[i]},
+  }));
+  const messages=[],alert=realAlertPorts(w,async input=>{messages.push(input.body.text);return {status:200,text:'ok'};});alert.configure();
+  const ports={...w.ports,...alert.ports,execFile:async(file,args)=>{
+    w.calls.push({file,args});
+    if(file==='git'&&args[0]==='rev-list')return {code:0,stdout:merge+' '+parent+' '+'d'.repeat(40)};
+    if(file==='gh'&&args[0]==='pr')return {code:0,stdout:'https://github.com/example/project/pull/99'};
+    return {code:0,stdout:'{}'};
+  }};
+  const outcomes=[];
+  for(const pr of w.run.pr)outcomes.push(await auditMerge({run:w.run,pr:pr.number},ports));
+  assert.equal(messages.length,2,'EACH_VALID_BAD_PR_MUST_DELIVER_ITS_RECOMMENDATION');
+  assert.deepEqual(outcomes.map(out=>out.exitCode),[0,0]);
+  for(const [i,pr] of w.run.pr.entries()) {
+    const delivered=messages.filter(text=>text.includes(`PR #${pr.number} (${pr.mergeSha})`));
+    assert.equal(delivered.length,1);assert.match(delivered[0],new RegExp(`recommendation: ${recommendations[i]}`,'i'));
+    assert.equal(w.audit(pr.number).alert.state,'sent');
+  }
+  const effects=w.calls.length;
+  for(let n=0;n<2;n++)for(const pr of [...w.run.pr].reverse())assert.equal((await auditMerge({run:w.run,pr:pr.number},ports)).exitCode,0);
+  assert.equal(messages.length,2);assert.equal(w.calls.length,effects);assert.equal(w.launches.length,0);
+});
+
+for(const recommendation of [false,true])test(`3138 BAD revert=${recommendation} saves the recommendation and alerts once`,async t=>{
+  const w=await world(t);w.answer={...result('BAD'),revert:recommendation};
+  assert.equal((await w.check()).code,0);
+  assert.equal(w.audit().result.verdict,'BAD');assert.equal(w.audit().result.revert,recommendation);
+  assert.equal(newPrs(w).length,recommendation?1:0);
+  assert.equal(w.alerts.length,1);assert.match(w.alerts[0].text,new RegExp(`recommendation: ${recommendation}`,'i'));
+  assert.equal((await w.check()).code,0);
+  assert.equal(newPrs(w).length,recommendation?1:0);assert.equal(w.alerts.length,1);assert.equal(comments(w).length,1);assert.equal(w.launches.length,1);
+  assert.deepEqual(pendingAudits({run:w.run},w.ports),[]);
+});
+for(const state of ['closed','open'])test(`3138 BAD without revert keeps the merge and leaves a ${state} issue open with its missing parts`,async t=>{
+  const w=await world(t);w.issueState=state;w.answer={...result('BAD'),revert:false,summary:'Synthetic remaining work',evidence:'- Missing export coverage\n- Missing scope validation'};
+  assert.equal((await w.check()).code,0);assert.equal(w.issueState,'open');assert.equal(w.audit().reopen?.state,'sent');
+  assert.equal(w.audit().revert,undefined);assert.equal(w.calls.filter(c=>c.file==='git'&&(c.args.includes('revert')||c.args[0]==='push'||c.args[0]==='switch')).length,0);
+  const comment=comments(w)[0].args.find(a=>a.startsWith('body='));
+  assert.ok(comment.includes(w.answer.summary));assert.ok(comment.includes(w.answer.evidence));assert.ok(comment.includes(merge));assert.match(comment,/recommendation: false/i);
+  const alert=JSON.parse(w.alerts[0].text);assert.match(alert.need,/default.*keep.*merge.*finish/i);assert.match(alert.need,/git revert -m 1 [a-f0-9]{40}/);assert.ok(alert.need.includes(merge));
+  assert.equal(w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.includes(`repos/${w.run.repo}/issues`)).length,0);
+  assert.equal((await w.check()).code,0);assert.equal(reopens(w).length,1);assert.equal(comments(w).length,1);assert.equal(w.alerts.length,1);
+});
+for(const uncertain of ['reopen','alert'])test(`3138 BAD without revert retains an uncertain ${uncertain} without repeating effects`,async t=>{
+  const w=await world(t);w.answer={...result('BAD'),revert:false};w.uncertain=uncertain;
+  assert.equal((await w.check()).code,1);assert.equal(w.audit()[uncertain].state,'unknown');
+  assert.equal((await w.check()).code,1);assert.equal(reopens(w).length,1);assert.equal(newPrs(w).length,0);assert.equal(w.alerts.length,1);assert.equal(comments(w).length,1);assert.equal(w.launches.length,1);
+  if(uncertain==='reopen')assert.match(w.alerts[0].text,/unknown/);
+  assert.deepEqual(pendingAudits({run:w.run},w.ports),[]);
+});
+for(const state of ['sent','unknown'])test(`3138 legacy no-revert audit preserves ${state} revert and alert reservations`,async t=>{
+  const w=await world(t);w.answer=result('BAD');assert.equal((await w.check()).code,0);
+  const saved=w.audit();saved.result.revert=false;
+  for(const key of ['revert','alert']) {saved[key].state=state;if(state==='unknown')delete saved[key].value;}
+  const identity=createHash('sha256').update(JSON.stringify([saved.runId,saved.pr,saved.merge])).digest('hex');
+  for(const file of [w.file(),join(w.concernFolder(),'..','records',`${identity}.json`)])writeFileSync(file,JSON.stringify(saved));
+  assert.deepEqual(pendingAudits({run:w.run},w.ports),[23]);
+  assert.equal((await w.check()).code,state==='sent'?0:1);assert.equal(w.issueState,'open');assert.equal(w.audit().reopen?.state,'sent');
+  assert.deepEqual(w.audit().revert,saved.revert);assert.deepEqual(w.audit().alert,saved.alert);
+  assert.equal((await w.check()).code,state==='sent'?0:1);assert.equal(reopens(w).length,1);assert.equal(newPrs(w).length,1);
+  assert.equal(w.alerts.length,1);assert.equal(comments(w).length,1);assert.equal(w.launches.length,1);assert.deepEqual(pendingAudits({run:w.run},w.ports),[]);
+});
+
+test('3111 automatic merged PR launches one fresh auditor, saves pinned evidence and comments once',async t=>{
+  const w=await world(t),out=await w.check();assert.equal(out.code,0,out.text);
+  const saved=w.audit();assert.equal(saved.result.verdict,'OK');assert.equal(saved.merge,merge);assert.equal(saved.parent,parent);assert.equal(saved.runId,w.run.runId);
+  assert.equal(saved.chat.session.id,w.session);assert.equal(w.launches.length,1);assert.equal(w.launches[0].command,'configured-codex');
+  assert.equal(w.launches[0].args.includes('resume'),false);assert.ok(w.launches[0].options.input.includes(parent));assert.ok(w.launches[0].options.input.includes(merge));
+  assert.equal(comments(w).length,1);assert.equal((await w.check()).code,0);assert.equal(w.launches.length,1);assert.equal(comments(w).length,1);
+});
+test('3111 concurrent calls cannot start a second auditor',async t=>{
+  const w=await world(t);let release,started;const ready=new Promise(r=>{started=r;});w.delay=()=>new Promise(r=>{release=r;started();});
+  const first=w.check();await atLaunch(ready,first);const second=await w.check();assert.equal(second.code,1);release();assert.equal((await first).code,0);assert.equal(w.launches.length,1);
+});
+for(const [name,configure] of [
+  ['unmerged',w=>{w.merged=false;}],['foreign target',w=>{w.repo='other/repo';}],['wrong base',w=>{w.targetBase='other';}],
+  ['account limited',w=>{w.limit='limited';}],['account unknown',w=>{w.limit='unknown';}],
+  ['daily cap',w=>{w.config({auditTokenLimit:100});w.usage={known:true,total:100};}],
+  ['daily unknown',w=>{w.config({auditTokenLimit:100});w.usage={known:false,total:0};}],
+  ['observe',w=>{w.config({mode:'observe'});}]
+]) test(`3111 ${name} holds without a model call or GitHub write`,async t=>{
+  const w=await world(t);configure(w);assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);assert.equal(comments(w).length,0);
+});
+test('3111 per-repository disable makes no model or GitHub call',async t=>{
+  const w=await world(t);w.config({audit:false});const out=await w.check();assert.equal(out.code,0,out.text);assert.equal(w.launches.length,0);assert.equal(w.calls.filter(c=>c.file==='gh').length,0);
+});
+for(const mode of ['invalid-json','invalid-verdict','provider-refusal','reused-session'])test(`3111 ${mode} remains unknown and is never relaunched`,async t=>{
+  const w=await world(t);
+  if(mode==='invalid-json')w.raw='not json';if(mode==='invalid-verdict')w.answer.verdict='GOOD';if(mode==='provider-refusal')w.providerExit=1;
+  if(mode==='reused-session') {w.run.chats.push({agent:'codex',session:{id:w.session}});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));}
+  assert.equal((await w.check()).code,1);assert.equal(w.audit().state,'unknown');assert.equal(w.audit().chat.session.id,w.session);assert.equal((await w.check()).code,1);assert.equal(w.launches.length,1);assert.equal(comments(w).length,0);
+});
+test('3111 BAD pushes only a unique revert branch, opens one PR and alerts once',async t=>{
+  const w=await world(t);w.answer=result('BAD');const out=await w.check();assert.equal(out.code,0,out.text);
+  const pushes=w.calls.filter(c=>c.file==='git'&&c.args[0]==='push');assert.equal(pushes.length,1);assert.match(pushes[0].args.at(-1),/^HEAD:refs\/heads\/pdd\/revert-23-/);
+  assert.ok(w.calls.find(c=>c.file==='git'&&c.args.includes('revert')).args.includes('-m'));assert.equal(w.calls.filter(c=>c.file==='gh'&&c.args[0]==='pr'&&c.args[1]==='create').length,1);
+  assert.equal(w.alerts.length,1);assert.equal(w.audit().revert.state,'sent');assert.equal((await w.check()).code,0);assert.equal(w.alerts.length,1);assert.equal(w.launches.length,1);
+});
+test('3111 BAD squash merge uses its first parent without a mainline flag',async t=>{
+  const w=await world(t);w.squash=true;w.answer=result('BAD');assert.equal((await w.check()).code,0);
+  assert.equal(w.calls.find(c=>c.file==='git'&&c.args.includes('revert')).args.includes('-m'),false);
+});
+test('3111 revert conflict retains failure and sends one alert without any push',async t=>{
+  const w=await world(t);w.answer=result('BAD');w.conflict=true;assert.equal((await w.check()).code,1);
+  assert.equal(w.audit().revert.state,'unknown');assert.equal(w.calls.filter(c=>c.file==='git'&&c.args[0]==='push').length,0);assert.equal(w.alerts.length,1);
+  await w.check();assert.equal(w.alerts.length,1);assert.equal(w.calls.filter(c=>c.file==='git'&&c.args.includes('revert')).length,1);
+});
+test('3111 uncertain comment is reserved once across restart',async t=>{
+  const w=await world(t);w.writeFailure=true;assert.equal((await w.check()).code,1);assert.equal(w.audit().comment.state,'unknown');w.writeFailure=false;
+  assert.equal((await w.check()).code,1);assert.equal(comments(w).length,1);assert.equal(w.launches.length,1);
+});
+test('3111 saved verdict resumes a known unsent comment without another auditor',async t=>{
+  const w=await world(t);assert.equal((await w.check()).code,0);const a=w.audit();delete a.comment;writeFileSync(w.file(),JSON.stringify(a));
+  // Damage the authority to model a crash after reservation but before journaling.
+  const identity=createHash('sha256').update(JSON.stringify([a.runId,a.pr,a.merge])).digest('hex');
+  writeFileSync(join(w.concernFolder(),'..','records',`${identity}.json`),JSON.stringify(a));
+  // The exclusive reservation proves that a crashed publication cannot be sent again.
+  assert.equal((await w.check()).code,1);assert.equal(comments(w).length,1);assert.equal(w.audit().comment.state,'unknown');
+});
+test('3111 two same-kind CONCERNs open one process issue for three merges',async t=>{
+  const w=await world(t);w.answer=result('CONCERN');w.run.pr.push({number:24,state:'merged'},{number:25,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  for(const pr of [23,24,25]) {w.session=randomUUID();const out=await w.check(pr);assert.equal(out.code,0,out.text);}
+  const issues=w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.includes(`repos/${w.run.repo}/issues`));assert.equal(issues.length,1);
+  const group=JSON.parse(readFileSync(join(w.concernFolder(),'missing-reproduction.json'),'utf8'));assert.equal(group.records.length,3);assert.equal(group.issue.state,'sent');
+  assert.equal((await w.check(24)).code,0);assert.equal(w.launches.length,3);
+});
+test('3111 auditor native token usage enters the cost ledger once',async t=>{
+  const w=await world(t);assert.equal((await w.check()).code,0);
+  const date=new Date(w.clock).toISOString().slice(0,10).split('-'),folder=join(w.ports.env.HOME,'.codex','sessions',...date);mkdirSync(folder,{recursive:true});
+  writeFileSync(join(folder,`rollout-audit-${w.session}.jsonl`),JSON.stringify({type:'event_msg',payload:{type:'token_count',info:{total_token_usage:{input_tokens:100,cached_input_tokens:20,output_tokens:30,reasoning_output_tokens:10,total_tokens:130}}}})+'\n');
+  const capture=()=>updateRunCosts(w.run.runDir,r=>r,{...w.ports,now:()=>w.clock});
+  const first=capture();assert.equal(first.cost.tokens.reduce((n,r)=>n+r.total,0),130);assert.equal(capture().cost.tokens.reduce((n,r)=>n+r.total,0),130);
+  assert.ok(readdirSync(join(w.run.runDir,'audits')).includes('23.json'));
+  // Complete native usage admits the next audit below the cap.
+  seedWorkflowUsage(w);w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  w.config({auditTokenLimit:1000});w.nativeUsage=true;w.session=randomUUID();
+  const out=await w.check(24);assert.equal(out.code,0,out.text);assert.equal(w.launches.length,2);
+});
+
+
+test('3111 repository custody serializes admission of distinct PR audits',async t=>{
+  const w=await world(t);w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  w.config({auditTokenLimit:1000});let release,started;const ready=new Promise(r=>{started=r;});w.delay=()=>new Promise(r=>{release=r;started();});
+  const first=w.check();await atLaunch(ready,first);assert.equal((await w.check(24)).code,1);assert.equal(w.launches.length,1);release();assert.equal((await first).code,0);
+});
+test('3111 saved merge mismatch refuses before a paid auditor',async t=>{
+  const w=await world(t);w.run.pr[0].mergeCommit='c'.repeat(40);writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+});
+test('3111 Claude audit captures usage from its private checkout, distinct from the builder',async t=>{
+  const w=await world(t);w.agent='claude';w.run.agent='claude';w.run.configDir=join(w.ports.env.HOME,'.claude');writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  const out=await w.check();assert.equal(out.code,0,out.text);const a=w.audit();assert.notEqual(a.chat.root,w.run.root);
+  assert.ok(w.launches[0].args.includes('--session-id'));assert.equal(w.launches[0].args.includes('--resume'),false);
+  const folder=join(w.run.configDir,'projects',a.chat.root.replace(/[^a-zA-Z0-9]/g,'-'));mkdirSync(folder,{recursive:true});
+  writeFileSync(join(folder,`${a.chat.session.id}.jsonl`),JSON.stringify({type:'assistant',message:{id:'audit-message',usage:{input_tokens:40,output_tokens:10}}})+'\n');
+  const capture=()=>updateRunCosts(w.run.runDir,r=>r,{...w.ports,now:()=>w.clock});
+  assert.equal(capture().cost.tokens.reduce((n,r)=>n+r.total,0),50);assert.equal(capture().cost.tokens.reduce((n,r)=>n+r.total,0),50);
+});
+
+
+test('3111 a process-issue sending reservation stays unknown after recovery',async t=>{
+  const w=await world(t);w.answer=result('CONCERN');
+  const folder=w.concernFolder();mkdirSync(folder,{recursive:true});
+  writeFileSync(join(folder,'missing-reproduction.json'),JSON.stringify({repository:w.run.repo,kind:'missing-reproduction',records:[{identity:'other:22',pr:22,issue:16,summary:'Earlier concern'}],issue:{state:'sending',at:w.clock-1000}}));
+  assert.equal((await w.check()).code,1);assert.equal(w.audit().concern.state,'unknown');
+  const issues=w.calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.includes(`repos/${w.run.repo}/issues`));assert.equal(issues.length,0);
+  assert.equal((await w.check()).code,1);assert.equal(w.launches.length,1);
+});
+test('3111 auditor keeps the saved model and removes caller session markers',async t=>{
+  const w=await world(t);w.run.launchProfile={agent:'codex',model:'configured-model',configDir:w.run.configDir,herdrAgentName:'factory',codexThreads:null};writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  w.ports.env.CLAUDECODE='1';w.ports.env.CODEX_THREAD_ID='caller';w.ports.env.HERDR_PANE_ID='caller-pane';w.ports.env.PDD_AUTOPILOT_CONTEXT='caller';
+  const out=await w.check();assert.equal(out.code,0,out.text);const launch=w.launches[0];assert.equal(launch.args[launch.args.indexOf('--model')+1],'configured-model');
+  for(const key of ['CLAUDECODE','CODEX_THREAD_ID','HERDR_PANE_ID','PDD_AUTOPILOT_CONTEXT'])assert.equal(Object.hasOwn(launch.options.env,key),false);
+  assert.equal(launch.options.env.CODEX_HOME,w.run.configDir);
+});
+
+
+test('3111 independent clones of one repository share audit admission custody',async t=>{
+  const first=await world(t),second=await world(t);second.ports.stateDir=first.ports.stateDir;
+  assert.notEqual(first.run.commonDir,second.run.commonDir);let release,started;const ready=new Promise(r=>{started=r;});first.delay=()=>new Promise(r=>{release=r;started();});
+  const pending=first.check();await atLaunch(ready,pending);assert.equal((await second.check()).code,1);assert.equal(second.launches.length,0);release();assert.equal((await pending).code,0);
+});
+
+
+for(const kind of ['missing','malformed','saturated'])test(`3111 ${kind} cost index cannot admit an audit as zero cost`,async t=>{
+  const w=await world(t);w.config({auditTokenLimit:1000});w.nativeUsage=true;const file=join(w.ports.stateDir,'runs.json');
+  if(kind==='missing')unlinkSync(file);
+  else if(kind==='malformed')writeFileSync(file,'{');
+  else writeFileSync(file,JSON.stringify({version:1,runs:Array.from({length:200},(_,n)=>({number:n+1,repo:w.run.repo,runDir:join(w.base,`absent-${n}`,'pdd/runs/17')}))}));
+  const out=await w.check();assert.equal(out.code,1,out.text);assert.equal(w.launches.length,0);
+});
+
+
+test('3111 a failed cost refresh cannot admit an audit from a stale complete snapshot',async t=>{
+  const w=await world(t);w.config({auditTokenLimit:1000});w.nativeUsage=true;let refreshes=0;
+  assert.ok(w.run.cost);w.run.cost.coverage=[];writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  w.refreshCosts=()=>{refreshes++;throw Error('synthetic attempt changed during refresh');};
+  const out=await w.check();assert.equal(out.code,1,out.text);assert.equal(refreshes,1);assert.equal(w.launches.length,0);
+});
+
+function seedWorkflowUsage(w) {
+  for(const chat of w.run.chats) {
+    const agent=chat.agent??w.run.agent,id=chat.session.id;
+    const config=chat.configDir??w.run.configDir??w.ports.env[agent==='codex'?'CODEX_HOME':'CLAUDE_CONFIG_DIR'];
+    const folder=agent==='claude'
+      ?join(config,'projects',(chat.root??w.run.root).replace(/[^a-zA-Z0-9]/g,'-'))
+      :join(config,'sessions',...new Date(w.clock).toISOString().slice(0,10).split('-'));
+    mkdirSync(folder,{recursive:true});
+    const row=agent==='claude'?{type:'assistant',message:{id:'builder-usage',usage:{input_tokens:10,output_tokens:10}}}
+      :{type:'event_msg',payload:{type:'token_count',info:{total_token_usage:{input_tokens:10,output_tokens:10,total_tokens:20}}}};
+    writeFileSync(join(folder,agent==='claude'?`${id}.jsonl`:`rollout-builder-${id}.jsonl`),JSON.stringify(row)+'\n');
+  }
+}
+function sameAttempt(first,second) {
+  second.ports.stateDir=first.ports.stateDir;second.run.runId=first.run.runId;
+  writeFileSync(join(second.run.runDir,'status.json'),JSON.stringify(second.run));
+}
+const effects=worlds=>{
+  const calls=worlds.flatMap(w=>w.calls);
+  return {auditors:worlds.reduce((n,w)=>n+w.launches.length,0),comments:worlds.reduce((n,w)=>n+comments(w).length,0),
+    pushes:calls.filter(c=>c.file==='git'&&c.args[0]==='push').length,
+    revertPRs:calls.filter(c=>c.file==='gh'&&c.args[0]==='pr'&&c.args[1]==='create').length,
+    alerts:worlds.reduce((n,w)=>n+w.alerts.length,0),
+    processIssues:calls.filter(c=>c.file==='gh'&&c.args.includes('POST')&&c.args.includes('repos/example/project/issues')).length};
+};
+for(const uncertain of ['none','comment','push','revert-pr','alert'])test(`3111 repair sequential clones retain every BAD effect after lock release, uncertain=${uncertain}`,async t=>{
+  const first=await world(t),second=await world(t);sameAttempt(first,second);
+  first.answer=result('BAD');second.answer=result('BAD');first.writeFailure=uncertain==='comment';first.uncertain=uncertain;
+  const firstOut=await first.check(),secondOut=await second.check();
+  assert.deepEqual(effects([first,second]),{auditors:1,comments:1,pushes:1,revertPRs:uncertain==='push'?0:1,alerts:1,processIssues:0});
+  assert.equal(firstOut.code,uncertain==='none'?0:1);assert.equal(secondOut.code,uncertain==='none'?0:1);
+  assert.equal(second.audit().result.verdict,'BAD');
+});
+test('3111 repair sequential clones retain an uncertain auditor launch',async t=>{
+  const first=await world(t),second=await world(t);sameAttempt(first,second);first.raw='invalid';
+  const firstOut=await first.check(),secondOut=await second.check();
+  assert.deepEqual(effects([first,second]),{auditors:1,comments:0,pushes:0,revertPRs:0,alerts:0,processIssues:0});
+  assert.equal(firstOut.code,1);assert.equal(secondOut.code,1);
+});
+for(const uncertain of [false,true])test(`3111 repair sequential clones retain process issue custody, uncertain=${uncertain}`,async t=>{
+  const first=await world(t),second=await world(t);sameAttempt(first,second);
+  for(const w of [first,second]) {w.answer=result('CONCERN');w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));}
+  assert.equal((await first.check()).code,0);first.session=randomUUID();first.writeFailure=uncertain;
+  assert.equal((await first.check(24)).code,uncertain?1:0);
+  const secondOut=await second.check(),nextOut=await second.check(24);
+  assert.deepEqual(effects([first,second]),{auditors:2,comments:2,pushes:0,revertPRs:0,alerts:0,processIssues:1});
+  assert.equal(secondOut.code,0);assert.equal(nextOut.code,uncertain?1:0);
+});
+for(const kind of ['invalid-schema','wrong-identity','omitted','invalid-index-row'])test(`3111 repair indexed ${kind} record holds native cost admission before launch`,async t=>{
+  const w=await world(t);w.config({auditTokenLimit:1000});w.nativeUsage=true;seedWorkflowUsage(w);
+  const dir=join(w.run.commonDir,'pdd','runs',kind==='omitted'?'outside-discovery':'18');mkdirSync(dir,{recursive:true});
+  const file=join(dir,'status.json');
+  if(kind==='invalid-schema')writeFileSync(file,JSON.stringify({repo:w.run.repo,number:18}));
+  else writeFileSync(file,JSON.stringify({...w.run,number:kind==='wrong-identity'?19:18,runDir:dir}));
+  const indexPath=join(w.ports.stateDir,'runs.json'),index=JSON.parse(readFileSync(indexPath,'utf8'));
+  index.runs.push({...(kind==='invalid-index-row'?{}:{repo:w.run.repo}),number:18,runDir:dir});writeFileSync(indexPath,JSON.stringify(index));
+  assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+  if(kind==='invalid-schema') {
+    unlinkSync(file); // The same indexed history must also hold when absent.
+    assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+    writeFileSync(file,'{');
+    assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+    unlinkSync(file);mkdirSync(file); // EISDIR models an unreadable record.
+    assert.equal((await w.check()).code,1);assert.equal(w.launches.length,0);
+  }
+});
+for(const kind of ['damaged','invalid-schema','unreadable-file','unreadable-folder'])test(`3111 repair earlier ${kind} audit holds CLI before any additional launch`,async t=>{
+  const w=await world(t);assert.equal((await w.check()).code,0);seedWorkflowUsage(w);
+  if(kind==='damaged')writeFileSync(w.file(),'{');
+  else if(kind==='invalid-schema')writeFileSync(w.file(),JSON.stringify({runId:null}));
+  else if(kind==='unreadable-file') {unlinkSync(w.file());mkdirSync(w.file());}
+  else w.fs={...nativeFs,readdirSync(path,...args) {if(path===join(w.run.runDir,'audits'))throw Object.assign(Error('denied'),{code:'EACCES'});return nativeFs.readdirSync(path,...args);}};
+  w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  const captured=captureCosts(null,w.run,{...w.ports,fs:w.fs??nativeFs});
+  w.config({auditTokenLimit:1000});w.nativeUsage=true;w.session=randomUUID();
+  const out=await w.check(24);assert.equal(w.launches.length,1);assert.equal(out.code,1);
+  assert.ok(captured.coverage.includes('audit-session-unavailable'));
+});
+
+test('review: malformed saved verdict must not authorize BAD follow-ups',async t=>{
+  const w=await world(t); assert.equal((await w.check()).code,0);
+  const a=w.audit();a.result={verdict:'BAD'};
+  const identity=createHash('sha256').update(JSON.stringify([a.runId,a.pr,a.merge])).digest('hex');
+  writeFileSync(w.file(),JSON.stringify(a));
+  writeFileSync(join(w.concernFolder(),'..','records',`${identity}.json`),JSON.stringify(a));
+  const out=await w.check();
+  const pushes=w.calls.filter(c=>c.file==='git'&&c.args[0]==='push');
+  assert.equal(pushes.length,0,'DAMAGED_AUDIT_MUST_NOT_PUSH_REVERT');
+  assert.equal(w.alerts.length,0);assert.equal(out.code,1);assert.ok(out.text.includes('audit-evidence-invalid'));
+});
+test('review: malformed prior audit verdict must hold a new auditor launch',async t=>{
+  const w=await world(t); assert.equal((await w.check()).code,0);
+  const a=w.audit();a.result={verdict:'OK'};
+  const identity=createHash('sha256').update(JSON.stringify([a.runId,a.pr,a.merge])).digest('hex');
+  writeFileSync(w.file(),JSON.stringify(a));
+  writeFileSync(join(w.concernFolder(),'..','records',`${identity}.json`),JSON.stringify(a));
+  w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));w.session=randomUUID();
+  const out=await w.check(24);
+  assert.equal(w.launches.length,1,'DAMAGED_PRIOR_AUDIT_MUST_HOLD_LAUNCH');
+  assert.equal(out.code,1);assert.ok(out.text.includes('audit-evidence-invalid'));
+});
+
+// The saved schema guards both public command execution and tick discovery.
+const auditDamage = {
+  verdict:a=>{a.result.verdict='MAYBE';}, summary:a=>{delete a.result.summary;},
+  evidence:a=>{a.result.evidence=' ';}, kind:a=>{delete a.result.kind;},
+  recommendation:a=>{a.result.revert='yes';}, concernKind:a=>{a.result.verdict='CONCERN';a.result.kind='../bad';},
+  repository:a=>{a.repository='foreign/repo';}, at:a=>{a.at='yesterday';},
+  sessionId:a=>{a.chat.session.id='bad-session';}, startedAt:a=>{a.chat.startedAt=null;},
+  state:a=>{a.state='done';}, unrecordedResult:a=>{a.state='starting';},
+  missingResult:a=>{delete a.result;}, completion:a=>{delete a.completedAt;},
+  chat:a=>{a.chat.agent='other';}, session:a=>{a.chat.session={};},
+  reservation:a=>{a.comment={state:'sent'};}, reservationState:a=>{a.comment.state='retry';},
+  reservationTime:a=>{a.comment.at='yesterday';}, reservationValue:a=>{delete a.comment.value;},
+  revertReservation:a=>{a.revert={state:'sent',at:a.at,value:'url'};},
+  reopenReservation:a=>{a.reopen={state:'sent',at:a.at,value:'open'};},
+  reopenState:a=>{a.result.verdict='BAD';a.result.revert=false;a.reopen={state:'retry',at:a.at};},
+  concernReservation:a=>{a.concern={state:'sending',kind:'bad'};},
+};
+for(const custody of ['local','shared']) for(const [damage,corrupt] of Object.entries(auditDamage)) {
+  test(`saved audit schema: ${custody} ${damage} holds discovery and public command`,async t=>{
+    const w=await world(t);assert.equal((await w.check()).code,0);
+    const a=w.audit();corrupt(a);
+    const shared=join(w.concernFolder(),'..','records',`${createHash('sha256').update(JSON.stringify([a.runId,a.pr,a.merge])).digest('hex')}.json`);
+    const file=custody==='local'?w.file():shared;
+    writeFileSync(file,JSON.stringify(a));
+    w.run.pr.push({number:24,state:'merged'});writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+    const before=readFileSync(file,'utf8'), reservations=readdirSync(join(w.concernFolder(),'..','records')).sort();
+    const holds=[];
+    assert.deepEqual(pendingAudits({run:w.run},{...w.ports,onAuditHold:h=>holds.push(h)}),[],'DAMAGED_INVENTORY_MUST_HOLD_DISCOVERY');
+    assert.deepEqual(holds.map(h=>h.cause),['audit-evidence-invalid','audit-evidence-invalid']);
+    const beforeEffects=effects([w]);
+    let measured=0;w.nativeUsage=true;w.config({auditTokenLimit:1000});
+    w.refreshCosts=()=>{measured++;throw Error('invalid authority must not reach measurement');};
+    const out=await w.check(24);
+    assert.equal(out.code,1);assert.ok(out.text.includes('audit-evidence-invalid'));
+    assert.equal(w.launches.length,1);assert.deepEqual(effects([w]),beforeEffects);assert.equal(measured,0);
+    assert.equal(readFileSync(file,'utf8'),before);
+    assert.deepEqual(readdirSync(join(w.concernFolder(),'..','records')).sort(),reservations);
+  });
+}

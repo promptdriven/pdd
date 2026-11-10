@@ -26,6 +26,8 @@ function fixture(t, { existing = false, opted = false, prompt = false } = {}) {
   const baseSha = git('rev-parse', 'HEAD'); git('switch', '-qc', 'topic');
   writeFileSync(join(root, 'value'), 'head'); git('commit', '-qam', 'head');
   const head = git('rev-parse', 'HEAD'); if (existing) git('push', '-q', 'origin', 'HEAD:refs/heads/topic');
+  // Code publication compares against the fetched PR1 contract (#2897).
+  if (!prompt) git('push', '-q', 'origin', `${baseSha}:refs/heads/prompt-topic`);
   const runDir = join(root, '.git', 'pdd', 'runs', '17'); mkdirSync(runDir, { recursive: true });
   const areas = [{ name: 'prompt-pr', steps: ['scope','check'], optional: [], gate: 'pr', then: 'ask-code' }, { name: 'code', steps: ['build', 'verify', 'formal','review'], optional: [], gate: 'pr', ...(opted ? { replay_evidence: 'pdd.replay-evidence.v1' } : {}) }];
   const prs = prompt ? [] : [{ stage: 'prompt-pr', number: 22, url: url(22), branch: 'prompt-topic', base: 'main' }];

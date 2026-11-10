@@ -21,7 +21,7 @@ export function fixture(t) {
   for (const dir of [root, bin, join(home, '.codex')]) mkdirSync(dir, {recursive:true});
   const route = `url.file://${remote}.insteadOf=https://github.com/example/project.git`;
   const env = {...process.env, HOME:home, CODEX_HOME:join(home, '.codex'), CLAUDE_CONFIG_DIR:join(home, '.claude'),
-    XDG_CONFIG_HOME:join(home, '.config'), PDD_SUITE_QUEUE:join(base, 'suite-queue'), PDD_INTERPRETER_QUEUE:join(base, 'interpreter-queue'), PATH:`${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, PDD_AGENT_SESSION:'1',
+    XDG_CONFIG_HOME:join(home, '.config'), PDD_SUITE_QUEUE:join(base, 'suite-queue'), PATH:`${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, PDD_AGENT_SESSION:'1',
     GIT_CONFIG_NOSYSTEM:'1', GIT_CONFIG_GLOBAL:join(base, 'gitconfig')};
   writeFileSync(env.GIT_CONFIG_GLOBAL, '');
   const git = (...args) => execFileSync('/usr/bin/git', ['-c', route, ...args], {cwd:root, env, encoding:'utf8', stdio:['ignore','pipe','pipe']}).trim();
@@ -55,7 +55,9 @@ const r=cp.spawnSync('/usr/bin/git',a[0]==='remote'&&a[1]==='get-url'?a:['-c',${
 `, {mode:0o755});
   writeFileSync(join(bin, 'gh'), `#!${process.execPath}
 const fs=require('node:fs'),cp=require('node:child_process'),file=${JSON.stringify(transport)},s=JSON.parse(fs.readFileSync(file)),a=process.argv.slice(2),flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?x:JSON.stringify(x));
-s.events.push({program:'gh',args:a});
+const event={program:'gh',args:a};
+if(a[0]==='pr'&&a[1]==='edit')event.approvalIds=JSON.parse(fs.readFileSync(${JSON.stringify(status)})).decisions.map(d=>d.evidence?.id);
+s.events.push(event);
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[0]==='pr'&&a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')));
 else if(a[0]==='pr'&&a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
@@ -155,4 +157,44 @@ export function assertReviewCosts(before, after) {
   assert.ok(current.person.waitingMinutes >= old.person.waitingMinutes);
   assert.deepEqual(current.events.slice(0, old.events.length), old.events);
   for (const [key, value] of Object.entries(old.waits)) assert.deepEqual(current.waits[key], value, key);
+}
+
+// Code consent refreshes presentation after its durable decision. PR identity
+// and publication custody remain exact; review-only recovery allows no PR delta.
+export function assertContinuationPr1(f, before, after) {
+  assert.equal(after.pr.length, before.pr.length);
+  const decision = after.decisions.at(-1);
+  for (let index = 0; index < before.pr.length; index++) {
+    const {readable: priorReadable, ...priorPublication} = before.pr[index];
+    const {readable, ...publication} = after.pr[index];
+    assert.deepEqual(publication, priorPublication, 'PR identity and publication custody');
+    const stablePresentation = value => {
+      const copy = structuredClone(value);
+      for (const field of ['approval','diff','pr1','updatedAt','thisPr']) delete copy.facts[field];
+      delete copy.facts.records.ci;
+      return copy;
+    };
+    assert.deepEqual(stablePresentation(readable), stablePresentation(priorReadable), 'unrelated readable facts');
+    assert.equal(readable.head, priorReadable.head);
+    assert.deepEqual(readable.facts.diff, {files:[], count:0, added:0, removed:0});
+    assert.equal(readable.facts.records.ci, 'none');
+    assert.ok(readable.facts.updatedAt >= priorReadable.facts.updatedAt);
+    assert.equal(readable.facts.approval.kind, priorReadable.facts.approval.kind);
+    assert.deepEqual(readable.facts.approval.items, [
+      ...priorReadable.facts.approval.items,
+      {route:decision.evidence.route, at:decision.evidence.at, words:decision.evidence.words}
+    ]);
+    assert.equal(readable.facts.pr1.number, publication.number);
+    assert.equal(readable.facts.pr1.url, publication.url);
+    assert.equal(readable.facts.pr1.merged, true);
+    assert.equal(readable.facts.pr1.state, 'merged');
+    const remote = f.data().prs.find(pr => pr.url === publication.url);
+    assert.equal(remote.headRefOid, publication.publishedHeadSha);
+    for (const item of readable.facts.approval.items) {
+      assert.ok(remote.body.includes(item.words.trim()), 'published approval evidence');
+    }
+    const edit = f.data().events.findLast(event => event.program === 'gh' && event.args[0] === 'pr' && event.args[1] === 'edit' && event.args[2] === publication.url);
+    assert.ok(edit, 'PR description refresh');
+    assert.ok(edit.approvalIds.includes(decision.evidence.id), 'approval saved before PR edit');
+  }
 }

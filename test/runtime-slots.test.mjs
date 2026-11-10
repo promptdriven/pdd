@@ -169,7 +169,7 @@ test('slots: ten real CLI checks across repositories share a limit of three and 
   assert.equal(early.status, 404);
   assert.equal(jobs.size, 0); assert.equal(active, 0);
   const gh = join(setup.sandbox, 'gh'); writeFileSync(gh, '#!/bin/sh\nif [ "$1" = auth ]; then echo fixture-token; else echo "octo 4242"; fi\n'); chmodSync(gh, 0o700);
-  const env = { HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '3', PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '3', PDD_INTERPRETER_QUEUE: join(setup.sandbox, 'machine-queue') };
+  const env = { HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '3', PDD_RUNTIME_URL: fake.origin };
   const start = i => child([join(root, 'bin/pdd.mjs'), 'test', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env, t });
   const waitFor = async predicate => {
     const deadline = Date.now() + 60_000;

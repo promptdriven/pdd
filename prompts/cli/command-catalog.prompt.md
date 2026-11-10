@@ -52,6 +52,7 @@ Catalog four local routes before the product routes: `autopilot.start` (`autopil
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
+- `pdd autopilot release ISSUE`: End this machine's idle run, release its claim, and remove pdd:working and pdd:stuck; keep the run folder, branch and PRs. A live worker, check, or another machine's claim prevents release.
 
 Catalog two alert routes after `autopilot.add`. [Autopilot alerts](autopilot-alerts.prompt.md) owns their behavior and validation.
 
@@ -266,17 +267,47 @@ RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then `## Dependencies`, then one Runtime interface block.
+1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then `The workflow park options also include text `--blocker` and `--until`. Show `pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` for a named external blocker; clearing values belong to the runner contract.
+
+## Dependencies`, then one Runtime interface block.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
 4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.
-5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves.
+5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check.
 ```
 
+
+## Post-merge audit route
+
+Catalog `autopilot.audit` with prefix `autopilot audit`, local `autopilot-audit`,
+required text operands RUN and PR, no options. Form: `pdd autopilot audit RUN PR`.
+Description: Audit an automatic merge once with a fresh agent and save its verdict.
 
 ## Finished chat maintenance
 
 Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands, optional flag `--dry-run`, and help form `pdd workflow tidy [--dry-run]`. It closes safely finished chats or reports eligible tabs without changes.
+
+## Lost-verdict resend route (#3097)
+
+Add workflow.resend, prefix workflow resend, local workflow-resend, required repeated issue operands, optional text --said. Help form: `pdd workflow resend ISSUE... [--said WORDS]`. Description: Record one person decision and resend each lost check once; --said - reads exact words from stdin; strict mode requires a person terminal. Preserve all other routes.
+
+## Interface draft commands
+
+Interface-draft help follows the same command-name substitutions as other
+commands. Use local schema-check wording for the action and interpreter admission
+for server admission; Runtime names only the Runtime interface declaration.
+
+Catalog `interface draft` with local `interface-draft`, repeat optional prompt operands, flags --all, --json, --extend and --refresh, and text --contract. Forms: `pdd interface draft [PROMPT...] [--all] [--json]` and `pdd interface draft PROMPT [--contract FILE] [--extend | --refresh] [--json]`. Draft from explicit prose or contracts and lint locally without AI/network calls. The second form supplies effect ports, extends preserved operations or reopens a stale block as draft. Missing facts include questions and a next step. Catalog approve flags --automatic and text --tests, with additional form `pdd approve PROMPT --automatic --tests COMMAND`. The automatic route requires existing tests and a complete current prompt check; strict mode still requires a person. Help must explain native-only not-run and the separate automatic route, without claiming that an agent can approve new behavior.
+
+Catalog text --route on workflow park and show `pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` for recording a missing supported PDD route without asking a person. The runner owns route validation and installed-fix clearing.
+
+
+## Read-only binding explanation (#3135)
+
+The test route accepts flag `--explain-bindings` and publishes the form
+`pdd test --explain-bindings [STORY...] [--json]`. Its description states that it
+explains local edge and fixture selection before any paid call. Runtime-client
+owns mode compatibility and execution.
 
 ## Dependencies
 
@@ -303,3 +334,9 @@ The metrics routes are `pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID]
 For `workflow.run`, also accept optional `--origin` (manual, autopilot or unknown), `--decision-id` (text) and `--outcome` (code or prompt-only) as observational metadata. The runner verifies the decision against the actual repository and issue. Keep the draft, base and approved-corpus options and existing help form.
 
 Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopilot-check-base`, required text operands RUN and PR, and no options. Form: `pdd autopilot check-base RUN PR`. Description: Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only.
+
+
+## First-start doctor
+
+Register autopilot.doctor, prefix autopilot doctor, local autopilot-doctor, no operands or options. Advertise `pdd autopilot doctor` as read-only first-start diagnostics with no AI call. Preserve other forms.
+Completion offers `doctor` only after `autopilot`. The top-level `doctor` command remains unsupported, including its help forms.

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {fixture, inventory, nativeCase, reviewedPr1, missingCompletedReview, success, assertReviewCosts} from './helpers/recover-guidance-cli-fixture.mjs';
+import {fixture, inventory, nativeCase, reviewedPr1, missingCompletedReview, success, assertReviewCosts, assertContinuationPr1} from './helpers/recover-guidance-cli-fixture.mjs';
 
 const recovery = () => [...nativeCase('recover-current-review').commands[0]];
 const approval = () => [...nativeCase('approve-after-recovery').commands[0]];
@@ -58,7 +58,8 @@ test('approved native guidance recovery cases replay through bin/pdd.mjs', async
     const row=nativeCase('approve-after-recovery'), before=reviewed;
     const out=f.cli(row.commands[0],row.approval_input);assert.equal(out.status,row.expected.exit_codes[0],out.stderr);
     const after=f.read();assert.equal(after.runId,before.runId);assert.equal(after.root,before.root);
-    assert.deepEqual(after.pr,before.pr);assert.deepEqual(after.done,before.done);
+    for (const field of ['same_pr1_identity','same_pr1_publication_head','same_pr1_owned_paths','pr1_description_refreshed_after_decision','pr1_readable_approval_refreshed']) assert.equal(row.expected[field],true,field);
+    assertContinuationPr1(f,before,after);assert.deepEqual(after.done,before.done);
     assert.deepEqual(after.decisions.slice(0,-1),before.decisions);
     assert.equal(after.decisions.length-before.decisions.length,row.expected.new_code_decisions);
     assert.equal(after.decisions.at(-1).gateId,before.gate.id);assert.equal(after.decisions.at(-1).gateAt,before.gate.at);

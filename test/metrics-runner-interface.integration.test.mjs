@@ -7,11 +7,12 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {interfaceBlocks,proseSha256,fillHashes} from '../src/runtime-preflight.mjs';
 const path='prompts/cli/workflow-runner.prompt.md';
-// Local checks accept either status. Pin both complete declarations.
+// Pin every legacy declaration field and require the explicit partial coverage kind.
 const acceptedShapes={approved:'553ec45b71833be1c7b97cde0d888c62a14eac565907c176af509e0339f105e7',draft:'26bcd39d3f1475f9dfabadbfa868b1128891e0680d0881fac6f2115e12a87487'};
-const shape=doc=>{const value=structuredClone(doc);value.prose_sha256='';return createHash('sha256').update(JSON.stringify(value)).digest('hex');};
+const shape=doc=>{const value=structuredClone(doc);value.prose_sha256='';delete value.kind;return createHash('sha256').update(JSON.stringify(value)).digest('hex');};
 function checked(text,status) {
  const blocks=interfaceBlocks(text);assert.equal(blocks.length,1);const doc=JSON.parse(blocks[0][1]);
+ assert.equal(doc.kind,'partial');
  assert.deepEqual(doc.entries.map(e=>e.operation),['changeRun','acknowledgeRequest','storyCount','runStatus']);assert.deepEqual(doc.resources.map(r=>r.name),['source','runs','files','program','results']);
  assert.ok(Object.hasOwn(acceptedShapes,doc.status));
  if(status!==undefined)assert.equal(doc.status,status);

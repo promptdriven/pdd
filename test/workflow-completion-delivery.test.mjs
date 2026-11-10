@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync} from 'node:fs';
 import {join} from 'node:path';
-import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
+import {fixture, packageRoot, matchingClaimPorts} from './helpers/workflow-runner-fixture.mjs';
 import {readDependencySnapshot} from '../src/issue-dependencies-github.mjs';
 import {reconcileDependencyIntake, checkDependencyStart} from '../src/issue-dependencies-intake.mjs';
 import {runAutopilotLauncher} from '../src/autopilot-launcher.mjs';
@@ -139,6 +139,7 @@ async function launcherHarness(f) {
         if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return {code: 0, stdout: cwd + '/.git\n', stderr: ''};
         return {code: 0, stdout: cwd + '\n', stderr: ''};
       }
+      if (command === 'gh' && args[0] === 'api') {const endpoint=args.find(word=>/^repos\//.test(word)),subject=/^repos\/example\/project\/issues\/(\d+)$/.exec(endpoint??'');if(subject){const row=issueRows.find(row=>row.number===Number(subject[1]));return {code:row?0:1,stdout:JSON.stringify(row??{})};}}
       if (command === 'gh' && args[0] === 'repo') return {code: 0, stdout: JSON.stringify({nameWithOwner: repository, defaultBranchRef: { name: 'main' }}), stderr: ''};
       if (command === 'gh' && args[0] === 'api' && args.at(-1).endsWith('/permission')) return {code:0, stdout:'HTTP/1.1 200 OK\r\n\r\n{\"permission\":\"admin\"}', stderr:''};
       if (command === 'gh' && args[0] === 'auth') return {code: 0, stdout: '', stderr: ''};
@@ -147,6 +148,7 @@ async function launcherHarness(f) {
     },
     herdr: async args => {
       herdrCalls.push(args);
+      if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: Array.from({length: workspaceCount}, (_, i) => ({pane_id: `pane-${i + 1}`, workspace_id: `workspace-${i + 1}`, tab_id: `tab-${i + 1}`, terminal_id: `terminal-${i + 1}`}))}};
       if (args[0] === 'workspace' && args[1] === 'create') {
         workspaceCount++;
         return {result: {workspace: {workspace_id: `workspace-${workspaceCount}`}, root_pane: {pane_id: `pane-${workspaceCount}`}}};
@@ -227,6 +229,7 @@ test('automatic open resume and replacement arm their captured attempts', async 
   assert.equal((await f.run()).exitCode, 0);
   const before = f.record();
   updateRun(before.runDir, run => { run.automaticOrigin = {repository, coordinatorId:'coordinator', machine:'machine', claim:{commentId:'11',labelEventId:'12'}}; return run; }, f.ports);
+  f.ports.owners = matchingClaimPorts(f.record());
   const armed = [], ports = {...f.ports, isTTY:false, env:{...f.ports.env, HERDR_SOCKET_PATH:'/sessions/pdd-autopilot/socket', HERDR_PANE_ID:'coordinator'}, armWorkerCompletion: identity => armed.push(identity)};
   const old = f.record().chats.at(-1); f.herdr.paneOf(old).agent = null; f.tick(31000);
   const resumed = await openRun({ref:'17',cwd:f.source,packageRoot}, ports);

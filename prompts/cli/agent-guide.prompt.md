@@ -42,6 +42,9 @@ saved accepts `{id,name,story_path,result}` only after collectSavedTests actuall
 
 ## Dependencies
 
+- [Secret redaction](secret-redaction.prompt.md): required shared string-sanitizing
+  rules, extracted from this module; object/path scrubbing remains local.
+
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Agent project](agent-project.prompt.md): required for safe scenario reads, where-you-are facts, product rules, latest check and save target.

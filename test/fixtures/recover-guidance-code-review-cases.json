@@ -4,7 +4,7 @@
   "criteria": [
     {"id":"AC1","text":"A guidance-only PR 1 can be explicitly approved with an intentionally reviewed empty prompt selection, and its later code choice waits for a separate approval."},
     {"id":"AC2","text":"After a change request invalidates that review and merged PR 1 completes the run, `pdd workflow done try` from its worktree displays and durably saves the current code-choice review, including an empty selection, without approving, publishing, allocating a chat or changing progress."},
-    {"id":"AC3","text":"After that current review is shown, a later explicit scoped approval starts the normal code continuation once, preserving the original run, PR 1, prior progress and approval evidence."},
+    {"id":"AC3","text":"After that current review is shown, a later explicit scoped approval starts the normal validated code continuation once, preserving the original run, PR-1 identity, publication head, owned paths, prior progress and approval evidence. After the code decision is saved, PR 1 refreshes its description and saved readable facts with the current approval and PR state."},
     {"id":"AC4","text":"An absent review refuses approval even when no prompts are selected; stale or revoked reviews and substantive prompt changes still require a current review and new approval."},
     {"id":"AC5","text":"Cancelled runs and runs completed in code remain ended; attempting review recovery or approval cannot start code, change progress or add approval evidence."}
   ],
@@ -35,7 +35,7 @@
       "given":"Previous case after review display; independently supply a later explicit approval through stdin.",
       "commands":[["workflow","approve","17","--said","-"]],
       "approval_input":"Synthetic fixture: approve this current code continuation only.\n",
-      "expected":{"exit_codes":[0],"new_code_decisions":1,"decision_bound_to_current_gate":true,"decision_selection":[],"code_branches":1,"code_chats":1,"code_base":"fetched saved base after PR 1 merge","same_run":true,"same_pr1":true,"previous_steps_preserved":true,"previous_approval_preserved":true}
+      "expected":{"exit_codes":[0],"new_code_decisions":1,"decision_bound_to_current_gate":true,"decision_selection":[],"code_branches":1,"code_chats":1,"code_base":"fetched saved base after PR 1 merge","same_run":true,"same_pr1_identity":true,"same_pr1_publication_head":true,"same_pr1_owned_paths":true,"pr1_description_refreshed_after_decision":true,"pr1_readable_approval_refreshed":true,"previous_steps_preserved":true,"previous_approval_preserved":true}
     },
     {
       "id":"review-refusal-controls", "criteria":["AC4"],

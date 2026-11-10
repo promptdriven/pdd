@@ -56,6 +56,8 @@ async function fixture(t, initialReviews = [[]]) {
       assert.ok(command === 'gh' && args[0] === 'api' && args.includes('GET'), `Unexpected process: ${command} ${args.join(' ')}`);
       const endpoint = args[args.indexOf('GET') + 1], request = { endpoint, args: [...args] };
       f.requests.push(request);
+      const subject = /^repos\/owner\/repo\/issues\/(\d+)$/.exec(endpoint);
+      if (subject) { const row = f.rows.find(row => row.number === Number(subject[1])); return reply(row ?? {}, row ? 200 : 404); }
       if (endpoint.startsWith('repos/owner/repo/issues?')) {
         const etag = `"issues-${f.issueVersion}"`;
         request.status = args.includes(`If-None-Match: ${etag}`) ? 304 : 200;
@@ -81,6 +83,8 @@ async function fixture(t, initialReviews = [[]]) {
     herdr: async args => {
       const live={pane_id:'fake-pane',workspace_id:'fake-workspace',cwd,foreground_cwd:cwd,tab_id:'t',terminal_id:'term',agent:'codex',agent_status:f.agentStatus,agent_session:'session'};
       if (args[0] === 'workspace') return { result: { type:'workspace_info', root_pane: { pane_id: 'fake-pane' }, workspace: { workspace_id: 'fake-workspace' } } };
+      // #3123 admission reads complete native pane inventory before allocation.
+      if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: [live]}};
       if (args[0] === 'pane' && args[1] === 'get') return {result:{type:'pane_info',pane:live}};
       if (args[0] === 'pane' && args[1] === 'run') { f.agentStarted = true; return {}; }
       if (args[0] === 'pane' && args[1] === 'read') return '';

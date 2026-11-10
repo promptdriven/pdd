@@ -1,14 +1,16 @@
 import './helpers/test-home.mjs';
 import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
+import { analysisFor, autopilotGithubWorld } from './helpers/autopilot-github-world.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
-import { applyDependencyChanges, readDependencySnapshot, saveDependencyReview } from '../src/issue-dependencies-github.mjs';
+import { applyDependencyChanges, createDependencyReadPorts, readDependencySnapshot, saveDependencyReview } from '../src/issue-dependencies-github.mjs';
 import { completeDependencyIntake, prepareDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 import { autopilotLaunchFingerprint, tickAutopilot } from '../src/autopilot-launcher.mjs';
 
@@ -947,4 +949,168 @@ test('the launcher names a repeated request and its reason, and does not send it
   await tickAutopilot(file, ports);
   assert.equal(prompts.length, 4);
   assert.match(prompts[3], /Repeated request 1 of 3: .*Last reason: not-completed\./);
+});
+
+
+// #3100: use the native owner reader against private launcher state, with the
+// existing GitHub world. Pane replacement must preserve the batch; a different
+// machine must not inherit an unfinished batch even when its issues are unclaimed.
+test('review batches survive coordinator replacement and refuse a real machine owner change', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-review-owner-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cwd = join(dir, 'repo'), stateRoot = join(dir, 'autopilot'), home = join(dir, 'home');
+  for (const path of [cwd, stateRoot, home]) mkdirSync(path);
+  execFileSync('git', ['init', '-q'], { cwd });
+  execFileSync('git', ['remote', 'add', 'origin', `https://github.com/${repository}.git`], { cwd });
+  const stateFile = join(stateRoot, `${sha(cwd).slice(0, 20)}.json`);
+  const state = { cwd, repo: repository, coordinatorId: 'stable-owner-a', machine: 'machine-a', paneId: 'old-pane' };
+  const save = () => writeFileSync(stateFile, JSON.stringify(state)); save();
+  const i17 = issue(17), i18 = issue(18), i19 = issue(19), w = world({ issues: [i17, i18, i19] });
+  const { owners, ...base } = w.ports();
+  const ports = { ...base, env: { HOME: home }, autopilotStateRoot: stateRoot,
+    execFile: async (command, args, options = {}) => {
+      if (command === 'gh') {
+        assert.equal(args[0], 'repo');
+        return { stdout: JSON.stringify({ nameWithOwner: repository, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repository}` }) };
+      }
+      assert.equal(command, 'git');
+      return { stdout: execFileSync(command, args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }) };
+    } };
+  const first = await prepareDependencyIntake({ cwd, repository, issue: '17' }, ports);
+  const second = await prepareDependencyIntake({ cwd, repository, issue: '18' }, ports);
+  assert.deepEqual(first.queued, [key(17)]);
+  assert.deepEqual(second.queued, [key(18)]);
+  const third = await prepareDependencyIntake({ cwd, repository, issue: '19' }, ports);
+  state.paneId = 'replacement-pane'; save();
+  const finish = (request, subject) => completeDependencyIntake({ cwd, request,
+    analysis: { impactJson: '', reviews: [answer(request, subject)] } }, ports);
+  const result = await finish(first.request, i17);
+  assert.equal(result.state, 'complete');
+  assert.equal(w.comments[key(17)].length, 1);
+  assert.deepEqual((await finish(first.request, i17)).reviewIds, result.reviewIds);
+  assert.equal(w.comments[key(17)].length, 1);
+  // A saved pending review is completed on retry under the same stable owner.
+  const analysis = { impactJson: '', reviews: [answer(third.request, i19, needs(18, 'Issue 19 needs issue 18 first.'))] };
+  const apply = ports.github.addBlocker; let unavailable = true;
+  ports.github.addBlocker = async args => { if (unavailable) throw Error('Fake link write unavailable'); return apply(args); };
+  const stopped = await completeDependencyIntake({ cwd, request: third.request, analysis }, ports);
+  assert.equal(stopped.reason, 'write-unconfirmed');
+  assert.equal(w.comments[key(19)].length, 1);
+  unavailable = false;
+  assert.equal((await completeDependencyIntake({ cwd, request: third.request, analysis }, ports)).state, 'complete');
+  assert.deepEqual(w.blockedBy[key(19)], [key(18)]);
+  state.coordinatorId = 'stable-owner-b'; state.machine = 'machine-b'; save();
+  const changed = await finish(second.request, i18);
+  assert.equal(changed.reason, 'owner-changed');
+  assert.equal(changed.state, 'pending');
+  assert.equal(w.comments[key(18)]?.length ?? 0, 0);
+});
+
+for (const change of ['owner', 'machine', 'claim', 'unknown', 'unavailable', 'unbound'])
+  test(`review delivery checks live ${change} ownership before AI work`, async () => {
+    const i17 = issue(17), w = world({ issues: [i17] }), d = deliveries();
+    let afterEvidence = false;
+    const ports = w.ports({ pending: d.pending,
+      evidence: { read: async () => { afterEvidence = true; return reply({ source: [], requirements: [] }); } },
+      owners: { read: async () => {
+        if (afterEvidence && change === 'unavailable') throw Error('Fake owner read unavailable');
+        return reply({ localOwner: afterEvidence && change === 'owner' ? 'owner-b' : afterEvidence && change === 'unknown' || change === 'unbound' ? '' : 'owner-a',
+          localMachine: afterEvidence && change === 'machine' ? 'machine-b' : 'machine-a',
+          claims: afterEvidence && ['claim', 'unbound'].includes(change) ? [{ issue: key(17), active: true, owner: 'owner-b', machine: 'machine-b' }] : [],
+          runs: [], runsKnown: true });
+      } } });
+    const result = await reconcileDependencyIntake({ repository, trigger: 'startup', mode: 'auto' }, ports);
+    assert.equal(afterEvidence, true);
+    assert.equal(d.delivered.length, 0);
+    assert.equal(result.pending, true);
+  });
+
+test('prepare skips another machine before collecting semantic evidence even with a matching owner string', async () => {
+  const i17 = issue(17), w = world({ issues: [i17] }); let evidenceReads = 0;
+  const result = await prepareDependencyIntake({ repository }, w.ports({
+    owners: { read: async () => reply({ localOwner: 'owner-a', localMachine: 'machine-a',
+      claims: [{ issue: key(17), owner: 'owner-a', machine: 'machine-b', active: true }], runs: [], runsKnown: true }) },
+    evidence: { read: async () => { evidenceReads++; return reply({ source: [], requirements: [] }); } },
+  }));
+  assert.deepEqual(result.queued, []);
+  assert.deepEqual(result.skipped, [key(17)]);
+  assert.equal(evidenceReads, 0);
+});
+
+test('a new stable review owner receives a fresh batch without waiting for redelivery', async () => {
+  const i17 = issue(17), w = world({ issues: [i17] }), d = deliveries(); let owner = 'owner-a';
+  const ports = w.ports({ pending: d.pending, owners: { read: async () => reply({ localOwner: owner, localMachine: 'machine-a', claims: [], runs: [], runsKnown: true }) } });
+  await reconcileDependencyIntake({ repository, trigger: 'startup', mode: 'auto' }, ports);
+  assert.equal(d.delivered.length, 1);
+  owner = 'owner-b';
+  await reconcileDependencyIntake({ repository, trigger: 'tick', mode: 'auto' }, ports);
+  assert.equal(d.delivered.length, 2);
+  assert.notEqual(d.delivered[0].id, d.delivered[1].id);
+});
+
+
+test('an owner change before a timed review redelivery stays pending and sends no work', async () => {
+  const i17 = issue(17), w = world({ issues: [i17] }), r = redelivery(w);
+  await r.tick(0);
+  assert.equal(r.sent.length, 1);
+  let afterEvidence = false;
+  const result = await r.tick(31, {
+    evidence: { read: async () => { afterEvidence = true; return reply({ source: [], requirements: [] }); } },
+    owners: { read: async () => reply({
+      localOwner: afterEvidence ? 'new-owner' : 'coordinator', claims: [], runs: [], runsKnown: true,
+    }) },
+  });
+  assert.equal(r.sent.length, 1);
+  assert.equal(result.pending, true);
+  assert.equal(r.pending.state.redelivered ?? 0, 0);
+});
+
+
+for (const state of ['busy', 'dialog']) test(`a timed review redelivery refused as ${state} remains pending`, async () => {
+  const i17 = issue(17), w = world({ issues: [i17] }), r = redelivery(w);
+  await r.tick(0);
+  assert.equal(r.sent.length, 1);
+  r.pending.deliver = async () => ({ state });
+  const result = await r.tick(31);
+  assert.equal(result.pending, true);
+  assert.equal(r.sent.length, 1);
+  assert.equal(r.pending.state.redelivered ?? 0, 0);
+});
+
+
+test('native review owner batches retain live claim checks when a label batch is incomplete', async t => {
+  const w = await autopilotGithubWorld({ issues: 2 }); t.after(w.cleanup);
+  assert.equal((await w.invoke('start')).exitCode, 0);
+  const request = w.requests.at(-1), gh = w.github.gh;
+  w.github.claim(2);
+  for (const fault of ['working', 'missing', 'malformed', 'paginated', 'foreign', 'error', 'unavailable']) {
+    w.github.gh = async (args, options) => {
+      if (!args.includes('graphql')) return gh(args, options);
+      if (fault === 'unavailable') throw Error('Fake batch read unavailable');
+      const response = await gh(args, options), split = response.stdout.indexOf('\r\n\r\n');
+      const body = JSON.parse(response.stdout.slice(split + 4));
+      // Put the foreign claim first so malformed negatives cannot hide it.
+      const row = body.data.repository.i0;
+      if (fault === 'missing') body.data.repository.i0 = null;
+      if (fault === 'malformed') row.labels.nodes = [{}];
+      if (fault === 'paginated') row.labels.pageInfo.hasNextPage = true;
+      if (fault === 'foreign') { row.url = `https://github.com/other/project/issues/2`; row.labels.nodes = []; }
+      if (fault === 'error') body.errors = [{ message: 'Fake partial GraphQL answer' }];
+      return { ...response, stdout: response.stdout.slice(0, split + 4) + JSON.stringify(body) };
+    };
+    const ports = createDependencyReadPorts({ cwd: w.cwd }, w.commandPorts());
+    const owners = JSON.parse((await ports.owners.read({ repository: w.repository,
+      issues: [`https://github.com/${w.repository}/issues/2`, `https://github.com/${w.repository}/issues/1`] })).json);
+    assert.equal(owners.claims.find(c => c.issue.endsWith('/2'))?.owner, 'coordinator-b', fault);
+  }
+  w.github.gh = gh;
+  // The earlier unclaimed subject still belongs to the original review batch.
+  const stateFile = w.stateFile(), state = w.state();
+  writeFileSync(stateFile, JSON.stringify({ ...state, coordinatorId: 'replacement-owner', machine: 'replacement-machine' }));
+  const subject = request.issues.find(k => k.endsWith('/1'));
+  const selected = { ...request, issues: [subject] };
+  const result = await completeDependencyIntake({ cwd: w.cwd, request: selected,
+    analysis: analysisFor(selected) }, w.commandPorts());
+  assert.equal(result.reason, 'owner-changed');
+  assert.equal(w.github.reviewComments(1).length, 0);
 });

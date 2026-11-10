@@ -24,6 +24,7 @@ function world(t, existing) {
   const dir = existing?.base ?? mkdtempSync(join(tmpdir(), 'pdd-restart-claims-'));
   if (!existing) t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cwd = existing?.source ?? join(dir, 'repo'), home = existing?.ports.env.HOME ?? join(dir, 'restart-home'), stateRoot = join(dir, 'autopilot');
+  const env = { HOME: home };
   mkdirSync(home, { recursive: true }); mkdirSync(stateRoot);
   if (!existing) { mkdirSync(cwd); execFileSync('git', ['init', '-q'], { cwd }); execFileSync('git', ['remote', 'add', 'origin', `https://github.com/${repo}.git`], { cwd }); }
   const commonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim();
@@ -40,20 +41,20 @@ function world(t, existing) {
   };
   f.resetClaim();
   const origin = { repository: repo, coordinatorId: 'old', machine: 'machine-a', claim: { commentId: '901', labelEventId: '701' } };
-  if (existing) { const run = f.record(); run.automaticOrigin = origin; writeRun(run, { stateDir: join(dir, 'index'), env: { HOME: home } }); }
+  if (existing) { const run = f.record(); run.automaticOrigin = origin; writeRun(run, { stateDir: join(dir, 'index'), env }); }
   else writeRun({ v: 1, number: 17, repo, runDir, commonDir, sourceRoot: cwd, root: cwd, issue: { url: issue }, state: 'running', automaticOrigin: origin,
-    areas: [{ name: 'code', steps: ['build'], optional: [] }], area: 0, chats: [], done: { build: { summary: 'Finished work', at: NOW - hour } } }, { stateDir: join(dir, 'index'), env: { HOME: home } });
+    areas: [{ name: 'code', steps: ['build'], optional: [] }], area: 0, chats: [], done: { build: { summary: 'Finished work', at: NOW - hour } } }, { stateDir: join(dir, 'index'), env });
   const agent = { id: 'codex', kind: 'codex', command: 'codex' };
   const profile = { agent: { id: 'codex', kind: 'codex' }, home, definitionHome: home, configHome: null };
   f.saveState({ enabled: true, cwd, repo, stateFile: f.stateFile, coordinatorId: 'new', machine: 'machine-a', activatedAt: at(NOW - 8 * hour),
-    agent, environment: { HOME: home }, definitionHome: home, recipeDelivered: true, packageRoot,
+    agent, environment: env, definitionHome: home, recipeDelivered: true, packageRoot,
     paneId: 'p1', workspaceId: 'w1', ownerLaunch: { paneId: 'p1', startedAt: NOW - hour, coordinator: { version: 'pdd.autopilot-coordinator.v1', repository: repo, coordinatorId: 'new', machine: 'machine-a', activation: at(NOW - 8 * hour) }, profile } });
   f.execFile = async (command, args, options = {}) => {
     if (command === 'git') return { code: 0, stdout: execFileSync(command, args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }) };
     if (command === 'herdr' || command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '' };
     if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: repo, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repo}` }) };
     assert.equal(command, 'gh'); assert.equal(args[0], 'api');
-    const endpoint = args[4], method = args[3]; let value;
+    const endpoint = args.find(word => /^repos\//.test(word)), methodIndex = args.findIndex(word => ['--method','-X'].includes(word)), method = methodIndex < 0 ? 'GET' : args[methodIndex + 1]; let value;
     if (endpoint === `repos/${repo}`) value = { owner: { login: 'example' } };
     else if (endpoint === `repos/${repo}/collaborators?per_page=100`) value = [];
     else if (endpoint === `repos/${repo}/issues/17`) value = { labels: f.issueLabels ?? [{ name: 'pdd:working' }] };
@@ -66,15 +67,15 @@ function world(t, existing) {
         Object.assign(f.claim, { body, updated_at: at(f.time) });
         if (f.losePatch) { f.losePatch = false; throw Error('Lost accepted PATCH reply'); }
       }
-      value = f.claim;
+      value = {...f.claim, issue_url:`https://api.github.com/repos/${repo}/issues/17`};
     } else if (endpoint === `repos/${repo}/issues/17/comments` && method === 'POST') {
       value = { id: 1000 + f.comments.length, user: { login: 'example' }, created_at: at(f.time), ...JSON.parse(options.input) };
       f.comments.push(value); f.writes.push({ method, body: value.body });
       if (f.losePost) { f.losePost = false; throw Error('Lost accepted POST reply'); }
     } else throw Error(`Unexpected fake endpoint ${method} ${endpoint}`);
-    return { code: 0, stdout: `HTTP/1.1 200 OK\n\n${JSON.stringify(value)}` };
+    return { code: 0, stdout: args.includes('--include') ? `HTTP/1.1 200 OK\n\n${JSON.stringify(value)}` : JSON.stringify(value) };
   };
-  f.ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), env: { HOME: home }, stateRoot, stateDir: join(dir, 'index'), now: () => f.time, run: f.execFile, execFile: f.execFile,
+  f.ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(dir), env, stateRoot, stateDir: join(dir, 'index'), now: () => f.time, run: f.execFile, execFile: f.execFile,
     allocationCheck: async () => ({ state: 'ready' }), pathDiagnostic: () => [], selectAgent: async () => agent, timer: async () => true,
     allRuns: () => [], readRunProgress: async () => [], queryIssues: async () => ({ status: 304 }), warn: text => f.warnings.push(text),
     reconcileDependencyIntake: async () => {
@@ -84,6 +85,7 @@ function world(t, existing) {
     },
     herdr: async args => {
       if (args[0] === 'status') return { running: true };
+      if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: []}}; // Restart removed the old coordinator pane.
       if (args[0] === 'workspace') { f.activePane = 'p2'; return { result: { workspace: { workspace_id: 'w2' }, root_pane: { pane_id: 'p2' } } }; }
       const pane = { pane_id: args[2], workspace_id: args[2] === 'p1' ? 'w1' : 'w2', cwd, foreground_cwd: cwd, tab_id: 'tab', terminal_id: args[2], agent: 'codex', agent_status: 'idle', agent_session: 'session' };
       if (args[0] === 'pane' && args[1] === 'get') return { result: { type: 'pane_info', pane } };
@@ -97,7 +99,7 @@ function world(t, existing) {
     } };
   const initial = f.state(); initial.ownerLaunch.fingerprint = autopilotLaunchFingerprint(initial); f.saveState(initial);
   f.tick = () => tickAutopilot(f.stateFile, f.ports);
-  f.start = extra => runAutopilotLauncher({ command: 'start', cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot, issues: [], ...extra }, f.ports);
+  f.start = extra => runAutopilotLauncher({ command: 'start', cwd, env: { ...env, PATH: process.env.PATH }, packageRoot, issues: [], ...extra }, f.ports);
   return f;
 }
 

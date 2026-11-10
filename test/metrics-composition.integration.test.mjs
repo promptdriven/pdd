@@ -18,7 +18,8 @@ function selector(t,{issues=true}={}) {
  fs.mkdirSync(home);
  fs.writeFileSync(stateFile,JSON.stringify({enabled:true,defaultBranch:'main',baseBranch:'main',cwd:root,repo:'Owner/Repo',activatedAt,coordinatorId:'c',machine:'m',environment:{HOME:home},agent:{id:'codex',kind:'codex',command:'codex',env:{}},stateFile,workspaceId:'w',paneId:'p',recipeDelivered:true,ownerLaunch:{paneId:'p',startedAt:1,coordinator,profile:{agent:{id:'codex',kind:'codex'},home,definitionHome:home,configHome:null},fingerprint:autopilotLaunchFingerprint({cwd:root,agent:{kind:"codex"}})}}));
  const rows=issues?[{number:1,state:'open',title:'One',body:'body',user:{login:'owner'},author_association:'OWNER',created_at:'2026-11-04T00:01:00Z',updated_at:'2026-11-04T00:01:00Z',comments:0,labels:[],html_url:'https://example.test/1'}]:[];
- const f={root,stateFile,sent:[],ports:{...healthyMachine,now:()=>at,warn:()=>{},allocationCheck:async()=>({state:'ready',message:''}),queryIssues:async()=>({status:200,issues:rows}),run:async (command,args)=>({code:0,stdout:command==='git'?execFileSync('git',args,{cwd:root,encoding:'utf8'}):'{}',stderr:''})}};
+ const liveIssues=new Map(rows.map(row=>[row.number,row]));
+ const f={root,stateFile,liveIssues,sent:[],ports:{...healthyMachine,now:()=>at,warn:()=>{},allocationCheck:async()=>({state:'ready',message:''}),queryIssues:async()=>({status:200,issues:rows}),run:async (command,args)=>({code:0,stdout:command==='git'?execFileSync('git',args,{cwd:root,encoding:'utf8'}):'{}',stderr:''})}};
  f.ports.checkCapacityPorts=isolatedCheckCapacity(f.root);
  f.ports.reconcileDependencyIntake=async()=>({eligible:rows.map(row=>row.html_url),queued:[],skipped:[]});
  f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get')return {result:{agent:{agent_status:'idle',agent_session:'session'}}};if(args[0]==='pane'&&args[1]==='read')return '';if(args[0]==='agent'&&args[1]==='prompt'){const text=args.at(-1),match=/Artifact path: (.+)/.exec(text);f.sent.push(match?fs.readFileSync(JSON.parse(match[1]),'utf8'):text);}return {};};
@@ -46,7 +47,7 @@ test('composed launcher does not record busy pane as delivery attempt',async t=>
  const dir=join(f.root,'.git','pdd','metrics','decisions'),rows=fs.readdirSync(dir).map(n=>JSON.parse(fs.readFileSync(join(dir,n),'utf8')));assert.equal(rows.flatMap(r=>r.events).some(e=>e.type==='launch'),false);assert.equal(f.sent.length,0);
 });
 test('composed launcher preserves a time-only wake and its successful acknowledgement',async t=>{
- const f=selector(t,{issues:false});f.ports.readRunProgress=async()=>[{number:9,changedAt:at-3600001}];await f.tick();
+ const f=selector(t,{issues:false});f.liveIssues.set(9,{number:9,labels:[]});f.ports.readRunProgress=async()=>[{number:9,changedAt:at-3600001}];await f.tick();
  assert.equal(f.sent.length,1);const packet=JSON.parse(f.sent[0].trim().split('\n').at(-1));assert.deepEqual(packet.issues,[]);assert.equal(packet.timeRules[0].kind,'stuck-run');
  assert.equal(JSON.parse(fs.readFileSync(f.stateFile,'utf8')).timeSeen['run:9'],at-3600001);await f.tick();assert.equal(f.sent.length,1);
 });

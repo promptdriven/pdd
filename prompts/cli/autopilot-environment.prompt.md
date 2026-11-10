@@ -18,7 +18,8 @@ expectations as work regardless of word order; ambiguous failures fail closed.
 
 Export frozen `ENVIRONMENT_BACKOFF`: delays in milliseconds of 15 minutes,
 1 hour and 4 hours. Export `environmentRecovery(run)`: null unless an automatic
-run is stuck for an environment cause without a repair ceiling. Require its saved
+run is stuck for an environment cause without a saved `repairLimit` or
+`integrationLimit` under the [runner's budget policy](workflow-runner.prompt.md#autopilot-repair-ceiling). Require its saved
 `environmentRetry` with an explicit validation target, valid current area, finite
 failure time, integer attempts 0..3 and a finite nextAt below the limit (null at
 the limit). Never guess a failed step from unfinished steps in legacy records.

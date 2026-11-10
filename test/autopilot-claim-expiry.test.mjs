@@ -16,6 +16,7 @@ import { runIssueGraph } from '../src/issue-dependency-graph.mjs';
 import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { fixture as runnerFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
+import { createGithubRepoFake } from './helpers/github-repo-fake.mjs';
 
 // Issue #3032: claims carry a heartbeat, expire, and a lost claim stops work.
 const repo = 'owner/repo', hour = 60 * 60 * 1000, minute = 60 * 1000;
@@ -236,17 +237,25 @@ test('heartbeat: a writer clock 1 day ahead does not keep a stopped machine\'s c
 });
 
 // GitHub sets a comment's updated_at to its own (server) time on each edit.
-function commentService(initial, { serverTime = () => NOW, lostReply = false } = {}) {
+function commentService(initial, { serverTime = () => NOW, lostReply = false, issue = {number: 7, labels: []} } = {}) {
   const comments = new Map(initial.map(row => [String(row.id), structuredClone(row)])), patches = [];
   const execFile = async (file, args, options = {}) => {
     assert.equal(file, 'gh'); assert.equal(args[0], 'api');
-    const method = args[3], endpoint = args[4], id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(endpoint)?.[1];
+    const methodAt = args.findIndex(arg => ['--method', '-X'].includes(arg));
+    const method = methodAt < 0 ? 'GET' : args[methodAt + 1];
+    const endpoint = args.find(arg => /^repos\//.test(arg));
+    const output = value => ({stdout: (args.includes('--include') ? 'HTTP/2.0 200 OK\r\n\r\n' : '') + JSON.stringify(value)});
+    if (endpoint === `repos/owner/repo/issues/${issue.number}`) {
+      assert.equal(method, 'GET');
+      return output(issue);
+    }
+    const id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(endpoint)?.[1];
     assert.ok(id, `unexpected endpoint ${endpoint}`);
     if (method === 'PATCH') {
       const { body } = JSON.parse(options.input); patches.push({ id, body }); Object.assign(comments.get(id), { body, updated_at: at(serverTime()) });
       if (lostReply) return { stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}' };
     } else assert.equal(method, 'GET');
-    return { stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(comments.get(id))}` };
+    return output({...comments.get(id), issue_url: `https://api.github.com/repos/owner/repo/issues/${issue.number}`});
   };
   return { comments, patches, execFile };
 }
@@ -350,14 +359,24 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') {
-        const id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(args[4] ?? '')?.[1];
+        const methodAt = args.findIndex(arg => ['--method', '-X'].includes(arg));
+        const method = methodAt < 0 ? 'GET' : args[methodAt + 1];
+        const endpoint = args.find(arg => /^repos\//.test(arg));
+        const issueNumber = /^repos\/owner\/repo\/issues\/([0-9]+)$/.exec(endpoint ?? '')?.[1];
+        if (issueNumber && method === 'GET') {
+          const issue = f.issues.find(row => row.number === Number(issueNumber));
+          return {code: issue ? 0 : 1, stdout: `HTTP/2.0 ${issue ? '200 OK' : '404 Not Found'}\r\n\r\n${JSON.stringify(issue ?? {})}`, stderr: ''};
+        }
+        const id = /^repos\/owner\/repo\/issues\/comments\/([0-9]+)$/.exec(endpoint ?? '')?.[1];
         if (id && f.claimComments.has(id)) {
           // Real GitHub: an edit sets the comment's updated_at and the issue's updated_at to the edit time.
-          if (args[3] === 'PATCH') {
+          if (method === 'PATCH') {
             const { body } = JSON.parse(options.input); f.patches.push({ id, body }); Object.assign(f.claimComments.get(id), { body, updated_at: at(f.time) });
             for (const row of f.issues) if ((f.issueComments[row.number] ?? []).some(comment => String(comment.id) === id)) row.updated_at = at(f.time);
           }
-          return { code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(f.claimComments.get(id))}`, stderr: '' };
+          const number = Object.entries(f.issueComments).find(([,rows]) => rows.some(row => String(row.id) === id))?.[0];
+          const comment = {...f.claimComments.get(id), ...(number ? {issue_url: `https://api.github.com/repos/owner/repo/issues/${number}`} : {})};
+          return { code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(comment)}`, stderr: '' };
         }
         if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
         if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' };
@@ -373,6 +392,7 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
     herdr: async args => {
       if (args[0] === 'status') return { running: true };
       const live = { pane_id: 'p1', workspace_id: 'w1', cwd, foreground_cwd: cwd, tab_id: 't1', terminal_id: 'term1', agent: 'codex', agent_status: 'idle', agent_session: 'session' };
+      if (args[0] === 'pane' && args[1] === 'list') return { result: { type: 'pane_list', panes: f.agentStarted ? [live] : [] } };
       if (args[0] === 'workspace') return { result: { type: 'workspace_info', workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
       if (args[0] === 'pane' && args[1] === 'get') return { result: { type: 'pane_info', pane: live } };
       if (args[0] === 'agent' && args[1] === 'get') { if (!f.agentStarted) throw Object.assign(Error('agent_not_found'), { code: 'agent_not_found' }); return { result: { type: 'agent_info', agent: live } }; }
@@ -808,8 +828,8 @@ test('tick: the 24-hour alert is recorded in the own claim comment and skipped w
 
 test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most the one stuck alert', async t => {
   // Both ceilings at once (#3041 review S2): the rule names both and keeps the cancel step of the repair limit.
-  for (const ceiling of ['repair limit', 'takeover limit', 'takeover limit and the repair limit']) {
-    const repair = ceiling.includes('repair limit'), takeover = ceiling.includes('takeover limit');
+  for (const ceiling of ['repair limit', 'takeover limit', 'takeover limit and the repair limit', 'base integration limit']) {
+    const integration = ceiling.includes('integration limit'), repair = ceiling.includes('repair limit') || integration, takeover = ceiling.includes('takeover limit');
     const f = await tickFixture(t);
     f.issues = [tickIssue(7, { labels: [{ name: 'pdd:working' }, { name: 'pdd:stuck' }] })];
     const stuckSince = at(NOW - 3.75 * hour); // due at the first tick after start
@@ -818,14 +838,68 @@ test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most 
     if (repair) {
       mkdirSync(join(f.cwd, 'pdd', 'runs', '7'), { recursive: true });
       writeFileSync(join(f.cwd, 'pdd', 'runs', '7', 'status.json'), JSON.stringify({ v: 1, number: 7, repo: f.state().repo, state: 'stuck', parkReason: 'Repair limit reached in build: take the stuck path', repairLimit: { area: 'build', step: 'build', at: NOW } }));
+      if (integration) writeFileSync(join(f.cwd, 'pdd', 'runs', '7', 'status.json'), JSON.stringify({ v: 1, number: 7, repo: f.state().repo, state: 'stuck', integrationLimit: { area: 'build', step: 'build', at: NOW } }));
     }
     for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
     const rules = timeRules(f, 'stuck-claim');
     assert.equal(rules.length, 1, `${ceiling}: one rule`);
+    if (integration) {
+      assert.match(rules[0].reason, /integration/);
+      assert.match(rules[0].reason, /workflow cancel 7/);
+      assert.doesNotMatch(rules[0].reason, /changed approach/);
+      continue;
+    }
     assert.match(rules[0].reason, new RegExp(`stuck for 4 hours after the ${ceiling}\\. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet\\. `));
     assert.ok(rules[0].reason.includes(repair
       ? 'To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel 7 in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.'
       : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'), rules[0].reason);
     assert.doesNotMatch(rules[0].reason, /changed approach/);
   }
+});
+
+
+async function expiredNoRunClaimTick(t, ownership) {
+  const f = await tickFixture(t);
+  f.issues = [tickIssue(7, {labels:[{name:'pdd:working'}, {name:'pdd:stuck'}]})];
+  assert.equal((await f.start()).exitCode, 0);
+  const state = f.state();
+  let githubTime = f.time - 5 * hour;
+  const github = createGithubRepoFake({repository:repo, owner:'owner', issues:10, now:() => githubTime});
+  const comment = github.claim(7, {coordinatorId:state.coordinatorId, machine:state.machine});
+  const eventId = github.issues.get(7).timeline.filter(event => event.label === 'pdd:working').at(-1).id;
+  github.label(7, 'pdd:stuck');
+  githubTime = f.time;
+  const claim = {issue:key(7), owner:state.coordinatorId, coordinatorId:state.coordinatorId, machine:state.machine,
+    commentId:String(comment.id), labelEventId:String(eventId), active:false, expired:true, lastSeen:at(NOW - 5 * hour)};
+  f.claims = () => [claim];
+  const originalRun = f.ports.run;
+  f.ports.run = async (command, args, options={}) => command === 'gh'
+    ? github.gh(args, options) : originalRun(command, args, options);
+  f.ports.authority = {read:async () => ({authority:'trusted'})};
+  f.ports.owners = {read:async () => ({json:JSON.stringify(ownership(claim, state))})};
+  await f.tick();
+  return {f, claim, github};
+}
+
+test('3157: tick releases an expired own no-run claim after complete custody evidence', async t => {
+  const {f, github} = await expiredNoRunClaimTick(t, (observed, state) => ({
+    localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:true, runs:[], claims:[observed],
+  }));
+  assert.deepEqual(github.issues.get(7).labels, [], 'the public tick removed both labels through the shared release path');
+  assert.deepEqual(github.since(0).calls.filter(call => call.method === 'DELETE').map(call => call.endpoint.split('/labels/').at(-1)),
+    ['pdd%3Astuck', 'pdd%3Aworking']);
+  assert.deepEqual(f.state().githubIntake.claims, [], 'only the released era leaves intake');
+});
+
+test('3157: no-run expiry keeps unknown custody and a replacement era for later reconciliation', async t => {
+  for (const [name, ownership] of [
+    ['unknown custody', (claim, state) => ({localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:false, runs:[], claims:[claim]})],
+    ['replacement era', (claim, state) => ({localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:true, runs:[],
+      claims:[{...claim, commentId:'902', labelEventId:'702'}]})],
+  ]) await t.test(name, async () => {
+    const {f, claim, github} = await expiredNoRunClaimTick(t, ownership);
+    assert.deepEqual(github.issues.get(7).labels, ['pdd:working', 'pdd:stuck'], name + ': labels stay held');
+    assert.deepEqual(f.state().githubIntake.claims.map(row => [row.commentId, row.labelEventId]),
+      [[claim.commentId, claim.labelEventId]], name + ': the observed era stays for normal reconciliation');
+  });
 });

@@ -82,7 +82,7 @@ cost data with incomplete coverage. Preserve workflow fields, `updatedAt`,
 `journalSeq`, index and completion journal. Do not deliver metrics on this route.
 Save optional `progressAt` (milliseconds) as the prior status file's mtime on the
 first cost-only publication; later cost publications retain it. Ordinary
-`writeRun` and `updateRun` clear `progressAt`, so the newly published file's mtime
+`writeRun` and ordinary `updateRun` clear `progressAt`, so the newly published file's mtime
 again marks workflow activity. Read the prior mtime through the injected run
 filesystem. Publish cost data atomically; a failed callback or publication leaves
 the prior record intact. This keeps cost polling from postponing stalled-run
@@ -101,6 +101,8 @@ before selecting a current issue record or any other active run. Use the actual
 archive directory as runDir even for a legacy record with a stale saved path.
 Preserve the runner's replacedBy, chat closed, endedAt and openedAt fields through
 storage. An archived worktree must never resolve to the replacement run.
+
+For workflow session observations and cleanup only, updateRun accepts ports.preserveProgress=true. Preserve the callback's progressAt across publication while still advancing updatedAt, journalSeq, derived view and the index. The runner initializes missing progressAt from the pre-maintenance updatedAt, then startedAt, then 0. Ordinary worker mutations retain the default clearing rule, so actual progress restarts idle grace. This is not the cost-only route and cannot suppress journal capture or ordinary ownership checks.
 
 ## Dependencies
 

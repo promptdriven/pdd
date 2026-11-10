@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {fixture, nativeCase, success, assertReviewCosts} from './helpers/recover-guidance-cli-fixture.mjs';
+import {fixture, nativeCase, success, assertReviewCosts, assertContinuationPr1} from './helpers/recover-guidance-cli-fixture.mjs';
 
 // Independent oracle: user_stories/recover-guidance-code-review.md,
-// Rules to check and AC2--AC5, plus the unchanged native case inventory.
+// Rules to check and AC2--AC5, including the validated post-consent PR description refresh.
 // The complete finite domain is:
 //   selection {empty, one unchanged prompt}
 //   x review {reviewed, absent, stale, revoked}
@@ -72,7 +72,8 @@ function prompts(f) {
 function assertContinuation(f, before) {
   const after = f.read();
   assert.equal(after.area, 1); assert.equal(after.gate, null);
-  for (const field of ['runId','root','sourceRoot','baseSha','baseBranch','pr','done','changes']) assert.deepEqual(after[field], before[field], field);
+  for (const field of ['runId','root','sourceRoot','baseSha','baseBranch','done','changes']) assert.deepEqual(after[field], before[field], field);
+  assertContinuationPr1(f, before, after);
   assert.deepEqual(after.decisions.slice(0, -1), before.decisions);
   assert.equal(after.decisions.length, before.decisions.length + 1);
   const decision = after.decisions.at(-1);

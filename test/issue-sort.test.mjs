@@ -9,6 +9,22 @@ const graph = async w => projectIssueGraph({ snapshot: await read(w) });
 const node = async (w, n = 1) => (await graph(w)).nodes.find(x => x.key === key(n));
 const fixed = w => ({ ...w.record(1).status, state: 'fixed', fix: 'https://github.com/example/project/pull/90' });
 
+test('ordinary labels do not reserve an issue; assignment still does', async () => {
+  for (const label of ['person-work', 'pdd:manual']) {
+    const w = fixture();
+    w.issues[0].labels = [label];
+    w.save(w.record(1)); w.review(1);
+    const snapshot = await read(w);
+    assert.deepEqual(snapshot.issues[0].holds, []);
+    assert.equal(projectIssueGraph({snapshot}).nodes.find(row => row.key === key(1)).eligible, true);
+
+    w.issues[0].assignees = [{login:'person'}];
+    assert.equal((await node(w)).eligible, false);
+    await reconcileDependencyIntake({repository, mode:'auto'}, w.ports);
+    assert.equal(w.writes.length, 0);
+  }
+});
+
 test('a current dependency review cannot start an unsorted issue', async () => {
   const w = fixture(); w.review(1);
   assert.equal((await node(w)).eligible, false, 'new work must wait for sort');

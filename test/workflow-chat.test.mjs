@@ -49,7 +49,7 @@ test('Codex chats: new and resumed launches keep PDD_BIN and PDD_AGENT_SESSION u
   const file = join(root, 'start.md'); writeFileSync(file, 'Use the pdd-bug skill.');
   const id = '11111111-1111-4111-8111-111111111111';
   for (const [form, line] of [['new', installed.chatCommand({ agent: 'codex', cwd, messageFile: file, configDir: root })], ['resume', installed.chatCommand({ agent: 'codex', cwd, resumeId: id, configDir: root })]]) {
-    const out = JSON.parse(execFileSync('/bin/sh', ['-c', line], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
+    const out = JSON.parse(execFileSync('/bin/sh', ['-c', line], { cwd: root, env: { HOME: root, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' }));
     const { set, config } = codexConfigs(out.argv);
     assert.deepEqual(set, { PDD_BIN: pddBin, PDD_AGENT_SESSION: '1' }, `${form}: expected shell_environment_policy.set PDD_BIN and PDD_AGENT_SESSION, got -c values ${JSON.stringify(out.argv)}`);
     assert.deepEqual({ bin: out.bin, session: out.session }, { bin: pddBin, session: '1' }, `${form}: the env prefix stays`);

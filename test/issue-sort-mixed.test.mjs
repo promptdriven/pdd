@@ -213,9 +213,11 @@ for (const kind of ['part','sub','blocker']) test(`native ${kind} mutation has o
   const raw = { id: 2, number: 2, html_url: key(2), title: 'runtime part of #1', body: 'scoped evidence', assignees: [] };
   let allowed = true;
   const native = createDependencyReadPorts({}, { admitMutation: async action => action(), execFile: async (_file, args, options) => {
-    const method = args[args.indexOf('--method')+1], endpoint = args[args.indexOf('--method')+2];
+    const method = args.includes('--method') ? args[args.indexOf('--method')+1] : 'GET', endpoint = args.find(word=>/^repos\//.test(word));
     if (method !== 'GET') writes.push({ method, endpoint });
     const reply = value => ({ code: 0, stdout: JSON.stringify(value) });
+    const subject = new RegExp(`^repos/${repository}/issues/(1|2)$`).exec(endpoint??'');
+    if (method === 'GET' && subject) return reply({...raw,number:Number(subject[1]),labels:[],assignees:[]});
     if (kind === 'part') return reply(raw);
     if (method === 'POST') { relationships.push({ id: 2 }); return reply({}); }
     return reply(relationships);
@@ -234,7 +236,8 @@ for (const kind of ['part','sub','blocker']) test(`ownership arriving inside nat
   let allowed = true, posts = 0;
   const native = createDependencyReadPorts({}, { admitMutation: async action => { allowed = false; return action(); }, execFile: async (_file, args) => {
     if (args[args.indexOf('--method')+1] === 'POST') posts++;
-    return { code: 0, stdout: '[]' };
+    const endpoint=args.find(word=>/^repos\//.test(word)),subject=new RegExp(`^repos/${repository}/issues/(1|2)$`).exec(endpoint??'');
+    return {code:0,stdout:JSON.stringify(subject ? {number:Number(subject[1]),labels:[],assignees:[]} : [])};
   } });
   const action = () => kind === 'part' ? native.github.createSortPart?.({ repository, title: 'part', body: 'evidence', checkOwnership: async () => allowed }) : native.github.ensureSortLink?.({ repository, issue: 1, childId: '2', kind, checkOwnership: async () => allowed });
   // The explicit result assertion also detects a missing native boundary on base.

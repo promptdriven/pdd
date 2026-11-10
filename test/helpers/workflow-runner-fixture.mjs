@@ -76,7 +76,7 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
   }
   f.prompts = [];
   f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, queueRoot: join(base, 'suite-queue'), layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, sleep: async ms => { f.clock += ms; }, findNativeSessions: stage => f.herdr.findNativeSessions(stage),
-    env: { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), PDD_SUITE_QUEUE: undefined, PDD_VM_SUITE_LOCK: undefined, PDD_INTERPRETER_QUEUE: join(base, 'interpreter-queue'), CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
+    env: { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), PDD_SUITE_QUEUE: undefined, PDD_VM_SUITE_LOCK: undefined, CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };
   f.run = () => startRun({ name, issue: '17', agent, cwd: source, packageRoot }, f.ports);
@@ -84,4 +84,17 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
   f.tick = (ms = 1000) => { f.clock += ms; };
   f.agentPorts = extra => ({ ...f.ports, isTTY: false, env: { ...f.ports.env, PDD_AGENT_SESSION: '1' }, ...extra });
   return f;
+}
+
+// Explicit live ownership evidence for synthetic automatic runs. Capture it once;
+// later edits to saved origin must not change the observed winner.
+export function matchingClaimObservation(run) {
+  const {repository, coordinatorId, machine, claim} = run.automaticOrigin;
+  assert.equal(repository, run.repo);
+  return {localOwner: coordinatorId, claims: [{issue: run.issue.url, active: true,
+    owner: coordinatorId, coordinatorId, machine, ...claim}]};
+}
+export function matchingClaimPorts(run) {
+  const observation = matchingClaimObservation(run);
+  return {read: async () => ({json: JSON.stringify(observation)})};
 }

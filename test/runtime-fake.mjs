@@ -1,6 +1,5 @@
 import './helpers/test-home.mjs';
 import assert from 'node:assert/strict';
-import { after } from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -131,13 +130,6 @@ export function portsFor(env, extra = {}) {
     randomUUID: () => { clock.uuids += 1; return randomUUID(); },
     gh: args => { clock.gh.push(args); return args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}\n` } : { status: 0, stdout: 'octo 4242\n' }; },
     onInterrupt: handler => { interrupts.add(handler); return () => { interrupts.delete(handler); }; }, ...extra };
-  let queueParent = ports.env.PDD_STATE_DIR ?? ports.env.HOME;
-  if (!queueParent && !ports.env.PDD_INTERPRETER_QUEUE) {
-    queueParent = mkdtempSync(join(tmpdir(), 'pdd-runtime-ports-'));
-    after(() => rmSync(queueParent, { recursive: true, force: true }));
-  }
-  // Native child callers reuse the supplied environment as well as these ports.
-  ports.env = Object.assign(ports.env, { PDD_INTERPRETER_QUEUE: ports.env.PDD_INTERPRETER_QUEUE ?? join(queueParent, 'interpreter-queue') });
   return { ports, clock };
 }
 

@@ -36,7 +36,7 @@ async function setup(t, edit) {
     job.result.report.evaluation.requested_model = identity.requested_model;
     return { status: 200, json: job };
   });
-  const env = { HOME: fixture.home, PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '8', PDD_STATE_DIR: fixture.state };
+  const env = { HOME: fixture.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: fixture.state };
   const { ports, clock } = portsFor(env);
   const invokeWith = async (p, words = [], options = {}, cache = true) => {
     p.stdout.text = ''; p.stderr.text = '';
@@ -49,11 +49,8 @@ async function setup(t, edit) {
   const readBatch = async (name, p = ports, options = {}) => { p.stdout.text = ''; p.stderr.text = ''; return runCheck({ words: [name], options: { '--read': true, '--json': true, ...options }, cwd: fixture.repo, cache: true }, p); };
   return { ...fixture, fake, ports, clock, env, invoke, invokeWith, readBatch, state };
 }
-// Cache actors share cache files, while each actor owns its admission queue.
-// Busy adaptation in one actor must not turn this cache barrier into a queue test.
 function actorPorts(ctx, extra = {}) {
-  ctx.actors = (ctx.actors ?? 0) + 1;
-  return portsFor({...ctx.env, PDD_INTERPRETER_QUEUE: join(ctx.env.PDD_STATE_DIR, `interpreter-actor-${ctx.actors}`)}, extra);
+  return portsFor({ ...ctx.env }, extra);
 }
 function bump(ctx, file) { const path = join(ctx.repo, file), doc = read(path); doc.initial_world.changed = (doc.initial_world.changed ?? 0) + 1; write(path, doc); }
 function findBatch(dir, name) {

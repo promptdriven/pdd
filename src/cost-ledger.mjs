@@ -1,4 +1,4 @@
-// Generated from prompts/cli/cost-ledger.prompt.md (sha256: 43dec6ce93d1369e4793ec704e01cd03491d140920f01d7c1acc9698df5cd2c9).
+// Generated from prompts/cli/cost-ledger.prompt.md (sha256: b205da6f02f5e138f2e198de3533689069f0c3d4a717f5b20d30c5a7fd21b823).
 import * as nativeFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -66,6 +66,25 @@ function tokenValues(usage, agent) {
 }
 const savedChats = run => [...(run?.chats ?? []), ...(run?.abandonedChats ?? []),
   ...[run?.chatReplacement?.original, run?.chatReplacement?.replacement].filter(Boolean)];
+function auditChats(run, fs, cost, shared = []) {
+  if(!run?.runDir) return [];
+  const unavailable=()=>cost.coverage.push('audit-session-unavailable');
+  let files;
+  try {files=fs.readdirSync(join(run.runDir,'audits'));}
+  catch(e) {if(e.code!=='ENOENT')unavailable();files=[];}
+  const records=[...shared,...files.filter(n=>/^\d+\.json$/.test(n)).map(name=>readJson(fs,join(run.runDir,'audits',name)))];
+  const chats=[];
+  for(const audit of records) {
+    if(audit?.schema!=='pdd.audit.v1' || typeof audit.runId!=='string' || !audit.runId
+      || !Number.isSafeInteger(audit.pr) || audit.pr<=0
+      || ![audit.merge,audit.parent].every(v=>typeof v==='string' && /^[0-9a-f]{40,64}$/i.test(v))
+      || !audit.chat || typeof audit.chat!=='object' || Array.isArray(audit.chat)) {unavailable();continue;}
+    if(audit.runId!==run.runId) continue;
+    if(audit.chat.session?.id) chats.push(audit.chat);
+    else unavailable();
+  }
+  return chats;
+}
 function captureTokens(cost, run, chats, ports, at) {
   const fs = ports.sessionFs ?? ports.fs ?? nativeFs, env = ports.env ?? process.env, home = env.HOME || homedir();
   const visited = new Set();
@@ -76,7 +95,7 @@ function captureTokens(cost, run, chats, ports, at) {
     const account = `${agent}:${hash(config)}`, identity = hash(`${account}:${id}`);
     if (visited.has(identity)) continue; visited.add(identity);
     const saved = cost.sessions[identity] ?? { account, agent, offset: 0, usage: emptyTokens(), messages: {} };
-    const file = sessionFile(fs, config, agent, id, chat, run.root, at);
+    const file = sessionFile(fs, config, agent, id, chat, chat.root ?? run.root, at);
     const batch = file ? rows(fs, file, saved.offset, agent === 'codex') : null;
     if (!batch) { cost.coverage.push('session-unavailable'); continue; }
     if (batch.backlog) cost.coverage.push('session-backlog');
@@ -160,7 +179,7 @@ export function captureCosts(before, run, ports = {}) {
   const at = (ports.now ?? Date.now)(), fs = ports.fs ?? nativeFs;
   const cost = structuredClone(run.cost?.schema === 'pdd.cost.v1' ? run.cost : before?.cost?.schema === 'pdd.cost.v1' ? before.cost : initial(run, at));
   cost.coverage = [];
-  const chats = [...savedChats(before), ...savedChats(run)];
+  const chats = [...savedChats(before), ...savedChats(run), ...auditChats(run, fs, cost, ports.auditRecords)];
   if (ports.skipCostSessions) cost.coverage.push('session-capture-deferred');
   else captureTokens(cost, run, chats, ports, at);
   capturePerson(cost, before, run, at);

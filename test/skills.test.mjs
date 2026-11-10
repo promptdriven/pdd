@@ -773,7 +773,7 @@ test('AUTOPILOT6: risk 4-5, a split verdict or a change to check, merge or appro
 // Wrong: auto mode merges without the RUNBOOK request rule, edits approval fields, or merges after strict mode refuses.
 test('AUTOPILOT7: explicit operator choice or standing delegation authorizes covered work; checker evidence remains separate', () => {
   const rule = "An agent may merge only after the person's explicit chat request";
-  assert.ok(readFileSync(join(root, 'RUNBOOK.md'), 'utf8').split('\n')[65].includes(rule), 'RUNBOOK.md:66');
+  assert.ok(readFileSync(join(root, 'RUNBOOK.md'), 'utf8').includes(rule), 'RUNBOOK.md merge authorization');
   has('pdd-merge/SKILL.md', 'An operator’s explicit auto setup and start, or an applicable standing delegation, supplies it for eligible work; a configuration read alone does not.',
     'A checker PASS is separate evidence, never approval words.', '`pdd workflow approve N --said -`', 'Strict mode requires the person terminal; never bypass it or edit approval fields.',
     'Post one PR comment identifying the person’s actual explicit merge authorization without fabricating a quotation.');
@@ -822,10 +822,10 @@ test('AUTOPILOT12: claim remains until removed or expired and competing coordina
     'Only the owner of the current live claim removes it', 'Do not remove `pdd:working`, also when your run ends');
 });
 
-// Wrong: a fixed number of runs, or three runs that change one prompt file at once.
-test('AUTOPILOT13: runs start by room with no fixed cap, and at most 2 runs change one prompt file', () => {
-  const text = has('pdd-autopilot/SKILL.md', 'There is no fixed number of runs;',
-    'At most 2 runs change one prompt file; skip a 3rd and take the next free issue.');
+// Wrong: a fixed run count or an extra admission cap based on shared files.
+test('AUTOPILOT13: runs use the optional working cap without a shared-file admission cap', () => {
+  const text = has('pdd-autopilot/SKILL.md', 'There is no fixed number of runs;');
+  assert.doesNotMatch(text, /(?:at most\s+\d+\s+runs?[^.]*prompt file|skip a\s+\d+(?:st|nd|rd|th))/i);
   assert.match(text, /`--runs N` sets (?:an optional|a) cap/);
   assert.doesNotMatch(text, /max_runs|at most 3 runs/i);
 });

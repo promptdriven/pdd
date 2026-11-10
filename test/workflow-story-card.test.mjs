@@ -267,6 +267,20 @@ test('#2962 the run option --through code is saved and used at the card', async 
   assert.equal(refused.exitCode, 1);
 });
 
+test('#3103 a normal run without saved Story coverage keeps its person gate', async t => {
+  const f = await storyGate(t);
+  assert.equal((await approveRun({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
+  const run = f.record();
+  delete run.storyApproval;
+  writeRun(run);
+  saveCheck(f);
+  await f.done('check');
+  if (!f.record().done.try) await f.done('try', 'synthetic skip', {skipped: 'no simulation'});
+  assert.equal(f.record().storyApproval, undefined);
+  assert.equal(f.record().gate.kind, 'approve-pr');
+  assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0);
+});
+
 test('#2962 strict mode keeps today\'s gates: no card, try is asked, no automatic PR 1, the code question stays', async t => {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
   f.ports.env.PDD_STATE_DIR = join(f.state, 'runtime');

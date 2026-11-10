@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 2544e1a9a8bfad496013e9d3acf1cdcb447c7c9e4d867850229d645ccd79ff09).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 80831c2b53efc046ac3d7f9d8506a0bea464073023e72c6455f276ab880d8876).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -178,6 +178,13 @@ export function pr1Order(facts) {
 // is missing, stale or not finished keeps the status from ✅: it waits for it, or it is blocked with the reason.
 function proofRows(facts) {
   const r = facts.records ?? {}, rows = [], blocked = [], waiting = [];
+  const small = facts.workflow === 'small-change' && facts.single === true && facts.layout === 'code';
+  if (small) {
+    const checklist = r.checklist;
+    rows.push(['Issue checklist', checklist?.status === 'recorded' ? `${checklist.items.length} items; ${checklist.mustFix.length} must-fix` : checklist?.status ?? 'missing', '—']);
+    if (!checklist || checklist.status === 'missing') waiting.push('the issue checklist');
+    else if (checklist.status !== 'recorded' || checklist.mustFix.length) blocked.push('issue checklist has must-fix items');
+  }
   const manual = facts.mode === 'manual', code = facts.layout === 'code', pair = code && !facts.single;
   if (facts.pending) waiting.push('publication');
   // GitHub shows a head that pdd did not publish: every record below is for the older head.
@@ -206,23 +213,25 @@ function proofRows(facts) {
     }
     // #3029: the formal status that pdd read on its own; a Story with `## Rules to check` (rulesToCheck not false) needs a
     // recorded Proved or Not applicable result. With scenario vectors the code replay needs a typed block, so the row is
-    // never "not needed" there. Otherwise, without such a Story, only a recorded failure holds the PR.
-    const status = replay ? formalStatusText(replay.formal, r.rulesToCheck) : null, needed = r.rulesToCheck !== false;
+    // never "not needed" there. Without replay, malformed or stale supplied formal evidence also holds the PR.
+    const formal = replay?.formal ?? r.formal;
+    const status = replay || formal || small ? formalStatusText(formal, small ? true : r.rulesToCheck) : null;
+    const needed = small || (replay ? r.rulesToCheck !== false : r.rulesToCheck === true);
     if (status?.status === 'recorded') {
-      const formal = replay.formal, scope = inertText(formal.scope, 80);
-      const result = FORMAL[formal.result] ?? (formal.result === 'failed' ? `Failed at ${replay.counterexample ? codeSpan(clip(oneLine(replay.counterexample), 80)) : 'the counterexample in Details'}`
+      const scope = inertText(formal.scope, 80), counterexample = r.counterexample ?? replay?.counterexample;
+      const result = FORMAL[formal.result] ?? (formal.result === 'failed' ? `Failed at ${counterexample ? codeSpan(clip(oneLine(counterexample), 80)) : 'the counterexample in Details'}`
         : formal.result === 'not_applicable' ? `Not applicable: ${inertText(formal.reason, 120)}` : `Not run: ${inertText(formal.reason, 120)}`);
       const control = formal.control_outcome === 'assertion_failure' ? '✗ fails (as expected)' : formal.control_outcome === 'not_run' ? '—' : inertText(formal.control_outcome, 40);
       rows.push([`Formal check${scope ? ` (${scope})` : ''}`, result, control]);
-      if (formal.result === 'failed') blocked.push(`formal check failed${replay.counterexample ? ` at ${codeSpan(clip(oneLine(replay.counterexample), 80))}` : ''}`);
-      else if (needed && r.formalStep && formal.result === 'not_run') blocked.push('formal check not run');
-    } else if (replay && r.formalStep) {
+      if (formal.result === 'failed') blocked.push(`formal check failed${counterexample ? ` at ${codeSpan(clip(oneLine(counterexample), 80))}` : ''}`);
+      else if (needed && (r.formalStep || small) && formal.result === 'not_run') blocked.push('formal check not run');
+    } else if (status && (r.formalStep || small)) {
       // The same words, reason and repair step as the replay header; never a bare "not recorded".
-      if (status.notNeeded) rows.push(['Formal check', 'not needed (no Rules to check in the Story)', '—']);
+      if (status.notNeeded && (replay || status.status === 'missing')) rows.push(['Formal check', 'not needed (no Rules to check in the Story)', '—']);
       else {
         rows.push(['Formal check', cell(`${status.words} — ${status.detail}. Repair: ${status.repair}.${status.note ? ` ${status.note}` : ''}`, 500), '—']);
         if (status.status === 'missing' && r.formalDone !== true) waiting.push('the formal result');
-        else blocked.push(`formal check ${inertText(status.words, 80)}`);
+        else if (replay || needed || status.status !== 'missing') blocked.push(`formal check ${inertText(status.words, 80)}`);
       }
     } else if (r.formalStep) {
       // Without replay evidence (a small change) pdd records only that the formal step ran.
@@ -231,14 +240,17 @@ function proofRows(facts) {
     }
     const proof = r.proof;
     if (proof) {
+      const coverage = facts.single && facts.workflow === 'small-change' && proof.kind === 'coverage' && proof.status === 'old-passes';
       const counted = Number.isSafeInteger(proof.total) ? ` (${proof.passed} of ${proof.total} tests)` : '';
       const cells = { proved: [`✓ pass${counted}`, '✗ fail (as expected)'], 'old-passes': [`✓ pass${counted}`, '✓ pass (should fail)'], 'wrong-reason': [`✓ pass${counted}`, '✗ fails for another reason'],
         'head-fails': ['✗ fail', '—'], 'no-changed-tests': ['no changed tests', '—'], 'not-run': ['not run', '—'], stale: ['⏳ stale (rerun `pdd workflow prove`)', '—'],
         unavailable: ['unavailable', '—'], pending: ['⏳ pending', '—'] }[proof.status] ?? [`✗ ${inertText(proof.status, 40)}`, '—'];
       // A feature table names its last column "Planted mistake"; this cell is the old code, so it says so.
       if (facts.workflow === 'feature' && cells[1] !== '—') cells[1] = `old code: ${cells[1]}`;
-      rows.push(['Regression tests (old-code proof)', ...cells]);
-      if (PROOF_PROBLEM[proof.status]) blocked.push(PROOF_PROBLEM[proof.status]);
+      if (coverage) cells[1] = '✓ pass (coverage only; not a defect proof)';
+      rows.push([coverage ? 'Coverage validation' : 'Regression tests (old-code proof)', ...cells]);
+      if (coverage) { /* Both snapshots pass; this is coverage, not a defect proof. */ }
+      else if (PROOF_PROBLEM[proof.status]) blocked.push(PROOF_PROBLEM[proof.status]);
       else if (proof.status === 'stale') waiting.push('a fresh old-code proof');
       else if (proof.status === 'not-run' && pair) waiting.push('the old-code proof');
       else if (proof.status === 'no-changed-tests' && pair) blocked.push('the old-code proof found no changed tests');
@@ -287,6 +299,16 @@ export const sameReadableTop = (a, b) => [a, b].map(text => String(text ?? '').t
 function table(header, rows) {
   return [`| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows.map(row => `| ${row.join(' | ')} |`)];
 }
+function issueChecklist(facts) {
+  if (facts.workflow !== 'small-change' || facts.single !== true) return [];
+  const items = facts.records?.checklist?.items ?? [];
+  if (!items.length) return [];
+  return ['## Issue checklist', '', ...table(['Item', 'Request', 'State', 'Source / quote', 'Evidence / exclusion'], items.map(item => [
+    cell(item.id, Infinity), cell(item.request, Infinity), cell(item.state),
+    cell(`${item.source}: ${item.quote}`, Infinity),
+    cell(item.state === 'excluded' ? `${item.exclusion?.reason ?? ''}: "${item.exclusion?.quote ?? ''}"` : item.evidence, Infinity),
+  ])), ''];
+}
 function casesTable(facts) {
   const cases = facts.fields?.cases ?? [];
   if (!cases.length) return [];
@@ -310,9 +332,11 @@ function changes(facts, fileLimit) {
 // "Fix" is a closing keyword: its label carries a zero-width space, so "**Fix:** #5 …" never closes issue #5.
 function summary(facts) {
   const f = facts.fields ?? {}, bullet = (label, value) => value ? [`- **${label}:** ${inertText(value)}`] : [];
+  const recorded = facts.layout === 'spec' ? '' : proofRows(facts).rows.filter(row => /^(?:Approved cases|Formal check|Regression tests|Coverage validation)/.test(row[0]))
+    .map(([label, result, control]) => `${label}: ${result}${control && control !== '—' ? `; ${label.startsWith('Formal check') || facts.workflow === 'feature' && label.startsWith('Approved cases') ? 'control' : 'old code'}: ${control}` : ''}`).join('. ');
   const rows = facts.layout === 'spec' ? [...bullet('Problem', f.problem), ...bullet('This PR', f.thisPr || facts.thisPr), ...bullet('Verdict', f.verdict)]
-    : facts.single ? [...bullet('Problem', f.problem), ...bullet('Change', f.change || f.fix), ...bullet('Result', f.result)]
-    : [...bullet('Problem', f.problem), ...bullet('Cause', f.cause), ...bullet('Fix\u200b', f.fix), ...bullet('Result', f.result)];
+    : facts.single ? [...bullet('Problem', f.problem), ...bullet('Change', f.change || f.fix), ...(recorded ? [`- **Result:** ${recorded}.`] : [])]
+    : [...bullet('Problem', f.problem), ...bullet('Cause', f.cause), ...bullet('Fix\u200b', f.fix), ...(recorded ? [`- **Result:** ${recorded}.`] : [])];
   return rows.length ? ['## Summary', '', ...rows, ''] : [];
 }
 function approvalLine(facts) {
@@ -353,7 +377,7 @@ export function readablePrTop(facts, { fileLimit = MAX_FILES } = {}) {
   const header = facts.layout === 'spec' ? ['Check', 'Result'] : ['Check', 'New code', facts.workflow === 'feature' ? 'Planted mistake' : 'Old code'];
   const lines = [`${prStatus(facts)}${stamp(facts.updatedAt)}`, '', ...(facts.notFixed ? [NOT_FIXED_LINE, ''] : []),
     ...(stories.length ? ['## User story', '', ...stories.flatMap((story, index) => [...(index ? [''] : []), inertText(story, 600)]), ''] : []),
-    ...summary(facts), ...casesTable(facts), ...changes(facts, fileLimit),
+    ...summary(facts), ...issueChecklist(facts), ...casesTable(facts), ...changes(facts, fileLimit),
     `## ${facts.layout === 'spec' ? 'Checks' : 'Proof'}`, '', ...table(header, rows), '',
     ...(facts.layout === 'spec' ? [approvalLine(facts), ''] : []), ...readableNextLines(facts)];
   return { text: lines.join('\n'), notes };

@@ -79,6 +79,6 @@ export function smallChange() {
     stories: [], storyNote: 'this run changes no Story file',
     fields: { problem: 'The help text says "recieve".', change: 'fix the spelling in `src/help.js`.', result: 'the help text says "receive".', cases: [], notes: {} },
     diff: { added: 1, removed: 1, files: [{ path: 'src/help.js', added: 1, removed: 1 }] },
-    records: { promptTests: null, lint: null, replay: null, proof: { status: 'proved', passed: 3, total: 3 }, review: null, formalStep: true, formalDone: true, ci: 'pending', checker: null, drafts: [] },
+    records: { promptTests: null, lint: null, replay: null, checklist: {status: 'recorded', items: [{id: 'R1', request: 'Correct spelling', source: 'issue/12', quote: 'Correct spelling', state: 'done', evidence: 'help test'}], mustFix: []}, formal: {status: 'recorded', result: 'not_applicable', scope: 'Help wording', reason: 'Wording only', control_outcome: 'not_run'}, proof: { status: 'proved', passed: 3, total: 3 }, review: null, formalStep: true, formalDone: true, ci: 'pending', checker: null, drafts: [] },
     approval: { kind: 'words', items: [{ route: 'said', at: Date.parse('2026-11-06T12:00:00Z'), words: 'ok, fix the typo' }] }, pr1: null, stacked: false };
 }

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: a27ba959ee6d3f00a69598392f8c2c8099a7ec838a025492621a59e62e956c69).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 60fdb78236a539bf97b9126e0ce66595c6cee86d8c0975a96be07e987daa2f3b).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -640,7 +640,7 @@ function replayRecord(run, paths) {
   } catch (e) { return {...result,outcome:'blocked',reason:e.code==='ENOENT' ? 'Missing replay-evidence.json or an original vector; code replay is blocked.' : sanitize(e.message || 'Malformed replay evidence.')}; }
 }
 // "not needed" only when no Story of the run has `## Rules to check` and no scenario vectors need the block.
-function formalReport(value, rules) {
+export function formatFormalEvidence(value, rules) {
   const formal = formalStatus(value), shown = formalStatusText(formal, rules);
   if (formal.status === 'recorded') return `Formal check (agent reported): recorded — ${FORMAL_LABEL[formal.result]}; scope: ${render(formal.scope)}; reason: ${render(formal.reason)}; control: ${CONTROL_WORDS[formal.control_outcome] ?? 'not given'}${exit(formal.control_exit_code) ? ` (exit ${formal.control_exit_code})` : ''}.`;
   if (shown.notNeeded) return `Formal check: not needed (no Rules to check in the Story).${formal.status === 'missing' ? '' : ` The formal block is not accepted: ${shown.words} — ${shown.cause}.`}`;
@@ -658,7 +658,7 @@ export function formatReplayEvidence(result, {maxCharacters=Infinity, rules} = {
     ...(result.anchor ? [anchorLine(result.anchor)] : []),
     `Public-boundary operations: ${result.operations?.executed??0}/${result.operations?.total??0} executed.`,
     `Semantic mutation control: ${result.mutation?.outcome??'not recorded'}${result.mutation ? ` (${result.mutation.failures} assertion failures)` : ''}.`,
-    formalReport(result.formal, rules),
+    formatFormalEvidence(result.formal, rules),
     `Source: ${result.source?.sha256??'unconfirmed'}. Manifest SHA256: ${result.manifest_sha256??'unavailable'}.`,
     ...(result.vectors??[]).slice(0,12).map(v=>`Current vector: ${render(v.path)} — ${sha(v.sha256)?v.sha256:'unconfirmed'}.`),
     ...((result.vectors?.length??0)>12 ? [`${result.vectors.length-12} more current vector identities are in the full manifest.`] : []),
