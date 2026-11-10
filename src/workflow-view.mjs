@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: 2d4a5f5deb876ba91b37cd55fba34391d3548a111a630d0541dc2c53c1171f72).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: 548001a6062f082103c8010aa4d02da229881635135426ad0d5f5c3de4762726).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
