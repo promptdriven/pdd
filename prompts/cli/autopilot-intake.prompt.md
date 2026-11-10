@@ -109,6 +109,8 @@ ready even in shadow. Do not modify the core to wire the hook.
 - [Headless agent jobs](agent-job.prompt.md): required runtime and implementation
   contract for agentCommand, jobEnvironment and the start/read/stop operations.
   Use ctx.jobs/ports.jobs when injected, otherwise those native operations.
+- [Secret redaction](secret-redaction.prompt.md): required implementation contract
+  for sanitizing comment text before truncation and GitHub writes.
 - Node fs/path provide local state with an injected `fs` compatible with sync
   methods; use atomic private JSON files. Node crypto provides deterministic
   SHA-256. The injected clock `now()` returns epoch milliseconds.
