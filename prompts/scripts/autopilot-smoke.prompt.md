@@ -23,7 +23,10 @@ future callers; do not wire it into core now.
 - Apply stages the exact base bytes in a new temporary directory, initializes
   and commits main locally with a fixed synthetic author and no commit hooks,
   then uses `gh repo create --private --source ... --push`. Never clone or mutate
-  an existing remote. Print repo identity and manual cleanup command before the
+  an existing remote. Native subprocesses discard inherited `GIT_*` variables
+  so a caller's repository/index/author overrides cannot redirect sandbox work.
+  Disable init templates and configure the staged repo's hooks path to `/dev/null`
+  for both commit and push. Print repo identity and manual cleanup command before the
   remote mutation, so a partial failure is recoverable. Create the opt-in label
   then the fixed issues in filename order with that label and their identity
   markers. Print each returned issue URL as soon as created. Any failed command

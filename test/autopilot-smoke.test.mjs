@@ -53,7 +53,10 @@ test('fixture loader loads sorted fixed issues, exact base bytes and a passing N
     fs.readFileSync(join(fixtureRoot, 'base/README.md'), 'utf8'));
   const destination = scratch(t);
   fs.cpSync(join(fixtureRoot, 'base'), destination, {recursive: true});
-  const base = spawnSync(process.execPath, ['--test', 'test/helpers.test.mjs'], {cwd: destination, encoding: 'utf8'});
+  const env = {...process.env};
+  delete env.NODE_TEST_CONTEXT;
+  const base = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'test/helpers.test.mjs'],
+    {cwd: destination, encoding: 'utf8', env});
   assert.equal(base.status, 0, base.stdout + base.stderr);
   assert.match(base.stdout, /# tests 3/);
 });
@@ -237,4 +240,38 @@ test('shell entrypoint works outside the checkout without gh for a default dry r
     {cwd: scratch(t), encoding: 'utf8'});
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Dry run/);
+});
+
+test('native apply uses real isolated Git and a fake gh executable despite inherited Git overrides', t => {
+  const root = scratch(t), bin = join(root, 'bin'), transcript = join(root, 'gh-calls.jsonl');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const cp = require('node:child_process');
+const args = process.argv.slice(2);
+const row = {args};
+if (args[0] === 'repo') {
+  const source = args[args.indexOf('--source') + 1];
+  row.branch = cp.execFileSync('git', ['-C', source, 'branch', '--show-current'], {encoding: 'utf8'}).trim();
+  row.author = cp.execFileSync('git', ['-C', source, 'log', '-1', '--format=%an <%ae>'], {encoding: 'utf8'}).trim();
+  row.hooks = cp.execFileSync('git', ['-C', source, 'config', 'core.hooksPath'], {encoding: 'utf8'}).trim();
+}
+fs.appendFileSync(${JSON.stringify(transcript)}, JSON.stringify(row) + '\\n');
+if (args[0] === 'issue') {
+  const repo = args[args.indexOf('--repo') + 1];
+  console.log('https://github.com/' + repo + '/issues/' + fs.readFileSync(${JSON.stringify(transcript)}, 'utf8').trim().split('\\n').length);
+}
+`, {mode: 0o755});
+  const redirected = join(root, 'must-not-exist');
+  const result = spawnSync(resolve('scripts/autopilot-smoke.sh'), ['--owner', 'example', '--apply'],
+    {cwd: root, encoding: 'utf8', env: {...process.env, PATH: `${bin}:${process.env.PATH}`,
+      GIT_DIR: redirected, GIT_WORK_TREE: redirected, GIT_INDEX_FILE: redirected,
+      GIT_AUTHOR_NAME: 'Inherited author', GIT_AUTHOR_EMAIL: 'inherited@example.invalid'}});
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(fs.existsSync(redirected), false);
+  const rows = fs.readFileSync(transcript, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(rows.length, 5);
+  assert.equal(rows[0].branch, 'main');
+  assert.equal(rows[0].author, 'Smoke sandbox <smoke@example.invalid>');
+  assert.equal(rows[0].hooks, '/dev/null');
 });
