@@ -48,13 +48,23 @@ function latest(rows, key) {
 // remains incomplete instead of silently looking like the end of pagination.
 function reader(ports, errors) {
   const prefix = `repos/${ports.repo}/`;
+  let requests = 0, stopped = null;
   const request = async endpoint => {
-    try {
-      const response = await ports.gh(['api', '--include', '--method', 'GET', endpoint]);
-      const parsed = githubReply(response?.stdout);
-      if ((response?.code ?? 0) !== 0 || parsed?.status !== 200) throw Error();
-      return { value: JSON.parse(parsed.body), next: parsed.link?.match(/<([^>]+)>;\s*rel="next"/)?.[1] };
-    } catch { throw Error(`GitHub read unavailable: ${endpoint.split('?')[0]}`); }
+    const unavailable = () => Object.assign(Error(`GitHub read unavailable: ${endpoint.split('?')[0]}`), { scanStop: stopped });
+    if (requests >= 100 && !stopped) stopped = 'request budget exhausted (100 reads)';
+    if (stopped) throw unavailable();
+    requests++;
+    // execFile rejects nonzero exits but retains HTTP headers on error.stdout.
+    let response;
+    try { response = await ports.gh(['api', '--include', '--method', 'GET', endpoint]); }
+    catch (error) { response = error; }
+    const parsed = githubReply(response?.stdout);
+    const headers = String(response?.stdout ?? '').split(/\r?\n\r?\n/, 1)[0];
+    if (parsed?.status === 429 || parsed?.rate?.remaining <= 0) stopped = 'GitHub rate limit exhausted';
+    else if (parsed && /^retry-after:/im.test(headers)) stopped = 'GitHub Retry-After received';
+    if ((response?.code ?? 0) !== 0 || parsed?.status !== 200) throw unavailable();
+    try { return { value: JSON.parse(parsed.body), next: parsed.link?.match(/<([^>]+)>;\s*rel="next"/)?.[1] }; }
+    catch { throw unavailable(); }
   };
   const one = async endpoint => (await request(prefix + endpoint)).value;
   const all = async (endpoint, field, valid = () => true) => {
@@ -78,7 +88,7 @@ function reader(ports, errors) {
   const attempt = async (label, action, fallback = null, merge = null) => {
     try { return await action(); }
     catch (error) {
-      const detail = safe(`Unavailable ${label}`); errors.push(detail);
+      const detail = safe(`Unavailable ${label}${error.scanStop ? `: ${error.scanStop}` : ''}`); errors.push(detail);
       if (merge) merge.signals.push({ kind: 'unavailable', level: 'suspect', at: null, url: null, detail, parentUrl: null });
       return Array.isArray(fallback) && Array.isArray(error.partial) ? error.partial : fallback;
     }
@@ -147,7 +157,7 @@ export async function regressionScan(ports) {
       for (const detail of sharedErrors) add('unavailable', 'suspect', null, null, detail);
       for (const commit of commits) {
         const at = commit.commit?.committer?.date, text = String(commit.commit?.message ?? '');
-        if (later(at) && [...text.matchAll(/\bThis reverts commit ([a-f\d]{40})\./gi)].some(m => m[1].toLowerCase() === merge.mergeCommit)) add('revert', 'proven', at, commit.html_url, `Commit ${commit.sha} reverts merge ${merge.mergeCommit}`);
+        if (later(at) && [...text.matchAll(/\bThis reverts commit ([a-f\d]{40})(?:\.|,\s+reversing\s+changes made to [a-f\d]{40}\.)/gi)].some(m => m[1].toLowerCase() === merge.mergeCommit)) add('revert', 'proven', at, commit.html_url, `Commit ${commit.sha} reverts merge ${merge.mergeCommit}`);
       }
       for (const pull of pulls) {
         if (pull.number === merge.pr) continue;
