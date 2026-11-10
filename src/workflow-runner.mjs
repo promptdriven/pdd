@@ -82,6 +82,7 @@ const keepLines = value => String(value ?? '').split('\n').map(oneLine).filter(B
 const done = message => ({ exitCode: 0, message });
 const fail = message => ({ exitCode: 1, message });
 const ended = run => ['cancelled', 'completed'].includes(run.state);
+const closedOutcome = run => (run.cost?.outcome === 'closed' || run.prState?.state === 'closed') && !(run.gate?.kind === 'ask-code' && run.through === 'code');
 const isAgentSession = env => Boolean(env.PDD_AGENT_SESSION || env.CLAUDECODE || env.CODEX_THREAD_ID);
 // About max characters at a word end, never inside a URL: a URL that crosses the end stays whole (0.1.6 tester: status
 // showed "report https://ru").
@@ -93,8 +94,8 @@ function clip(text, max) {
   return end >= text.length ? text : `${text.slice(0, end).trimEnd()}${url ? ' ' : ''}…`;
 }
 // The chat's open question. One asked before the current gate opened was answered when that gate opened (0.1.6 tester:
-// status showed "Do you approve … so PDD can open PR 1?" after PR 1 was open).
-const openQuestion = run => run.question && !(run.gate && run.question.at < run.gate.at) ? run.question : null;
+// status showed "Do you approve … so PDD can open PR 1?" after PR 1 was open). An ended run has no open question.
+const openQuestion = run => !ended(run) && !closedOutcome(run) && run.question && !run.question.answeredAt && !(run.gate && run.question.at < run.gate.at) ? run.question : null;
 const listed = items => items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : items[0];
 // A plain approval sent with changes (0.1.6 tester: "I approve. The Story and the prompt look good now." reached the chat as
 // a change request, and the chat could not approve with it). An approval word with a change word is a change request.
@@ -457,6 +458,7 @@ async function areaMessage(run, index, p, packageRoot) {
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Saved base: ${run.baseBranch}. Use this base for this run; do not take a base from documents or ask which document to follow. PR 2 may stack on PR 1 as directed by pdd.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
+    ...(run.previous?.length ? [`Previous run notes: ${run.previous.at(-1).runDir} (worktree ${run.previous.at(-1).root}). Start fresh; you may read the old run's notes, and any open questions from that ended run ended with it.`] : []),
     ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => !area.optional.includes(step) ? step : normal && step === 'try' && area.before === 'approve' ? `${step} (optional: pdd skips it; do not ask)` : `${step} (optional: ask the person)`).join(', ')}.`,
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
@@ -579,7 +581,7 @@ const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairL
 export function automaticAttention({ repo, machine }, ports = {}) {
   return (ports.readRuns ? ports.readRuns() : allRuns({}, ports)).flatMap(run => {
     if (run.repo?.toLowerCase() !== repo?.toLowerCase() || !run.automaticOrigin || run.automaticOrigin.machine !== machine
-      || run.state === 'cancelled' || run.state === 'completed' && run.gate?.kind !== 'ask-code') return [];
+      || run.state === 'cancelled' || closedOutcome(run) || run.state === 'completed' && run.gate?.kind !== 'ask-code') return [];
     const question = openQuestion(run);
     const item = run.state === 'stuck' ? { category: 'stuck', cause: stuckReason(run) }
       : run.state === 'paused' ? { category: 'parked', cause: run.runtimeWait?.reason ?? run.parkReason ?? 'automatic work paused' }
@@ -721,6 +723,7 @@ async function chatContinuationOwnership(run, p, {releaseUnowned = false} = {}) 
     latest.state = 'cancelled';
     latest.cancelled = {state: 'handed-over', at: p.now(), reason};
     if (releaseUnowned) {
+      latest.question = null; latest.gate = null;
       delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
     }
     for (const chat of latest.chats ?? []) chat.endedAt ??= latest.cancelled.at;
@@ -836,6 +839,12 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
       if (coordinator.claim.commentId !== claim.commentId || coordinator.claim.labelEventId !== claim.labelEventId) return fail('Automatic start deferred: owner.');
       const decision = await check({ cwd: context.toplevel, repository: binding.repository, issue: binding.issue.url, coordinator }, readPorts);
       if (!decision?.allowed) return fail(`Automatic start deferred: ${decision?.reason ?? 'unknown'}.`);
+      if (existing && !ended(existing) && closedOutcome(existing)) commitRun(existing, p, latest => {
+        latest.state = 'cancelled'; latest.cancelled = latest.cancelled ?? { state: 'closed', at: p.now() };
+        latest.question = null; latest.gate = null;
+        delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
+        for (const chat of latest.chats ?? []) chat.endedAt ??= p.now();
+      });
       if (existing && !ended(existing)) return fail('Automatic start deferred: issue has an active run.');
       automaticOrigin = { repository: binding.repository, coordinatorId: coordinator.coordinatorId, machine: coordinator.machine, claim: { ...coordinator.claim } };
     } catch { return fail('Automatic start is unavailable: native admission binding is incomplete.'); }
@@ -891,7 +900,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
     const replacing = !ended(existing);
     if (replacing) {
       const last = existing.updatedAt ?? existing.startedAt, minutes = Number.isFinite(last) ? Math.max(0, Math.floor((p.now() - last) / 60000)) : null;
-      try { commitRun(existing, p, latest => { latest.state = 'cancelled'; latest.cancelled = { state: 'replaced', at: p.now() }; latest.replacedBy = runId; latest.gate = null; for (const chat of latest.chats ?? []) chat.endedAt ??= p.now(); }); }
+      try { commitRun(existing, p, latest => { latest.state = 'cancelled'; latest.cancelled = { state: 'replaced', at: p.now() }; latest.replacedBy = runId; latest.question = null; latest.gate = null; for (const chat of latest.chats ?? []) chat.endedAt ??= p.now(); }); }
       catch (error) { return fail(`Issue #${number} has an active run ${existing.runId}, but pdd could not mark it replaced (${oneLine(error.message)}). Retry in a moment.`); }
       warnings.push(`warning: Issue #${number} had an active run ${existing.runId} (${existing.workflow}). pdd marked it replaced and starts a new run.`
         + ` Its worktree stays at ${existing.root} (branch ${existing.branch}), from checkout ${existing.sourceRoot}. Last activity: ${minutes === null ? 'unknown' : `${minutes} min ago`}.`
@@ -4244,7 +4253,7 @@ async function cancelRunCommand({ ref, cwd }, ports) {
   // No chat of a cancelled run may still read a login file.
   removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
   const cancelled={state:'cancelled',at:p.now()};
-  commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:cancelled;latest.gate=null;delete latest.parking;delete latest.blockedOn;delete latest.parkReason;delete latest.runtimeWait;delete latest.routeWait;for(const chat of latest.chats ?? [])chat.endedAt ??= cancelled.at;});
+  commitRun(run,p,latest=>{latest.state='cancelled';latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:cancelled;latest.question=null;latest.gate=null;delete latest.parking;delete latest.blockedOn;delete latest.parkReason;delete latest.runtimeWait;delete latest.routeWait;for(const chat of latest.chats ?? [])chat.endedAt ??= cancelled.at;});
   if (!ports?.claimReleased && validSavedAutomaticOrigin(run)) {
     try { await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts); } catch {}
     try {
@@ -4283,9 +4292,10 @@ export const releaseRunClaim = saveGuard(async ({ ref, cwd, repository, machine,
   if (remote?.state !== 'released') return fail(`Could not release the claim for ${repo}#${number}.`);
   if (run && (!run.automaticOrigin?.machine || run.automaticOrigin.machine === host)) {
     try { await cleanupRunChats(run, p, { force: true, reason: 'cancel' }); } catch {}
-    if (!ended(run) || run.parking) {
+    if (!ended(run) || run.parking || run.question || run.gate) {
       try {
         commitRun(run, p, latest => {
+          latest.question = null; latest.gate = null;
           delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
         });
       } catch {}
@@ -4322,7 +4332,11 @@ async function refreshPr(run, p) {
     if(latest.state==='cancelled')return;
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
-    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt ??= checkedAt;
+    if (ended(latest) || closedOutcome(latest) && !latest.promptReturn) {
+      latest.question = null;
+      delete latest.parking; delete latest.blockedOn; delete latest.parkReason; delete latest.runtimeWait; delete latest.routeWait;
+      for (const chat of latest.chats ?? []) chat.endedAt ??= checkedAt;
+    }
   });
   await refreshTops();
 }

@@ -1114,3 +1114,55 @@ test('native review owner batches retain live claim checks when a label batch is
   assert.equal(result.reason, 'owner-changed');
   assert.equal(w.github.reviewComments(1).length, 0);
 });
+
+test('3157: ended-run questions in dependency reviews stop holding the issue while issue-level person questions keep holding', async () => {
+  const i2697 = issue(2697, { title: 'Add cancel cleanup for parked runs' });
+  const i2747 = issue(2747, { title: 'Keep claim release idempotent' });
+  const i2793 = issue(2793, { title: 'Preserve run folder notes after handover' });
+  const i2800 = issue(2800, { title: 'Clarify status output format' });
+  const i2790 = issue(2790, { title: 'Fix batch 20261031-163927-j74s failure', body: 'Bug report: pdd test batch 20261031-163927-j74s failed.' });
+  const all = [i2697, i2747, i2793, i2800, i2790];
+  const candidates = all.map(row);
+
+  const reviewQuestion = (id, subject, text, extra = {}) => comment(id, recordBody({
+    analysis: 'Reviewed issue.',
+    base: [],
+    continuation: '',
+    issue: subject.html_url,
+    inputs: [row(subject)],
+    candidates,
+    outcome: 'question',
+    dependencies: [],
+    questions: [text],
+    effects: 'none',
+    ...extra,
+  }));
+
+  const w = world({
+    issues: all,
+    comments: {
+      [key(2697)]: [reviewQuestion('601', i2697, 'Should we start a fresh run or wait on the existing run and batch 20261108-062749-jlsv?')],
+      [key(2747)]: [reviewQuestion('602', i2747, 'What happened to batch 20261108-063153-9i5c?')],
+      [key(2793)]: [reviewQuestion('603', i2793, 'What happened to the finished prompt check batch 20261108-065710-b0mh with no saved verdict?')],
+      [key(2800)]: [reviewQuestion('604', i2800, 'Should status --json include archived runs by default or require a flag?')],
+      [key(2790)]: [reviewQuestion('605', i2790, 'Which expected value should batch 20261031-163927-j74s assert?')],
+    },
+  });
+
+  const g = await graph(w);
+  for (const num of [2697, 2747, 2793]) {
+    const n = g.node(num);
+    assert.equal(n.reviewState, 'current', `#${num} ended-run question stops holding`);
+    assert.equal(n.eligible, true, `#${num} becomes eligible`);
+    assert.deepEqual(n.facts, [], `#${num} has no holding question fact`);
+    assert.ok(!n.reasons.includes('Review question'), `#${num} has no Review question reason`);
+  }
+
+  for (const num of [2800, 2790]) {
+    const n = g.node(num);
+    assert.equal(n.reviewState, 'question', `#${num} issue-level question keeps holding`);
+    assert.equal(n.eligible, false, `#${num} stays ineligible until answered`);
+    assert.ok(n.reasons.includes('Review question'), `#${num} keeps Review question reason`);
+    assert.equal(n.facts.length, 1);
+  }
+});

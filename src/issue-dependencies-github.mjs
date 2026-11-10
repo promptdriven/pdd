@@ -1,6 +1,7 @@
 import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
+import { endedRunQuestion } from './issue-sort.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
 // Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: aebc28170168922209050d353dc52ddc80632f6592d9804dfdb7a685c56d8959).
@@ -860,6 +861,8 @@ function nativeEvidence(cwd, ports) {
       const authority = await readPorts.authority.read({ repository, author: raw.user?.login ?? '' });
       if (authority.authority === 'trusted') requirements.push({ issue: i.key, key: i.key,
         revision: hash(JSON.stringify({ title: raw.title ?? '', body: raw.body ?? '' })), text: `${raw.title ?? ''}\n\n${raw.body ?? ''}`, authority: 'trusted' });
+      const activeClaim = (raw.labels ?? []).some(l => (typeof l === 'string' ? l : l.name) === 'pdd:working' || (typeof l === 'string' ? l : l.name) === 'pdd:stuck');
+      const stubIssue = { title: raw.title ?? '', sortText: raw.body ?? '', execution: activeClaim ? 'running' : 'idle', holds: [] };
       const comments = await allPages(ports.github, repository, 'comments', i.issue);
       for (const c of comments) {
         const record = parseRecord(c.body);
@@ -867,9 +870,16 @@ function nativeEvidence(cwd, ports) {
           const existing = required.get(row.key) ?? new Set(); existing.add(i.key); required.set(row.key, existing);
         }
         if (bookkeeping(c.body)) continue;
-        if ((await readPorts.authority.read({ repository, author: c.user?.login ?? '' })).authority === 'trusted') requirements.push({
-          issue: i.key, key: `${i.key}#issuecomment-${c.id}`, revision: hash(c.body ?? ''), text: c.body ?? '', authority: 'trusted',
-        });
+        if ((await readPorts.authority.read({ repository, author: c.user?.login ?? '' })).authority === 'trusted') {
+          const body = c.body ?? '';
+          const endedNote = !activeClaim && (endedRunQuestion(stubIssue, body)
+            || /^(?:Interpreter wake remains blocked|Stuck after the interpreter wake|Autopilot is stuck at the prompt check after the interpreter wake)\b/i.test(body.trim()));
+          requirements.push({
+            issue: i.key, key: `${i.key}#issuecomment-${c.id}`, revision: hash(body),
+            text: endedNote ? `[Ended-run note — run ended; its open batch/run questions ended with that run and do not hold the issue]\n${body}` : body,
+            authority: 'trusted',
+          });
+        }
       }
     }
     // Explicit source paths in trusted requirements retain subject scope. Other
@@ -1193,7 +1203,7 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     const runId = run.runId || run.runDir;
     if (typeof runId !== 'string' || !runId) { runsKnown = false; continue; }
     seen.add(runId);
-    if (['completed', 'cancelled'].includes(run.state)) continue;
+    if (['completed', 'cancelled'].includes(run.state) || run.cost?.outcome === 'closed' || run.prState?.state === 'closed') continue;
     const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
     const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports))
       || held((ports.readInterpreterProgress ?? readInterpreterProgress)({cwd: run.root, env: ports.env}, {now: ports.now ?? Date.now, ...ports.interpreterQueuePorts}));

@@ -1514,3 +1514,58 @@ test('3157: expired or lost claim on tick removes pdd:working and pdd:stuck and 
   assert.equal(status.exitCode, 0, status.message);
   assert.match(status.message, /working 0 of 1 · parked 0/);
 });
+
+test('3157: when a run ends (merged, closed, cancelled, claim lost), its open questions end with it and a new run starts fresh with the old run notes', async t => {
+  const {blockerFor, routeQuestionFor, idleParkingBlocker} = await import('../src/autopilot-parking.mjs');
+  const {automaticAttention, startRun} = await import('../src/workflow-runner.mjs');
+
+  for (const endedRun of [
+    {state: 'completed', question: {text: 'What happened to batch 20261108-062749-jlsv?', area: 'story', at: 100}},
+    {state: 'cancelled', cancelled: {state: 'handed-over', at: 200, reason: 'Chat continuation refused: the admitted claim is no longer active.'}, cost: {outcome: 'closed'}, question: {text: 'What happened to batch 20261108-063153-9i5c?', area: 'story', at: 100}},
+    {state: 'waiting', cost: {outcome: 'closed'}, prState: {state: 'closed'}, question: {text: 'What happened to batch 20261108-065710-b0mh?', area: 'story', at: 100}},
+  ]) {
+    const sample = {number: 17, repo: 'example/project', automaticOrigin: {repository: 'example/project', coordinatorId: 'c1', machine: 'm1', claim: {commentId: '1', labelEventId: '2'}}, ...endedRun};
+    assert.equal(blockerFor(sample), null);
+    assert.equal(routeQuestionFor(sample), null);
+    assert.equal(idleParkingBlocker(sample, 1_000_000, 1000), null);
+    assert.deepEqual(automaticAttention({repo: 'example/project', machine: 'm1'}, {readRuns: () => [sample]}), []);
+  }
+
+  // Starting a fresh automatic run on an issue whose old run ended with outcome closed archives the old run and points the new run to the old run's notes.
+  const {f} = await setup(t);
+  const old = f.record();
+  writeFileSync(join(old.runDir, 'NOTES.md'), 'Old run investigation notes.\n');
+  old.state = 'waiting';
+  old.cost = {schema: 'pdd.cost.v1', outcome: 'closed'};
+  old.prState = {state: 'closed', ci: 'none', checkedAt: f.clock};
+  old.question = {text: 'What happened to batch 20261108-062749-jlsv?', area: 'story', at: f.clock};
+  save(f, old);
+
+  const nextClaim = {commentId: '901', labelEventId: '902'};
+  const startPorts = {
+    ...f.ports,
+    checkDependencyStart: async () => ({allowed: true}),
+    owners: {read: async () => ({json: JSON.stringify({
+      localOwner: old.automaticOrigin.coordinatorId,
+      claims: [{issue: old.issue.url, active: true, owner: old.automaticOrigin.coordinatorId, coordinatorId: old.automaticOrigin.coordinatorId, machine: old.automaticOrigin.machine, ...nextClaim}],
+    })})},
+  };
+  const started = await startRun({
+    name: 'small-change',
+    issue: '17',
+    cwd: f.source,
+    packageRoot,
+    coordinator: {repository: old.repo, coordinatorId: old.automaticOrigin.coordinatorId, machine: old.automaticOrigin.machine, activation: 'a1', claim: nextClaim},
+  }, startPorts);
+  assert.equal(started.exitCode, 0, started.message);
+  const fresh = f.record();
+  assert.notEqual(fresh.runId, old.runId);
+  assert.equal(fresh.state, 'running');
+  assert.equal(fresh.question, undefined);
+  assert.equal(fresh.previous?.length, 1);
+  assert.equal(fresh.previous[0].runId, old.runId);
+  assert.ok(existsSync(join(fresh.previous[0].runDir, 'NOTES.md')));
+  const firstMessage = readFileSync(fresh.chats[0].messageFile, 'utf8');
+  assert.match(firstMessage, /Previous run notes:/);
+  assert.ok(firstMessage.includes(fresh.previous[0].runDir));
+});

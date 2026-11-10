@@ -4,7 +4,11 @@ Required step for pdd-autopilot. After readiness and claim, check `pdd workflow 
 For a root-cause umbrella, carry all current members and their requirements in the same handoff. Never start a member separately. The umbrella code PR closes its current members.
 Reuse an active run with `pdd workflow open N`; otherwise start
 `pdd workflow run bug|feature|small-change N --agent AGENT` with the matching workflow
-and the packet's agent, or the current agent without a packet. Use the normal PDD
+and the packet's agent, or the current agent without a packet. When an earlier run on
+the issue ended (merged, closed, cancelled, or claim lost), its open questions ended
+with it and stop holding the issue; the new run starts fresh and may read the old
+run's notes. A question that a person must still answer about the issue itself keeps
+holding. Use the normal PDD
 session before issue edits or delegation. The run owns its worktree, area chats,
 gates and PRs; do not create issue worktrees or PRs outside it.
 

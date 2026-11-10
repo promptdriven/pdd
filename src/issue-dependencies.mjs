@@ -1,4 +1,4 @@
-import { projectSortGraph } from './issue-sort.mjs';
+import { projectSortGraph, endedRunQuestion } from './issue-sort.mjs';
 // Generated from prompts/cli/issue-dependencies.prompt.md (sha256: 9dd1aafacf95cd2361eb7a0afc1127cfc320e5cdb1051c8f3f075398788cc196).
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const unique = xs => [...new Set(xs)];
@@ -176,7 +176,10 @@ function freshnessInputs(head, snapshot, issues, edges, reviews) {
 
 // A trusted requirement comment on the issue that a question did not examine is
 // a person's answer, so the question needs a new review.
-const answered = (head, snapshot) => head.outcome === 'question' && rows(snapshot.inputs).some(r => /#issuecomment-[1-9][0-9]*$/.test(r.key)
+const endedQuestionHead = (head, issue) => head?.outcome === 'question' && (head.questions ?? []).length > 0
+  && (head.questions ?? []).every(q => endedRunQuestion(issue, q));
+const answered = (head, snapshot, issues) => head.outcome === 'question' && !(endedQuestionHead(head, issues.get(head.issue)) && head.dependencies.length === 0)
+  && rows(snapshot.inputs).some(r => /#issuecomment-[1-9][0-9]*$/.test(r.key)
   && coverageIssueKey(r.key) === head.issue && !head.inputs.some(i => i.key === r.key));
 
 const namedLinkRemoved = (head, edges) => head.outcome === 'complete'
@@ -184,7 +187,7 @@ const namedLinkRemoved = (head, edges) => head.outcome === 'complete'
 
 function freshness(head, snapshot, issues, edges, reviews) {
   // PDD never removes a link, so a named link that is now absent is a person's change.
-  if (namedLinkRemoved(head, edges) || answered(head, snapshot)) return false;
+  if (namedLinkRemoved(head, edges) || answered(head, snapshot, issues)) return false;
   const { current, deficits } = freshnessInputs(head, snapshot, issues, edges, reviews);
   const coverage = coverageRows(snapshot), headRepository = issueRepository(head.issue);
   // Only current impacts hosted in the head's root repository that name this head apply.
@@ -218,12 +221,12 @@ export function projectIssueGraph({ snapshot }) {
   };
   const ownFacts = new Map();
   for (const [key, issue] of issues) {
-    const facts = issue.conditions.map(text => {
+    const facts = issue.conditions.filter(text => !endedRunQuestion(issue, text)).map(text => {
       const provenance = issue.conditionSources?.find(x => x.text === text);
       return { kind: 'condition', text, issue: key, source: provenance?.source ?? key,
         inputs: provenance?.inputs ?? [{ key, revision: issue.revision }] };
     });
-    for (const r of selected.get(key).heads) for (const text of r.questions ?? []) facts.push({
+    for (const r of selected.get(key).heads) for (const text of (r.questions ?? []).filter(q => !endedRunQuestion(issue, q))) facts.push({
       kind: 'question', text, issue: key, source: /^\d+$/.test(r.id) ? `${key}#issuecomment-${r.id}` : key, inputs: r.inputs,
     });
     ownFacts.set(key, facts);
@@ -245,9 +248,10 @@ export function projectIssueGraph({ snapshot }) {
     const currentInputs = new Set([...snapshot.inputs.map(row => locator(row.key)), ...issues.keys(), `${key}${LINKS}`]);
     if (head && head.inputs.some(row => !currentInputs.has(locator(row.key)))) { reasons.push('Required context unavailable', `Observation unavailable: context ${key}`); covered = false; }
     let reviewState = selection.state, review = head?.id ?? '';
+    const endedQuestionsOnly = endedQuestionHead(head, issue);
     // A head whose own outcome is pending with no effects to apply (a bare pending
     // answer that an earlier version saved) is reviewed again.
-    if (head) reviewState = !freshness(head, snapshot, issues, edges, reviews) || (head.outcome === 'pending' && head.effects !== 'pending') ? 'stale' : head.outcome === 'complete' ? 'current' : head.outcome;
+    if (head) reviewState = !freshness(head, snapshot, issues, edges, reviews) || (head.outcome === 'pending' && head.effects !== 'pending') || (endedQuestionsOnly && head.dependencies.length > 0) ? 'stale' : (head.outcome === 'complete' || endedQuestionsOnly) ? 'current' : head.outcome;
     // A removed named link makes the review stale, so intake reviews it again.
     const humanChange = !!head && namedLinkRemoved(head, edges);
     const reviewReason = { unchecked: 'Unchecked', stale: 'Stale review', question: 'Review question', pending: 'Pending effects',

@@ -33,7 +33,10 @@ their existing owners. It is distinct from steps/handoff.md.
   change wins: do not name a prerequisite whose link a person removed. If you still
   think it is needed, record a question. Completion refuses a link that a confirmed
   review named; a write that a removal or a cycle refuses becomes one question on
-  the issue. A person's answer (a trusted comment after the question) queues the
+  the issue. When a run on an issue has ended (merged, closed, cancelled, or claim
+  lost), its open questions about that old run (such as what happened to its
+  interpreter batch) end with it and stop holding the issue; a question that a
+  person must still answer about the issue itself keeps holding. A person's answer (a trusted comment after the question) queues the
   issue again. An outsider's issue is never queued. A stale or
   unchecked review is refreshed through the ordinary `pdd dependencies prepare`,
   analysis and `pdd dependencies complete --input -` path; do not treat its old

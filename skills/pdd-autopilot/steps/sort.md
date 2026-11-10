@@ -32,7 +32,10 @@ record in analysis.sorts. It has this shape (values below are illustrative):
 Copy the subject, area/release row and all trusted requirement comment revisions
 from the snapshot. Add every examined source row. `base` names the unsuperseded
 sort comment IDs on this issue. Use unknown/unclear and one question when evidence
-cannot decide. Never invent a fix or owner. For mixed issues include touchedAreas, one
+cannot decide. When a run on an issue has ended (merged, closed, cancelled, or
+claim lost), its open questions about that old run (such as what happened to its
+interpreter batch) end with it and do not hold the issue; only a question that a
+person must still answer about the issue itself holds the issue. Never invent a fix or owner. For mixed issues include touchedAreas, one
 {area,evidence:[files,commands,error text]} row for every area. For split work,
 include splitOrder:{first:<area>,evidence:[reason for the work order]}. Missing
 area evidence or order means one owner question. Whole sends every part to the

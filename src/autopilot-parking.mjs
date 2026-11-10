@@ -1,7 +1,7 @@
 // Source: prompts/cli/autopilot-parking.prompt.md.
 import {environmentRecovery} from './autopilot-environment.mjs';
 
-const ended = run => ['completed', 'cancelled'].includes(run.state);
+const ended = run => ['completed', 'cancelled'].includes(run?.state) || run?.cost?.outcome === 'closed' || run?.prState?.state === 'closed';
 const stopped = run => ['stuck', 'waiting', 'paused'].includes(run.state);
 const reasonFor = run => [run.parkReason, run.question && !run.question.answeredAt ? run.question.text : ''].filter(Boolean).join(' ');
 // Route reports are facts from the worker, not decisions made by a model in a tick.

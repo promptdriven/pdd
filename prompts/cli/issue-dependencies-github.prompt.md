@@ -92,7 +92,14 @@ linked placeholders when inaccessible. Only raw native relationships become edge
 `context.read({cwd,repository})` returns JSON containing relevant requirement/source
 revision observations (`inputs`) and issue semantic conditions/execution holds.
 Read substantive issue title/body and currently trusted requirement comments;
-exclude unchanged PDD marker records, claims, sync and review bookkeeping. Derive
+exclude unchanged PDD marker records, claims, sync and review bookkeeping. When an
+issue has no active claim (`execution` is `idle` and `holds` contains none of
+`Claimed`, `Stuck` or `Waiting for the interpreter`), worker progress, cost-estimate
+and interpreter-batch-stuck comments from an ended run on that issue are old-run
+notes rather than active requirement comments: exclude them from `evidence.read`
+requirement comments and `sortText` while retaining their comment revisions in
+`snapshot.inputs` when rereading saved record `inputs` so existing current reviews
+and sorts remain fresh. Derive
 stable revisions from actual content (not updated_at). No whole-source commit or
 unrelated file change alone invalidates a review. Unknown context stays explicit.
 Optional read inputs name additional required non-issue rows from completion.
@@ -602,7 +609,7 @@ even for a stopped workflow. Keep `occupied` as custody evidence for existing co
 duplicate-run refusal. Native settings return optional `maxParked` from current
 Autopilot parking policy; its absence lets admission use twice the working cap.
 
-A local run with parking.phase parked and confirmed closed chat/shell custody returns its same identity and `occupied:false` and `parked:true`, without a Herdr agent lookup. Before freeing that slot, read the existing suite and interpreter queues for its worktree. Queued, running or unavailable check custody remains occupied even if chats were already closed. Other parking phases remain occupied. Record each saved run's `runId` as seen before skipping completed or cancelled runs, so a retained worktree assignment for an ended run never reports `starting` or a stale local claim. Native settings expose parkingWakePending from the current launcher summary; native start admission holds new issues while that ready-wake list is nonempty. No allocation becomes an extra slot for that same identity. Starting/unknown counts remain conservative.
+A local run with parking.phase parked and confirmed closed chat/shell custody returns its same identity and `occupied:false` and `parked:true`, without a Herdr agent lookup. Before freeing that slot, read the existing suite and interpreter queues for its worktree. Queued, running or unavailable check custody remains occupied even if chats were already closed. Other parking phases remain occupied. Record each saved run's `runId` as seen before skipping completed, cancelled or closed runs (`cost.outcome: "closed"` or `prState.state: "closed"`), so a retained worktree assignment for an ended run never reports `starting` or a stale local claim. Native settings expose parkingWakePending from the current launcher summary; native start admission holds new issues while that ready-wake list is nonempty. No allocation becomes an extra slot for that same identity. Starting/unknown counts remain conservative.
 
 Export `releaseParkedClaim({cwd,repository,claim,coordinatorId,machine,runId,branch,reason},ports)`. Reuse the live claim winner and writer ports. For a parked timeout or surplus release (`runId` and `branch` without a non-park `reason`), verify the exact current coordinator, machine, comment and label-event identity, remove both `pdd:working` and `pdd:stuck` from the issue while preserving branch/worktree/files, read comments for marker `<!-- pdd:park-release:RUNID -->` and post at most one short release comment naming the retained branch and blocker timeout; a retry after label removal still completes its own marked release without removing a newer owner's label. For `reason` in `cancel`, `release`, `expired` or `lost`, use this same function and existing GitHub budget rules (`githubFloor` and `claims` purpose): read the issue and live winning claim; refuse with `{state:"refused",machine}` when another machine holds a live claim; skip when `claim.commentId` or `claim.labelEventId` names an older claim era than a live claim on this machine; otherwise remove `pdd:working` and `pdd:stuck` from the issue when owned by this machine or when no live claim exists, returning `{state:"released"}` (or `{state:"skipped"}` when deferred or already clean). Unknown ownership or failed writes never count as release. This is the native safety release route; no model call.
 

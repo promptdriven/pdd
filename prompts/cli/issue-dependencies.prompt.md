@@ -171,8 +171,23 @@ intake reviews it again. `review` is the selected head ID or
 empty when unresolved. Incomplete reads give dependencyState `unknown`.
 Persist unresolved install/deploy/product requirements as `questions` on a
 question review. An explicit trusted replacement resolves them; a restart does
-not erase them. A subject's own supplied conditions prevent eligibility. When
-checking a prerequisite, retain its supplied conditions and unresolved saved
+not erase them. When an issue has no active run (`execution` is `idle` and `holds`
+contains none of `Claimed`, `Stuck` or `Waiting for the interpreter`), an open
+question about an ended run on that issue ends with the run and stops holding
+the issue. An **ended-run question** is a question that asks about a check or
+interpreter batch (`batch YYYYMMDD-HHMMSS-ID`) absent from the issue's own `title`
+and `sortText`, or asks about or instructs preserving, resuming, retrying,
+continuing or reconciling an existing, retained, saved, old, previous, cancelled
+or ended run on that issue. Exclude ended-run questions on such an idle issue from
+its own `facts` (both review questions and supplied `conditions`) and from
+prerequisite condition checks. When a selected `question` head on an idle issue
+has only ended-run questions (`questions` nonempty and all ended-run) and no
+dependencies, its review state is `current` when its own inputs and links are
+current (later unexamined comments do not invalidate that ended-run question head),
+else `stale`. A question that a person must still answer about the issue itself
+(including a batch named in the issue's own `title` or `sortText`) keeps holding.
+A subject's own remaining supplied conditions prevent eligibility. When
+checking a prerequisite, retain its remaining supplied conditions and unresolved saved
 questions, including questions whose current authority cannot be verified.
 A blocker is satisfied only when its native state is `completed` and it has no
 such unresolved condition. A completed blocker with no saved review needs no

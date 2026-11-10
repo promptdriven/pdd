@@ -30,6 +30,22 @@ export function sortCovered(snapshot, issue) {
   return snapshot.coverage.scope === true && !!row && ['issue','authority','comments','context','execution'].every(k => row[k] === true);
 }
 export const sortSourceKey = (repository, path) => `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
+export const noActiveRun = issue => issue?.execution === 'idle'
+  && !(issue.holds ?? []).some(h => h === 'Claimed' || h === 'Stuck' || h === 'Waiting for the interpreter');
+export function endedRunQuestion(issue, value) {
+  if (!noActiveRun(issue) || !text(value) || !value.trim()) return false;
+  const own = `${issue.title ?? ''}\n${issue.sortText ?? ''}`.toLowerCase();
+  for (const m of value.matchAll(/\bbatch\s+(\d{8}-\d{6}-[a-z0-9]+)\b/gi))
+    if (!own.includes(m[1].toLowerCase())) return true;
+  const whatBatch = /\bwhat\s+happened\s+to\s+batch\s+([^\s?,.;:)]+)/i.exec(value);
+  if (whatBatch && !own.includes(whatBatch[1].toLowerCase())) return true;
+  if ((/\b(?:preserve|resume|retry|continue|reconcil\w*)\s+the\s+(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run\b/i.test(value)
+    || /\b(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run(?:'s|\s+#?\d+|\s+before\s+(?:it\s+resumes|retrying|any\s+new\s+check|further\s+hosted\s+work))\b/i.test(value)
+    || /\bin\s+the\s+(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run\b/i.test(value)
+    || /\bbefore\s+(?:this|the)\s+run\s+(?:continues|resumes|retries|proceeds)\b/i.test(value))
+    && !/\b(?:existing|retained|saved|old|previous|cancelled|ended)\s+(?:[a-z0-9_-]+\s+)*run\b/i.test(own)) return true;
+  return false;
+}
 export function selectedSort(snapshot, issue) {
   if (!issue || !sortCovered(snapshot, issue)) return null;
   const all = (issue.sorts ?? []).filter(x => x.authority !== 'outsider');
@@ -41,6 +57,10 @@ export function selectedSort(snapshot, issue) {
   if (!head.intact || head.authority !== 'trusted' || !validSort(r) || r.issue !== issue.key || r.status.release !== snapshot.sortContext?.release) return null;
   const current = new Map([...snapshot.issues, ...snapshot.inputs].map(x => [x.key, x.revision]));
   if (r.paths.some(path => !r.inputs.some(x => x.key === sortSourceKey(snapshot.repository, path))) || r.inputs.some(x => current.get(x.key) !== x.revision) || sortInputs(snapshot, issue).some(x => !r.inputs.some(y => y.key === x.key && y.revision === x.revision))) return null;
+  if (r.question && endedRunQuestion(issue, r.question)) {
+    if (r.belongs.kind === 'unknown' || r.status.state === 'unclear' || r.genuine.kind === 'unclear') return null;
+    return { ...r, question: '' };
+  }
   return r;
 }
 export function sortPlan({ snapshot }) {

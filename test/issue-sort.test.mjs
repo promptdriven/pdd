@@ -348,3 +348,50 @@ test('a confirmed expired claim does not block a fixed-issue route', async () =>
   await reconcileDependencyIntake({ repository, mode: 'auto' }, w.ports);
   assert.equal(w.issues[0].state, 'closed');
 });
+
+test('3157: ended-run questions on a saved sort record stop holding the issue while issue-level questions keep holding', async () => {
+  // 1. Ended-run question on a valid work sort clears the question so the issue is eligible to start fresh.
+  const w1 = fixture();
+  w1.save(w1.record(1, {
+    question: 'Should the coordinator treat the existing run as failed/stalled and start a fresh run, or recover the lost check batch 20261108-062749-jlsv?',
+  }));
+  w1.review(1);
+  const n1 = await node(w1);
+  assert.equal(n1.sort?.action, 'work');
+  assert.equal(n1.eligible, true);
+  assert.deepEqual((await prepareDependencyIntake({ repository }, w1.ports)).queued, []);
+
+  // 2. Ended-run question on an unclear/unknown sort (like #2793) ignores the stale sort and queues a fresh sort.
+  const w2 = fixture();
+  w2.save(w2.record(1, {
+    genuine: 'unclear',
+    question: 'Should the coordinator treat the existing run as failed/stalled (check batch 20261108-065710-b0mh has no saved verdict) and start a fresh run?',
+  }));
+  w2.review(1);
+  const n2 = await node(w2);
+  assert.equal(n2.sort?.action, 'hold');
+  assert.equal(n2.eligible, false);
+  assert.deepEqual((await prepareDependencyIntake({ repository }, w2.ports)).queued, [key(1)]);
+
+  // 3. A question that a person must still answer about the issue itself keeps holding.
+  const w3 = fixture();
+  w3.save(w3.record(1, {
+    question: 'Should --json output include cancelled runs by default, or require --cancelled?',
+  }));
+  w3.review(1);
+  const n3 = await node(w3);
+  assert.equal(n3.sort?.action, 'question');
+  assert.equal(n3.eligible, false);
+  assert.deepEqual((await prepareDependencyIntake({ repository }, w3.ports)).queued, []);
+
+  // 4. An issue whose own body is a bug report about a batch (#2790) keeps holding when asked about that batch.
+  const w4 = fixture();
+  w4.issues[0].body = 'Bug report: pdd test batch 20261031-163927-j74s failed with a missing artifact.';
+  w4.save(w4.record(1, {
+    question: 'Which expected output should batch 20261031-163927-j74s assert for the missing artifact?',
+  }));
+  w4.review(1);
+  const n4 = await node(w4);
+  assert.equal(n4.sort?.action, 'question');
+  assert.equal(n4.eligible, false);
+});
