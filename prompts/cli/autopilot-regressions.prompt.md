@@ -34,6 +34,18 @@ Follow GitHub next links only within that repository's REST namespace; cycles,
 invalid links and failed pages are errors rather than successful truncation.
 Use explicit GET for every GitHub call. Do not use search's limited result set.
 
+One scan may issue at most 100 GitHub requests in total, including failed reads
+and every page, across all merges and shared evidence. Before request 101, stop
+all further GitHub reads. Also stop further reads immediately after HTTP 429,
+any Retry-After response header, or x-ratelimit-remaining at or below zero
+(regardless of reset time). Observe headers even when gh throws with stdout.
+A successful response that exhausts the allowance still supplies its evidence.
+Keep the stop reason and request count only in memory; do not retry, wait for a
+reset, or write a ledger. Subsequent required reads add safe unavailable signals
+and errors naming the rate limit, Retry-After or request budget. Preserve all
+collected pages and proof; unexamined merges remain incomplete/suspect rather
+than ok. Ordinary read failures still allow other merges within the budget.
+
 Each signal has `kind` (`ci`, `revert`, `reopened`, `reference`, `unavailable`),
 `level` (`suspect` or `proven`), `at` (ISO UTC timestamp or null), `url` (evidence
 link or null), `detail` (safe single-line explanation), and `parentUrl` (comparison
@@ -46,7 +58,7 @@ is proven, otherwise suspect if any signal exists, otherwise ok.
 | Latest check run for the same app id/name is failure, timed_out, cancelled, action_required, startup_failure, or stale; or latest status context is failure/error | suspect |
 | That red result is dated at/after the merge and its matching parent result is success | proven (the brief's CI rule; no claim of deflaking) |
 | Pending, neutral, skipped, or absent checks | no regression signal; absence/pending does not prove health |
-| Later default-branch commit says `This reverts commit FULL_SHA.` matching the merge | proven |
+| Later default-branch commit says `This reverts commit FULL_SHA.` or the standard merge-revert form `This reverts commit FULL_SHA, reversing` followed by whitespace and `changes made to PARENT.` | proven when FULL_SHA matches the exact merge SHA, case insensitive; shorter, longer and different SHAs never match |
 | Later PR explicitly says `Reverts owner/repo#PR`, `Reverts #PR`, or `Reverts` followed by the exact PR URL | proven if merged, suspect if only proposed; closed unmerged PRs stay suspect |
 | A later PR title is exactly `Revert "ORIGINAL_TITLE"`, without an exact target | suspect |
 | New issue title/body explicitly says `Regressed by #PR`, qualified repository reference, or exact PR URL | proven |

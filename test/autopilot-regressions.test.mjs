@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { regressionScan, runAutopilotRegressions } from '../src/autopilot-regressions.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
+import { PUBLIC_HELP_TEXT } from '../src/command-catalog.mjs';
 
 const repo = 'sample/project', M = 'a'.repeat(40), P = 'b'.repeat(40), R = 'c'.repeat(40);
 const mergedAt = '2026-11-01T10:00:00Z', later = '2026-11-02T12:00:00Z', now = Date.parse('2026-11-05T00:00:00Z');
@@ -94,6 +95,76 @@ test('an exact later revert commit is proven', async t => {
   const f = fixture(t); commits(f, [{ sha: R, html_url: url('commit', R), commit: { message: `Revert thing\n\nThis reverts commit ${M}.`, committer: { date: later } } }]);
   const r = await f.scan(); assert.equal(r.merges[0].classification, 'proven'); assert.equal(r.merges[0].signals[0].kind, 'revert');
 });
+test('standard merge reverts require an exact full merge SHA in either Git message form', async t => {
+  const f = fixture(t);
+  for (const [target, suffix, expected] of [
+    [M, `, reversing\nchanges made to ${P}.`, 'proven'],
+    [M.toUpperCase(), '.', 'proven'],
+    [P, `, reversing\nchanges made to ${M}.`, 'ok'],
+    [M.slice(0, 39) + 'd', ', reversing\nchanges made to parent.', 'ok'],
+    [M.slice(0, 12), '.', 'ok'],
+    [M + 'a', ', reversing\nchanges made to parent.', 'ok'],
+  ]) {
+    commits(f, [{ sha: R, html_url: url('commit', R), commit: { message: `Revert merge\n\nThis reverts commit ${target}${suffix}`, committer: { date: later } } }]);
+    const r = await f.scan();
+    assert.equal(r.complete, true); assert.equal(r.merges[0].classification, expected, target + suffix);
+    assert.deepEqual(r.days, expected === 'proven' ? [{ date: '2026-11-02', proven: 1 }] : []);
+  }
+});
+test('rate exhaustion and Retry-After stop the entire scan, preserving proof and remaining merge identities', async t => {
+  const cases = [
+    [429, '', false],
+    [403, 'X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 9999999999\r\n', false],
+    [200, 'X-RateLimit-Remaining: 0\r\n', false],
+    [503, 'Retry-After: 60\r\n', false],
+    [429, 'Retry-After: 60\r\n', true],
+  ];
+  for (const [code, headers, throws] of cases) {
+    const f = fixture(t), gh = f.ports.gh;
+    for (let pr = 13; pr <= 37; pr++) f.rows.push({ outcome: 'merged', pr });
+    f.routes.set(`commits/${M}/statuses?per_page=100`, [status('failure')]);
+    f.routes.set(`commits/${P}/statuses?per_page=100`, [status('success', mergedAt, 2)]);
+    f.ports.gh = async args => {
+      if (!args[4].endsWith('/pulls/13')) return gh(args);
+      f.calls.push(args);
+      const response = { code: code === 200 ? 0 : 1, stdout: `HTTP/2 ${code}\r\n${headers}\r\n${JSON.stringify({ number: 13, merge_commit_sha: R, merged_at: mergedAt })}`, stderr: 'DO_NOT_PRINT_TOKEN' };
+      if (throws) throw Object.assign(Error('DO_NOT_PRINT_TOKEN'), response);
+      return response;
+    };
+    const r = await f.scan();
+    assert.equal(f.calls.length, 7, `${code} ${headers}`);
+    assert.equal(r.complete, false); assert.equal(r.merges.length, 26);
+    assert.deepEqual(r.counts, { ok: 0, suspect: 25, proven: 1 });
+    assert.deepEqual(r.days, [{ date: '2026-11-02', proven: 1 }]);
+    assert.match(r.errors.join('\n'), /rate limit|Retry-After/i);
+    assert.equal(JSON.stringify(r).includes('DO_NOT_PRINT_TOKEN'), false);
+    assert.deepEqual(fs.readdirSync(f.root), ['history.jsonl']);
+  }
+});
+test('a scan-wide request budget bounds distinct pagination URLs and retains earlier page evidence', async t => {
+  const f = fixture(t), gh = f.ports.gh;
+  f.ports.gh = async args => {
+    if (!args[4].startsWith(`repos/${repo}/issues?`)) return gh(args);
+    f.calls.push(args);
+    const endpoint = new URL(`https://api.github.com/${args[4]}`), page = Number(endpoint.searchParams.get('page') ?? 1);
+    endpoint.searchParams.set('page', String(page + 1));
+    return { code: 0, stdout: `HTTP/2 200 OK\r\n${page < 105 ? `Link: <${endpoint}>; rel="next"\r\n` : ''}\r\n${JSON.stringify(page === 1 ? [newIssue('Regressed by #12')] : [])}`, stderr: '' };
+  };
+  const r = await f.scan();
+  assert.equal(f.calls.length, 100); assert.equal(r.complete, false);
+  assert.equal(r.merges[0].classification, 'proven');
+  assert.deepEqual(r.days, [{ date: '2026-11-02', proven: 1 }]);
+  assert.match(r.errors.join('\n'), /request budget/i);
+});
+test('the same request budget applies across distinct historical merges', async t => {
+  const f = fixture(t);
+  f.rows.splice(0, 1, ...Array.from({ length: 105 }, (_, i) => ({ outcome: 'merged', pr: i + 1 })));
+  f.ports.gh = async args => { f.calls.push(args); return { code: 1, stdout: 'HTTP/2 404\r\n\r\n{}', stderr: '' }; };
+  const r = await f.scan();
+  assert.equal(f.calls.length, 100); assert.equal(r.merges.length, 105);
+  assert.deepEqual(r.counts, { ok: 0, suspect: 105, proven: 0 });
+  assert.equal(r.complete, false); assert.match(r.errors.join('\n'), /request budget/i);
+});
 test('merged revert links prove while proposed and title-only reverts stay suspect', async t => {
   const f = fixture(t);
   for (const [body, merged_at, expected] of [['Reverts sample/project#12', later, 'proven'], ['Reverts #12', null, 'suspect'], [`Reverts ${url('pull', 12)}`, later, 'proven'], ['', later, 'suspect']]) {
@@ -172,6 +243,17 @@ test('CLI dispatch forwards options, bypasses launcher and settings, and rejects
   assert.equal(await runPdd(['autopilot', 'regressions', '--json', '--file', 'report.json'], deps), 0); assert.equal(stdout, '{"safe":true}\n'); assert.equal(stderr, '');
   for (const args of [['extra'], ['--file'], ['--unknown']]) assert.equal(await runPdd(['autopilot', 'regressions', ...args], deps), 2);
   assert.equal(calls, 1);
+});
+test('regressions route stays outside the exact prompting help contract and leaves topic output unchanged', async () => {
+  const contract = fs.readFileSync(new URL('../prompts/cli/command-catalog.prompt.md', import.meta.url), 'utf8');
+  const literal = [...contract.matchAll(/```text\n([\s\S]*?)\n```/g)].find(m => m[1].startsWith('In PDD,'));
+  assert.ok(literal);
+  assert.deepEqual(literal[1].split('\n'), PUBLIC_HELP_TEXT.promptingLines);
+  assert.match(contract.replace(/```[^\n]*\n[\s\S]*?\n```/g, ''), /## Regression scan\n/);
+  let stdout = '', stderr = '';
+  assert.equal(await runPdd(['help', 'prompting'], { packageRoot: '/package', stdout: { write: s => stdout += s }, stderr: { write: s => stderr += s } }), 0);
+  assert.equal(stdout, [PUBLIC_HELP_TEXT.heading, '', ...literal[1].split('\n'), '', 'Prompting guide: /package/docs/prompting-guide.md', 'RUNBOOK: /package/RUNBOOK.md', ''].join('\n'));
+  assert.equal(stderr, '');
 });
 test('command resolves launcher hash/core folder read-only and exclusively creates report', async t => {
   const f = fixture(t), stateRoot = join(f.root, 'state'), cwd = join(f.root, 'checkout'); fs.mkdirSync(stateRoot); fs.mkdirSync(cwd);
