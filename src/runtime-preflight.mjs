@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 593795d5383de3ba190e67df257d1f7f1973f0e36c599efdc6a3f2459525eeb9).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b8fb2c58c2bfaf25fb4769a32462a5158f420f6dee5d762b7142612c08b43bf8).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -17,8 +17,11 @@ export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
 // The interpreter's upload limit (prompt-runtime server/uploads.py: MAX_UPLOAD 10 MiB, at most 10,000 files).
 // The only size limit on what pdd sends; over it, pdd names the largest files with their sizes.
 export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
+// The server's live resource JSON size limit (prompt-runtime server/live_policy.py: MAX_JSON_BYTES = 65_536).
+export const MAX_LIVE_JSON_BYTES = 65_536;
+const LIVE_POLICY_HINT = 'Set live.resource_bindings (prompt-runtime.live-resource-bindings.v1) and live.resource_run_config (prompt-runtime.live-resource-run-config.v1) to Git-visible regular files inside the upload, at most 65536 bytes, with no symlinks.';
 const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation',
-  'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings']);
+  'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings', 'live']);
 const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
 const STEP_KEYS = new Set(['step_id', 'entry_path', 'operation', 'input', 'checks', 'expected_error', 'simulation_overrides', 'model']);
 const RULE_OPS = new Set(['at_most', 'at_least', 'not_contains', 'all_in', 'equals_ignore_case']);
@@ -828,8 +831,151 @@ function documentRefusal(doc,path) {
   return null;
 }
 
+const LIVE_KEYS = new Set(['resource_bindings', 'resource_run_config', 'resource_mode']);
+function liveShapeRefusal(doc) {
+  if (!isObject(doc) || !Object.hasOwn(doc, 'live')) return null;
+  if (!isObject(doc.live)) return refusal('live-resource-policy', 'live', 'live must be a JSON object with resource_bindings and resource_run_config.', { hint: LIVE_POLICY_HINT });
+  const extra = Object.keys(doc.live).filter(key => !LIVE_KEYS.has(key));
+  if (extra.length) return refusal('live-resource-policy', 'live', `live has unknown keys: ${extra.map(key => `"${key}"`).join(', ')}.`, { hint: LIVE_POLICY_HINT });
+  if (Object.hasOwn(doc.live, 'resource_mode') && doc.live.resource_mode !== 'live') {
+    return refusal('live-resource-policy', 'live.resource_mode', 'live.resource_mode must be "live".', { hint: LIVE_POLICY_HINT });
+  }
+  for (const field of ['resource_bindings', 'resource_run_config']) {
+    const raw = doc.live[field], section = `live.${field}`;
+    if (typeof raw !== 'string' || !raw.trim() || raw !== raw.trim()) {
+      return refusal('live-resource-policy', section, `${section} must be a non-empty repository-relative path.`, { hint: LIVE_POLICY_HINT });
+    }
+    if (raw.startsWith('/') || /^[A-Za-z]:/.test(raw) || isAbsolute(raw)) {
+      return refusal('live-resource-policy', section, `${section} must be a repository-relative path, not an absolute path: ${raw}.`, { hint: LIVE_POLICY_HINT });
+    }
+    if (raw.includes('\\') || /[\0-\x1f\x7f]/.test(raw)) {
+      return refusal('live-resource-policy', section, `${section} must use forward slashes and no control characters: ${raw}.`, { hint: LIVE_POLICY_HINT });
+    }
+    const parts = raw.split('/');
+    if (parts.some(part => !part || part === '.' || part === '..' || part === '.git') || posix.normalize(raw) !== raw) {
+      return refusal('live-resource-policy', section, `${section} must be a normalized repository-relative path with no ".." or ".git" segments: ${raw}.`, { hint: LIVE_POLICY_HINT });
+    }
+    if (isSecretPath(raw)) {
+      return refusal('live-resource-policy', section, `${section} names a secret or credential path (${raw}), which cannot be uploaded.`, { hint: LIVE_POLICY_HINT });
+    }
+  }
+  return null;
+}
+
+export function liveRefusal(root, found, doc) {
+  if (!isObject(doc) || !Object.hasOwn(doc, 'live')) return { refusal: null, live: null };
+  const shape = liveShapeRefusal(doc);
+  if (shape) return { refusal: shape, live: null };
+  const workspace = found?.workspace ?? loadRuntimeWorkspace({ root });
+  const parsedDocs = {};
+  for (const field of ['resource_bindings', 'resource_run_config']) {
+    const raw = doc.live[field], section = `live.${field}`;
+    if (!allowsRuntimePath(workspace, raw)) {
+      return { refusal: refusal('live-resource-policy', section, `${raw} is outside the configured runtime workspace and is not inside the upload.`, { hint: LIVE_POLICY_HINT }), live: null };
+    }
+    const parts = raw.split('/');
+    let current = '';
+    for (let index = 0; index < parts.length; index++) {
+      current = current ? `${current}/${parts[index]}` : parts[index];
+      const st = statOf(join(root, current));
+      if (st?.isSymbolicLink()) {
+        return {
+          refusal: refusal('live-resource-policy', section,
+            index < parts.length - 1
+              ? `${raw} uses a symbolic-link ancestor (${current}); live resource files must not use symlinks.`
+              : `${raw} is a symbolic link; live resource files must be regular files with no symlinks.`,
+            { hint: LIVE_POLICY_HINT }),
+          live: null,
+        };
+      }
+      if (index < parts.length - 1 && st && !st.isDirectory()) {
+        return { refusal: refusal('live-resource-policy', section, `${raw} has a non-directory ancestor (${current}).`, { hint: LIVE_POLICY_HINT }), live: null };
+      }
+    }
+    if (!found?.visible?.has(raw)) {
+      return { refusal: refusal('live-resource-policy', section, `${raw} is not a Git-visible file in this repository.`, { hint: LIVE_POLICY_HINT }), live: null };
+    }
+    let buf;
+    if (found?.overlay?.has(raw)) {
+      buf = Buffer.from(found.overlay.get(raw).bytes);
+      if (buf.length === 0) return { refusal: refusal('live-resource-policy', section, `${raw} is empty; live resource JSON files must be between 1 and ${MAX_LIVE_JSON_BYTES} bytes.`, { hint: LIVE_POLICY_HINT }), live: null };
+      if (buf.length > MAX_LIVE_JSON_BYTES) return { refusal: refusal('live-resource-policy', section, `${raw} is ${buf.length} bytes; the live resource size limit is ${MAX_LIVE_JSON_BYTES} bytes (64 KB).`, { hint: LIVE_POLICY_HINT }), live: null };
+    } else {
+      const st = statOf(join(root, raw));
+      if (!st || !st.isFile()) {
+        return { refusal: refusal('live-resource-policy', section, `${raw} is not a regular file on disk.`, { hint: LIVE_POLICY_HINT }), live: null };
+      }
+      if (st.size === 0n) {
+        return { refusal: refusal('live-resource-policy', section, `${raw} is empty; live resource JSON files must be between 1 and ${MAX_LIVE_JSON_BYTES} bytes.`, { hint: LIVE_POLICY_HINT }), live: null };
+      }
+      if (st.size > BigInt(MAX_LIVE_JSON_BYTES)) {
+        return { refusal: refusal('live-resource-policy', section, `${raw} is ${st.size} bytes; the live resource size limit is ${MAX_LIVE_JSON_BYTES} bytes (64 KB).`, { hint: LIVE_POLICY_HINT }), live: null };
+      }
+      try {
+        const fd = openSync(join(root, raw), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        try {
+          const fst = fstatSync(fd, { bigint: true });
+          if (!fst.isFile()) return { refusal: refusal('live-resource-policy', section, `${raw} is not a regular file on disk.`, { hint: LIVE_POLICY_HINT }), live: null };
+          if (fst.size === 0n || fst.size > BigInt(MAX_LIVE_JSON_BYTES)) {
+            return { refusal: refusal('live-resource-policy', section, `${raw} is ${fst.size} bytes; the live resource size limit is ${MAX_LIVE_JSON_BYTES} bytes (64 KB).`, { hint: LIVE_POLICY_HINT }), live: null };
+          }
+          buf = readFileSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+      } catch (error) {
+        return { refusal: refusal('live-resource-policy', section, `${raw} cannot be read as a regular file: ${error.code ?? error.message}.`, { hint: LIVE_POLICY_HINT }), live: null };
+      }
+      if (buf.length === 0 || buf.length > MAX_LIVE_JSON_BYTES) {
+        return { refusal: refusal('live-resource-policy', section, `${raw} is ${buf.length} bytes; the live resource size limit is ${MAX_LIVE_JSON_BYTES} bytes (64 KB).`, { hint: LIVE_POLICY_HINT }), live: null };
+      }
+    }
+    let parsed;
+    try { parsed = JSON.parse(buf.toString('utf8')); } catch (error) {
+      return { refusal: refusal('live-resource-policy', section, `${raw} is not valid UTF-8 JSON: ${error.message}`, { hint: LIVE_POLICY_HINT }), live: null };
+    }
+    if (field === 'resource_bindings') {
+      if (!isObject(parsed) || parsed.schema_version !== 'prompt-runtime.live-resource-bindings.v1'
+        || !Array.isArray(parsed.operations) || !parsed.operations.length
+        || !parsed.operations.every(op => isObject(op)
+          && typeof op.resource === 'string' && !!op.resource.trim()
+          && typeof op.operation === 'string' && !!op.operation.trim()
+          && ['command', 'http', 'model'].includes(op.kind))) {
+        return {
+          refusal: refusal('live-resource-policy', section,
+            `${raw} must have schema_version "prompt-runtime.live-resource-bindings.v1" and a non-empty operations list of {resource, operation, kind}.`,
+            { hint: LIVE_POLICY_HINT }),
+          live: null,
+        };
+      }
+    } else {
+      if (!isObject(parsed) || parsed.schema_version !== 'prompt-runtime.live-resource-run-config.v1'
+        || parsed.mode !== 'live'
+        || typeof parsed.max_live_calls !== 'number' || !Number.isSafeInteger(parsed.max_live_calls) || parsed.max_live_calls < 1
+        || typeof parsed.allow_live_writes !== 'boolean') {
+        return {
+          refusal: refusal('live-resource-policy', section,
+            `${raw} must have schema_version "prompt-runtime.live-resource-run-config.v1", mode "live", integer max_live_calls >= 1, and boolean allow_live_writes.`,
+            { hint: LIVE_POLICY_HINT }),
+          live: null,
+        };
+      }
+    }
+    parsedDocs[field] = parsed;
+  }
+  return {
+    refusal: null,
+    live: {
+      resource_mode: 'live',
+      resource_bindings: doc.live.resource_bindings,
+      resource_run_config: doc.live.resource_run_config,
+      max_live_calls: parsedDocs.resource_run_config.max_live_calls,
+    },
+  };
+}
+
 export function scenarioShapeRefusal(doc,path) {
-  const broken=documentRefusal(doc,path);if(broken)return broken;
+  const broken=documentRefusal(doc,path) ?? liveShapeRefusal(doc);if(broken)return broken;
   if (!Array.isArray(doc.criteria)||!doc.criteria.length) return refusal('invalid-criterion','criteria','The test has no criteria.');
   const ids=new Set();
   for (const [index,item] of doc.criteria.entries()) {
@@ -863,6 +1009,7 @@ function checkTest(root, found, test, prompts) {
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
   if (test.storyPath && doc.story_path !== test.storyPath) return discoveryRefusal({ ...test, doc });
   const partial = partialTestRefusal(doc); if (partial) return partial;
+  const liveCheck = liveRefusal(root, found, doc); if (liveCheck.refusal) return liveCheck.refusal;
   if (!Array.isArray(doc.criteria) || !doc.criteria.length) return refusal('invalid-criterion', 'criteria', 'The test has no criteria.');
   const ids = new Set();
   for (const [index, item] of doc.criteria.entries()) {
@@ -938,10 +1085,13 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       prompts.set(path, prompt);
       for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
     };
-    let refused, plan, testSha = null;
+    let refused, plan, testSha = null, liveInfo = null;
     try {
       for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
       refused = checkTest(root, found, test, prompts);
+      if (!test.error && isObject(test.doc) && Object.hasOwn(test.doc, 'live')) {
+        liveInfo = liveRefusal(root, found, test.doc).live;
+      }
       const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')
         .map(prompt => promptRefusal(prompt,'interface')).filter(Boolean);
       if (nativeProblems.length) refused = [...(refused ? [refused].flat() : []),...nativeProblems];
@@ -957,7 +1107,16 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha, reviews }),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
       criteria_total: plan?.criteria.length ?? (Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0),
-      ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}), draft: false };
+      ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}),
+      ...(liveInfo ? {
+        live: {
+          resource_mode: 'live',
+          resource_bindings: liveInfo.resource_bindings,
+          resource_run_config: liveInfo.resource_run_config,
+        },
+        max_live_calls: liveInfo.max_live_calls,
+      } : {}),
+      draft: false };
     row.native_only = [...prompts.values()].filter(item => item.interface?.kind === 'native-only').map(item => ({path:item.path,reason:item.interface.reason}));
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
     for (const [index, step] of row.steps.entries()) {
@@ -1400,11 +1559,25 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
         : discoveryRefusal({path:file.path,storyPath:expected?.storyPath,doc});
       if (authority) throw Object.assign(new PreflightError(4, `${file.path}: ${authority.message}`), authority,
         {message:`${file.path}: ${authority.message}`,hint:'Restore the Story path selected by the test name, then run the selection again.'});
+      let liveCheck = { refusal: null, live: null };
+      if (isObject(doc) && Object.hasOwn(doc, 'live')) {
+        liveCheck = liveRefusal(root, { visible, workspace, overlay }, doc);
+        if (liveCheck.refusal) {
+          throw Object.assign(new PreflightError(4, `${file.path}: ${liveCheck.refusal.message}`), liveCheck.refusal,
+            { message: `${file.path}: ${liveCheck.refusal.message}`, hint: liveCheck.refusal.hint ?? LIVE_POLICY_HINT });
+        }
+      }
       if (typeof doc?.story_path === 'string' && !scenarioShapeRefusal(doc, file.path)) {
         add(doc.story_path, file.path, 'story');
+        if (liveCheck.live) {
+          add(liveCheck.live.resource_bindings, file.path);
+          add(liveCheck.live.resource_run_config, file.path);
+        }
         const plan = capturedCriterionPlan(doc, storyCriteria(bytes(inspect(doc.story_path, file.path)).toString('utf8')), file.path);
-        if (plan?.not_checked.length && plan.checked) content = Buffer.from(JSON.stringify({...doc,criteria:plan.criteria,
+        const { live: _live, ...scenarioDoc } = doc;
+        if (plan?.not_checked.length && plan.checked) content = Buffer.from(JSON.stringify({...scenarioDoc,criteria:plan.criteria,
           check_exemptions:plan.not_checked.map(item => ({criterion_id:item.criterion_id,reason:'out-of-scope',detail:item.reason}))}), 'utf8');
+        else if (Object.hasOwn(doc, 'live')) content = Buffer.from(JSON.stringify(scenarioDoc), 'utf8');
       }
     }
     const result = {...file,bytes:content,size:content.length};

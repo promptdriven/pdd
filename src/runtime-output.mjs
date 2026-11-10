@@ -216,6 +216,8 @@ export function jsonRow(row) {
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
     why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
     rerun: row.rerun ?? null, ...(typeof row.cache_reason === 'string' ? { cache_reason: row.cache_reason } : {}), ...(row.cached ? { cached: true, passed_at: row.passed_at } : {}),
+    ...(row.live ? { resource_mode: 'live', resource_bindings: row.live.resource_bindings, resource_run_config: row.live.resource_run_config } : {}),
+    ...(Number.isSafeInteger(row.max_live_calls) ? { max_live_calls: row.max_live_calls, cost: { max_calls: row.max_calls, max_live_calls: row.max_live_calls } } : {}),
     ...resultOutcome(row) };
 }
 

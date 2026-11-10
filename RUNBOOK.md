@@ -422,6 +422,9 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
 | `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
+| `live-resource-policy` | The live resource bindings or run config broke a path, upload, size, schema or server policy rule | Use repository-relative Git-visible non-symlink JSON files (at most 65536 bytes) with schemas `prompt-runtime.live-resource-bindings.v1` and `prompt-runtime.live-resource-run-config.v1` and a positive integer `max_live_calls`. |
+| `live-resource-binding-missing` | A declared resource required for live execution has no binding in `live.resource_bindings` | Add the missing resource binding in the file named by `live.resource_bindings`, or switch the test back to simulated mode. |
+| `live-replay-unavailable` | The server refused live resource replay on this endpoint or run | Remove `"live"` from the test when using simulated or Try endpoints, or run `pdd test` when live replay is enabled on the server. |
 
 ## 12. `pdd simulate` and Save as test
 
@@ -1263,6 +1266,19 @@ Use `schema_version: "prompt-runtime.interface.v2"`, `instance_types: [{"name":"
 Passing prompt check (DRAFT): [2/2 checks · 4 AI calls](https://runtime.promptdriven.ai/r/eaa3c792-986a-498c-8970-5d67181d179e).
 
 A prompt pass proves these synthetic cases against the declared fake world. It does not execute the JavaScript module, establish every input/error, approve the prompt, or prove a live effect. If a criterion remains unbound, state the exact missing contract or unsupported effect and the native test needed; never report it as passed.
+
+### Live resource mode on `pdd test`
+
+Simulated mode is the default: `pdd test` sends `{requestId, source_sha256, scenario, max_calls}` on `POST /v1/check`. To request live resource mode on `pdd test`, add a top-level `live` object to the Story test file (`tests/<story>.json`):
+
+```json
+"live": {
+  "resource_bindings": "runtime/live-resources.json",
+  "resource_run_config": "run-config.json"
+}
+```
+
+`"resource_mode": "live"` is optional inside `live`; any other value is refused. Before upload, `pdd` validates both paths locally: each must be a clean repository-relative path (no leading `/`, `..`, backslash or `.git` segment), Git-visible, a regular non-symlink file with no symlinked ancestor inside the repository, included in the source upload, at most 65536 bytes, and valid JSON with `"schema_version": "prompt-runtime.live-resource-bindings.v1"` (`operations` list) and `"schema_version": "prompt-runtime.live-resource-run-config.v1"` (`"mode": "live"`, positive integer `max_live_calls` and boolean `allow_live_writes`). `pdd` strips the client-side `live` key from the uploaded scenario copy so the server receives a strict `program-scenario.v1` file alongside the two JSON files in the upload tar, and sends `resource_mode: "live"`, `resource_bindings` and `resource_run_config` only on `POST /v1/check`. `pdd lint` (`POST /v1/lint`) and `pdd simulate` / Try (`POST /v1/try`) never send those three fields. Live mode keeps every existing `max_calls` cap, skips local pass-cache reuse (`runs every time: uses live resources`), and records `max_live_calls` from `resource_run_config` in the check plan, row, batch and summary cost record (`cost: {max_calls, max_live_calls}`).
 ## Use the Try tools when they are available
 
 The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `try_open` to open or reuse the Story's simulation, `try_state` to inspect it, fill the input in `try_run`, `try_check` to check the run against the Story, and `try_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the simulation's call budget and appears in the Simulator's history; inspect remaining calls before more work.

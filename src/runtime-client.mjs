@@ -1,7 +1,7 @@
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { acquireInterpreterSlot, markInterpreterDispatch, observeInterpreterRequest } from './interpreter-queue.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 67a58f26d740cc383fa518a0e6daa062308444b1d31ae99d3b5844a300307062).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5248e5492501722c55a80fef25a75dbf75d7ffc8621a0cc141e8cfd979808a0b).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -1000,10 +1000,14 @@ function judgePost(reply, id, command, secrets) {
   if (reply.status === 401) return { kind: 'stop', note: { code: cleanText(error?.code, secrets) || 'auth-required', message: AUTH_TEXT } };
   if (reply.status === 503 && /^(?:pool-low-room|pool-copy-[a-z-]+|github-unavailable)$/.test(error?.code ?? '')) return { kind: 'not_run', note: note('Try again later.') };
   if ([400, 413, 415, 422].includes(reply.status) && error?.code) {
-    return { kind: 'refused', refusal: { code: cleanText(error.code, secrets), section: null, message: cleanText(error.message, secrets) || null,
+    const code = cleanText(error.code, secrets);
+    const section = cleanText(error.field ?? error.section ?? reply.json?.details?.field, secrets) || null;
+    const message = cleanText(error.message, secrets) || LIVE_REFUSAL_MESSAGES[code] || null;
+    const liveHint = LIVE_REFUSAL_HINTS[code] || null;
+    return { kind: 'refused', refusal: { code, section, message,
       engine_message: reply.json.details ? cleanText(JSON.stringify(reply.json.details), secrets) : null,
       ...(reply.status === 422 ? { reason: cleanText(error.reason, secrets) || null, fix: cleanText(error.fix, secrets) || null,
-        hint: cleanText(error.hint, secrets) || null, cause: cleanText(error.cause, secrets) || null } : { hint: null }) } };
+        hint: cleanText(error.hint, secrets) || liveHint, cause: cleanText(error.cause, secrets) || null } : { hint: liveHint }) } };
   }
   const said = cleanText(error?.message, secrets);
   return { kind: 'unknown', why: `The interpreter answered HTTP ${reply.status}${said ? `: ${said.replace(/\.$/, '')}` : ''}.` };
@@ -1064,8 +1068,20 @@ function select(found, words, root) {
   return selected;
 }
 
+const LIVE_REFUSAL_MESSAGES = Object.freeze({
+  'live-resource-policy': 'The live resource bindings or run config failed the live resource policy.',
+  'live-resource-binding-missing': 'A live check reached a resource operation that has no live binding in resource_bindings.',
+  'live-replay-unavailable': 'Live resource steps cannot be replayed in Try.',
+});
+const LIVE_REFUSAL_HINTS = Object.freeze({
+  'live-resource-policy': 'pdd: check resource_bindings (prompt-runtime.live-resource-bindings.v1) and resource_run_config (prompt-runtime.live-resource-run-config.v1): both must be repository-relative regular files inside the upload, at most 65536 bytes, with no symlinks and allowed live policy bounds.',
+  'live-resource-binding-missing': 'pdd: add a live binding for the named resource and operation in resource_bindings (prompt-runtime.live-resource-bindings.v1), then run pdd test again.',
+  'live-replay-unavailable': 'pdd: run a fresh pdd test check instead; Try does not replay live resource calls.',
+});
+
 const localRows = rows => rows.map(row => ({ ...row, ...(row.refusals.length ? {unsent:true} : {}), state: row.refusals.length ? 'refused' : row.native_only?.length ? 'not_run' : 'ready', phase: row.refusals.length || row.native_only?.length ? 'local' : 'server',
   ...(row.native_only?.length ? {unsent:true,note:{code:'native-only',message:row.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}} : {}),
+  ...(Number.isSafeInteger(row.max_live_calls) ? { cost: { max_calls: row.max_calls, max_live_calls: row.max_live_calls } } : {}),
   refusals:row.refusals.map(item=>({...item,hint:item.hint??'Fix the named test or prompt rule, then run the selection again.'})),
   request_ids: [], calls: 0, report_url: null, checks: null, failed_checks: [], all_checks: [] }));
 
@@ -1078,7 +1094,27 @@ const incompleteCriteria = row => {
 
 function capturedCriteria(rows, capture) {
   let broken = false;
+  const uploaded = new Map((capture.files ?? []).map(file => [file.path, file]));
   for (const row of rows.filter(row=>!row.unsent)) {
+    if (row.live) {
+      let missingField = null, missingPath = null, linkedPath = null;
+      for (const field of ['resource_bindings', 'resource_run_config']) {
+        const target = row.live[field], entry = uploaded.get(target);
+        if (!entry) { missingField = `live.${field}`; missingPath = target; break; }
+        if (entry.target) { missingField = `live.${field}`; linkedPath = target; break; }
+      }
+      if (missingPath || linkedPath) {
+        const message = linkedPath
+          ? `${row.test}: ${linkedPath} is a symbolic link; live resource files must be regular files with no symlinks.`
+          : `${row.test}: ${missingPath} is not inside the uploaded source archive.`;
+        const error = Object.assign(new PreflightError(4, message), {
+          code: 'live-resource-policy',
+          section: missingField,
+          hint: LIVE_REFUSAL_HINTS['live-resource-policy'],
+        });
+        refuseSource(row, error); broken = true; continue;
+      }
+    }
     const source = capture.sources?.find(source=>source.path===row.test);
     if (!source) continue;
     let doc; try { doc=JSON.parse(Buffer.from(source.bytes).toString('utf8')); } catch { /* Refuse captured invalid bytes below. */ }
@@ -1229,9 +1265,14 @@ function lintDiagnostics(context, answer, rows) {
 }
 const cleanItem = (item, secrets) => ({ code: cleanText(item.code, secrets) || 'unknown', path: cleanText(item.file ?? item.path, secrets) || null });
 
-// Hints that make a server refusal readable: the local P9 rule or the P7 status.
+// Hints that make a server refusal readable: the local P9 rule, P7 status or live resource policy.
 function addHints(row, root, visible) {
   for (const item of row.refusals) {
+    if (LIVE_REFUSAL_MESSAGES[item.code]) {
+      if (!item.message || item.message === item.code || GENERIC_REFUSAL.test(item.message)) item.message = LIVE_REFUSAL_MESSAGES[item.code];
+      item.hint ||= LIVE_REFUSAL_HINTS[item.code];
+      if (row.next_step === 'Tell the person the reason. Do not resend it automatically.') row.next_step = null;
+    }
     const index = Number(/^steps\[(\d+)\]/.exec(item.section ?? '')?.[1]), step = row.steps?.[index];
     if (!step) continue;
     const prompt = readPrompt(root, visible, step.entry_path);
@@ -1348,8 +1389,12 @@ function saveLocalNativeResult(context, rows, intent, problems = []) {
 
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
+  const liveRows = rows.filter(row => Number.isSafeInteger(row.max_live_calls) && row.max_live_calls >= 1);
+  const totalMaxCalls = rows.reduce((sum, row) => sum + (Number.isSafeInteger(row.max_calls) ? row.max_calls : 0), 0);
+  const totalMaxLiveCalls = liveRows.reduce((sum, row) => sum + row.max_live_calls, 0);
   return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
+    ...(liveRows.length ? { max_live_calls: totalMaxLiveCalls, cost: { max_calls: totalMaxCalls, max_live_calls: totalMaxLiveCalls } } : {}),
     ...(context.singleAttempt ? {single_attempt:true} : {}),
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
     native_source: context.nativeSource ?? null,
@@ -1361,7 +1406,10 @@ function batchRecord(context) {
     rows: rows.map(row => ({ test: row.test, native_only: row.native_only ?? [], story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, recovery_state: row.state, ...resultOutcome(row),
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       ...(row.unsent ? { unsent: true } : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, binding_plan: row.binding_plan, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
-      sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
+      sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls,
+      ...(row.live ? { live: row.live, resource_mode: 'live', resource_bindings: row.live.resource_bindings, resource_run_config: row.live.resource_run_config } : {}),
+      ...(Number.isSafeInteger(row.max_live_calls) ? { max_live_calls: row.max_live_calls, cost: { max_calls: row.max_calls, max_live_calls: row.max_live_calls } } : {}),
+      warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
       ...(row.known_calls !== undefined ? { known_calls: row.known_calls } : {}), ...(row.unknown_calls !== undefined ? { unknown_calls: row.unknown_calls } : {}),
@@ -1572,7 +1620,8 @@ async function sendCheckAttempt(context, row) {
     row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
     row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
     row.phase = 'server';
-    const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
+    const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls,
+      ...(row.live ? { resource_mode: 'live', resource_bindings: row.live.resource_bindings, resource_run_config: row.live.resource_run_config } : {}) };
     const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())), machine);
     if (verdict.kind === 'not_sent') {
       const note = { code: null, message: 'Stopped before sending.' };
@@ -1878,6 +1927,13 @@ function printResult(context, rows, extra = {}) {
     ? Object.fromEntries(Object.entries(context.coverage).filter(([key])=>key !== 'runtime')) : context.coverage;
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage, rows, exitCode, summaryLine: context.noFailed ? 'No failed Stories. 0 AI calls.' : summaryLine(rows),
     warnings: [...new Set([...warnings, ...(context.unmatched ?? [])]), ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
+  const liveRows = rows.filter(row => Number.isSafeInteger(row.max_live_calls) && row.max_live_calls >= 1);
+  if (liveRows.length) {
+    const totalMaxCalls = rows.reduce((sum, row) => sum + (Number.isSafeInteger(row.max_calls) ? row.max_calls : 0), 0);
+    const totalMaxLiveCalls = liveRows.reduce((sum, row) => sum + row.max_live_calls, 0);
+    summary.max_live_calls = totalMaxLiveCalls;
+    summary.cost = { max_calls: totalMaxCalls, max_live_calls: totalMaxLiveCalls };
+  }
   if (context.checkPlan) {
     summary.check_plan = context.checkPlan;
     summary.check_scope = checkPlanResults(context.checkPlan, rows);
@@ -2256,7 +2312,8 @@ function heldForLint(row) {
       || row.phase === 'lint' && row.note?.code === 'lint-finished');
 }
 function validSavedCallCeiling(row) {
-  return Number.isInteger(row.max_calls) && row.max_calls >= 1 && row.max_calls <= 1000;
+  return Number.isInteger(row.max_calls) && row.max_calls >= 1 && row.max_calls <= 1000
+    && (!row.live || (Number.isSafeInteger(row.max_live_calls) && row.max_live_calls >= 1));
 }
 function validSavedCheck(row) {
   const text = value => typeof value === 'string' && !!value.trim();
@@ -3181,7 +3238,8 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
       if (!story) continue;
       const fingerprint = capture ? storyFingerprint(cache, capture, story, options, origin) : null;
       const pass = data.stories[story]?.pass;
-      const reason = capture && declarationCacheReason(capture, story, own.map(row => row.test))
+      const reason = (own.some(row => row.live) ? 'runs every time: uses live resources' : null)
+        || capture && declarationCacheReason(capture, story, own.map(row => row.test))
         || (Number.isFinite(Date.parse(pass?.passed_at)) && cache.context.ports.now() - Date.parse(pass.passed_at) > 7 * 86400000 ? 'runs again: saved pass is older than seven days' : null)
         || (pass && !cleanRecordMatches(data.latest_identity, pass) ? 'runs again: interpreter build or model changed' : null);
       if (reason) for (const row of own) row.cache_reason = reason;
@@ -3266,12 +3324,17 @@ async function runBatch(context, cwd, words, options, setRelease) {
     row.criterion_texts = Object.fromEntries([...(Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]),
       ...(row.not_checked??[]).map(item=>[item.criterion_id,item.text])]);
   }
-  if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
+  if (options['--max-calls'] !== undefined) for (const row of rows) {
+    row.max_calls = Number(options['--max-calls']);
+    if (row.cost) row.cost = { ...row.cost, max_calls: row.max_calls };
+  }
   const runs = allRuns({cancelled:true}, {env:ports.env}).filter(run => {
     try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
   });
   context.checkPlan = buildCheckPlan({root,found,selected,rows,full:words.length === 0,
     base:runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD'});
+  const livePlanRows = rows.filter(row => Number.isSafeInteger(row.max_live_calls) && row.max_live_calls >= 1);
+  if (livePlanRows.length) context.checkPlan.max_live_calls = livePlanRows.reduce((sum, row) => sum + row.max_live_calls, 0);
   for (const value of checkPlanLines(context.checkPlan)) line(ports.stderr, value);
   if (!words.length && context.checkPlan.prerequisites.length) {
     const note = {code:'check-plan-prerequisite',message:checkPlanResults(context.checkPlan,rows).guidance};
@@ -3714,8 +3777,8 @@ function trySetupRefused(context, test, appMap, refusals, reportUrl) {
   if (context.doorMode) throw new Stop(125, refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean).join('; ') || 'The interpreter refused this Try.');
   const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
   const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
-    reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
-    fix: text(item.fix), where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') }));
+    reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message), LIVE_REFUSAL_MESSAGES[text(item.code)]].find(Boolean),
+    fix: text(item.fix) || LIVE_REFUSAL_HINTS[text(item.code)] || '', where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') }));
   const mapped = !!appMap && items.some(item => Object.hasOwn(APP_MAP_RULES, item.code) || /^app-map-/.test(item.code) || /app[-_]map/i.test(item.section));
   const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.fix)?.fix;
   const again = `run pdd simulate ${test.story} --new.`;
@@ -4244,7 +4307,10 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
     if (reply.status && ![200, 202].includes(reply.status)) {
       knownOutcome = reply.status >= 400 && reply.status < 500 && reply.status != 408;
-      throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The interpreter refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
+      const errCode = cleanText(reply.json?.error?.code, [identity.token]);
+      const errMsg = cleanText(reply.json?.error?.message, [identity.token]) || LIVE_REFUSAL_MESSAGES[errCode];
+      const errHint = LIVE_REFUSAL_HINTS[errCode] ? ` ${LIVE_REFUSAL_HINTS[errCode]}` : '';
+      throw new Stop(125, (errMsg || errCode || `The interpreter refused the command (HTTP ${reply.status}).`) + errHint + recovery);
     }
     const end = ports.now() + 900_000;
     let answer = null;
@@ -4257,8 +4323,10 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
           knownOutcome = ['failed', 'refused', 'not_run'].includes(answer.state);
           const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets: [identity.token] });
           const why = answer.result?.refusals?.[0];
+          const whyCode = cleanText(why?.code, [identity.token]);
+          const whyHint = LIVE_REFUSAL_HINTS[whyCode] ? ` ${LIVE_REFUSAL_HINTS[whyCode]}` : '';
           if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}${recovery}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
-          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]) + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
+          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || LIVE_REFUSAL_MESSAGES[whyCode] || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]) + whyHint + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
         }
         let observation = answer.result.report ?? {};
         if (typeof observation.action_id === 'string') {
