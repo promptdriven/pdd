@@ -5,7 +5,8 @@ import { redactSecrets } from './secret-redaction.mjs';
 
 export const REPORT_REPOSITORY = 'promptdriven/pdd';
 export const RUNTIME_OWNER = 'agarwal-ishaan';
-const DAY = 24 * 60 * 60 * 1000, RECENT = 14 * DAY, NEW_PER_DAY = 3;
+const DAY = 24 * 60 * 60 * 1000, RECENT = 14 * DAY, NEW_PER_DAY = 3, COUNT = '{{count}}';
+const withCount = draft => ({ ...draft, body: draft.body.replace(COUNT, String(draft.count ?? 1)) });
 const LABELS = { runtime: 'pdd:runtime', pdd: 'pdd:autopilot-report' };
 const slug = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 const minor = version => /^(\d+)\.(\d+)/.exec(String(version ?? ''))?.slice(1, 3).join('.') ?? 'unknown';
@@ -36,7 +37,7 @@ function draftFor({ cause, versions, step, words }) {
   const tail = safeTail(cause.detail || cause.text, words);
   const body = [`Autopilot ended one job because of a ${kind === 'runtime' ? 'Runtime' : 'PDD'} problem. The job did not wait for a fix.`, '',
     `- Kind: ${kind}`, `- Component: ${slug(cause.component) || 'unknown'}`, `- Error code: ${slug(cause.code) || 'unknown'}`, `- Step: ${slug(step) || 'unknown'}`,
-    `- Versions: PDD ${versions.pdd ?? 'unknown'}, Node ${versions.node ?? 'unknown'}, ${versions.platform ?? 'unknown'}, agent ${versions.agent ?? 'unknown'}`,
+    `- Versions: PDD ${versions.pdd ?? 'unknown'}, Node ${versions.node ?? 'unknown'}, ${versions.platform ?? 'unknown'}, agent ${versions.agent ?? 'unknown'}`, `- Seen on this machine: ${COUNT}`,
     '', 'Redacted detail (no repository code):', '', '```text', tail || '(none)', '```', '', reportMarker(fingerprint)].join('\n');
   return { fingerprint, repository: REPORT_REPOSITORY, title, body, labels: [LABELS[kind]], assignees: kind === 'runtime' ? [RUNTIME_OWNER] : [] };
 }
@@ -77,7 +78,7 @@ async function sendDraft(draft, { root, machine, limit = true }, ports) {
     return { state: 'seen', number: found.number, ref: ref(found.number) };
   }
   if (limit && ledger.filed.filter(row => now - row.at < DAY).length >= NEW_PER_DAY) return { state: 'limit' };
-  const { value } = await api('POST', `repos/${draft.repository}/issues`, { title: draft.title, body: draft.body, labels: draft.labels, assignees: draft.assignees });
+  const { value } = await api('POST', `repos/${draft.repository}/issues`, { title: draft.title, body: withCount(draft).body, labels: draft.labels, assignees: draft.assignees });
   ledger.filed = [...ledger.filed.filter(row => now - row.at < DAY), { fingerprint: draft.fingerprint, number: value.number, at: now }];
   save(fs, file, ledger);
   return { state: 'filed', number: value.number, ref: ref(value.number) };

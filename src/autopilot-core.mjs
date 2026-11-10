@@ -229,6 +229,7 @@ async function intake(ctx, rows) {
   const busy = readJobs(ctx.fs, ctx.root).filter(job => job.phase !== 'ending').length;
   let free = settings.runs - busy, tries = 0;
   if (free <= 0) return null;
+  if (!['codex', 'claude'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex or Claude agent; run pdd autopilot start from a signed-in Codex or Claude';
   if (held.heldUntil > ctx.now()) return `intake paused until ${new Date(held.heldUntil).toISOString()}: ${STRIKES} jobs in a row ended with no result; check the agent with pdd autopilot doctor`;
   let agentChecked = false;
   for await (const row of readyRows(ctx, rows)) {
@@ -300,7 +301,11 @@ function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent
 
 async function mergeCheck(ctx, job) {
   const { gh, repo, state, settings } = ctx;
-  if (ctx.now() >= job.deadline) { stopChecks(ctx, job); return end(ctx, job, cause('job', 'checks-timeout', `the PR checks did not finish within ${settings.jobTimeoutMinutes} minutes${job.lastError ? `; last error: ${job.lastError}` : ''}`)); }
+  if (ctx.now() >= job.deadline) {
+    stopChecks(ctx, job);
+    const text = `the PR checks did not finish within ${settings.jobTimeoutMinutes} minutes${job.lastError ? `; last error: ${job.lastError}` : ''}`;
+    return end(ctx, job, job.lastErrorTool ? cause('pdd', 'merge-check-tool', text) : cause('job', 'checks-timeout', text));
+  }
   const pr = await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`);
   if (pr.merged) return finishMerge(ctx, job);
   if (pr.state !== 'open') return end(ctx, job, cause('job', 'pr-closed', `PR #${job.pr} was closed without a merge`));
@@ -458,7 +463,7 @@ export async function tickCore(input, ports) {
     try { await advance(ctx, job); }
     catch (error) {
       const latest = readJson(ctx.fs, join(ctx.dirs.jobs, `${job.issue}.json`));
-      if (latest) { latest.lastError = oneLine(error.message); ctx.saveJob(latest); }
+      if (latest) { latest.lastError = oneLine(error.message); latest.lastErrorTool = ['github', 'git'].includes(error.code); ctx.saveJob(latest); }
       ctx.warn(`Autopilot core #${job.issue}: ${error.message}`);
     }
   }

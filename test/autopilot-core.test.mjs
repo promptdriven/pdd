@@ -178,7 +178,7 @@ test('Runtime no verdict files one report, links it, and the next issue starts',
   assert.deepEqual(reports[0].labels, ['pdd:runtime']);
   assert.deepEqual(reports[0].assignees, ['agarwal-ishaan']);
   assert.match(reports[0].body, /<!-- pdd:autopilot-report:runtime\.pdd-test\.no-verdict\.0\.1 -->/);
-  assert.match(reports[0].body, /0\.1\.27/); assert.match(reports[0].body, /no verdict/);
+  assert.match(reports[0].body, /0\.1\.27/); assert.match(reports[0].body, /no verdict/); assert.match(reports[0].body, /Seen on this machine: 1/);
   assert.doesNotMatch(reports[0].body, /change-17|widgets/, 'no user code or repository text');
   assert.match(endComments(w, 17)[0], /Blocked by promptdriven\/pdd#1/);
   assert.ok(w.job(18, 'build'), 'the next issue starts');
@@ -363,4 +363,38 @@ test('launcher: engine core ticks without Herdr or a coordinator; status and rep
   assert.ok(!seen.includes('herdr'));
   const report = await runAutopilotLauncher({ command: 'report', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [] }, ports);
   assert.equal(report.message, 'No local Autopilot report drafts.');
+});
+
+test('at most 3 new reports per machine per day; a 4th new cause stays a local draft', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, report: 'file' } });
+  for (const n of [17, 18, 19, 20]) w.issue(n);
+  for (const [n, code] of [[17, 'a'], [18, 'b'], [19, 'c'], [20, 'd']]) {
+    await w.tick(); w.finish(n, 'build', { result: { ...runtimeFailure, kind: 'pdd', component: 'pdd lint', code: `crash-${code}` } });
+  }
+  await w.tick();
+  assert.equal(w.reports.issues.size, 3);
+  assert.ok([...w.reports.issues.values()].every(issue => issue.labels[0] === 'pdd:autopilot-report' && !issue.assignees.length));
+  assert.deepEqual(listReportDrafts({ root: w.reportRoot }).map(d => d.fingerprint), ['pdd.pdd-lint.crash-d.0.1']);
+  assert.match(endComments(w, 20)[0], /local draft/);
+});
+
+test('a merge check that keeps failing on GitHub ends at its time limit with a PDD report', async t => {
+  const w = await coreWorld(t, { settings: { report: 'draft', jobTimeoutMinutes: 30 } });
+  w.issue(17);
+  await w.tick(); const { pr } = w.build(17);
+  const gh = w.gh;
+  w.gh = async (args, options) => args.some(a => String(a).includes(`/pulls/${pr.number}`)) && !args.includes('PATCH') ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' } : gh(args, options);
+  await w.tick();
+  assert.match(JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).lastError, /502/);
+  w.advance(31 * MIN); await w.tick();
+  assert.match(endComments(w, 17)[0], /did not finish within 30 minutes.*502/);
+  assert.equal(listReportDrafts({ root: w.reportRoot })[0].fingerprint, 'pdd.autopilot-core.merge-check-tool.0.1');
+});
+
+test('an agent other than Codex or Claude holds intake without a claim', async t => {
+  const w = await coreWorld(t);
+  w.state.agent = { kind: 'gemini', command: 'gemini' };
+  w.issue(17);
+  const result = await w.tick();
+  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex or Claude/);
 });
