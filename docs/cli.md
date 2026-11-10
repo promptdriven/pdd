@@ -1389,7 +1389,8 @@ says to run `pdd autopilot start`.
 | `runs` | Issues in progress at the same time on this machine | 2 |
 | `label` | Take only issues with this label | none: every ready issue |
 | `quietMinutes` | Minutes with no progress after which a job or the checks of a PR end. There is no fixed time limit: a job runs as long as its log or branch changes, and a PR waits while CI, the review or the suite still runs | 45 |
-| `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `draft` |
+| `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `file` |
+| `reports.runtimeRepo` | Repository for Runtime problem reports, for example `promptdriven/prompt-runtime`; used when this machine can read it, else `promptdriven/pdd` with label `pdd:runtime` | none |
 | `repairs` | Repair jobs for one PR after a red check | 2 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
 
@@ -1471,12 +1472,14 @@ after a pause writes nothing on an issue that another machine took over.
 A Runtime problem (no verdict, interface or binding refusal, interpreter error,
 server compatibility) or a PDD problem (CLI error, crash, claim or merge-check tool
 error, and test vectors: a Runtime case, a scenario value limit such as a value that
-is not a safe integer, a vector replay) also gets one report for its owners in
-promptdriven/pdd: label `pdd:runtime` (assigned to the Runtime owner) or
-`pdd:autopilot-report`. One cause has one report: a repeat on another
-day adds one "seen again" comment. Each machine files at most 3 new reports a day.
-Reports hold versions, the step, the error code and a short redacted detail,
-never code or text from your repository. With `report` `draft` (the default) the
+is not a safe integer, a vector replay) also gets one report for its owners: a PDD
+problem in promptdriven/pdd with label `pdd:autopilot-report`; a Runtime problem in
+`reports.runtimeRepo` when this machine can read it, else in promptdriven/pdd, with
+label `pdd:runtime` (assigned to the Runtime owner). One cause has one report: a
+repeat adds at most one "seen again" comment per machine a day. There is no daily
+cap on new reports. Reports hold versions, the step, the error code and a short
+redacted detail, never code or text from your repository. With `report` `file` (the
+default) Autopilot files them. With `draft` the
 report stays on this machine until you run `pdd autopilot report send
 FINGERPRINT`; with `off` nothing is saved. In both cases the ended issue gets
 `pdd:stuck`, because there is no report to wait on. Report issues themselves are

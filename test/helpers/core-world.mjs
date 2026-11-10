@@ -117,7 +117,8 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.state = { cwd: w.cwd, repo: repository, coordinatorId, machine, baseBranch: 'main', agent: { kind: 'codex', command: 'codex' },
     packageRoot: join(dir, 'pkg'), stateFile: join(dir, `state-${machine}.json`) };
   w.root = join(dir, `core-${machine}`); w.reportRoot = join(dir, `reports-${machine}`);
-  w.settings = coreSettings({ autopilot: { mode: 'auto', engine: 'core', testCommand: 'npm test', ...settings } });
+  // Tests keep reports as local drafts unless they ask for another mode (the product default is file).
+  w.settings = coreSettings({ autopilot: { mode: 'auto', engine: 'core', testCommand: 'npm test', report: 'draft', ...settings } });
   w.gh = async (args, options) => {
     const endpoint = endpointOf(args) ?? '';
     return endpoint.startsWith('repos/promptdriven/pdd') && repository.toLowerCase() !== 'promptdriven/pdd' ? w.reports.gh(args, options) : w.github.gh(args, options);

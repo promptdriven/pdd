@@ -21,11 +21,11 @@ test('settings: engine switch, defaults and bounded values', () => {
   assert.equal(autopilotEngine({ autopilot: { engine: 'core' } }), 'core');
   assert.equal(autopilotEngine({ autopilot: { engine: 'turbo' } }), 'full');
   assert.deepEqual(coreSettings({ autopilot: { mode: 'auto', engine: 'core' } }), {
-    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, report: 'draft', repairs: 2, testCommand: null });
+    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, report: 'file', runtimeRepo: null, repairs: 2, testCommand: null });
   const custom = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check', trust: ['Dana'] } });
-  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check' });
+  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', runtimeRepo: null, repairs: 0, testCommand: 'make check' });
   const invalid = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 0, quietMinutes: -1, report: 'loud', repairs: 1.5, label: '' } });
-  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'draft', 2, null]);
+  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'file', 2, null]);
   assert.equal(coreSettings({ autopilot: { jobTimeoutMinutes: 120 } }).jobTimeoutMinutes, undefined, 'there is no fixed time limit');
   assert.equal(coreSettings({ autopilot: { engine: 'core' } }, { scripts: { test: 'node --test' } }).testCommand, 'npm test');
 });
@@ -387,17 +387,17 @@ test('launcher: engine core ticks without Herdr or a coordinator; status and rep
   assert.equal(report.message, 'No local Autopilot report drafts.');
 });
 
-test('at most 3 new reports per machine per day; a 4th new cause stays a local draft', async t => {
+test('no daily cap: 4 new causes in one day are 4 reports, none stays a local draft', async t => {
   const w = await coreWorld(t, { settings: { runs: 1, report: 'file' } });
   for (const n of [17, 18, 19, 20]) w.issue(n);
   for (const [n, code] of [[17, 'a'], [18, 'b'], [19, 'c'], [20, 'd']]) {
     await w.tick(); w.finish(n, 'build', { result: { ...runtimeFailure, kind: 'pdd', component: 'pdd lint', code: `crash-${code}` } });
   }
   await w.tick();
-  assert.equal(w.reports.issues.size, 3);
+  assert.equal(w.reports.issues.size, 4);
   assert.ok([...w.reports.issues.values()].every(issue => issue.labels[0] === 'pdd:autopilot-report' && !issue.assignees.length));
-  assert.deepEqual(listReportDrafts({ root: w.reportRoot }).map(d => d.fingerprint), ['pdd.pdd-lint.crash-d.0.1']);
-  assert.match(endComments(w, 20)[0], /local draft/);
+  assert.deepEqual(listReportDrafts({ root: w.reportRoot }), []);
+  assert.match(endComments(w, 20)[0], /Blocked by promptdriven\/pdd#4/);
 });
 
 test('a merge check that keeps failing on GitHub ends after its quiet period with a PDD report', async t => {
@@ -1644,4 +1644,59 @@ test('G5 a reviewer whose log stops for the quiet period is stopped and tried on
   w.suite(17, 0);
   for (let i = 0; i < 6; i++) { w.advance(10 * MIN); await w.tick(); }
   assert.ok(w.stopped.includes(first.id)); assert.notEqual(w.job(17, 'review').id, first.id, 'a second reviewer starts');
+});
+
+// ---- C (#3186): reports filed by default, no daily cap, owner repository ------------------------------------
+const reportGh = ({ readable = true } = {}) => {
+  const calls = [], issues = new Map(); let next = 500;
+  const reply = (status, body) => ({ code: status < 300 ? 0 : 1, stdout: `HTTP/2.0 ${status} OK\r\n\r\n${JSON.stringify(body)}`, stderr: '' });
+  const gh = async (args, options = {}) => {
+    const method = args[args.indexOf('--method') + 1], endpoint = args[4], input = options.input ? JSON.parse(options.input) : null;
+    calls.push([method, endpoint, input]);
+    if (method === 'GET' && endpoint === 'repos/promptdriven/prompt-runtime') return readable ? reply(200, { full_name: 'promptdriven/prompt-runtime' }) : reply(404, { message: 'Not Found' });
+    const m = /^repos\/([^/]+\/[^/]+)\/issues(?:\?(.*))?$/.exec(endpoint);
+    if (m && method === 'GET') return reply(200, [...issues.values()].filter(i => i.repo === m[1]));
+    if (m && method === 'POST') { const issue = { number: ++next, id: next * 10, repo: m[1], state: 'open', ...input }; issues.set(issue.number, issue); return reply(201, issue); }
+    if (/\/comments$/.test(endpoint) && method === 'POST') return reply(201, { id: 1 });
+    return reply(404, { message: 'Not Found' });
+  };
+  return { gh, calls, issues };
+};
+
+test('H1 reports: file is the default mode; no daily cap; the same cause gets one "seen again" per machine per day', async t => {
+  const { fileReport } = await import('../src/autopilot-reports.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  assert.equal(coreSettings({ autopilot: { engine: 'core' } }).report, 'file');
+  const root = mkdtempSync(join(tmpdir(), 'pdd-h1-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fake = reportGh();
+  const file = code => fileReport({ cause: { kind: 'pdd', component: 'pdd', code, text: 'x' }, mode: 'file', root, machine: 'host-a', versions: { pdd: '0.1.27' } }, { gh: fake.gh, now: () => 0 });
+  for (const code of ['a', 'b', 'c', 'd', 'e']) assert.equal((await file(code)).state, 'filed', `cause ${code} is filed`);
+  assert.equal(fake.issues.size, 5, 'no cap of 3 a day');
+  assert.equal((await file('a')).state, 'seen'); assert.equal((await file('a')).state, 'counted', 'one seen-again comment a day');
+  const seen = fake.calls.filter(([method, endpoint]) => method === 'POST' && endpoint.endsWith('/comments'));
+  assert.equal(seen.length, 1); assert.doesNotMatch(seen[0][2].body, /host-a/, 'no host name');
+});
+
+test('H2 a Runtime report goes to the configured Runtime repository when readable, else to promptdriven/pdd with pdd:runtime', async t => {
+  const { fileReport } = await import('../src/autopilot-reports.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const cause = { kind: 'runtime', component: 'pdd test', code: 'binding-refused', text: 'refused' };
+  for (const [readable, repo] of [[true, 'promptdriven/prompt-runtime'], [false, 'promptdriven/pdd']]) {
+    const root = mkdtempSync(join(tmpdir(), 'pdd-h2-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+    const fake = reportGh({ readable });
+    const sent = await fileReport({ cause, mode: 'file', root, machine: 'm', versions: { pdd: '0.1.27' }, runtimeRepo: 'promptdriven/prompt-runtime' }, { gh: fake.gh, now: () => 0 });
+    assert.equal(sent.state, 'filed'); assert.equal(sent.ref, `${repo}#501`);
+    const issue = fake.issues.get(501);
+    assert.equal(issue.repo, repo); assert.deepEqual(issue.labels, ['pdd:runtime']); assert.deepEqual(issue.assignees, ['agarwal-ishaan']);
+  }
+  // A PDD cause (also a test vector) always goes to promptdriven/pdd.
+  const root = mkdtempSync(join(tmpdir(), 'pdd-h2-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fake = reportGh();
+  const vector = await fileReport({ cause: { kind: 'runtime', component: 'pdd lint', code: 'scenario-integer-out-of-range', text: 'x' }, mode: 'file', root, machine: 'm', versions: { pdd: '0.1.27' }, runtimeRepo: 'promptdriven/prompt-runtime' }, { gh: fake.gh, now: () => 0 });
+  assert.equal(vector.ref, 'promptdriven/pdd#501'); assert.deepEqual(fake.issues.get(501).labels, ['pdd:autopilot-report']);
+  // The core passes autopilot.reports.runtimeRepo from pdd.json.
+  assert.equal(coreSettings({ autopilot: { reports: { runtimeRepo: 'promptdriven/prompt-runtime' } } }).runtimeRepo, 'promptdriven/prompt-runtime');
+  assert.equal(coreSettings({ autopilot: { reports: { runtimeRepo: 'not a repo' } } }).runtimeRepo, null);
 });

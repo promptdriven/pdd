@@ -1,11 +1,11 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: a2a8f513dab59cca173b68e6cd53b08a10948d16728331e6975d7d2d5e6992aa).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 47dc0b1b1b0ff66f06f7bfa93648f51d27fe1aa07b640f1fff1887c29b973141).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { redactSecrets } from './secret-redaction.mjs';
 
 export const REPORT_REPOSITORY = 'promptdriven/pdd';
 export const RUNTIME_OWNER = 'agarwal-ishaan';
-const DAY = 24 * 60 * 60 * 1000, RECENT = 14 * DAY, NEW_PER_DAY = 3, COUNT = '{{count}}';
+const DAY = 24 * 60 * 60 * 1000, RECENT = 14 * DAY, COUNT = '{{count}}';
 const withCount = draft => ({ ...draft, body: draft.body.replace(COUNT, String(draft.count ?? 1)) });
 const LABELS = { runtime: 'pdd:runtime', pdd: 'pdd:autopilot-report' };
 const slug = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
@@ -40,7 +40,7 @@ function draftFor({ cause, versions, step, words }) {
     `- Kind: ${kind}`, `- Component: ${slug(cause.component) || 'unknown'}`, `- Error code: ${slug(cause.code) || 'unknown'}`, `- Step: ${slug(step) || 'unknown'}`,
     `- Versions: PDD ${versions.pdd ?? 'unknown'}, Node ${versions.node ?? 'unknown'}, ${versions.platform ?? 'unknown'}, agent ${versions.agent ?? 'unknown'}`, `- Seen on this machine: ${COUNT}`,
     '', 'Redacted detail (no repository code):', '', '```text', tail || '(none)', '```', '', reportMarker(fingerprint)].join('\n');
-  return { fingerprint, repository: REPORT_REPOSITORY, title, body, labels: [LABELS[kind]], assignees: kind === 'runtime' ? [RUNTIME_OWNER] : [] };
+  return { fingerprint, kind, repository: REPORT_REPOSITORY, title, body, labels: [LABELS[kind]], assignees: kind === 'runtime' ? [RUNTIME_OWNER] : [] };
 }
 
 function github(ports) {
@@ -66,19 +66,26 @@ async function findReport(api, draft, now) {
   return null;
 }
 
-// Send one report through the dedup rules. `limit` false is a person's explicit send.
-async function sendDraft(draft, { root, machine, limit = true }, ports) {
+// The owner repository: a Runtime cause goes to the configured Runtime repository when this machine can read it,
+// else to promptdriven/pdd with label pdd:runtime. A PDD cause always goes to promptdriven/pdd.
+async function ownerRepository(api, draft, runtimeRepo) {
+  if (draft.kind !== 'runtime' || !/^[\w.-]+\/[\w.-]+$/.test(String(runtimeRepo ?? ''))) return REPORT_REPOSITORY;
+  try { await api('GET', `repos/${runtimeRepo}`); return runtimeRepo; } catch { return REPORT_REPOSITORY; }
+}
+// Send one report through the dedup rules: one issue per cause, and at most one "seen again" comment per cause per
+// machine per day. There is no daily cap on new reports.
+async function sendDraft(draft, { root, machine, runtimeRepo }, ports) {
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), api = github(ports), file = join(root, 'ledger.json');
   const ledger = readJson(fs, file, { filed: [], seen: {} });
+  draft = { ...draft, repository: await ownerRepository(api, draft, runtimeRepo ?? draft.runtimeRepo) };
   const ref = number => `${draft.repository}#${number}`;
   const found = await findReport(api, draft, now);
   if (found) {
     if (now - (ledger.seen[draft.fingerprint] ?? -Infinity) < DAY) return { state: 'counted', number: found.number, id: found.id, ref: ref(found.number) };
-    await api('POST', `repos/${draft.repository}/issues/${found.number}/comments`, { body: `Seen again on machine ${slug(machine) || 'unknown'} at ${new Date(now).toISOString()}.\n\n${reportMarker(draft.fingerprint)}` });
+    await api('POST', `repos/${draft.repository}/issues/${found.number}/comments`, { body: `Seen again on one more Autopilot machine run at ${new Date(now).toISOString()}.\n\n${reportMarker(draft.fingerprint)}` });
     ledger.seen[draft.fingerprint] = now; save(fs, file, ledger);
     return { state: 'seen', number: found.number, id: found.id, ref: ref(found.number) };
   }
-  if (limit && ledger.filed.filter(row => now - row.at < DAY).length >= NEW_PER_DAY) return { state: 'limit' };
   const { value } = await api('POST', `repos/${draft.repository}/issues`, { title: draft.title, body: withCount(draft).body, labels: draft.labels, assignees: draft.assignees });
   ledger.filed = [...ledger.filed.filter(row => now - row.at < DAY), { fingerprint: draft.fingerprint, number: value.number, at: now }];
   save(fs, file, ledger);
@@ -98,15 +105,13 @@ export function reportKind(cause) {
   return cause?.kind === 'runtime' && PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) ? 'pdd' : cause?.kind;
 }
 // File, count or keep one report for a Runtime or PDD cause. It never throws: a failed send keeps a local draft.
-export async function fileReport({ cause, mode, root, machine, versions = {}, step, words = [] }, ports = {}) {
+export async function fileReport({ cause, mode, root, machine, versions = {}, step, words = [], runtimeRepo = null }, ports = {}) {
   if (!['runtime', 'pdd'].includes(cause?.kind) || mode === 'off') return { state: 'off' };
   cause = { ...cause, kind: reportKind(cause) };
-  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), draft = draftFor({ cause, versions, step, words });
+  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), draft = { ...draftFor({ cause, versions, step, words }), ...(runtimeRepo ? { runtimeRepo } : {}) };
   if (mode === 'file') {
-    try {
-      const sent = await sendDraft(draft, { root, machine }, ports);
-      if (sent.state !== 'limit') return { ...sent, fingerprint: draft.fingerprint };
-    } catch (error) { ports.warn?.(`Autopilot report kept as a local draft: ${error.message}`); }
+    try { return { ...await sendDraft(draft, { root, machine, runtimeRepo }, ports), fingerprint: draft.fingerprint }; }
+    catch (error) { ports.warn?.(`Autopilot report kept as a local draft: ${error.message}`); }
   }
   keepDraft(fs, root, draft, now);
   return { state: 'draft', fingerprint: draft.fingerprint };
@@ -123,7 +128,7 @@ export async function sendReportDraft({ root, fingerprint, machine }, ports = {}
   const fs = ports.fs ?? nativeFs, file = join(root, 'drafts', `${fingerprint}.json`), draft = readJson(fs, file, null);
   if (!draft || draft.fingerprint !== fingerprint) return { exitCode: 1, message: `No local report draft ${fingerprint}. Run pdd autopilot report to list drafts.` };
   try {
-    const sent = await sendDraft(draft, { root, machine, limit: false }, ports);
+    const sent = await sendDraft(draft, { root, machine }, ports);
     fs.unlinkSync(file);
     return { exitCode: 0, message: `${sent.state === 'filed' ? 'Filed' : 'Counted on'} ${sent.ref}.` };
   } catch (error) { return { exitCode: 1, message: `Report not sent: ${error.message}. The draft stays.` }; }

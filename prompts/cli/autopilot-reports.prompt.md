@@ -7,7 +7,8 @@ the repository chooses. The job never waits for the report or its fix.
 
 Why the limits: automatic issues from many machines can flood a tracker, reach the
 wrong owner or leak a person's code. So each cause has one issue, the owner is fixed
-by the cause kind, the text is safe, and each machine has a daily limit.
+by the cause kind, the text is safe, and each machine comments on a known cause at
+most once a day.
 
 ## Rules
 
@@ -18,9 +19,12 @@ by the cause kind, the text is safe, and each machine has a daily limit.
   as `-` (at most 40 characters; empty is `unknown`), and MINOR is the first two
   numbers of the PDD version, for example `runtime.pdd-test.no-verdict.0.1`. The
   report body ends with the hidden marker `<!-- pdd:autopilot-report:FP -->`.
-- Owner: every report goes to `promptdriven/pdd`. Runtime reports have label
-  `pdd:runtime` and assignee `agarwal-ishaan`; PDD reports have label
-  `pdd:autopilot-report` and no assignee. Test vectors are PDD's, not Runtime's:
+- Owner: PDD reports go to `promptdriven/pdd` with label `pdd:autopilot-report` and
+  no assignee. Runtime reports have label `pdd:runtime` and assignee
+  `agarwal-ishaan`; they go to the configured Runtime repository (`runtimeRepo`,
+  `OWNER/NAME`) when `GET repos/RUNTIME_REPO` succeeds on this machine at send time,
+  else to `promptdriven/pdd`. A draft keeps its `kind` and `runtimeRepo`, so a later
+  send resolves the owner the same way. Test vectors are PDD's, not Runtime's:
   `reportKind(cause)` makes a `runtime` cause kind `pdd` when its component or code
   (as slugs) names a scenario, vector, replay, safe integer, integer out of range,
   Runtime case or test case (for example `scenario-integer-out-of-range`), before the
@@ -36,11 +40,11 @@ by the cause kind, the text is safe, and each machine has a daily limit.
   absolute paths become `[path]`, and the repository's full name, owner and name
   become `[repository]`. It never includes the issue text or repository code.
 - Dedup: before filing, read the label's issues (`state=all`, up to 5 pages) and
-  match the marker on an open issue or one closed less than 14 days ago. On a match,
-  add at most one "Seen again on machine M at T" comment per fingerprint per machine
-  per 24 hours; otherwise only count it. Filing a new issue does not use that
-  comment allowance.
-- Limit: at most 3 new issues per machine per 24 hours. Over the limit, or when a
+  match the marker on an open issue or one closed less than 14 days ago, in the owner
+  repository. On a match, add at most one "Seen again on one more Autopilot machine
+  run at T" comment per fingerprint per machine per 24 hours (no host name); otherwise
+  only count it. Filing a new issue does not use that comment allowance.
+- No daily cap: each new cause is filed (one issue per cause by the dedup). When a
   GitHub call fails, keep a local draft instead, so nothing is lost and nothing
   throws.
 
@@ -49,18 +53,18 @@ last 24 hours) and `seen` (fingerprint to last seen-again comment time).
 
 ## Public contract
 
-- `fileReport({cause, mode, root, machine, versions, step, words}, ports)` returns
+- `fileReport({cause, mode, root, machine, versions, step, words, runtimeRepo}, ports)` returns
   `{state, number?, id?, ref?, fingerprint}`. `state` is `filed` or `seen` (with the
   issue number, the issue's GitHub `id` for dependency links, and `ref`
   `promptdriven/pdd#N`), `counted` (a match already
   commented today), `draft` or `off`. Mode `file` sends; mode `draft` only keeps
   the draft; mode `off` does nothing.
-- A draft is `ROOT/drafts/FP.json` with `fingerprint`, `repository`, `title`,
+- A draft is `ROOT/drafts/FP.json` with `fingerprint`, `kind`, `runtimeRepo`, `repository`, `title`,
   `body`, `labels`, `assignees`, `count`, `firstAt` and `lastAt`; a repeat raises the
   count.
 - `listReportDrafts({root}, ports)` returns the drafts, ordered by file name.
 - `sendReportDraft({root, fingerprint, machine}, ports)` sends one draft through
-  the same dedup rules, without the daily limit because a person asked, deletes
+  the same dedup and owner rules, deletes
   the draft and returns `{exitCode: 0, message: "Filed promptdriven/pdd#N."}` or
   `"Counted on …"`. A missing draft or a failed send returns exit code 1 and keeps
   the draft.

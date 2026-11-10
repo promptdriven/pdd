@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: a7b36bb6c9e2f488de0640371d72991a58973a8b0ec64e67f00f54ad3716134b).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 8ffe03dd04e4435a76fb8b6d47d537316dac9679f9384bad8fdba92aabad2e15).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +103,8 @@ export function coreSettings(config = {}, packageJson = null) {
   const count = (value, fallback, min = 1) => Number.isSafeInteger(value) && value >= min ? value : fallback;
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
-    quietMinutes: count(a.quietMinutes, 45), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'draft',
+    quietMinutes: count(a.quietMinutes, 45), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'file',
+    runtimeRepo: /^[\w.-]+\/[\w.-]+$/.test(String(a.reports?.runtimeRepo ?? '')) ? a.reports.runtimeRepo : null,
     repairs: count(a.repairs, 2, 0), testCommand: named(a.testCommand) ? a.testCommand : packageJson?.scripts?.test ? 'npm test' : null };
 }
 export function readCoreSettings(cwd, fs = nativeFs) {
@@ -695,7 +696,7 @@ async function finishMerge(ctx, job, read = null) {
 // ---- END ------------------------------------------------------------------------------------------------
 async function report(ctx, job, why, step) {
   const [owner, name] = ctx.repo.split('/');
-  return fileReport({ cause: why, mode: ctx.settings.report, root: ctx.ports.reportRoot ?? join(ctx.root, 'reports'), machine: ctx.state.machine, step, words: [ctx.repo, owner, name],
+  return fileReport({ cause: why, mode: ctx.settings.report, root: ctx.ports.reportRoot ?? join(ctx.root, 'reports'), machine: ctx.state.machine, step, words: [ctx.repo, owner, name], runtimeRepo: ctx.settings.runtimeRepo,
     versions: { pdd: ctx.ports.version, node: process.version, platform: process.platform, agent: ctx.state.agent?.kind } }, { gh: ctx.ports.gh, now: ctx.now, warn: ctx.warn, fs: ctx.fs });
 }
 // Another machine holds the claim: stop locally, change nothing on its issue, and leave this machine's own open PR

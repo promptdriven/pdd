@@ -28,7 +28,8 @@ string `core`; any other value, or none, is `full`.
 | `runs` | positive safe integer, default 2: the slot count |
 | `label` | trimmed nonblank opt-in label, for example `pdd:autopilot`, else `null` |
 | `quietMinutes` | positive safe integer, default 45: the no-progress period (there is no fixed time limit) |
-| `report` | `file`, `draft` or `off`, default `draft` |
+| `report` | `file`, `draft` or `off`, default `file` |
+| `runtimeRepo` | `autopilot.reports.runtimeRepo` when it is `OWNER/NAME` (the Runtime report repository), else `null` |
 | `repairs` | safe integer of at least 0, default 2 |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
@@ -345,7 +346,7 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 2. `Runtime: not run (…)` is allowed, and the PR body is not rewritten. When the
    job's `runtime` has state `not-run` and kind `runtime` (Runtime could not check),
    file or count one report through the [report owner](autopilot-reports.prompt.md)
-   with the cause `{kind: runtime, component, code, text, detail, shipped: true}`
+   (with `runtimeRepo`) with the cause `{kind: runtime, component, code, text, detail, shipped: true}`
    (component default `pdd-test`, code default `not-run`), once per job and
    component/code (`job.runtimeReport`). It never blocks or ends the job. A not-run
    with no Runtime kind (for example no prompt changed) files nothing.
@@ -426,7 +427,8 @@ task, no progress, red checks). It stops the job's processes and saves phase
    labels): when another machine owns it now, hand over and write nothing on the
    issue.
 2. For a `runtime` or `pdd` cause, file or count one report through the
-   [report owner](autopilot-reports.prompt.md) with the repository's settings.
+   [report owner](autopilot-reports.prompt.md) with the repository's settings
+   (`report` mode and `runtimeRepo`).
 3. A `runtime` or `pdd` cause whose report has a GitHub reference **waits for the
    report, not for a person**. Loop breaker first: when an earlier END comment on
    this issue has a blocked-by marker with the same fingerprint and that report is
