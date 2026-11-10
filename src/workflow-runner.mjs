@@ -4268,11 +4268,7 @@ async function cancelRunCommand({ ref, cwd }, ports, expectedIdentity = null) {
   const run = found.run;
   if (expectedIdentity && runIdentity(run) !== expectedIdentity) return fail('The selected workflow run changed. Retry cancellation.');
   const automatic = !ports?.claimReleased && validSavedAutomaticOrigin(run);
-  p.say('Closing the chat tabs in Herdr…');
-  const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
-  const at = p.now(), held = automatic && !kept.length ? await releaseWorkerHeld(readRun(run.runDir) ?? run,p) : null;
-  if (!kept.length) removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
-  commitRun(run,p,latest=>{
+  const recordCancellation = at => commitRun(run,p,latest=>{
     latest.state='cancelled';
     latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:{state:'cancelled',at};
     latest.gate=null; delete latest.parking; delete latest.blockedOn; delete latest.parkReason;
@@ -4280,6 +4276,14 @@ async function cancelRunCommand({ ref, cwd }, ports, expectedIdentity = null) {
     for(const chat of latest.chats ?? []) chat.endedAt ??= at;
     if (automatic) latest.claimRelease = {state:'pending',reason:'cancel',at};
   });
+  // The automatic cancellation lock is held by cancelRun. Persist the terminal
+  // blocker before an awaited Herdr cleanup lets a publication continue.
+  if (automatic) recordCancellation(p.now());
+  p.say('Closing the chat tabs in Herdr…');
+  const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
+  const held = automatic && !kept.length ? await releaseWorkerHeld(readRun(run.runDir) ?? run,p) : null;
+  if (!kept.length) removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
+  if (!automatic) recordCancellation(p.now());
   const cleanupNotes = [];
   if (automatic) {
     const latest = readRun(run.runDir) ?? run;
