@@ -1,3 +1,4 @@
+import { tracksReviewInput } from './issue-review-context.mjs';
 import { projectSortGraph } from './issue-sort.mjs';
 // Generated from prompts/cli/issue-dependencies.prompt.md (sha256: 9dd1aafacf95cd2361eb7a0afc1127cfc320e5cdb1051c8f3f075398788cc196).
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -169,14 +170,14 @@ function currentRows(head, snapshot, issues, edges, reviews) {
 function freshnessInputs(head, snapshot, issues, edges, reviews) {
   const current = currentRows(head, snapshot, issues, edges, reviews), { written } = pddLinks(reviews), links = `${head.issue}${LINKS}`;
   const candidates = rowMap(head.candidates);
-  const required = new Map(head.inputs.map(i => [i.key, i.key === links ? savedLinkRow(i.revision, head.issue, written) : i.revision]));
+  const required = new Map(head.inputs.filter(i => tracksReviewInput(issues.get(head.issue), i.key)).map(i => [i.key, i.key === links ? savedLinkRow(i.revision, head.issue, written) : i.revision]));
   for (const { key } of head.dependencies) if (!required.has(key) && candidates.has(key)) required.set(key, candidates.get(key));
   return { current, deficits: [...required].filter(([key, revision]) => !current.has(key) || current.get(key) !== revision) };
 }
 
 // A trusted requirement comment on the issue that a question did not examine is
 // a person's answer, so the question needs a new review.
-const answered = (head, snapshot) => head.outcome === 'question' && rows(snapshot.inputs).some(r => /#issuecomment-[1-9][0-9]*$/.test(r.key)
+const answered = (head, snapshot) => (head.outcome === 'question' || head.inputs.some(x => x.key === `${head.issue}#dependencies`)) && rows(snapshot.inputs).some(r => /#issuecomment-[1-9][0-9]*$/.test(r.key)
   && coverageIssueKey(r.key) === head.issue && !head.inputs.some(i => i.key === r.key));
 
 const namedLinkRemoved = (head, edges) => head.outcome === 'complete'
@@ -243,7 +244,7 @@ export function projectIssueGraph({ snapshot }) {
     const { key } = issue, selection = selected.get(key), head = selection.head, blockers = outgoing.get(key), reasons = [];
     let covered = subjectCovered(key, outgoing, coverage);
     const currentInputs = new Set([...snapshot.inputs.map(row => locator(row.key)), ...issues.keys(), `${key}${LINKS}`]);
-    if (head && head.inputs.some(row => !currentInputs.has(locator(row.key)))) { reasons.push('Required context unavailable', `Observation unavailable: context ${key}`); covered = false; }
+    if (head && head.inputs.some(row => tracksReviewInput(issue, row.key) && !currentInputs.has(locator(row.key)))) { reasons.push('Required context unavailable', `Observation unavailable: context ${key}`); covered = false; }
     let reviewState = selection.state, review = head?.id ?? '';
     // A head whose own outcome is pending with no effects to apply (a bare pending
     // answer that an earlier version saved) is reviewed again.

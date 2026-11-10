@@ -32,6 +32,31 @@ test('factory intake: a mixed assigned and free batch starts the free issue', as
   assert.deepEqual(w.leadActions, []);
 });
 
+test('factory 3062: backlog review saves once and updates only a changed issue with neighbour summaries', async t => {
+  const w = await factoryWorld(t);
+  for (let n = 20; n < 44; n++) w.github.add(n, { title: `Backlog issue ${n}`, body: `Independent backlog work ${n}.`, created: w.time - 1000, updated: w.time });
+  await w.start();
+  await w.reviewDependencies();
+  w.time += 11 * 60 * 1000;
+  await w.tick(); w.messages();
+  assert.equal(w.dependencyRequests.length, 0, '3062_FACTORY_UNCHANGED_REREVIEWED');
+  await w.github.gh(['issue', 'edit', '20', '--add-label', 'pdd:close-proposed']);
+  w.time += 11 * 60 * 1000;
+  await w.tick(); w.messages();
+  assert.equal(w.dependencyRequests.length, 0, '3062_FACTORY_WORK_LABEL_REREVIEWED');
+  w.github.edit(17, 'Change the value to two.');
+  w.time += 11 * 60 * 1000;
+  await w.tick(); w.messages();
+  assert.equal(w.dependencyRequests.length, 1, '3062_FACTORY_EXPECTED_SINGLE_UPDATE');
+  const req = w.dependencyRequests[0], snap = JSON.parse(req.snapshotJson);
+  assert.deepEqual(req.issues, [`https://github.com/${w.repository}/issues/17`]);
+  assert.equal(snap.issues.length, 21, '3062_FACTORY_FULL_BACKLOG_PACKET');
+  assert.ok(snap.issues.filter(i => i.key !== req.issues[0]).every(i => i.reviewSummary && !i.sortText && !i.sorts), '3062_FACTORY_NEIGHBOUR_NOT_COMPACT');
+  await w.reviewDependencies();
+  assert.equal(w.dependencyRequests.length, 0);
+  assert.deepEqual(w.leadActions, []);
+});
+
 test('factory 3139: independent scope checker rejects a dropped trusted request and shares docs exemption',async t=>{
   const {reviewSmallChangeChecklist}=await import('../src/workflow-small-change.mjs');
   const {sourceFingerprint}=await import('../src/workflow-replay.mjs');

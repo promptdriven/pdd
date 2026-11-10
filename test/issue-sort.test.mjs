@@ -57,7 +57,10 @@ test('only changed sort inputs require a new record', async () => {
 });
 
 for (const change of ['comment','source','release','areas','edited-record','untrusted-record']) test(`${change} invalidates the saved sort`, async () => {
-  const w = fixture(); const r = w.record(1);
+  const w = fixture();
+  // Source freshness concerns a file named by the issue. Background files have a separate regression case.
+  if (change === 'source') w.issues[0].body += ' See `src/other.mjs`.';
+  const r = w.record(1);
   if (change === 'source') { r.inputs.push({ key: 'https://github.com/example/project/blob/HEAD/src/other.mjs', revision: 'old' }); w.files.set(r.inputs.at(-1).key, 'old'); }
   const saved = w.save(r); w.review(1);
   assert.equal((await node(w)).sort?.action, 'work');

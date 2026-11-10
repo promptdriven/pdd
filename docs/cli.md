@@ -852,7 +852,23 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 
-`pdd dependencies prepare [--issue N]` prepares a coordinator packet. Review batches use the stable owner of this machine’s Autopilot for the repository. A replacement coordinator chat can finish the same batch. Ownership is checked before automatic review delivery and again before saving reviews. A different owner leaves the batch pending with `owner-changed`. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
+`pdd dependencies prepare [--issue N]` prepares a coordinator packet. PDD saves
+the backlog sort and dependency records once. It queues only new or changed
+issues. Each packet includes up to 20 likely neighbours per subject, using saved
+area, cause, file and word matches. Explicit issue links and native prerequisites
+are always included. Packets also retain issue observations used by saved subject
+reviews and incoming PDD link history, including removed links. Neighbours carry
+short summaries. Required sort work and saved sort records name only queued
+subjects. A packet that cannot fit
+its required context in 2 MiB fails with `review-packet-too-large`.
+
+Issue text, links, trusted comments and named files make a review stale.
+Background source edits do not. Saved sort paths remain relevant to routing.
+New sort records retain their release evidence across unrelated release changes;
+legacy release-sensitive records can need one fresh sort. A weekly local check
+records group and link inconsistencies in the pending store. It makes no AI call.
+
+Review batches use the stable owner of this machine’s Autopilot for the repository. A replacement coordinator chat can finish the same batch. Ownership is checked before automatic review delivery and again before saving reviews. A different owner leaves the batch pending with `owner-changed`. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
 
 `pdd workflow park --reason TEXT --step STEP` records an environment failure of
 check, verify or formal in the current area. Environment parks require `--step`;

@@ -24,6 +24,10 @@ Exercise a mixed intake batch with a trusted assigned issue and a free issue.
 The free issue must receive a saved dependency review and sort, and start in the
 same intake cycle. The assigned issue receives no sort, route, group or workflow.
 Expose synthetic assignees through both REST and GraphQL fake observations.
+Also exercise incremental backlog review (#3062): save the initial backlog review
+and sort once, confirm an unchanged backlog and a PDD work-label change queue no
+new review, and confirm one edited issue re-reviews only itself with at most 20
+compact neighbour summaries in its packet.
 
 Exercise these independently, with an asserted final merge or a real decision
 question and no lead repair commands:

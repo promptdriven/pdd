@@ -1,0 +1,15 @@
+import { reviewWorld, reviewAll, repository } from './incremental-review-fixture.mjs';
+import { prepareDependencyIntake } from '../../src/issue-dependencies-intake.mjs';
+const w = reviewWorld(Number(process.argv[2] || 200));
+for (const raw of w.issues) raw.body += ' Synthetic parser report.'.repeat(100);
+await reviewAll(w, { background: true });
+const full = { ...w.counts };
+w.resetCounts(); w.issues[0].body += ' One changed requirement.';
+await reviewAll(w, { background: true });
+const update = { ...w.counts };
+w.resetCounts(); await prepareDependencyIntake({ repository }, w.ports);
+const idle = { ...w.counts };
+w.resetCounts(); w.files.set(w.background, 'background-v2');
+await reviewAll(w, { background: true });
+const unrelatedSource = { ...w.counts };
+console.log(JSON.stringify({ issues: w.issues.length, full, update, idle, unrelatedSource }));
