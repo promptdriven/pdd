@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 0f6be696136e17abdac7d0e9a4aec6be3ea1cf37850f8681b7dc8bde838b1794).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c0017b40349649e4db8bf2a9214f77378069f39a3d5bd26d42cb222797efee54).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -2233,6 +2233,8 @@ function savedProfile(state, env) {
   if (!state?.agent) return null;
   const profile=profileBinding(state,{env});
   const launched=state.ownerLaunch?.profile ?? state.launchProfile;
+  // The core engine launches no coordinator; a core state saved before its launch profile selects the agent again.
+  if (!launched && state.cwd && engineOf(state).engine === 'core') return null;
   if (!launched || JSON.stringify(launched)!==JSON.stringify(profile) || !profile.home || !profile.definitionHome)
     throw Error('The saved coordinator profile cannot be verified. Inspect the existing coordinator before retrying.');
   return profile;
@@ -2647,6 +2649,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       state.definitionHome = (input.env ?? ports.env ?? process.env).HOME;
       state.environment = keepEnv({ ...p.env, ...agent.env });
     }
+    // The core engine has no coordinator launch to record its profile: save it here so a later start can verify it.
+    if (core && state.agent) state.launchProfile ??= profileBinding(state, p);
     state.activatedAt ??= new Date(p.now()).toISOString();
     state.coordinatorId ??= randomUUID(); state.machine ??= hostname();
     state.enabled = true; state.timerInstalled = true; state.nextTick = p.now() + INTERVAL;

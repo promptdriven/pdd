@@ -1378,7 +1378,10 @@ through this machine's alert destination (cause, tried, need), `ROOT` = the stat
   `core: {at, message}`.
 - Start: a core engine skips the workflow-readiness check, the Herdr check and the
   coordinator workspace; it still checks sign-ins, the agent, the base and the
-  timer, saves the agent profile and runs the first tick. Its message names
+  timer, saves the agent profile and runs the first tick. With no coordinator launch,
+  the start also saves `launchProfile` from the profile binding, so that a later
+  start verifies the saved profile; a core state saved without one selects the agent
+  again instead of refusing. Its message names
   `pdd autopilot status` instead of the Herdr session.
 - Status (without `--all` or `--json`): a core engine shows the enabled and timer
   line, `coreStatus` from local files, and the last tick message. No Herdr read.
