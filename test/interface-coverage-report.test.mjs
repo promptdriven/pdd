@@ -23,9 +23,9 @@ function setup(t,text,files={}) {
     for(const [path,value] of Object.entries(files)) writeFileSync(join(repo,path),typeof value==='string'?value:JSON.stringify(value));
   });
 }
-function draft(f,args=[]) {
+function draft(f,args=[],timeout) {
   const r=spawnSync(process.execPath,[join(root,'bin/pdd.mjs'),'interface','draft',PLACE,...args,'--json'],{
-    cwd:f.repo,encoding:'utf8',env:{...process.env,HOME:f.home,PDD_STATE_DIR:f.state}
+    cwd:f.repo,encoding:'utf8',timeout,killSignal:'SIGKILL',env:{...process.env,HOME:f.home,PDD_STATE_DIR:f.state}
   });
   assert.equal(r.signal,null);assert.ok(r.stdout,r.stderr);
   const report=JSON.parse(r.stdout),text=readFileSync(join(f.repo,PLACE),'utf8');
@@ -186,4 +186,16 @@ for (const context of ['fragment', 'cycle']) test('integration 013: person appro
   assert.equal(after.status,'approved');
   assert.deepEqual(after.entries,value.entries);
   assert.equal(JSON.parse(readFileSync(join(f.repo,'.git/pdd/approvals.json'),'utf8')).approvals.length,1);
+});
+
+for(const malformed of [false,true]) test('example list coverage completes and preserves supported sentences: '+(malformed?'malformed':'valid'),t=>{
+  const sentence='For example, 0 produces `0 B`'+', 1 produces `1 B`'.repeat(80)+(malformed?' unexpected.':'.');
+  const bytes=readFileSync(new URL('./fixtures/interface-drafting/bytes.prompt.md',import.meta.url),'utf8');
+  const source=bytes.replace(interfaceBlocks(bytes)[0][0],'').replace(/For example,[^\n]+/,sentence);
+  assert.ok(source.includes(sentence));
+  const r=draft(setup(t,source),[],5000);
+  const row=r.row.prose_coverage.find(row=>row.sentence===sentence);
+  assert.equal(row.status,malformed?'unmapped':'mapped');
+  if(malformed) {assert.deepEqual(row.pointers,[]);assert.equal(r.code,4);}
+  else {retained(r,row);assert.ok(r.iface.entries[0].result_schema.description.includes(sentence));assert.equal(r.code,0);}
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 3b4853e52f47f43f3e1df33fc7112d49afd395baaebedcd272ec87e59491a6f1).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 4cf8bc048142d9ccbe73086251ec7f4f8da9971436f10cb9b5db12c275250fc8).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -94,6 +94,25 @@ function questionsFor(iface, problems=interfaceSchemaProblems(iface)) {
   return questions;
 }
 
+// Consume each quoted example once, so an unsupported tail cannot repartition a list.
+function numericExamples(sentence) {
+  if(!sentence.startsWith('For example, ') || !sentence.endsWith('.')) return false;
+  const end=sentence.length-1;
+  let cursor='For example, '.length;
+  if(cursor===end) return false;
+  while(cursor<end) {
+    const open=sentence.indexOf('`',cursor);
+    if(open<0 || !/^[\d, -]+(?:and [\d-]+ )?(?:produce|produces) $/.test(sentence.slice(cursor,open))) return false;
+    const close=sentence.indexOf('`',open+1);
+    if(close<=open+1 || close>=end) return false;
+    cursor=close+1;
+    for(const separator of [', and ',' and ', ', ']) {
+      if(sentence.startsWith(separator,cursor)) {cursor+=separator.length;break;}
+    }
+  }
+  return cursor===end;
+}
+
 // Full-sentence grammar: unrecognized clauses never inherit a nearby sentence's mapping.
 function proseCoverage(text, transport, errors) {
   const sentences=[];
@@ -123,7 +142,7 @@ function proseCoverage(text, transport, errors) {
     [/^(?:100 basis points equal one percent|Accept a Number only if it is a safe integer|Accept only a nonnegative safe integer Number, including negative zero|Do not coerce inputs|No input is rounded)\.$/,null,[input]],
     [/^(?:Show the exact rate with two decimal digits and a trailing `%`, without spaces or grouping separators|Use the magnitude for the digits and a leading minus sign for negative rates|Zero, including negative zero, is `0\.00%`|Rates above 100 percent are allowed; do not clamp or round|Use powers of 1,024 for B, KiB, MiB, GiB, TiB and PiB, respectively|Select the largest unit whose size is no greater than the input, capped at PiB; zero uses B|Divide by that unit's size and round down to a whole number|Return its ungrouped decimal digits, one space, and the unit name)\.$/,null,[result]],
     [/^For example, (?:-?\d+ is `-?[0-9.]+%`(?:, |, and | and )?)+\.$/,null,[result]],
-    [/^For example, (?:[\d, -]+(?:and [\d-]+ )?(?:produce|produces) `[^`]+`(?:, |, and | and )?)+\.$/,null,[result]],
+    [/^For example, /,numericExamples,[result]],
     [/^Fractions, non-number values, NaN, infinities and unsafe integers are refused\.$/,null,['/entries/0/errors']],
     [/^(?:Preserve existing helpers and add no dependencies|None)\.$/,null,['/calls','/resources']],
   ];
