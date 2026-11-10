@@ -67,6 +67,6 @@ never wake it through interpreter health alone. Display binding in summaries.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"7198672b8e0fbf95d3a6cbc4fa9b617b1ba14df876e39e57d8475d6d934c64c1","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"7198672b8e0fbf95d3a6cbc4fa9b617b1ba14df876e39e57d8475d6d934c64c1","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

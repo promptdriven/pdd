@@ -10,7 +10,7 @@ import {automaticFixture} from './helpers/autopilot-run-base-fixture.mjs';
 import {packageRoot} from './helpers/workflow-runner-fixture.mjs';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
-import {approveRun, runStatus, stepDone, cancelRun, askPerson} from '../src/workflow-runner.mjs';
+import {approveRun, runStatus, stepDone, cancelRun, askPerson, advanceAutomaticPr1} from '../src/workflow-runner.mjs';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
 import {captureSource} from '../src/runtime-preflight.mjs';
 import {renderJson} from '../src/runtime-output.mjs';
@@ -309,6 +309,94 @@ for (const kind of ['strict', 'scope', 'custody', 'Story']) test(`#3099 publicat
   assert.equal(f.prs.length, 0); assert.equal(f.pushes.length, 0); assert.equal(f.record().decisions.length, decisions);
 });
 
+test('#3099 concurrent full-pass publication attempts create one PR', async t => {
+  const f = await setup(t), original = f.tickPorts.execFile;
+  const path = join(f.run.root, PROMPT);
+  writeFileSync(path, readFileSync(path, 'utf8').replace(/"status":\s*"approved"/, '"status":"draft"'));
+  f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Synthetic checked draft');
+  saveCheck(f);
+  let reached, resume;
+  const preparing = new Promise(resolve => { reached = resolve; });
+  const proceed = new Promise(resolve => { resume = resolve; });
+  f.tickPorts.execFile = async (file, args, options) => {
+    const result = await original(file, args, options);
+    if (file === 'git' && args[0] === 'commit') { reached(); await proceed; }
+    return result;
+  };
+  const first = f.scan();
+  try {
+    await preparing;
+    const origin = f.record().automaticOrigin;
+    const second = await advanceAutomaticPr1({ref: '17', cwd: f.source, packageRoot,
+      coordinatorId: origin.coordinatorId, machine: origin.machine}, f.tickPorts);
+    assert.notEqual(second.exitCode, 0);
+    assert.equal(f.prs.length, 0);
+    assert.equal(f.pushes.length, 0);
+  } finally { resume(); await first; }
+  assert.equal(f.prs.length, 1);
+  assert.equal(f.pushes.length, 1);
+});
+
+test('#3099 automatic cancellation stops publication before delayed unknown cleanup resolves', async t => {
+  const f = await setup(t), path = join(f.run.root, PROMPT), before = f.record(), original = f.tickPorts.execFile;
+  writeFileSync(path, readFileSync(path, 'utf8').replace(/"status":\s*"approved"/, '"status":"draft"'));
+  f.git(f.run.root, 'add', '.'); f.git(f.run.root, 'commit', '-qm', 'Synthetic checked draft');
+  saveCheck(f);
+  let startCleanup, releaseCleanup, resumePublication;
+  const cleanupStarted = new Promise(resolve => { startCleanup = resolve; });
+  const cleanupCanFinish = new Promise(resolve => { releaseCleanup = resolve; });
+  const publicationCanContinue = new Promise(resolve => { resumePublication = resolve; });
+  const herdr = f.automaticPorts.herdr;
+  let delayedCleanup = false;
+  f.automaticPorts.herdr = async args => {
+    if (!delayedCleanup && args[0] === 'workspace' && args[1] === 'list') {
+      delayedCleanup = true; startCleanup();
+      await cleanupCanFinish;
+      throw Object.assign(Error('controlled inventory outage'), {code: 'inventory_unavailable'});
+    }
+    return herdr(args);
+  };
+  let cancellation, cancellationDone = false, triggered = false;
+  f.tickPorts.execFile = async (file, args, options) => {
+    const result = await original(file, args, options);
+    if (!triggered && file === 'git' && args[0] === 'commit') {
+      triggered = true;
+      cancellation = cancelRun({ref: '17', cwd: f.source}, f.automaticPorts);
+      cancellation.then(() => { cancellationDone = true; }, () => {});
+      await cleanupStarted;
+      await publicationCanContinue;
+    }
+    return result;
+  };
+  const scan = f.scan();
+  try {
+    await cleanupStarted;
+    const during = f.record();
+    assert.equal(triggered, true, 'the race must reach publication preparation');
+    assert.equal(during.state, 'cancelled');
+    assert.equal(during.claimRelease?.state, 'pending');
+    assert.ok(f.herdr.paneOf(before.chats.at(-1)), 'cleanup still retains the native chat');
+    resumePublication();
+    await scan;
+    assert.equal(cancellationDone, false, 'publication must stop before cleanup resolves');
+    assert.equal(f.prs.length, 0);
+    assert.equal(f.pushes.length, 0);
+    assert.deepEqual(f.record().decisions, before.decisions);
+    releaseCleanup();
+    const result = await cancellation;
+    assert.equal(result.exitCode, 0, result.message);
+    const after = f.record();
+    assert.equal(after.state, 'cancelled');
+    assert.equal(after.claimRelease?.state, 'pending');
+    assert.ok(after.cleanupKept.some(item => item.reason === 'inventory_unavailable'));
+    assert.ok(nativeFs.existsSync(join(before.commonDir, 'pdd', 'worktree-assignments', 'issues', '17.json')), 'unknown cleanup keeps local allocation');
+  } finally {
+    resumePublication();
+    releaseCleanup();
+    await scan;
+    await cancellation;
+  }
+});
 for (const boundary of ['preparation', 'pre-push', 'post-push'])
 for (const kind of ['cancelled', 'question']) test(`#3099 ${kind} during ${boundary} stops further publication`, async t => {
   const f = await setup(t);
