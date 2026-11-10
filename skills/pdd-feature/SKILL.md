@@ -2,7 +2,7 @@
 name: pdd-feature
 description: Use when the person asks for a new feature or new behavior in a PDD project.
 metadata:
-  pdd-skills: 0.1.26
+  pdd-skills: 0.1.27
 ---
 
 # PDD feature

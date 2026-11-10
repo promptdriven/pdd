@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {existsSync, readFileSync, writeFileSync, statSync, readdirSync} from 'node:fs';
 import {join} from 'node:path';
 import * as runner from '../src/workflow-runner.mjs';
+import {closeFinishedChats} from '../src/workflow-chat.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
@@ -25,6 +26,71 @@ async function ended(t, agent = 'claude') {
   return {f,run,chat:run.chats[0]};
 }
 
+for (const [name, kind, rows] of [
+  ['wrong-workspace pane', 'pane', [{pane_id:'other',workspace_id:'foreign',tab_id:'other',terminal_id:'other'}]],
+  ['pane without tab', 'pane', [{pane_id:'other',workspace_id:null,terminal_id:'other'}]],
+  ['pane without terminal', 'pane', [{pane_id:'other',workspace_id:null,tab_id:'other'}]],
+  ['wrong-workspace tab', 'tab', [{tab_id:'other',workspace_id:'foreign'}]],
+  ['tab without workspace', 'tab', [{tab_id:'other'}]],
+  ['malformed workspace', 'workspace', [{workspace_id:42}]],
+]) test(`3132 repair: cleanup retains ${name} inventory without absence custody`, async t => {
+  const {f,run,chat} = await ended(t), before = structuredClone(chat), checkpoints = [];
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    if (kind === 'tab' && args[0] === 'pane' && args[1] === 'list')
+      return {id:'cli:pane:list',result:{type:'pane_list',panes:[]}};
+    if (args[0] === kind && args[1] === 'list') return {
+      id:`cli:${kind}:list`, result:{type:`${kind}_list`,[`${kind}s`]:rows.map(row => ({
+        ...row, ...(row.workspace_id === null ? {workspace_id:chat.workspaceId} : {})
+      }))}
+    };
+    return herdr(args);
+  };
+  const result = await closeFinishedChats(run, {...f.ports,force:true,reason:'park',
+    checkpoint:async (...args) => checkpoints.push(structuredClone(args))});
+  assert.equal(chat.closed,undefined,'UNTRUSTED_INVENTORY_CONFIRMED_ABSENT');
+  assert.equal(chat.state,before.state);
+  assert.deepEqual(chat.session,before.session);
+  assert.equal(result.closed,0);
+  assert.ok(result.kept.some(row => row.area === chat.area && row.reason === 'invalid_cleanup_inventory'));
+  assert.equal(checkpoints.length,0);
+  assert.equal(effects(f).length,0);
+  if (kind === 'workspace') {
+    delete run.layout.createdWorkspaceId;
+    await assert.doesNotReject(async () => {
+      const retry = await closeFinishedChats(run, {...f.ports,force:true,reason:'park',
+        checkpoint:async (...args) => checkpoints.push(structuredClone(args))});
+      assert.ok(retry.kept.some(row => row.area === chat.area && row.reason === 'invalid_cleanup_inventory'));
+    });
+    assert.deepEqual(chat,before);
+    assert.equal(checkpoints.length,0);
+    assert.equal(effects(f).length,0);
+  }
+});
+
+test('3132 repair: a valid empty scoped pane inventory confirms absence and retains the session', async t => {
+  const {f,run,chat} = await ended(t), session = structuredClone(chat.session), checkpoints = [];
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    if (args[0] === 'pane' && args[1] === 'list' && args.includes('--workspace')) {
+      assert.equal(args[args.indexOf('--workspace')+1],chat.workspaceId);
+      return {id:'cli:pane:list',result:{type:'pane_list',panes:[]}};
+    }
+    return herdr(args);
+  };
+  const result = await closeFinishedChats(run, {...f.ports,force:true,reason:'park',
+    checkpoint:async value => {if(value) checkpoints.push(structuredClone(value));}});
+  assert.equal(result.closed,1);
+  assert.equal(chat.state,'ended');
+  assert.equal(chat.closed.reason,'absent');
+  assert.equal(chat.closed.confirmedAt,f.clock);
+  assert.equal(chat.closed.screen,null);
+  assert.deepEqual(chat.session,session);
+  assert.equal(checkpoints[0].closed.confirmedAt,f.clock);
+  assert.equal(effects(f).length,0);
+  assert.equal(f.herdr.calls.some(args => args[0] === 'agent' || args[0] === 'pane' && args[1] === 'read'),false);
+});
+
 test('2709: tidy closes finished chats, checkpoints durable intent before close and preserves native history', async t => {
   const {f,run,chat} = await ended(t);
   const herdr = f.ports.herdr;
@@ -46,9 +112,9 @@ test('2709: tidy closes finished chats, checkpoints durable intent before close 
   assert.equal(f.record().chats[0].closed.reason,'run-end');
 });
 
-for (const condition of ['busy','blocked','own-pane','foreign-terminal','foreign-workspace','split','no-session','grace','opened-recently','current-gate']) {
+for (const condition of ['busy','blocked','own-pane','foreign-terminal','foreign-workspace','split','no-session-no-screen','grace','opened-recently','current-gate']) {
   test(`2709: tidy protects ${condition}`, async t => {
-    const {f,run,chat} = await ended(t,condition === 'no-session' ? 'gemini' : 'claude');
+    const {f,run,chat} = await ended(t,condition === 'no-session-no-screen' ? 'gemini' : 'claude');
     const pane = f.herdr.paneOf(chat);
     if (condition === 'busy') pane.agent.agent_status = 'working';
     if (condition === 'blocked') pane.agent.agent_status = 'blocked';
@@ -59,6 +125,12 @@ for (const condition of ['busy','blocked','own-pane','foreign-terminal','foreign
     if (condition === 'grace') { run.chats[0].endedAt = f.clock; save(f,run); }
     if (condition === 'opened-recently') { run.chats[0].openedAt = f.clock-5*60_000; save(f,run); }
     if (condition === 'current-gate') { run.state = 'waiting'; run.gate = {area:'story',kind:'approve',at:f.clock}; save(f,run); }
+    if (condition === 'no-session-no-screen') {
+      pane.agent=null;run.chats[0].session=null;save(f,run);
+      const h=f.ports.herdr; f.ports.herdr=async args=>{
+      if (args[0]==='pane' && args[1]==='read') throw Object.assign(Error('capture unavailable'),{code:'screen_unavailable'});
+      return h(args);
+    }; }
     const before = f.herdr.panes.length;
     assert.equal((await tidy(f)).exitCode,0);
     assert.equal(f.herdr.panes.length,before);

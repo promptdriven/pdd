@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-environment.prompt.md (sha256: c655cfcc99fd5c06ef38a6c3e1fab7a350fdf31b740b5cd37373bf5a7336ccd7).
+// Generated from prompts/cli/autopilot-environment.prompt.md (sha256: d801ed81adbf2a0875c5a66c13096b64b76f03751d33c012fee6ee3551b74957).
 import { readFileSync, readdirSync, accessSync, constants } from 'node:fs';
 import { readCheckStatus } from './test-suite-queue.mjs';
 import { readMachineResources } from './machine-resources.mjs';
@@ -17,7 +17,7 @@ export function classifyStuckCause(reason, runtime = false) {
   return /filesystem journal|(?:disk|memory|I\/O) (?:pressure|stall|contention|full)|(?:native|test|suite|validation)[^.;\n]*(?:stall|timed? out|timeout|killed|cancelled|incomplete|ETIMEDOUT)|(?:full|suite) queue|queue (?:is )?full|missing tool|tool[^.;\n]*not found/i.test(text) ? 'environment' : 'work';
 }
 export function environmentRecovery(run) {
-  if (!run?.automaticOrigin || run.state !== 'stuck' || run.repairLimit || classifyStuckCause(run.parkReason) !== 'environment') return null;
+  if (!run?.automaticOrigin || run.state !== 'stuck' || run.repairLimit || run.integrationLimit || classifyStuckCause(run.parkReason) !== 'environment') return null;
   const retry = run.environmentRetry;
   if (!retry || !Number.isFinite(retry.at) || !Number.isInteger(retry.attempts) || retry.attempts < 0 || retry.attempts > ENVIRONMENT_BACKOFF.length
     || retry.area !== run.area || !validations.has(retry.step) || !run.areas?.[run.area]?.steps?.includes(retry.step)

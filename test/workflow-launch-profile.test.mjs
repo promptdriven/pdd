@@ -23,6 +23,7 @@ function commandProfile(command, {model, threads}) {
   assert.match(command, /dangerously-(?:bypass-approvals-and-sandbox|skip-permissions)/);
 }
 async function advance(f) {
+  f.tick(); // Separate later-area discovery from the prior native session.
   assert.equal((await stepDone({step:'scope', summary:'Synthetic completed scope', cwd:f.record().root}, f.agentPorts())).exitCode, 0);
   // This is the fixture's fake person gate, not a prompt approval in this checkout.
   const result = await approveRun({ref:'17', cwd:f.source}, f.ports);
@@ -63,6 +64,7 @@ for (const agent of ['codex','claude']) test(`Theme D ${agent}: start, focus, re
   assert.equal(f.record().launchProfile.configDir, first, 'Changes from another account must not select it');
   const before = preserved(f.record()), originalSession = f.record().chats.at(-1).session?.id;
   f.herdr.calls.length = 0;
+  f.tick(); // Fresh native sessions have their own discovery window.
   const replaced = await open(f, {newSession:true, model:'synthetic-model-b', herdrAgentName:`next-${agent}`, ...(agent === 'codex' ? {codexThreads:'6'} : {})});
   assert.equal(replaced.exitCode, 0, replaced.message);
   const selected = f.record(), replacement = selected.chats.at(-1);
@@ -306,6 +308,7 @@ for (const agent of ['codex','claude']) test(`Theme D ${agent} naming failure ne
   const resumed = await open(f); assert.equal(resumed.exitCode, 0, resumed.message);
   assert.ok(resumed.message.includes('agent_name_conflict'), 'Resume must return its post-launch naming warning');
   f.herdr.calls.length = 0;
+  f.tick();
   const fresh = await open(f, {newSession:true}); assert.equal(fresh.exitCode, 0, fresh.message);
   assert.ok(fresh.message.includes('agent_name_conflict'), 'Fresh replacement must return its own naming warning');
   assert.equal(calls(f).length, 1);

@@ -41,6 +41,7 @@ async function started(t, { saved = 'old', agent = 'codex' } = {}) {
 }
 
 async function advance(f) {
+  f.tick(); // Later native sessions need a distinct launch window.
   const completed = await stepDone({ step: 'scope', summary: 'Keep approved scope and history.', cwd: f.record().root }, f.agentPorts());
   assert.equal(completed.exitCode, 0, completed.message);
   const approved = await approveRun({ ref: '17', cwd: f.source }, f.ports);
@@ -64,6 +65,7 @@ for (const saved of [null, 'old']) test(`2907 saved ${saved} selects Work5 and l
   const f = await started(t, { saved }), before = f.record(), original = before.chats.at(-1);
   const originalBytes = readFileSync(original.messageFile);
   f.ports.env.CODEX_HOME = f.work5;
+  f.tick(); // A fresh account session starts after the original session.
   const result = await open(f, { newSession: true });
   assert.equal(result.exitCode, 0, result.message);
   const after = f.record(), replacement = after.chats.at(-1);

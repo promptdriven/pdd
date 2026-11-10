@@ -23,6 +23,25 @@ When the person asks you to report a problem with pdd itself, follow
 | `user_stories/<story>.md` | One story: first one line "As a …, I want …, so that …" in the words of the issue (the PR shows it as the user story), then a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
 | `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` with a folder named `tests` or `test` anywhere in its path, not only as the direct parent (`tests/`, `test/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
+A Story can narrow its executable closure only with one dedicated block:
+
+````markdown
+```pdd-boundary
+prompts/place_order.prompt.md
+```
+````
+
+List repository-relative prompt paths, one per line, including every entry and
+Runtime call target. Use exact fence lines separated from other content by blank
+lines. The [Story boundary format](docs/cli.md#explain-resource-bindings) gives the
+complete path and admission rules. Markdown links, headings and reference
+examples do not narrow scope. No block, duplicate blocks, an invalid/unreadable
+path or ambiguous syntax keeps the full dependency closure, including context
+resources, and adds a named `boundary-not-applied` plan note. A `Runtime boundary`
+heading alone gives `boundary not applied: use the pdd-boundary block`. Only a
+valid block permits interface projection; actual Runtime calls across it refuse.
+Combined selections keep every selected Story's required edge.
+
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
 Across its steps, the test file must check every criterion of its story.
 
@@ -40,6 +59,21 @@ The block of Harbor Coffee's `place_order` (schemas cut):
  "entries": [{"operation": "place_order", "input_schema": {...}, "result_schema": {...}, "errors": ["unknown-item"]}],
  "calls": [], "resources": [], "limits": {"max_steps": 4, "max_model_calls": 2}, "conventions": []}
 ```
+- `kind` is `full`, `partial` or `native-only`. Without kind, a block means full.
+  Full declares the module's checkable behavior. Partial declares only some operations.
+  Native-only requires `reason`: name the native effect that the bound ports in §21 cannot fake.
+  It needs status and prose_sha256, but no entries or limits. A checker reviews this reason.
+  Approval records it. Checks show `not run: <reason>`; they never count it as passed.
+- Missing blocks: run `pdd interface draft PROMPT`, or `pdd interface draft --all` for the repository.
+  This local command uses explicit prose transport declarations or schemas without AI calls and preserves prose.
+  Unknown fields become questions with a `--contract FILE` recovery command. Use `--extend --contract FILE`
+  to add operations without changing existing declarations. Use `--refresh [--contract FILE]` to reopen
+  a stale or changed block as draft. Effect ports use §21 resources. Run `pdd lint STORY` for Runtime
+  admission; local drafting alone proves no Runtime acceptance.
+- A complete block drafted from unchanged committed behavior can use
+  `pdd approve PROMPT --automatic --tests COMMAND`. Existing native tests and a complete
+  current prompt check must pass; pdd records `automatic-check-pass` evidence.
+  Strict mode still requires a person. New behavior requires a person.
 - Every schema follows section 3. List every error that the prose can return in `errors`.
 - Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
 - Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/main/docs/cli.md#record-a-chat-approval). In a normal workflow run (not strict mode, not Autopilot), the Story gate shows pdd's Story card: show it as printed, then ask, never a bare "approve?". The person approves each Story with that context. With the approval they may choose the code PR after PR 1 (`--through code`); without it, pdd stops after PR 1. For several runs, show the cards one after another and record one answer for each card.
@@ -578,9 +612,9 @@ ticks. Ticks use the existing action/call budget.
 3. ✗ failed: tell the person "Verdict: the bug is in the PROMPT (its check fails on the issue's case)." Find the
    cause first (section 11, "After a ✗"). Fix the prompt (set draft, fill the hash) and check again: at most 2 fix
    rounds, then ask the person.
-4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." The repo's own tests prove
-   the code fix.
-5. The check report shows before ✗ → after ✓. `pdd simulate <story>` opens with the issue's input ready.
+4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." Keep the correct prompt
+   unchanged. The code-only checker route below proves the code fix.
+5. For a prompt bug the check report shows before ✗ → after ✓; for a code-only bug show before ✓ → after ✓. `pdd simulate <story>` opens with the issue's input ready.
 - If no prompt owns the behavior, say in reproduce: "No prompt exists yet for this behavior, so the bug can only be
   in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." Write the
   prompt from the issue, and write "before: no prompt" in PR 1.
@@ -588,6 +622,28 @@ ticks. Ticks use the existing action/call budget.
 - Keep the change small: change one prompt when you can, and test only the criteria of the bug.
 - PR 1 must not make the repo's own tests fail. Put a new failing code test in PR 2, or mark it `todo` in PR 1.
   Never offer to merge PR 1 while the repo's tests fail on its branch.
+
+**Independent checker: code-only bugs.** Use this route only for a bug with the recorded Story-gate verdict
+"the prompt is right; the bug is only in the CODE". Compare the owning prompt and required context on the old
+and new snapshots: they must be unchanged. Check the same issue-derived Story and expected cases on each
+snapshot. Both prompt checks must pass in full. Apply pdd-check's current-source, fresh-result rules to each;
+unavailable or unverifiable results are no verdict, never an assumed pass.
+
+Independently run the same native regression against the old code and the corrected code, using the same
+expected cases and public boundary. The old code must fail an assertion for the issue's reason and the new
+code must pass. A pre-target crash, setup error, missing test or passing old code is not proof. Keep the exact
+snapshot/head identities, commands, exits and failing assertion in the checker evidence. Replay and formal
+checks in §17, independent review, exact-head suites, approvals and merge rules still apply.
+
+The PR body must state: prompt unchanged and passing on old and new snapshots; native regression fails on
+old code for the bug's reason and passes on the new code. Retain the real report links and counts, native
+old-code proof and limitations. Do not label the old prompt as failing. A wrong or changed prompt uses the
+prompt-bug route: the old prompt must fail the issue case and the corrected prompt must pass. No owning
+prompt uses the existing "before: no prompt" route, never this exception.
+
+Autopilot waits saved as `capability:route-code-only-checker` wake through the installed capability rule
+(#3112). Keep prior verdicts and route history. A wake supplies no approval or checker PASS; revalidate the
+current candidates before a new verdict.
 
 ## 15. PR text
 
@@ -599,6 +655,63 @@ and `pdd lint` results, the replay evidence (§17), the old-code proof, review.m
 and the rows of each open PR ("Updated <time>"). All the rest (pdd result lines, your step summaries, approvals,
 verify.md) stays whole in a closed "Details for tools and audits" section. pdd owns the description: it rewrites the
 part above Details at each status and all of it at each push. Put notes for people in a PR comment.
+
+### Small-change issue checklist
+
+The plan in scope.md lists every requested item from the complete issue and trusted
+follow-up comments. Preserve each item through change and verify. Mark it pending,
+done with concrete evidence, or excluded with a reason and an exact quote from the
+issue that permits exclusion. The run's plan cannot narrow the issue. The fresh
+checker first derives its own request inventory from the original issue and trusted
+follow-ups, then compares it with the checklist and PR diff. Missing requests,
+unjustified exclusions, pending work and unsupported done claims are must-fixes.
+A passing wording/structure test does not prove that a requested behavior is correct.
+
+Save the checklist outside source, at `<run-folder>/small-change-checklist.json`:
+
+```json
+{
+  "schema_version": "pdd.small-change-checklist.v1",
+  "run_id": "<run ID>",
+  "source": {"kind": "git-content-v1", "sha256": "<current content fingerprint>"},
+  "items": [
+    {"id": "R1", "request": "Correct the generated setup instructions",
+     "source": "https://github.com/example/project/issues/17",
+     "quote": "Correct the generated setup instructions", "state": "done",
+     "evidence": "Generated instructions checked with the setup fixture"},
+    {"id": "R2", "request": "Add a picture",
+     "source": "https://github.com/example/project/issues/17",
+     "quote": "Optionally add a picture", "state": "excluded",
+     "exclusion": {"reason": "The issue makes the picture optional",
+                   "quote": "Optionally add a picture"}}
+  ]
+}
+```
+
+This example is synthetic. Item ids are unique and nonblank. Keep source URLs and
+exact request quotes, including trusted comment URLs. Update the fingerprint with
+`sourceFingerprint(root)` from `src/workflow-replay.mjs` after source edits; never
+replace a missing item with a smaller inventory. The native reader validates shape,
+current source and completion evidence. It does not establish semantic coverage or
+judge whether a quote permits exclusion. The independent checker does those checks
+against the issue. The PR shows every item's state, quote and evidence or exclusion.
+Missing checklist evidence waits; malformed/stale evidence and must-fixes block ready.
+
+The structured `formal` block in `replay-evidence.json` (§17 and
+the record contract at `docs/replay-evidence.md`) is the only formal exemption field.
+For documentation-only work, record `result: "not_applicable"`, a specific `scope`
+and `reason`, and `control_outcome: "not_run"`. Use the normal schema_version,
+run_id and current source fingerprint; scenario vectors are not required for this
+standalone block. Do not invent a proof or control. Body, Summary, Proof and saved
+status read the same validated field. A scope/formal note cannot override it.
+A one-PR small-change requires a recorded formal result, even without a Story or Rules to check.
+Missing formal evidence waits before formal step completion and blocks readiness after completion;
+malformed, stale, failed or not_run evidence cannot say ready. A valid exemption
+means not applicable, never proved. The checker verifies that the diff fits it.
+Other workflows keep their step-completion policy for a missing formal block unless a known Story has
+`## Rules to check`; malformed or stale supplied evidence blocks readiness. This adds no person gate.
+
+### Agent PR fields
 
 Give pdd the human parts as labeled lines in your `done` summary, one per line. A later line with the same label
 replaces an earlier one, also from a later step of the same PR:

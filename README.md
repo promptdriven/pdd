@@ -13,7 +13,7 @@ flowchart LR
   A --> K["Code<br/>from the prompts"]
 ```
 
-PDD is the `pdd` command and a set of skills for your agent. Your agent writes the prompts, the Stories, the tests and the code. The PDD interpreter runs the checks and the simulation. Only you approve.
+PDD is the `pdd` command and a set of skills for your agent. Your agent writes the prompts, the Stories, the tests and the code. The PDD interpreter runs the checks and the simulation. In manual workflows, you approve. An explicit Autopilot auto setup and start can delegate ordinary gates; strict approvals and required human reviews still need a person.
 
 ## Install
 
@@ -29,13 +29,88 @@ pdd setup
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
-3. `pdd --version` must print `0.1.26`. When your skills are older than pdd, it also prints the command that updates them.
+3. `pdd --version` must print `0.1.27`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
 
 > [!IMPORTANT]
 > Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different package with the name `pdd`.
+
+## Autopilot on your own repository
+
+Use Node.js 22.20 or newer, Git, and the GitHub CLI. Use a repository that you
+own or can write to. Read access alone cannot create branches and PRs or merge
+them. Required branch reviews and checks still apply. Fork a repository first
+if you need your own write access.
+
+1. Install PDD and its skills with the commands above. Check the active tools:
+
+   ```sh
+   node --version
+   git --version
+   gh auth login
+   gh auth setup-git
+   pdd --version
+   ```
+
+2. Install and sign in to one agent. For Codex:
+
+   ```sh
+   npm install -g @openai/codex
+   codex login
+   codex login status
+   ```
+
+   For Claude Code, use `npm install -g @anthropic-ai/claude-code`,
+   `claude auth login`, then `claude auth status --json`.
+
+3. Install Herdr, then enter your repository and run setup:
+
+   ```sh
+   curl -fsSL https://herdr.dev/install.sh | sh
+   herdr --version
+   cd your-repo
+   pdd setup
+   cat pdd.json
+   pdd autopilot doctor
+   ```
+
+   Setup lets you select observe or auto. In auto mode, starting authorizes
+   eligible branches, PRs, ordinary gates and merges under repository rules.
+   An empty `trust: []` still trusts the owner and users with write access.
+   Explicit trust names add users. Observe mode reports eligible work.
+   Strict approvals and required human reviews still need a person.
+
+4. Sign in to an agent, review doctor warnings, then start and inspect the run:
+
+   ```sh
+   pdd autopilot start --runs 1
+   pdd autopilot status
+   herdr session attach pdd-autopilot
+   ```
+
+   Start runs the same doctor first. Only missing agent sign-in refuses preflight.
+   Other findings warn with fix commands; native start keeps its own guards.
+   Doctor reads tools, sign-ins, permissions, setup, pane room and interpreter
+   access. It makes no GitHub writes or AI calls. A read-only interpreter access
+   check does not prove prompt behavior. Draft prompts can need approval at the
+   first check. Doctor reports their paths and never approves them. Unknown
+   agent usage and unreadable branch rules remain warnings, not proof.
+
+5. Keep the machine available. On Linux, a systemd user session is required.
+   `loginctl enable-linger` keeps timers available after logout. On macOS,
+   `caffeinate -i` can keep the machine awake while you work. Stop the repo's
+   timer when you finish:
+
+   ```sh
+   pdd autopilot stop
+   ```
+
+Doctor prints commands to fix or inspect each item. Linux tool installation
+commands use apt-get; use your distribution's package manager where needed.
+See the [CLI reference](docs/cli.md#autopilot-on-this-machine) for checks,
+settings, automatic approval scope, status and stop.
 
 ## The PDD loop
 
@@ -200,7 +275,7 @@ The [CLI reference](docs/cli.md) has every command and option.
 
 **Small test steps.** Keep each test step small: one action, or a short run of about 10 actions. The server stops a step after 10 minutes.
 
-**Draft and approved.** A prompt starts as a draft. A draft can be checked and tried. Only a person approves a prompt. When an approved prompt changes, it goes back to draft.
+**Draft and approved.** A prompt starts as a draft. A draft can be checked and tried. New behavior needs approval from a person, or an applicable Autopilot delegation through the supported approval command. Strict approvals still need a person terminal. When an approved prompt changes, it goes back to draft.
 
 **AI-call budgets.** A budget is a limit, not a price. You are charged only for calls that run. A check gives each test file 12 calls for each step, at least 18 and at most 1000. A new simulation has 400 calls. `--max-calls N` sets another limit, from 1 to 1000, for a check or a new simulation.
 
@@ -228,7 +303,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 | `This Try session is busy.` | A simulation runs one command at a time. Wait for the first command to finish. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
 | `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
-| `pdd --version` does not print `0.1.26` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.27` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 

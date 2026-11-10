@@ -9,7 +9,7 @@ import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 const checkPosts = fake => fake.posts.filter(e => e.command === 'check');
 const completeZero = () => ({ provider_calls: 0, accounting_complete: true,
   usage: { calls: 0, known_calls: 0, unknown_calls: 0, provider_calls: 0, accounting_complete: true } });
-const makePorts = (setup, fake, extra) => portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PDD_INTERPRETER_CONCURRENCY: '8' }, extra);
+const makePorts = (setup, fake, extra) => portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }, extra);
 const saved = (setup, batch) => JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json')));
 const restart = (f, id, calls = 'unknown') => f.job(id, 'check', 'unknown', { why: 'The result is unknown.', refusals: [{ code: 'service-restarted', message: 'The service restarted.' }] }, calls);
 

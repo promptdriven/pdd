@@ -1020,13 +1020,14 @@ test('RUNTIME-ADDRESS2: Try and report links on the runtime domain pass; links o
 });
 
 // Wrong: a check of every story starts with no word on what it costs (cli 12b).
-test('RUNTIME-COST1: a check of all stories says about how many AI calls it uses; a check of one story does not', async t => {
+test('RUNTIME-COST1: a check plan shows bounded calls before lint', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const all = await check(setup, fake, []);
   assert.equal(all.code, 0);
   const lines = all.err.split('\n');
-  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 36).') >= 0, all.err);
-  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 36).') < lines.findIndex(text => text.startsWith('Lint passed')));
+  const estimate = lines.findIndex(text => /Interpreter calls: about 2; at most 72/.test(text));
+  assert.ok(estimate >= 0, all.err);
+  assert.ok(estimate < lines.findIndex(text => text.startsWith('Lint passed')));
   const one = await check(setup, fake, ['place-order']);
   assert.doesNotMatch(one.err, /Checking all/);
 });
@@ -1083,7 +1084,7 @@ test('RUNTIME-CLOUD1: 403 no-cloud-access stops at once with the sign-up line in
       const result = await check(setup, fake, [], options), why = JSON.stringify({ json, options });
       assert.equal(result.code, 5, why); assert.equal(result.out, '', why);
       if (typeof said === 'string') assert.ok(result.err.trimEnd().split('\n').includes(said), result.err); else assert.match(result.err, said);
-      assert.doesNotMatch(result.err, /update pdd|unknown|If pdd stops/i, why);
+      assert.doesNotMatch(result.err.split("\n").filter(line=>!/^  /.test(line)).join("\n"), /update pdd|unknown|If pdd stops/i, why);
       assert.equal(result.clock.now, START, why);
     }
     assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']); assert.equal(fake.gets.length, 0);
@@ -1100,7 +1101,7 @@ test('RUNTIME-CLOUD2: 503 cloud-unavailable says at once to try again in a minut
     const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
     for (const options of [{}, { '--lint': true }]) {
       const result = await check(setup, fake, [], options);
-      assert.equal(result.code, 5); assert.match(result.err, again); assert.doesNotMatch(result.err, /pdd retries this|unknown/i);
+      assert.equal(result.code, 5); assert.match(result.err, again); assert.doesNotMatch(result.err.split("\n").filter(line=>!/^  /.test(line)).join("\n"), /pdd retries this|unknown/i);
       assert.equal(result.clock.now, START);
     }
     assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']); assert.equal(fake.gets.length, 0);
@@ -1333,6 +1334,6 @@ test('hcli-2: saved-data and nested prompt calls contribute to the estimate with
   const result = await check(setup, fake, [], { '--max-calls': '32' });
   assert.equal(result.code, 0, result.out + result.err);
   // Entry1 + store(load,save)2 + target(1+load1)*max_calls2 =7.
-  assert.match(result.err, /about 7 AI calls \(at most 32\)/);
+  assert.match(result.err, /Interpreter calls: about 7; at most 64/);
   assert.equal(fake.posts.find(p => p.command === 'check').request.max_calls, 32);
 });

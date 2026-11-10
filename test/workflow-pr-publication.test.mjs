@@ -33,6 +33,8 @@ function fixture(t, { existing = false, opted = false, prompt = false } = {}) {
   const head = git('rev-parse', 'HEAD'); if (existing) git('push', '-q', 'origin', 'HEAD:refs/heads/topic');
   const runDir = join(root, '.git', 'pdd', 'runs', '17'); mkdirSync(runDir, { recursive: true });
   const areas = [{ name: 'prompt-pr', steps: ['scope','check'], optional: [], gate: 'pr', then: 'ask-code' }, { name: 'code', steps: ['build', 'verify', 'formal','review'], optional: [], gate: 'pr', ...(opted ? { replay_evidence: 'pdd.replay-evidence.v1' } : {}) }];
+  // A saved open PR 1 has a fetchable source branch for the code publication guard.
+  if (!prompt) git('push', '-q', 'origin', 'main:refs/heads/prompt-topic');
   const prs = prompt ? [] : [{ stage: 'prompt-pr', number: 22, url: url(22), branch: 'prompt-topic', base: 'main' }];
   if (existing) prs.push({ stage: prompt ? 'prompt-pr' : 'code', number: 23, url: url(23), branch: 'topic', base: 'main' });
   const run = { v: 1, runId: 'publication-17', number: 17, repo: 'example/project', issue: { title: 'Repair value', number: 17, url: 'https://github.com/example/project/issues/17' }, root, sourceRoot: root, runDir, branch: 'topic', baseBranch: 'main', baseSha, workflow: 'small-change', agent: 'codex', areas, area: prompt ? 0 : 1, state: 'running', done: {review:{summary:'reviewed',at:4}, scope: { summary: 'Defect: broken value', at: 1 }, build: { summary: 'built', at: 2 }, verify: { summary: 'verified', at: 3 } }, decisions: [], changes: [], chats: [], pr: prs, replayBaseline: { schema_version: 'pdd.replay-vectors.v1', vectors: [] } };
@@ -43,28 +45,32 @@ const fs=require('node:fs'),cp=require('node:child_process');
 const file=process.env.PDD_PUBLICATION_GH_STATE,s=JSON.parse(fs.readFileSync(file,'utf8')),a=process.argv.slice(2);
 const flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?x:JSON.stringify(x));
 const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/topic'],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
+const remote=(ref='topic')=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/'+ref],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
-else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
-else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName==='topic'?{...found,headRefOid:remote()||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
+else if(a[1]==='list')out(s.prs.filter(p=>(!a.includes('--head')||p.headRefName===flag('--head'))&&(!a.includes('--search')||p.body.includes(flag('--search').split('"')[1]))).map(p=>({...p,headRefOid:remote(p.headRefName)||p.headRefOid})));
+else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName?{...found,headRefOid:remote(found.headRefName)||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
+else if(a[0]==='api'&&/^repos\\/example\\/project\\/pulls\\/\\d+\\/files\\?per_page=100$/.test(a[1])){
+ if(!a.includes('--paginate')||!a.includes('--slurp'))throw Error('file list must include every JSON page');
+ const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages);
+}
 else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||a[1]==='edit'){
  if(flag('--body-file')!=='-')throw Error('must read body from stdin');
  const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
  if(kind==='edit'&&s.failEdit===s.events.filter(e=>e.kind==='edit').length){fs.writeFileSync(file,JSON.stringify(s));process.stderr.write('error: refused edit');process.exit(1)}
- if(kind==='create'){s.prs.push({number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
+ if(kind==='create'){const number=Math.max(22,...s.prs.map(p=>p.number))+1;s.prs.push({number,url:'https://github.com/example/project/pull/'+number,state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
  else{s.prs.find(p=>p.url===a[2]).body=body;out('updated')}
  fs.writeFileSync(file,JSON.stringify(s));
 }else throw Error('unexpected gh '+a.join(' '));
 `;
   writeFileSync(join(bin, 'gh'), fake); chmodSync(join(bin, 'gh'), 0o755);
   const save = () => writeFileSync(join(runDir, 'status.json'), JSON.stringify(run)); save();
-  const invoke = (summary, method = 'stepDone') => {
+  const invoke = (summary, method = 'stepDone', step = prompt ? 'check' : 'formal') => {
     const review=String(summary).split('\n').filter(row=>row.startsWith('Review:')).join('\n');if(review)writeFileSync(join(runDir,'review.md'),review);
     const verify=String(summary).split('\n').filter(row=>/^(?:Not fixed yet:|Proof \()/.test(row)).join('\n');if(verify)writeFileSync(join(runDir,'verify.md'),verify);
     const scope=String(summary).split('\n').filter(row=>row.startsWith('Not caught because:')).join('\n');if(scope)writeFileSync(join(runDir,'scope.md'),scope);
 
-    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'check' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
+    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
   const machine = (proved = head) => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: proved, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
@@ -527,10 +533,10 @@ test('READABLE-CODE: the code PR proof table reads the old-code proof and review
   assert.equal(out.exitCode, 0, out.message);
   const pr = f.data().prs[0], [visible] = pr.body.split(DETAILS_OPEN), proof = visible.slice(visible.indexOf('## Proof'));
   assert.equal(pr.title, 'fix(small-change): Repair value (#17 · part 2: fix)');
-  assert.match(visible, /- \*\*Cause:\*\* an old constant\.\n- \*\*Fix\u200b:\*\* set it to two\.\n- \*\*Result:\*\* CI green; checker PASS; formal Proved \(bounded\)\./);
+  assert.match(visible, /- \*\*Cause:\*\* an old constant\.\n- \*\*Fix\u200b:\*\* set it to two\.\n- \*\*Result:\*\* Formal check: missing[^\n]+Regression tests/);
   assert.match(visible, /\| value \| 1 \| 2 \| 2 ✓ \|/);
   assert.match(proof, /\| Regression tests \(old-code proof\) \| ✓ pass \| ✗ fail \(as expected\) \|/);
-  assert.match(proof, /\| Formal check \| Not recorded: pdd has no formal result for this run \(see Details\) \| — \|/);
+  assert.match(proof, /\| Formal check \| missing[^\n]+replay-evidence\.json[^\n]+Repair:/);
   assert.match(proof, /\| Full test suite \(CI\) on this commit \| ⏳ pending \| — \|/); assert.match(proof, /\| Fresh review \| no must-fix \| — \|/);
   assert.doesNotMatch(proof, /green|PASS|Proved/, 'Agent claims never fill a proof row.');
   assert.match(visible, /\*\*Merge:\*\* waiting for a person to merge\. Closes #17\./); assert.doesNotMatch(visible, JARGON);
@@ -540,6 +546,149 @@ test('READABLE-CODE: the code PR proof table reads the old-code proof and review
 // #3029: the formal status of a real code PR whose prompt area has no scenario vectors (PR 1 changed no scenario file,
 // as in prompt-runtime PRs #670 and #686). The code replay stays NOT REPLAYED; the formal block is read on its own.
 const VALUE_STORY = '# Value\n\nAs a maintainer, I want the value to be two,\nso that the report adds up.\n\n## Acceptance criteria\n\n1. The value is two.\n';
+
+// #3085: main can advance after the run starts. The PR diff excludes inherited
+// Stories even though the run's saved baseSha still sees them. Use the existing
+// publication fake: real local Git and gh redirected to the fixture's state file.
+for (const selection of ['docs', 'changed', 'named', 'approved', 'stacked-changed', 'stacked-named', 'stacked-approved']) {
+  test(`3085-STORY-SCOPE: ${selection} publication excludes inherited Stories and keeps its own`, t => {
+    const f = fixture(t);
+    const stacked = selection.startsWith('stacked-');
+    const ownPath = 'user_stories/own.md', inheritedPath = 'user_stories/inherited.md';
+    const own = VALUE_STORY.replace('two,', 'OWN3085,');
+    const inherited = VALUE_STORY.replace('two,', 'INHERITED3085,');
+    f.git('switch', 'main');
+    mkdirSync(join(f.root, 'user_stories'));
+    writeFileSync(join(f.root, inheritedPath), inherited);
+    if (['named', 'approved'].includes(selection)) writeFileSync(join(f.root, ownPath), own);
+    f.git('add', '.'); f.git('commit', '-qm', 'Upstream Stories after run start');
+    f.git('push', '-q', 'origin', 'main');
+    f.git('switch', 'topic'); f.git('merge', '--no-edit', 'main');
+    f.git('checkout', 'main', '--', 'value');
+    if (selection === 'changed' || stacked) writeFileSync(join(f.root, ownPath), own);
+    if (stacked) {
+      f.git('add', '.'); f.git('commit', '-qm', 'Own Story in prompt PR');
+      f.git('push', '-q', 'origin', 'HEAD:refs/heads/prompt-topic');
+      f.run.prBase = 'prompt-topic';
+      f.run.pr[0].branch = 'prompt-topic';
+    } else {
+      // A single-PR small-change, as in #3079.
+      f.run.areas = [{ name: 'change', steps: ['scope', 'change', 'verify', 'formal'], optional: [], gate: 'pr' }];
+      f.run.area = 0; f.run.pr = [];
+      f.run.done.change = f.run.done.build;
+    }
+    writeFileSync(join(f.root, 'CONTRIBUTING.md'), '# Contributing\n\nUse a shallow clone.\n');
+    f.git('add', '.'); f.git('commit', '-qm', 'Run documentation change');
+    if (selection.endsWith('named')) f.run.done.scope.summary = `Story: ${ownPath}`;
+    if (selection.endsWith('approved')) {
+      // Synthetic saved approval input, never a real approval command.
+      f.run.storyApproval = { fingerprint: { stories: [{ path: ownPath, criteria: ['AC1'] }] } };
+    }
+    f.save();
+    assert.ok(f.git('diff', '--name-only', f.run.baseSha).includes(inheritedPath), 'Reproduce the stale-base Story inventory.');
+    const result = f.invoke('Review: no must-fix');
+    assert.equal(result.exitCode, 0, result.message);
+    const body = f.data().prs[0].body, visible = body.split(DETAILS_OPEN)[0];
+    const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json')));
+    const facts = saved.pr.find(pr => pr.number === 23).readable.facts;
+    assert.equal(facts.stories.length, selection === 'docs' ? 0 : 1, 'Only this run owns the selected Story.');
+    assert.doesNotMatch(visible, /INHERITED3085/);
+    if (selection === 'docs') {
+      assert.deepEqual(facts.diff.files.map(file => file.path), ['CONTRIBUTING.md']);
+      assert.doesNotMatch(visible, /^## User story$/m);
+      assert.match(detailsOf(body).details, /User story:.*no Story applies/i);
+    } else {
+      assert.match(visible, /^## User story$/m);
+      assert.match(visible, /OWN3085/);
+      assert.equal(facts.stories.filter(story => story.includes('OWN3085')).length, 1);
+      if (stacked) assert.ok(!facts.diff.files.some(file => file.path === ownPath), 'PR 2 keeps its own Story from PR 1.');
+    }
+    // Refresh from saved facts must preserve the same scoped selection.
+    assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+    assert.doesNotMatch(f.data().prs[0].body.split(DETAILS_OPEN)[0], /INHERITED3085/);
+  });
+}
+
+for (const history of ['legacy-branch', 'legacy-head', 'published-merge', 'published-squash', 'legacy-branch-fast-forward', 'legacy-head-fast-forward']) {
+  test(`3085-MERGED-STORY: ${history} retains PR 1 ownership without a named Story or fingerprint`, t => {
+    const published = history.startsWith('published-');
+    const f = fixture(t, { prompt: published });
+    const ownPath = 'user_stories/own.md', inheritedPath = 'user_stories/inherited.md';
+    f.git('switch', 'main');
+    mkdirSync(join(f.root, 'user_stories'));
+    writeFileSync(join(f.root, inheritedPath), VALUE_STORY.replace('two,', 'INHERITED3085,'));
+    f.git('add', '.'); f.git('commit', '-qm', 'Unrelated upstream Story');
+    const upstream = f.git('rev-parse', 'HEAD');
+    f.git('push', '-q', 'origin', 'main');
+    f.git('switch', 'topic');
+    if (history.endsWith('fast-forward')) f.git('reset', '--hard', f.run.baseSha);
+    f.git('merge', '--no-edit', 'main');
+    if (history.endsWith('fast-forward')) assert.equal(f.git('rev-parse', 'HEAD'), upstream);
+    writeFileSync(join(f.root, ownPath), VALUE_STORY.replace('two,', 'OWN3085,'));
+    if (published) {
+      // The retained Story inventory must survive the readable diff's 40-file cap.
+      mkdirSync(join(f.root, 'aaa'));
+      for (let i = 0; i < 45; i++) writeFileSync(join(f.root, 'aaa', `${i}.txt`), 'spec\n');
+    }
+    f.git('add', '.'); f.git('commit', '-qm', 'Own Story in PR 1');
+    const pr1Head = f.git('rev-parse', 'HEAD');
+    let pr1;
+    if (published) {
+      const result = f.invoke('check done');
+      assert.equal(result.exitCode, 0, result.message);
+      Object.assign(f.run, JSON.parse(readFileSync(join(f.runDir, 'status.json'))));
+      pr1 = f.run.pr[0];
+      assert.equal(pr1.readable.facts.stories.length, 1);
+      assert.ok(!pr1.readable.facts.diff.files.some(file => file.path === ownPath));
+      assert.match(f.data().prs[0].body.split(DETAILS_OPEN)[0], /OWN3085/);
+    } else {
+      f.git('push', '-q', 'origin', 'HEAD:refs/heads/prompt-topic');
+      pr1 = f.run.pr[0];
+      if (history.startsWith('legacy-head')) pr1.publishedHeadSha = pr1Head;
+      // GitHub retains the PR's own diff after main merges it. Capture that diff
+      // with real Git before the merge, then serve its filenames as API pages.
+      const files = f.git('diff', '--name-only', '-z', `${upstream}...${pr1Head}`).split('\0').filter(Boolean);
+      assert.ok(files.includes(ownPath)); assert.ok(!files.includes(inheritedPath));
+      f.configure({ prFiles: { [pr1.number]: files.map(filename => [{ filename }]) } });
+    }
+    if (history === 'published-squash') {
+      f.git('switch', 'main'); f.git('merge', '--squash', 'topic');
+      f.git('commit', '-qm', 'Squash PR 1');
+    } else {
+      f.git('switch', 'main'); f.git('merge', '--no-ff', '--no-edit', 'topic');
+    }
+    const merged = f.git('rev-parse', 'HEAD');
+    assert.notEqual(merged, upstream);
+    f.git('push', '-q', 'origin', 'main');
+    // PR 2 starts from merged main, as codeBranch does. The old PR branch can be gone.
+    f.git('switch', '-qc', 'topic-code');
+    if (!history.startsWith('legacy-branch')) {
+      f.git('push', '-q', 'origin', '--delete', pr1.branch);
+      f.git('update-ref', '-d', `refs/remotes/origin/${pr1.branch}`);
+    }
+    if (published) f.configure({ prs: f.data().prs.map(pr => ({ ...pr, state: 'MERGED', mergeCommit: { oid: merged } })) });
+    f.run.branch = 'topic-code'; f.run.prBase = 'main';
+    f.run.area = 1; f.run.state = 'running'; delete f.run.gate;
+    writeFileSync(join(f.root, 'CONTRIBUTING.md'), '# Contribution change\n');
+    f.git('add', '.'); f.git('commit', '-qm', 'PR 2 change');
+    assert.equal(f.run.storyApproval, undefined);
+    f.save();
+    const result = f.invoke('Review: no must-fix', 'stepDone', 'formal');
+    assert.equal(result.exitCode, 0, result.message);
+    const codePr = f.data().prs.find(pr => pr.headRefName === 'topic-code');
+    const visible = codePr.body.split(DETAILS_OPEN)[0];
+    assert.match(visible, /OWN3085/, 'The code PR must retain the Story that its own PR 1 changed.');
+    assert.doesNotMatch(visible, /INHERITED3085/);
+    const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json')));
+    const facts = saved.pr.find(pr => pr.number === codePr.number).readable.facts;
+    assert.equal(facts.stories.length, 1);
+    assert.deepEqual(facts.diff.files.map(file => file.path), ['CONTRIBUTING.md']);
+    assert.equal(f.invoke('', 'runStatus').exitCode, 0);
+    const refreshed = f.data().prs.find(pr => pr.number === codePr.number).body.split(DETAILS_OPEN)[0];
+    assert.match(refreshed, /OWN3085/); assert.doesNotMatch(refreshed, /INHERITED3085/);
+  });
+}
+
 // `story` is the Story path (null: the run has no Story file); `before` commits it before the run's base, so the run does not change it.
 function formalPublication(t, { rules, formal = null, story = 'user_stories/value.md', before = false, prepare = () => {}, summary = 'Review: no must-fix' }) {
   const f = fixture(t, { opted: true });
@@ -851,7 +1000,8 @@ test('#2596 PR1 refresh removes a deleted runtime scenario from its contents des
 });
 
 for(const change of ['identical','prompt','dependency','deleted']) test(`#2596 selected-source receipt publication after ${change} content`, async t=>{
-  const f=fixture(t);
+  // Authored prompt changes publish through PR 1; PR 2 forbids prompt edits.
+  const f=fixture(t,{prompt:true});
   for(const folder of ['prompts','tests','user_stories']) cpSync(join(packageRoot,'test/fixtures/harbor',folder),join(f.root,folder),{recursive:true});
   const prompt=join(f.root,'prompts/place_order.prompt.md');
   writeFileSync(prompt,readFileSync(prompt,'utf8').replace('## Dependencies\n\nNone.', '## Dependencies\n\n- [Prices](prices.md): required runtime context.'));
@@ -1095,4 +1245,167 @@ test('CALLS: a status refresh reads each PR once (with its description, head and
   assert.match(prStatus(facts), /^✅/);
   facts.mode = 'auto'; facts.records.checker = { verdict: 'PASS' };
   assert.match(prStatus(facts), /^✅/);
+});
+
+// #3088: use the real publication boundary, local bare origin and this file's fake gh.
+function evidence3088(t, { production = false, fixtureOnly = false, formal = {result: 'not_applicable', scope: 'Coverage validation', reason: 'No separate runtime rule in this synthetic coverage change', control_outcome: 'not_run'}, stale = false, malformed = false, extraFiles = 0, unavailableDiff = false } = {}) {
+  const f = fixture(t);
+  f.run.areas = [{ name: 'code', steps: ['scope', 'verify', 'formal'], optional: [], gate: 'pr' }];
+  f.run.area = 0; f.run.pr = [];
+  writeFileSync(join(f.root, 'value'), production ? 'head' : 'base');
+  mkdirSync(join(f.root, 'test/helpers'), { recursive: true });
+  writeFileSync(join(f.root, fixtureOnly ? 'test/helpers/value.mjs' : 'test/value.test.mjs'), 'import assert from "node:assert/strict"; assert.equal(2, 2);\n');
+  for (let i = 0; i < extraFiles; i++) writeFileSync(join(f.root, `test/helpers/extra-${i}.mjs`), 'export const value = 2;\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'coverage scope');
+  f.machine(f.git('rev-parse', 'HEAD'));
+  const path = join(f.runDir, 'old-code-proof.json'), record = JSON.parse(readFileSync(path));
+  record.base = phase(0); record.outcome = 'old-passes'; writeFileSync(path, JSON.stringify(record));
+  if (formal) writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify({ schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
+    source: { kind: 'git-content-v1', sha256: stale ? '0'.repeat(64) : sourceFingerprint(f.root) }, formal: malformed ? { ...formal, scope: '' } : formal }));
+  if (unavailableDiff) {
+    const wrapper = join(f.base, 'bin/git');
+    writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n', '#!/usr/bin/env node\nif (process.argv.includes("--numstat")) process.exit(1);\n'));
+  }
+  f.save();
+  const out = f.invoke('Result: Formal check: Proved (solver); CI green; checker PASS.\nFormal check: Proved (solver)');
+  assert.equal(out.exitCode, 0, out.message);
+  const pr = f.data().prs[0], saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'))).pr[0];
+  return { f, body: pr.body, visible: pr.body.split(DETAILS_OPEN)[0], facts: saved.readable.facts, details: detailsOf(pr.body).details };
+}
+
+test('3088 publication records tests-only old-passes as coverage with no defect-proof blocker', t => {
+  const pr = evidence3088(t);
+  assert.equal(pr.facts.records.proof.kind, 'coverage');
+  assert.equal(pr.facts.records.proof.status, 'old-passes');
+  assert.doesNotMatch(pr.visible.split('\n')[0], /⛔/);
+  assert.match(pr.visible, /\| Coverage validation[^\n]+✓ pass[^\n]+✓ pass/);
+  assert.doesNotMatch(pr.visible, /Proved \(solver\)|CI green|checker PASS|should fail/);
+  assert.match(pr.details, /Proved \(solver\)/, 'The original agent report stays attributed in Details.');
+});
+
+test('3088 repair 1: scenario-only publication recognizes executable coverage and keeps scope guards', t => {
+  const scenario = { schema_version: 'prompt-runtime.program-scenario.v1', steps: [{ step_id: 'value',
+    entry_path: 'prompts/value.prompt.md', operation: 'value', checks: [
+      { criterion_id: 'AC1', target: 'result', path: '', op: 'equals', value: 2 },
+    ] }] };
+  for (const options of [
+    { path: 'test/runtime/coverage.json', coverage: true },
+    { path: 'tests/runtime/coverage.json', coverage: true },
+    { path: 'test/runtime/fixture.json', document: { steps: scenario.steps }, coverage: false },
+    { path: 'test/runtime/empty.json', document: { ...scenario, steps: [] }, coverage: false },
+    { path: 'test/runtime/coverage.json', scenarioRead: 'malformed', coverage: false },
+    { path: 'test/runtime/coverage.json', scenarioRead: 'unavailable', coverage: false },
+    { path: 'test/runtime/coverage.json', production: true, coverage: false },
+    { path: 'test/runtime/coverage.json', unavailableDiff: true, coverage: false },
+  ]) {
+    const f = fixture(t);
+    f.run.areas = [{ name: 'code', steps: ['scope', 'verify', 'formal'], optional: [], gate: 'pr' }];
+    f.run.area = 0; f.run.pr = [];
+    writeFileSync(join(f.root, 'value'), 'base');
+    mkdirSync(join(f.root, 'src'));
+    mkdirSync(join(f.root, 'test'), { recursive: true });
+    mkdirSync(dirname(join(f.root, options.path)), { recursive: true });
+    writeFileSync(join(f.root, 'src/value.mjs'), 'export function value() { return 2; }\n');
+    // This runner and production source already exist on the base. Only the scenario is overlaid.
+    const relativeScenario = options.path.startsWith('tests/') ? `../${options.path}` : `./${options.path.slice(5)}`;
+    writeFileSync(join(f.root, 'test/value.vectors.test.mjs'), `import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {value} from '../src/value.mjs';
+const scenario = JSON.parse(readFileSync(new URL(${JSON.stringify(relativeScenario)}, import.meta.url)));
+test('scenario coverage', () => {
+  for (const step of scenario.steps) for (const check of step.checks)
+    assert.equal(value(), check.value, 'ASSERT_3088_SCENARIO');
+});
+`);
+    f.git('add', '.'); f.git('commit', '-qm', 'existing production and vector runner');
+    f.git('push', '-q', 'origin', 'HEAD:refs/heads/main');
+    f.run.baseSha = f.git('rev-parse', 'HEAD');
+    writeFileSync(join(f.root, options.path), JSON.stringify(options.document ?? scenario));
+    if (options.production) writeFileSync(join(f.root, 'src/value.mjs'), 'export function value() { return 1 + 1; }\n');
+    f.git('add', '.'); f.git('commit', '-qm', 'scenario coverage'); f.save();
+    const script = `import {proveRun} from ${JSON.stringify(join(packageRoot, 'src/workflow-prove.mjs'))};
+const result = await proveRun({ref:'17', cwd:${JSON.stringify(f.root)}, test:'node --test test/value.vectors.test.mjs', expect:'ASSERT_3088_SCENARIO'});
+process.stdout.write(JSON.stringify(result));`;
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: f.root, encoding: 'utf8',
+      env: { ...process.env, PATH: `${join(f.base, 'bin')}:${process.env.PATH}`, GIT_ALLOW_PROTOCOL: 'file' } });
+    const proof = JSON.parse(readFileSync(join(f.runDir, 'old-code-proof.json')));
+    assert.equal(proof.outcome, 'old-passes');
+    assert.deepEqual(proof.paths, [options.path]);
+    for (const snapshot of [proof.base, proof.head]) {
+      assert.equal(snapshot.exitCode, 0);
+      assert.ok(snapshot.stdoutTail.includes('# pass 1'));
+      assert.ok(snapshot.stdoutTail.includes('# fail 0'));
+      assert.ok(snapshot.stdoutTail.includes('# skipped 0'));
+    }
+    if (options.unavailableDiff) {
+      const wrapper = join(f.base, 'bin/git');
+      writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n', '#!/usr/bin/env node\nif (process.argv.includes("--numstat")) process.exit(1);\n'));
+    }
+    if (options.scenarioRead) {
+      const wrapper = join(f.base, 'bin/git');
+      const failure = options.scenarioRead === 'malformed' ? 'process.stdout.write("{"); process.exit(0);' : 'process.exit(1);';
+      writeFileSync(wrapper, readFileSync(wrapper, 'utf8').replace('#!/usr/bin/env node\n',
+        `#!/usr/bin/env node\nif (process.argv[2] === 'show' && process.argv[3]?.endsWith(${JSON.stringify(`:${options.path}`)})) { ${failure} }\n`));
+    }
+    // Coverage is not a defect proof; record its formal exemption explicitly.
+    writeFileSync(join(f.runDir, 'replay-evidence.json'), JSON.stringify({schema_version: 'pdd.replay-evidence.v1', run_id: f.run.runId,
+      source: {kind: 'git-content-v1', sha256: sourceFingerprint(f.root)},
+      formal: {result: 'not_applicable', scope: 'Scenario coverage', reason: 'No changed runtime rule in this synthetic scenario coverage', control_outcome: 'not_run'}}));
+    const out = f.invoke('Result: scenario coverage; both snapshots pass.');
+    assert.equal(out.exitCode, 0, out.message);
+    const pr = f.data().prs[0], saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'))).pr[0];
+    assert.equal(saved.readable.facts.records.proof.kind, options.coverage ? 'coverage' : 'defect', JSON.stringify(options));
+    assert.equal(saved.readable.facts.records.proof.status, 'old-passes');
+    if (options.coverage) {
+      assert.doesNotMatch(pr.body.split('\n')[0], /^⛔/);
+      assert.match(pr.body, /\| Coverage validation[^\n]+✓ pass[^\n]+✓ pass/);
+    } else assert.match(pr.body.split('\n')[0], /^⛔/);
+  }
+});
+
+for (const options of [{ production: true }, { fixtureOnly: true }]) test(`3088 non-coverage scope stays blocked ${JSON.stringify(options)}`, t => {
+  const pr = evidence3088(t, options);
+  assert.equal(pr.facts.records.proof.kind, 'defect');
+  assert.match(pr.visible, /^⛔/);
+});
+
+const FORMAL3088 = { result: 'not_run', scope: 'bounded values', reason: 'CONTROL_UNAVAILABLE', control_outcome: 'not_run' };
+for (const [name, formal, expected] of [
+  ['not-run', FORMAL3088, 'not_run'],
+  ['proved', PROVED_532, 'proved_bounded'],
+  ['failed', { ...FORMAL3088, result: 'failed', counterexample: 3088 }, 'failed'],
+]) test(`3088 standalone formal publication uses its recorded ${name} result`, t => {
+  const pr = evidence3088(t, { formal });
+  assert.equal(pr.facts.records.replay, null);
+  assert.ok(pr.facts.records.formal, 'The publication must read the standalone formal block.');
+  assert.equal(pr.facts.records.formal.status, 'recorded');
+  assert.equal(pr.facts.records.formal.result, expected);
+  assert.doesNotMatch(pr.visible, /Proved \(solver\)/);
+  const row = pr.visible.split('\n').find(line => line.startsWith('| Formal check'));
+  const header = pr.details.split('\n').find(line => line.startsWith('Formal check'));
+  assert.ok(row && header);
+  if (expected === 'not_run') { assert.match(row, /Not run: CONTROL_UNAVAILABLE/); assert.match(header, /Not run/); }
+  if (expected === 'proved_bounded') { assert.match(row, /Proved \(bounded\)/); assert.match(header, /Proved \(bounded\)/); }
+  if (expected === 'failed') { assert.match(row, /3088/); assert.match(header, /Failed/); assert.match(pr.visible, /^⛔/); }
+  assert.doesNotMatch(pr.details, /^Code replay:/m, 'Reading the formal block does not add a replay requirement.');
+});
+
+for (const [option, expected] of [['stale', 'stale'], ['malformed', 'malformed']]) test(`3088 ${option} formal evidence cannot accept the narrative proof claim`, t => {
+  const pr = evidence3088(t, { formal: PROVED_532, [option]: true });
+  assert.ok(pr.facts.records.formal, 'The publication must read the supplied formal block.');
+  assert.equal(pr.facts.records.formal.status, expected);
+  assert.match(pr.visible, /^⛔/);
+  assert.doesNotMatch(pr.visible, /Proved \(solver\)/);
+  assert.match(pr.visible, new RegExp(`\\| Formal check \\| ${expected}`));
+  assert.match(pr.details, new RegExp(`^Formal check[^\\n]+${expected}`, 'm'));
+});
+
+for (const options of [{ extraFiles: 45 }, { extraFiles: 45, production: true }, { unavailableDiff: true }]) test(`3088 full diff controls coverage, not the bounded display ${JSON.stringify(options)}`, t => {
+  const pr = evidence3088(t, options);
+  const coverage = !options.production && !options.unavailableDiff;
+  assert.equal(pr.facts.records.proof.kind, coverage ? 'coverage' : 'defect');
+  if (options.extraFiles) { assert.equal(pr.facts.diff.files.length, 40); assert.ok(pr.facts.diff.count > 40); }
+  if (coverage) assert.doesNotMatch(pr.visible, /^⛔/);
+  else assert.match(pr.visible, /^⛔/);
 });

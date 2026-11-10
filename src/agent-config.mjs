@@ -1,7 +1,8 @@
-// Generated from prompts/cli/agent-config.prompt.md (sha256: 156379ac070aad794ec2ce7c6bc67621f1ead349ec2a72440da6c660d574c1b7).
+// Generated from prompts/cli/agent-config.prompt.md (sha256: e830b36b3d0d196731a22a938e13fb29f9ce61d6c967e63894d1f8729b28a026).
 import {constants,lstatSync,openSync,fstatSync,readSync,closeSync} from 'node:fs';
 import {resolve,join,dirname,isAbsolute} from 'node:path';
 import {createHash} from 'node:crypto';
+import {knownSecretValues,rememberSecrets} from './secret-redaction.mjs';
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const controls = /[\u0000-\u001f\u007f-\u009f]/;
 const bad = message => {throw new Error(`Invalid agents configuration: ${message}.`);};
@@ -28,5 +29,6 @@ export function loadAgentDefinitions({cwd,env=process.env}){
   let command=expand(item.command,home);if(!isAbsolute(command)&&command.includes('/'))command=resolve(dirname(path),command);
   return {id:`custom-${createHash('sha256').update(item.name).digest('hex').slice(0,24)}`,name:item.name,kind:item.kind,command,env:childEnv};
  });
+ for(const definition of definitions)rememberSecrets(...knownSecretValues(definition.env));
  return [...definitions,...(enabled?defaults():[])];
 }

@@ -1,5 +1,10 @@
 # Autopilot launcher
 
+Bind the parking owner's checkProgress port to both fresh check-queue custody
+and current live agent activity. A current working/blocked/unknown agent holds
+working capacity and defers parking even when the workflow is stopped. Use the
+parking owner's closing reasons in status and retry its held reservations.
+
 Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(input, ports)` and
 `tickAutopilot(stateFile, ports)` and `requestAutopilotCompletion({cwd,env}, ports)`, and the pure
 `autopilotLaunchFingerprint(state)` that returns the launch fingerprint below for a saved state. This launcher connects a repository to the
@@ -7,11 +12,41 @@ person's interactive coding agent in a dedicated Herdr session. It adds no
 approval, merge, quota-reset or headless execution route. Its read-only base check refuses unsafe merge targets without performing a merge. Preserve existing
 setup, workflow and interpreter behavior.
 
-`runAutopilotLauncher` accepts command start, stop, status or add, cwd, packageRoot, env,
+`runAutopilotLauncher` accepts command start, stop, status, add or release, cwd, packageRoot, env,
 issues (argv issue references), and optional runs and checks text. Tests may inject `checkCapacityPorts` for the
 shared queue machine/filesystem ports independently of the launcher process port. Return `{exitCode,message}`.
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
 are injectable ports; native defaults implement these on macOS and Linux.
+
+Catalog command `release` (`pdd autopilot release ISSUE`) releases this machine's own Autopilot claim on `ISSUE` through the shared `releaseRunClaim` / `releaseParkedClaim` path, while keeping the run folder, branch and PRs. The workflow runner owns the run lock, worker/check-custody guard, chat cleanup result and local allocation result. If another machine holds a live claim, the winner is unknown, or a supplied saved identity differs from the current winner, refuse or defer without removing labels. A local automatic run ends as cancelled, but its allocation and labels remain held while a worker/check is live or unknown, a chat is retained, or local release is not confirmed. Keep `claimRelease` pending until local allocation release and both remote label removals are confirmed. During each tick when GitHub budget permits, retry pending release through the same runner path and reuse the tick's claim observation and ETag cache. For cancelled runs without pending state, clean only when a fresh intake observes the exact saved claim comment and label-event identities. Never fall back to an observed claim with a missing saved identity, and never clean a claim while another non-ended local run for the issue exists on this machine. For active local runs whose claim expired or was lost, check suite/interpreter custody before recording handover. Queued, running or unavailable checks leave the run unchanged for a later tick. With checks clear, the runner may record the old run as handed over so it cannot resume or publish, while zero-grace cleanup retains a busy or unknown worker. That terminal record does not release ownership: a retained chat, live or unknown worker/check, replacement local run, or unconfirmed local allocation keeps the local allocation and GitHub labels held with `claimRelease` pending. Retry through the same guarded runner path. After an explicit release completes remotely with saved prior launcher state, re-enter the existing admission owner and reread current launcher state. If the fresh repository and control revision still equal the release invocation values, treat the admitted release publication as a control action: replace the opaque control revision and save that fresh state even when the invocation cache is absent or incomplete, or the latest cache is empty. This makes a scan that captured the former revision fail the existing scan guard, so it cannot later publish stale intake or parked fields. Prune a cache row in that save only when its coordinator, machine, comment and label-event tuple matches this machine's released tuple, or this machine's complete tuple observed before the release. A different or incomplete fresh cache entry, and a number-only parked reservation, stay for ordinary reconciliation. If the latest revision differs, make no cache or revision write: preserve that newer state, including STOP, a replacement cache and its control revision. Preserve unrelated current state. This final cache update never restores stale enabled, control-revision or other state after STOP or a newer control action. Clear pending state and remove the observed claim from intake only after local allocation release and remote cleanup both confirm success.
+
+Workflow cleanup and pane admission use the injected workflowHerdr port, then the injected herdr port, with the native pdd-session transport only as fallback. This port is separate from coordinator transport. Before fresh intake, bind the runner's idle sweep to pane admission alongside finished cleanup; idle cleanup uses the existing parking and resume route.
+
+## Waiting PR 1 gates
+
+In auto mode, every tick and completion reconciliation handles saved waiting
+PR 1 gates before dependency intake or dependency review delivery. Read this
+checkout's runs with `listRuns`, filter to its repository, source checkout and
+current automatic coordinator/machine, and call the workflow runner's
+`advanceAutomaticPr1` boundary under the existing scan admission guard. Forward
+injected process, filesystem, clock and workflow ports; adapt the launcher process
+port to runner `execFile` when needed. This deterministic decision makes no AI
+or interpreter call. A held, busy or failed run does not prevent another run or
+remaining intake work. Preserve GitHub budget waits; perform this reconciliation
+only when those waits permit it, before local parking and before intake. Budget
+waits still permit local parking and stopped-chat maintenance but no PR 1
+publication. Reconcile already parked approval waits through the same runner
+boundary. When an inferred wait or incomplete parking reservation initially
+prevents this boundary, reconsider that run once after local parking refreshes
+its current blocker and cleanup facts, within the same tick and before intake.
+Re-read the GitHub budget before this second pass. The runner still owns eligibility;
+a held check, independent wait, or incomplete close never authorizes publication.
+Refresh the local budget observation after native maintenance before
+heartbeats and intake, so reads made during gate reconciliation or stopped-chat
+maintenance count toward subsequent work. Observe and off modes never advance
+gates.
+The runner owns eligibility, full-pass evidence, custody, publication and hold
+reasons. This caller supplies no approval words and no invented decisions.
 
 ## Stopped workflow chats
 
@@ -681,17 +716,27 @@ In `off` mode the tick stops before the heartbeat. This machine then releases
 nothing, but its claims get no `lastSeen` and expire after 4 hours, as on a stopped
 machine.
 
+After the existing saved-run cleanup, an expired claim of this coordinator with
+no saved local run can take the same guarded release path. Read complete native
+owners/custody facts first. Release only when that read has `runsKnown: true`,
+has no run or allocation for the issue, and returns the same expired claim era
+(coordinator, machine, comment and label-event identities). A missing or
+unreadable owners read, worker, check, allocation, replacement era or incomplete
+identity keeps both labels. The shared release rechecks that exact era before
+each remote label deletion. This is cleanup, not new-work admission.
+
 An own claim whose issue has had `pdd:stuck` for 4 hours (`stuckSince`) is not
 refreshed again, so it expires 4 hours later unless the issue leaves `pdd:stuck`.
 For it, offer one `stuck-claim` time rule, once per stuck time, that asks the
 skill to retry with a changed approach or ask in the configured alert channel,
 without another alert when the cause and required decision are unchanged.
 After a ceiling (the claim is `takeoverLimited`, or this checkout's run of the
-issue is `stuck` with a saved `repairLimit`), the rule instead says which limit
+issue is `stuck` with a saved `repairLimit` or `integrationLimit` from the
+[runner's budget policy](workflow-runner.prompt.md#autopilot-repair-ceiling)), the rule instead says which limit
 was reached and asks for no retry, no removal of `pdd:stuck` and no new comment:
 send the one `stuck` alert only if this stop has none yet. After the takeover
 limit, a person removes `pdd:stuck` and `pdd:working` to let Autopilot try again.
-After the repair limit, the rule gives the way out: to let Autopilot try again, a
+After the repair or base integration limit, the rule gives the way out: to let Autopilot try again, a
 person removes `pdd:stuck` and `pdd:working`, then runs `pdd workflow cancel N`
 in the checkout that holds the stuck run; the next tick starts a new run with a
 fresh repair count. When both limits hold, the rule names both and gives the
@@ -821,6 +866,10 @@ per wait, and every path ends in a wake or in the stuck rule:
 | Health `healthy`, a run used its wake | A `runtime-stuck` rule, also during an open outage; it is never the test |
 | No open outage, health `healthy` | Waits from one or many issues are no outage: offer each run one `retry` |
 
+Add a waiting issue to an incident's saved issue list only after the alert owner
+confirms delivery with exit code 0. A failed or thrown delivery stays eligible
+for the existing incident retry route.
+
 An offered wake is a `runtime-ready` time rule with one reason line: the run
 number, why it wakes (`one retry`, `the test` or the interpreter back), and the exact
 text for `pdd workflow changes N`. That text starts with
@@ -840,7 +889,7 @@ access problem and wakes in the launcher state as `runtime`. While an outage or
 access problem is open, the packet has `runtime: {state, since, note}` with
 state `unavailable`, `testing` or `access`; the note says to keep other work
 moving and that new issues may start and park only at their interpreter check, and
-for `access` names the fix and the 4-hour limit. Send alerts through
+for `access` names the fix and the 4-hour limit for ordinary waits. Its note explicitly keeps lost-verdict waits parked for a person decision, matching the alert and native wake rules. Send alerts through
 [Autopilot alerts](autopilot-alerts.prompt.md) `runAutopilotAlerts` with this
 repository and the state root of this launcher (an injectable `sendAlert` port,
 or `alertPorts` for its HTTP); an alert failure never stops the tick.
@@ -1186,18 +1235,6 @@ route that can remove the mark after success.
 
 For `status`, include the local [issue cost report](cost-ledger.prompt.md) for normal and automatic runs in the selected repository; `--all` includes indexed repositories. Refresh numeric cost checkpoints through `updateRunCosts`, preserving the workflow progress timestamp, sequence and completion journal. Before refreshing a selected cost record, verify its runId and startedAt under run ownership. Archived attempts can retain a former runDir now owned by a new attempt: retain their saved cost snapshot and never substitute or update that new attempt. Measurement failure must not fail status. `status --json` returns only the versioned cost report and skips timer, Herdr, settings-on-GitHub and workflow readiness probes. It works without a saved launcher. Human status appends `costStatusLines`; neither status form fetches CI durations.
 
-
-
-## Machine interpreter waiting
-
-Read [machine interpreter progress](interpreter-queue.prompt.md) for the run's
-worktree using the same machine queue environment. Keep workflow state separate
-from queue state. Show waiting with its position in workflow status. Exclude the
-union of persisted queue waiting intervals from the no-progress clock. An active
-wait or unavailable queue cannot establish a stuck run. Completed waiting time
-remains excluded after restart. Do not wake a chat or mutate queue records during
-observation. Preserve queue path and concurrency settings in launcher environments.
-
 This module has native Node integration tests against the settings module and
 bundled skill. Timer services, real sign-ins and cross-machine skill execution
 need live verification; syntax-only checks do not prove those effects.
@@ -1216,7 +1253,107 @@ Telemetry repository discovery uses the same injected native process port as the
 
 Pass the already observed common directory to the store commonDir port; telemetry must not rediscover it through an un-injected process.
 
+## Park blocked runs and backfill (#3091)
+
+Use [parking policy](autopilot-parking.prompt.md) as required generation/runtime/testing context. Classify all saved stopped states using the parking owner, including records without runtimeWait. Read native saved check evidence through readRunResults for finished approve-pr checks with no verdict. Re-evaluate that evidence for an existing park when the current blocker is a generic approve-pr gate without an independent question. A replacement finished no-verdict check must refine the park to interpreter and bind its wait to the current gate and batch, preserving park age, native session, claim and approval state. An explicit blockedOn of any kind, including person, and independent questions keep precedence; cached interpreter evidence from an older gate or check is not current evidence. Re-read inferred saved-check evidence on every parking reconciliation, including an unchanged approval gate. Pass interpreterCheck with the completed step and the saved result batch, at and states (null result when absent or unreadable), alongside interpreterBatch, to the workflow park boundary. Explicit runtimeWait and saved interpreter causes keep their existing precedence and identity rules. A still-parked matching interpreter probe remains pending while it awaits worker room; it is not a failed test merely because its original workflow state is stuck. Feed inferred interpreter waits into the same pattern and wake rules; keep their saved park timestamp and unknown-read safety. Installed fix evidence comes from WORKFLOW_CAPABILITIES of the invoked workflow module (or injected installedPddCapabilities), or a successful ancestor check in the installed package. Before stopped-chat recovery, including a tick deferred by the GitHub budget, reconcile this coordinator's blocked workers through that policy. Read the runner's durable parked-reply evidence for person readiness; an ordinary reply stays closed until this same capacity and oldest-first wake pass admits it. Before offering fresh work, gather readiness across blocker kinds and perform one oldest-first wake pass. Never let a younger local blocker take capacity before an older ready interpreter/environment wait. On GitHub budget deferrals, preserve local wakes without GitHub reads. Before any such local wake can take capacity, gather interpreter/environment readiness too and admit those ready waits together in age order. With no ready local wake, retain the ordinary full-tick interpreter observation timing. Remove native-consumed runtime-ready rules from the coordinator packet. Preserve the interpreter retry and saved-batch safety rules. A single no-verdict does not put intake in test mode: retain observed wait identities across ticks; three consecutive new no-verdict observations open test mode (a known same-step repeat after its used issue retry retains the existing stuck route and is not a new shared-service observation), a saved verdict resets it at its completion time, excluding older or equal no-verdict waits even when both are first observed in one tick; retain that cutoff across ticks. When discovering native verdicts, skip saved run rows without a nonblank string root: they provide no attributable verdict and must not stop digest, progress or time-rule processing. Discover verdicts from the last saved verdict completion time, or from the start when no verdict is saved; a scan time never excludes a first result that becomes visible later. Apply this boundary to native and injected readers. A verdict discovered on a later tick must retain all already observed failures after its completion time; recompute their count from retained event times rather than discard their count while keeping deduplication. Exactly one interpreter run is admitted as a test until its verdict. A health outage still prevents unsafe sends; test mode gates interpreter work, not ordinary code/native work.
+
+When supplying workflow parking ports, set `autopilotStateFile` to this coordinator's actual saved state file. The runner uses it for a fresh authority read at each native close boundary, including after asynchronous Herdr inspection. Preserve the runner's source, repository, coordinator, machine and enabled-state checks.
+
+Packet `parking` is `{working,parked,blockers,wakePending,limit}`; blockers maps display names to counts, and wakePending lists ready run numbers awaiting capacity in oldest-first order. Include the same local counts and interpreter test-mode streak in status without GitHub calls. Attempt ready wakes oldest-first before fresh selection. A remaining wakePending entry records an unresumed wake; it does not by itself defer an unrelated fresh issue. Defer that issue only when working capacity is unknown or the confirmed working count is at the limit. A failed resume, unknown custody, or wake reservation remains in working and can therefore consume the cap. Issues in a saved #3053 group with a parked member go to its existing run via the request journal; do not offer a second run. Do not restrict different issues merely because their files overlap. Existing check slots, pane budget, area PR, daily cost, account, trust and ownership gates still apply. A parked run's claim receives heartbeats until release; the four-hour stuck rule must not expire it. Save parking/interpreter observations on all tick exit paths. No AI call in this tick work.
+
+## Lost-verdict decision after recovery (#3097)
+
+When the free health read is healthy, gather all current unknown-outcome waits into one lost-verdict decision alert. List run numbers, batch identifiers and saved earlier call costs in compact rows (unknown remains unknown). For a recorded resend of the current wait batch, follow its saved newBatch and later recorded replacements as the current recovery batch, with cycle protection. A verdict receipt is ready for an ordinary capacity-limited read-only wake; tell the worker to read that batch and continue from its verdict without sending another check. A new no-verdict receipt remains unknown and needs a separate decision. A sending or uncertain resend without a new receipt remains held, never an automatic wake. Native waits include cost read with workflow-results savedLostCheck; injected waits may supply cost or omit it. Ask for one decision for the group using `pdd workflow resend N... --said -`. Ordinary auto setup/start does not authorize this paid resend. Send no check from the tick.
+
+Persist runtime.lostDecision with the sorted number/batch identities so unchanged ticks and restarts ask only once for that group. Send one alert (kind decision, attached to the oldest run, update true) for the complete group; a failed alert remains retryable. During unavailable/access health ask nothing. Select the interpreter-access incident's first run from all current waits, including lost-verdict waits. Attach later waits to that incident even when all waits have lost verdicts; repair a saved access incident with no first run when a current wait exists. A lost-verdict wait remains parked: exclude it from retry/probe/recovered wakes and repeated-wake stuck escalation. Ordinary known-unsent/service recovery retains its current rules. Never carry a resend authorization from an earlier batch into a new no-verdict batch. Keep the decision identity while other runtime state changes, and clear it only when no lost waits remain.
+
+## Route question ledger
+
+Before parking reconciliation, collect this coordinator's route gaps through the parking owner's routeQuestionFor/collectRouteQuestions into state.routeQuestions, saved by scanGuard even on local/budget-deferred ticks. This is the single record and count location. Once a kind has at least two distinct records, on an auto tick with GitHub work allowed create one issue in promptdriven/pdd through injected createRouteIssue({kind,title,body}) or native GitHub POST. Include kind, count, run/step/question records and a stable marker for the group. Save issue creating before the external effect; save opened with its confirmed URL, or unknown on failure/uncertain reply. Never blindly repeat a creating/unknown/opened attempt, including after restart. A refused reservation makes no external effect. Do not create issues in observe mode or local/budget-deferred maintenance. No model calls. The native adapter uses structured argument values, the existing GitHub budget and guarded mutation ports. JSON status includes routeQuestions, an array of {repository,cwd,records,groups} from matching saved coordinator ledgers (all ledgers for --all); records/groups retain the parking owner schema. Status reads local state only. Reuse pdd installed-fix wake checks for pdd-route and send a notice naming the fix; worker capacity, custody and independent questions follow the parking owner.
+
+
+## Post-merge audits
+
+Dispatch `audit` with RUN and PR through the audit owner. Resolve the saved run
+without requiring a live coordinator or issue claim (the merge can close both).
+On auto ticks with audit enabled, offer pendingAudits for saved automatic runs as
+`post-merge-audit` time rules naming RUN and PR, even for completed runs and closed
+issues. Match repository, source checkout and machine independently of the
+origin coordinator ID. Completed runs need no worker custody recovery or live
+claim. Include both absent audits and saved verdicts with unsent follow-ups;
+retain the audit owner's shared reservations and disable policy. The coordinator runs `pdd autopilot audit RUN PR`. Ticks make no model
+calls. Discover saved audit runs through the same injected counted process executor
+as the rest of the tick, including local Git reads. Discovery must not fall back
+to an ambient child process when only the launcher run port is supplied. Keep
+GitHub reads within the existing budget and ledger. Pass injected filesystem
+ports to discovery. Collect its per-PR holds
+as `state.auditHolds`, an array of `{number,pr,cause}` where `number` is the run
+number, `pr` is the PR number and `cause` is the audit owner's named cause.
+Persist this observation with tick state. Local status and status --all show
+each held run number, PR number and cause. JSON status adds `auditHolds`, an
+array of `{repository,cwd,holds}` for matching saved ledgers with nonempty holds;
+`repository` and `cwd` identify the saved repository and checkout, and `holds`
+is that ledger's `state.auditHolds` array. With --all include all ledgers;
+otherwise match the requested cwd. Preserve the other status fields.
+Replace the holds on the next audit scan, clearing repaired or disabled holds.
+A held audit has no post-merge-audit time rule. Route each invalid-evidence hold
+through auditMerge with the same run and PR and auditHoldOnly set, so the audit owner can send its
+missing-recommendation decision alert under shared custody. Keep the hold even
+when that alert succeeds; no auditor is launched for invalid evidence. Its evidence failure never aborts
+issue selection, other audit offers or coordinator delivery.
+Load [audit policy](autopilot-audit.prompt.md) as required context.
+
+## Reclamation before admission (#3123)
+
+Before allocating a missing coordinator workspace, request one pane through the same bounded finished/idle workflow sweeps used for worker admission. Reconcile same-repository, same-folder, same-machine older coordinator runs through live stable-claim recovery before final pane admission and worker filtering. Claim recovery failure is retried; proven transfer uses the workflow owner's normal handover path. Pane-budget reclamation can also reclaim blocked runs of another repository through that repository's enabled owner and guarded claim recovery. It never assigns those runs to the requesting repository. Retained pane reasons appear in the pane hold warning.
+
+## First-start diagnostics (#3125)
+
+Dispatch doctor to [the doctor owner](autopilot-doctor.prompt.md), required native
+generation and verification context. Start first retains the existing Git-folder validation in the C locale: an invalid
+location returns the existing repository error without other probes. For valid
+repository invocations, before any start state write, admission lock,
+timer change, workspace allocation, claim or GitHub mutation, run that same doctor
+with the selected invocation environment and injected ports. Read only the saved
+state first to resolve the same verified profile binding used by restart; a
+signed-out unrelated caller must not block a healthy saved coordinator. For
+--resume-custody, validate the projection shape and repository identity read-only
+and use its original profile for preflight. Doctor uses that saved profile too
+when invoked in the same checkout. No directory or lock is created by resolution.
+Share agent selection with the doctor owner; definition overrides apply to all
+checks and repair commands. After a pass, use that invocation environment for
+startup checks too. Keep state-file lookup and definitionHome tied to the caller
+home that selected the configuration. Revalidate saved profile/custody under existing start
+guards before effects. On a required failure return the complete multi-line report
+unchanged. Doctor bypasses launcher writes and the GitHub ledger. Successful start retains existing readiness, saved
+profile/custody, base, admission and delegation checks. A doctor pass alone grants
+no approval or merge authority. Supply the same read-only coordinatorHealth used
+by launcher status, bound to the saved target and `pdd-autopilot` session. Saved
+targets need no immediate workflow allocation; unavailable target evidence defers
+to guarded recovery. Supply the saved coordinator pane identity. The doctor
+owner defines prerequisite failures and advisory capacity. Do not predict cleanup
+candidates in preflight: native guarded cleanup can reclaim finished run shells
+as well as chats. Leave actual reclamation and capacity admission to start.
+Never run tidy, parking, claim recovery or a lock acquisition during doctor.
+Keep the workflow Herdr binding for delegated workflow gate advancement and
+stopped-worker recovery and parking. The coordinator binding belongs to `pdd-autopilot`;
+workflow operations belong to `pdd`, including when both ports are injected.
+
+## Binding hold (#3135)
+
+Treat the binding blocker as a manual repair hold. Its clearing observation is
+the existing durably queued reply/retry for this parked wait, as for unknown.
+Interpreter availability alone cannot clear it. At a completed check's automatic
+approve-pr gate, inspect the current saved result before inferring interpreter
+unavailability. A binding-missing/missing-binding reason or refusal, or matched
+missing-binding compatibility state, parks as binding. Preserve independent
+person questions and explicit blockers.
+
 ## Dependencies
+
+- [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
+
+- [Parking policy](autopilot-parking.prompt.md): required generation/runtime/testing context for resource-free parking, blocker shapes, wake precedence and age/count safety limits.
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
 
@@ -1226,15 +1363,13 @@ Pass the already observed common directory to the store commonDir port; telemetr
 
 - [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
-- [Machine interpreter queue](interpreter-queue.prompt.md): required progress and waiting-clock contract.
-
 - [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake and display size, cause and umbrella in status without a GitHub read.
 
 - [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage, run discovery and guarded custody updates.
 
-- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock, run mutation lock and stopped-chat recovery boundary.
+- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the existing shared admission lock, run mutation lock, automatic PR 1 full-pass gate and stopped-chat recovery boundary.
 
 - [GitHub dependency reader](issue-dependencies-github.prompt.md#coordinator-recovery): required native generation and verification context for guarded claim recovery and its current-claim proof.
 - [Dependency intake](issue-dependencies-intake.prompt.md): required generation, runtime and verification context for reconciliation and structured coordinator context. The [pure model](issue-dependencies.prompt.md) owns review and readiness, and its `issueKey` is the canonical issue identity for matching `eligible` keys.

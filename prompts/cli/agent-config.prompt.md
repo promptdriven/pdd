@@ -1,6 +1,6 @@
 # Named local agents
 
-`src/agent-config.mjs` owns the local list of the person's agent launchers. Export synchronous `loadAgentDefinitions({cwd,env=process.env})`, returning fresh records `{id,name,kind,command,env}`. `env` contains only overrides; the adapter merges these into the child environment. This new interface does not execute commands, change settings, read credentials or transmit configuration to the server.
+`src/agent-config.mjs` owns the local list of the person's agent launchers. Export synchronous `loadAgentDefinitions({cwd,env=process.env})`, returning fresh records `{id,name,kind,command,env}`. `env` contains only overrides; the adapter merges these into the child environment. Register secret-named override values in the shared memory-only inventory after expansion, so credentials passed to children can be redacted regardless of which caller loads definitions. This interface does not execute commands, change settings or transmit configuration to the server.
 
 Read launchers only from `$HOME/.config/pdd/agents.json`. Without HOME or that user file, return built-in defaults. Never inspect or load repository `.pdd/agents.json`, regardless of its validity, type or contents: project text must not choose a local executable or child environment. `cwd` remains an accepted argument but does not affect configuration selection. A selected invalid user file fails without fallback. A user file must be regular, not a symlink, and at most 65536 bytes. User configuration directory symlinks are permitted, supporting user-managed config directories. Read the selected file without following a final symlink and verify the byte bound on the actual read.
 
@@ -13,3 +13,4 @@ Append defaults unless `include_defaults` is false: `{id:'codex',name:'Codex',ki
 ## Dependencies
 
 Node built-in filesystem, path and crypto modules provide local bounded reads, path resolution and stable hashes. No project or provider dependency is required.
+- [Secret redaction](secret-redaction.prompt.md) supplies secret-name selection and memory-only credential registration for expanded environment overrides.

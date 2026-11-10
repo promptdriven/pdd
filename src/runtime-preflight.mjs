@@ -1,4 +1,6 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b965151fcc40dbebd6173cccc5f4689706bf8507dd82b96b83e9eb0880ec2979).
+import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
+import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 593795d5383de3ba190e67df257d1f7f1973f0e36c599efdc6a3f2459525eeb9).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -528,8 +530,18 @@ function limitProblems(iface) {
 }
 
 // Every schema problem of one interface: entry input and result schemas (any root) and resource operation schemas (object root).
+export function interfaceKindProblems(iface) {
+  if (!isObject(iface)) return [{code:'invalid-interface',pointer:'',rule:'must be an object.'}];
+  const kind = Object.hasOwn(iface, 'kind') ? iface.kind : 'full';
+  if (!['full', 'partial', 'native-only'].includes(kind)) return [{code:'interface-kind-invalid',pointer:'/kind',rule:'must be full, partial or native-only.'}];
+  if (kind === 'native-only' && (typeof iface.reason !== 'string' || !iface.reason.trim())) return [{code:'native-reason-missing',pointer:'/reason',rule:'must name the native effect that bound ports cannot fake (RUNBOOK §21).'}];
+  return [];
+}
 export function interfaceSchemaProblems(iface) {
+  const kindProblems = interfaceKindProblems(iface);
+  if (kindProblems.length || iface?.kind === 'native-only') return kindProblems;
   const out = limitProblems(iface);
+  if (Array.isArray(iface?.draft_gaps) && iface.draft_gaps.length) out.push({code:'interface-draft-incomplete',pointer:'/draft_gaps',rule:iface.draft_gaps.join('; ')});
   for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries()) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
   }
@@ -578,7 +590,7 @@ export const STALE_HINT = 'the text changed after approval: set status to draft,
 export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
   'entry-missing': path => `${path} is not a Git-visible *.prompt.md file.`,
-  'interface-missing': path => `${path} has no Runtime interface block.`,
+  'interface-missing': path => `${path} has no Runtime interface block. Run pdd interface draft ${/^[A-Za-z0-9_./-]+$/.test(path) ? path : "'" + path.replaceAll("'", "'\\''") + "'"}.`,
   'pdd-two-interfaces': path => `${path} has more than one Runtime interface block. Keep one.`,
   'invalid-json': path => `The Runtime interface of ${path} is not valid JSON.`,
 };
@@ -586,6 +598,8 @@ const PROMPT_MESSAGES = {
 // Rule P7 for one prompt. Returns null or a refusal (without the step).
 export function promptRefusal(prompt, section) {
   if (prompt.error) return refusal(prompt.error, section, PROMPT_MESSAGES[prompt.error](prompt.path));
+  const kindProblems = interfaceKindProblems(prompt.interface);
+  if (kindProblems.length) return refusal(kindProblems[0].code, section, `${prompt.path} ${kindProblems[0].rule}`);
   const status = prompt.interface.status;
   if (status !== 'approved' && status !== 'draft') {
     return refusal('interface-unapproved', section, `${prompt.path} has status ${show(status)}. Use "draft" or "approved".`);
@@ -878,9 +892,10 @@ function checkTest(root, found, test, prompts) {
     const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts);
     if (schemaIssues.length) return schemaIssues;
     const entry = (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
-    if (!entry) return refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at);
+    const native = [...prompts.values()].some(item => item.interface?.kind === 'native-only');
+    if (!entry && !native) return refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at);
     const errorStep = Object.hasOwn(step, 'expected_error');
-    if (errorStep && !(Array.isArray(entry.errors) && entry.errors.includes(step.expected_error))) {
+    if (!native && errorStep && !(Array.isArray(entry.errors) && entry.errors.includes(step.expected_error))) {
       return refusal('pdd-unknown-error', `${section}.expected_error`, `"${step.expected_error}" is not in the errors of ${step.operation} in ${step.entry_path}.`, at);
     }
     if (!Array.isArray(step.checks)) return refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at);
@@ -896,7 +911,7 @@ function checkTest(root, found, test, prompts) {
     if (errorStep && errorChecks === 0) {
       return refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at);
     }
-    inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
+    if (!native) inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
   }
   if (inputIssues.length) return inputIssues;
   for (const step of doc.steps) for (const check of step.checks) {
@@ -911,12 +926,25 @@ function checkTest(root, found, test, prompts) {
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
 export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}) }) {
   found={...found,workspace};for(const test of selected)requireRuntimePath(workspace,{path:test.path,from:'Selected test'});
-  const prompts = new Map(), warnings = [];
+  const warnings = [];
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
+    const prompts = new Map();
+    // Discover identity independently of validation: an early criterion error or
+    // stale caller must not make a reachable native-only declaration executable.
+    const visit = path => {
+      if (typeof path !== 'string' || prompts.has(path)) return;
+      const prompt = readPrompt(root, found.visible, path, workspace);
+      prompts.set(path, prompt);
+      for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
+    };
     let refused, plan, testSha = null;
     try {
+      for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
       refused = checkTest(root, found, test, prompts);
+      const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')
+        .map(prompt => promptRefusal(prompt,'interface')).filter(Boolean);
+      if (nativeProblems.length) refused = [...(refused ? [refused].flat() : []),...nativeProblems];
       if (!refused || refused.code === 'unchecked-criteria') {
         plan = criterionPlan(test.doc, storyCriteria(readText(root, test.doc.story_path)));
       }
@@ -930,6 +958,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
       criteria_total: plan?.criteria.length ?? (Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0),
       ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}), draft: false };
+    row.native_only = [...prompts.values()].filter(item => item.interface?.kind === 'native-only').map(item => ({path:item.path,reason:item.interface.reason}));
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
     for (const [index, step] of row.steps.entries()) {
       const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
@@ -1091,187 +1120,6 @@ function contextPath(raw, from, visible) {
   return sourcePath(path, from);
 }
 
-// Return local destinations without treating link labels or reference definitions as file paths.
-function markdownLinks(text, definitions, imagesOnly = false) {
-  const paths = [];
-  for (const match of text.matchAll(/(!?)\[[^\]\n]*\]\([ \t]*/g)) {
-    if (imagesOnly && !match[1]) continue;
-    let index = match.index + match[0].length, path = '', depth = 0;
-    if (text[index] === '<') {
-      const end = text.indexOf('>', index + 1);
-      if (end >= 0) paths.push(text.slice(index + 1, end));
-      continue;
-    }
-    for (; index < text.length; index++) {
-      const char = text[index];
-      if (char === '\\' && index + 1 < text.length) { path += text[++index]; continue; }
-      if (/\s/.test(char) || (char === ')' && depth === 0)) break;
-      if (char === '(') depth++;
-      if (char === ')') depth--;
-      path += char;
-    }
-    if (path) paths.push(path);
-  }
-  for (const match of text.matchAll(/(!?)\[([^\]\n]+)\](?:\[([^\]\n]*)\])?/g)) {
-    if (imagesOnly && !match[1]) continue;
-    const following = text[match.index + match[0].length];
-    if (following === '(' || following === ':') continue;
-    const target = definitions.get((match[3] || match[2]).trim().replace(/\s+/g, ' ').toLowerCase());
-    if (target) paths.push(target);
-  }
-  return paths;
-}
-
-// Consume existing block containers, without treating fence content as new markup.
-// A quote needs its marker on every code line; a list needs its content indent.
-function markdownContainerLine(line, containers) {
-  let matched = 0;
-  for (const indent of containers) {
-    if (indent === '>') {
-      const quote = /^ {0,3}> ?/.exec(line);
-      if (!quote) break;
-      line = line.slice(quote[0].length);
-    } else {
-      const spaces = /^ */.exec(line)[0].length;
-      if (line.trim() && spaces < indent) break;
-      line = line.slice(Math.min(spaces, indent));
-    }
-    matched++;
-  }
-  return { line, matched };
-}
-
-// Discovery sees prose only; preserve offsets and newlines without changing captured bytes.
-function markdownSectionText(text) {
-  const parts = [], inline = /`+|<!--|</g;
-  const opaque = /<(?:[A-Za-z][A-Za-z0-9-]*(?:[ \t\r\n]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t\r\n]*=[ \t\r\n]*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*[ \t\r\n]*\/?|\/[A-Za-z][A-Za-z0-9-]*[ \t\r\n]*|[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20<>]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/y;
-  let containers = [], fence = null, comment = false, copied = 0, paragraph = false;
-  let scopeStart = null, scopeEnd = 0;
-  const mask = (start, end) => {
-    parts.push(text.slice(copied, start), text.slice(start, end).replace(/[^\r\n]/g, ' '));
-    copied = end;
-  };
-  // Inline parsing belongs to one leaf block. A matching run in a later
-  // paragraph, heading or container cannot turn intervening prose into code.
-  const flush = () => {
-    if (scopeStart === null) return;
-    inline.lastIndex = scopeStart;
-    for (let match; (match = inline.exec(text)) && match.index < scopeEnd;) {
-      let tokenStart = match.index, token = match[0], slashes = 0;
-      for (let index = tokenStart - 1; index >= scopeStart && text[index] === '\\'; index--) slashes++;
-      if (slashes % 2) {
-        if (token === '<!--' || token.length === 1) continue;
-        // An escape consumes one punctuation character, not the entire run.
-        tokenStart++; token = token.slice(1);
-      }
-      if (token === '<') {
-        // Valid tags/autolinks consume their own backticks before code-opener
-        // lexing. Leave their bytes available to the existing capture policy.
-        opaque.lastIndex = tokenStart;
-        if (opaque.test(text) && opaque.lastIndex <= scopeEnd) inline.lastIndex = opaque.lastIndex;
-        continue;
-      }
-      let closeEnd;
-      if (token === '<!--') {
-        const close = text.indexOf('-->', inline.lastIndex);
-        if (close < 0 || close + 3 > scopeEnd) continue;
-        closeEnd = close + 3;
-      } else {
-        const closing = new RegExp('(?<!`)`{' + token.length + '}(?!`)', 'g');
-        closing.lastIndex = inline.lastIndex;
-        const close = closing.exec(text);
-        if (!close || close.index + close[0].length > scopeEnd) continue;
-        // Backslashes have no escape meaning inside an actual code span.
-        closeEnd = close.index + close[0].length;
-      }
-      mask(tokenStart, closeEnd);
-      inline.lastIndex = closeEnd;
-    }
-    scopeStart = null;
-  };
-  for (const row of text.matchAll(/[^\r\n]*(?:\r\n|[\r\n]|$)/g)) {
-    if (!row[0]) continue;
-    const original = row[0].replace(/[\r\n]+$/, '');
-    const start = row.index, end = start + original.length;
-    {
-      // Tabs affect Markdown indentation only. This view is never captured.
-      let column = 0;
-      const expanded = original.replace(/[^\t]|\t/g, char => {
-        const width = char === '\t' ? 4 - column % 4 : 1;
-        column += width;
-        return char === '\t' ? ' '.repeat(width) : char;
-      });
-      let { line, matched } = markdownContainerLine(expanded, containers);
-      const thematic = /^ {0,3}(?:(?:\* *){3,}|(?:- *){3,}|(?:_ *){3,})$/;
-      const item = /^ {0,3}([-+*]|[0-9]{1,9}[.)]) +(\S.*)$/.exec(line);
-      const fenceStart = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-      const validFence = fenceStart && !(fenceStart[1][0] === '`' && fenceStart[2].includes('`'));
-      // Only HTML block types that can interrupt a paragraph split its inline
-      // scope; ordinary angle prose and custom inline tags do not.
-      const htmlStart = /^ {0,3}<(?:!--|\?|![A-Z]|!\[CDATA\[|(?:pre|script|style|textarea)(?=[\t >]|$))/i.test(line)
-        || /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[\t >]|\/>|$)/i.test(line);
-      const startsBlock = /^ {0,3}(?:>|#{1,6}(?: |$))/.test(line) || validFence || htmlStart || thematic.test(line)
-        || (item && (!paragraph || !/^[0-9]/.test(item[1]) || /^1[.)]$/.test(item[1])
-          || (matched < containers.length && containers[matched] !== '>')));
-      // Lazy paragraph continuation keeps its parent containers available for a
-      // later indented fence. Code itself never permits lazy continuation.
-      const lazy = matched < containers.length && !fence && !comment && paragraph && line.trim() && !startsBlock;
-      const boundary = !line.trim() || startsBlock || /^ {0,3}(?:=+|-+) *$/.test(line)
-        || (!lazy && matched < containers.length);
-      if (boundary) flush();
-      if (!lazy && matched < containers.length) { fence = null; comment = false; paragraph = false; }
-      if (!lazy) containers = containers.slice(0, matched);
-      if (fence) {
-        mask(start, end);
-        const close = /^ {0,3}(`{3,}|~{3,}) *$/.exec(line);
-        if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
-        continue;
-      }
-      if (comment) {
-        const close = original.indexOf('-->');
-        mask(start, close < 0 ? end : start + close + 3);
-        if (close < 0) continue;
-        comment = false;
-        scopeStart = start + close + 3; scopeEnd = end;
-        flush();
-        continue;
-      }
-      // Start containers only outside code; a list's continuation width belongs
-      // to its item, so a sibling marker or dedent ends an unclosed example.
-      for (; !lazy;) {
-        const quote = /^ {0,3}> ?/.exec(line);
-        if (quote) { containers.push('>'); line = line.slice(quote[0].length); paragraph = false; continue; }
-        const list = /^( {0,3})([-+*]|[0-9]{1,9}[.)])( +|$)/.exec(line);
-        if (!list || thematic.test(line)) break;
-        const rest = line.slice(list[0].length);
-        if (paragraph && (!rest.trim() || (/^[0-9]/.test(list[2]) && !/^1[.)]$/.test(list[2])))) break;
-        const padding = rest.trim() && list[3].length <= 4 ? list[3].length : 1;
-        const indent = list[1].length + list[2].length + padding;
-        containers.push(indent); line = line.slice(indent); paragraph = false;
-      }
-      const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-      if (!lazy && opening && !(opening[1][0] === '`' && opening[2].includes('`'))) {
-        fence = opening[1]; paragraph = false; mask(start, end); continue;
-      }
-      if (/^ {0,3}<!--/.test(line)) {
-        const opening = original.indexOf('<!--'), close = original.indexOf('-->', opening + 4);
-        mask(start + opening, close < 0 ? end : start + close + 3);
-        comment = close < 0; paragraph = false;
-        if (!comment) { scopeStart = start + close + 3; scopeEnd = end; flush(); }
-        continue;
-      }
-      const definition = !paragraph && /^ {0,3}\[[^\]]+\]:/.test(line);
-      paragraph = Boolean(line.trim()) && !thematic.test(line) && !definition && !htmlStart
-        && !/^ {0,3}(?:#{1,6}(?: |$)|=+ *$)/.test(line);
-    }
-    if (scopeStart === null) scopeStart = start;
-    scopeEnd = end;
-    if (!paragraph) flush();
-  }
-  flush();
-  return parts.join('') + text.slice(copied);
-}
-
 // Read only a section name, never rewritten HTML. Ambiguous markup retains context.
 function markdownSectionTitle(text) {
   const tokens = /<\/(strong|em|b|i)\s*>|<(strong|em|b|i)(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*>|[^<>]+/giy;
@@ -1289,11 +1137,7 @@ function markdownSectionTitle(text) {
 }
 
 function markdownContext(text) {
-  const prose = text.replace(INTERFACE, ''), markdown = markdownSectionText(prose), definitions = new Map();
-  for (const match of markdown.matchAll(/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm)) {
-    const id = match[1].trim().replace(/\s+/g, ' ').toLowerCase();
-    if (!definitions.has(id)) definitions.set(id, match[2] ?? match[3]);
-  }
+  const prose = text.replace(INTERFACE, ''), markdown = markdownSectionText(prose), definitions = markdownDefinitions(markdown);
   const heading = /^##[ \t]+Dependencies[ \t]*\r?$/im.exec(markdown);
   const rest = heading ? prose.slice(heading.index + heading[0].length) : '';
   const maskedRest = heading ? markdown.slice(heading.index + heading[0].length) : '';
@@ -1626,7 +1470,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     const selected = tests ?? named.map(test=>test.path);
     for (const path of selected) add(path, 'Selected test',path.endsWith('.prompt.md')?'context':isStoryPath(path)?'story':'test');
     if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }
-    const storyTests = new Map();
+    const storyTests = new Map(), boundaries = new Map();
     let siblingsAdded = false;
     for (let index = 0; index < queue.length || !siblingsAdded; index++) {
       if (index === queue.length && !siblingsAdded) {
@@ -1676,6 +1520,26 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
             };
             walk(map);
           } else {
+            if (role === 'story') {
+              const notes=[];
+              let boundary=runtimeBoundary(path,text,{notes});
+              if (boundary) {
+                try {
+                  // Validate all members before admitting any boundary-only source.
+                  for (const member of boundary) {
+                    requireRuntimePath(workspace,{path:member,from:path,chain:chains.get(path)??[]});
+                    bytes(inspect(member,path));
+                  }
+                } catch (error) {
+                  if (reader.unstable || error === unstableSource) throw error;
+                  boundary=null;
+                  notes.push({code:'boundary-not-applied',reason:'unreadable-path',
+                    message:'boundary not applied: unreadable-path; full dependency closure is required'});
+                }
+              }
+              boundaries.set(path,{boundary,notes});
+              for (const member of boundary ?? []) add(member,path);
+            }
             for (const raw of markdownContext(text)) { const context = contextPath(raw, path, visible); if (context) add(context, path); }
             if (path.endsWith('.prompt.md')) {
               for (const block of interfaceBlocks(text)) {
@@ -1693,6 +1557,42 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
         if (selecting || reader.unstable || error === unstableSource) throw error;
         markUnavailable(path,error);
       }
+    }
+    // A Story boundary selects executable interfaces, while preserving context prose.
+    const bindingPrompts = new Map();
+    for (const [path,file] of footprintPayload) if (path.endsWith('.prompt.md')) {
+      try { bindingPrompts.set(path,JSON.parse(interfaceBlocks(bytes(file).toString('utf8'))[0][1])); } catch { /* Admission reports malformed interfaces. */ }
+    }
+    const bindingPlans = [];
+    for (const path of selected) {
+      const file = payload.get(path); if (!file) continue;
+      let doc; try { doc=JSON.parse(bytes(file).toString('utf8')); } catch { continue; }
+      if (!doc?.story_path || !Array.isArray(doc.steps)) continue;
+      try {
+        const reached=new Set(), pending=[path,...shared];
+        for (let index=0;index<pending.length;index++) {
+          const dependency=pending[index];
+          if (reached.has(dependency)) continue;
+          reached.add(dependency);pending.push(...(edges.get(dependency)??[]));
+        }
+        bindingPlans.push(buildBindingPlan({test:{path,storyPath:doc.story_path,doc},
+          storyText:bytes(inspect(doc.story_path,path)).toString('utf8'),prompts:bindingPrompts,
+          dependencyPaths:[...reached].filter(dependency=>dependency.endsWith('.prompt.md')).sort(),
+          boundaryState:boundaries.get(doc.story_path)}));
+      } catch (error) { throw Object.assign(new PreflightError(4,error.message),{code:error.code}); }
+    }
+    const scoped = bindingPlans.filter(plan=>plan.boundary !== null);
+    for (const plan of scoped) {
+      for (const path of plan.boundary) inspect(path,plan.story);
+      const crossing=plan.problems[0];
+      if (crossing) throw Object.assign(new PreflightError(4,`${plan.story}: ${crossing.step_id}: ${crossing.prompt_path}: ${crossing.code}. Correct the Runtime interface boundary or call target.`),{code:'binding-boundary-invalid'});
+    }
+    const required = new Set(scoped.flatMap(plan=>plan.boundary));
+    if (scoped.length === bindingPlans.length && scoped.length) for (const [path,file] of payload) {
+      if (!path.endsWith('.prompt.md') || required.has(path)) continue;
+      const projected=Buffer.from(bytes(file).toString('utf8').replace(INTERFACE,''),'utf8');
+      const next={...file,bytes:projected,size:projected.length};
+      payload.set(path,next); footprintPayload.set(path,next); effective.set(path,next);
     }
     const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
     const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
@@ -1742,6 +1642,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       raw_file_hashes:rawFileHashes,
       raw_prompt_hashes:Object.fromEntries(Object.entries(rawFileHashes).filter(([path])=>path.endsWith('.prompt.md'))),
       reads:[...new Set([...onDisk.storyFiles,...snapshots.keys()])].filter(path=>path!==SOURCE_CONFIG&&!payload.has(path)&&(snapshots.get(path)?.bytes||onDisk.storyFiles.includes(path))).sort().map(path=>({path,roles:[...(onDisk.storyFiles.includes(path)?['discovery']:[]),...(referenceReads.has(path)?['reference']:[]),...(preparationReads.has(path)?['preparation']:[]),...(!onDisk.storyFiles.includes(path)&&!referenceReads.has(path)&&!preparationReads.has(path)?['footprint']:[])].sort()})),
+      bindingPlans,
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
 }

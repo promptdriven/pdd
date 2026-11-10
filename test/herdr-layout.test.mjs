@@ -251,10 +251,10 @@ test('missing or changed worktree identity cannot authorize run reuse or close',
   assert(!f.calls.some(a=>a[0]==='workspace'&&a[1]==='close'));
  }
 });
-test('changed root terminal or an extra tab prevents run cleanup',async t=>{
+test('changed root pane or an extra tab prevents run cleanup',async t=>{
  for(const kind of ['terminal','tab','pane']) {
   const f=await fixture(t),layout=await f.open();const original=f.ports.command;
-  f.ports.command=async args=>{const response=await original(args);if(kind==='terminal'&&args[0]==='pane')response.result.panes[0].terminal_id='replacement';if(kind==='pane'&&args[0]==='pane')response.result.panes.push({pane_id:'person-pane'});if(kind==='tab'&&args[0]==='tab'&&args[1]==='list')response.result.tabs.push({tab_id:'user-tab'});return response;};
+  f.ports.command=async args=>{const response=await original(args);if(kind==='terminal'&&args[0]==='pane')response.result.panes[0].pane_id='replacement';if(kind==='pane'&&args[0]==='pane')response.result.panes.push({pane_id:'person-pane'});if(kind==='tab'&&args[0]==='tab'&&args[1]==='list')response.result.tabs.push({tab_id:'user-tab'});return response;};
   await assert.rejects(f.module.withHerdrLayoutLock(()=>f.close({...f.input,layout},f.ports),f.ports),/herdr_layout_identity_changed|run_has_open_tabs/);
   assert(!f.calls.some(a=>a[0]==='workspace'&&a[1]==='close'));
  }

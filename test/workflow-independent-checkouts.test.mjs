@@ -90,8 +90,9 @@ for(const kind of ['occupied','run-cwd','run-common','run-root','inventory'])tes
  }
  if(kind==='run-cwd')f.workspaces.find(w=>w.workspace_id===b.workspaceId).worktree.checkout_path=f.input.cwd;
  if(kind==='run-common')f.workspaces.find(w=>w.workspace_id===b.workspaceId).worktree.repo_key=f.input.commonDir;
+ if(kind==='run-root')f.herdr.paneOf(b).agent={agent:'claude',agent_status:'working'};
  const command=f.ports.command;
- f.ports.command=async args=>{const reply=await command(args);if(kind==='run-root'&&args[0]==='pane'&&args[3]===b.workspaceId)reply.result.panes[0].terminal_id='forged';if(kind==='inventory'&&args[0]==='workspace'&&args[1]==='list')reply.result.workspaces.push(reply.result.workspaces[0]);return reply;};
+ f.ports.command=async args=>{const reply=await command(args);if(kind==='run-root'&&args[0]==='pane'&&args[3]===b.workspaceId)reply.result.panes[0].pane_id='forged';if(kind==='inventory'&&args[0]==='workspace'&&args[1]==='list')reply.result.workspaces.push(reply.result.workspaces[0]);return reply;};
  const world=structuredClone(f.workspaces);f.calls.length=0;
  await assert.rejects(f.open(bInput),{code:kind==='occupied'?'repository_label_unavailable':kind==='inventory'?'invalid_workspace_inventory':'herdr_layout_identity_changed'});
  assert.deepEqual(mutations(f),[]);assert.deepEqual(f.workspaces,world);

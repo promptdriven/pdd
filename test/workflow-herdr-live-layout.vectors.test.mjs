@@ -127,7 +127,7 @@ const replay = {
       const f = await liveLayout(t), first = await f.open();
       await f.herdr.herdr(['tab', 'close', first.tabId]);
       const root = f.herdr.panes.find(p => p.pane_id === first.root.paneId);
-      if (kind === 'root') root.terminal_id = 'changed';
+      if (kind === 'root') root.pane_id = 'changed';
       if (kind === 'tab') await f.herdr.herdr(['tab', 'create', '--workspace', first.workspaceId, '--cwd', f.input.cwd, '--label', 'personal', '--no-focus']);
       if (kind === 'pane') f.herdr.panes.push({...root, pane_id: 'split'});
       await assert.rejects(f.layout.closeHerdrRunLayout({...f.input, layout: first}, f.ports));

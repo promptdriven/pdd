@@ -12,7 +12,7 @@ export async function liveLayout(t) {
   return {...f, input, ports, layout, open: extra => layout.withHerdrLayoutLock(() => layout.openHerdrRunLayout({...input, ...extra}, ports), ports)};
 }
 export const mutations = f => f.herdr.calls.filter(a => ['create', 'open', 'rename', 'close', 'remove', 'run'].includes(a[1]));
-export const ownerFor = (f, opened) => ({runId: f.input.runId, layout: {workspaceId: opened.workspaceId, repoWorkspaceId: opened.repoWorkspaceId, ...opened.root}, chats: [{area: 'story', ...opened}]});
+export const ownerFor = (f, opened) => ({runId: f.input.runId, layout: {createdWorkspaceId: opened.createdWorkspaceId, workspaceId: opened.workspaceId, repoWorkspaceId: opened.repoWorkspaceId, ...opened.root}, chats: [{area: 'story', ...opened}]});
 export async function closeRun(f, opened) {
   await f.herdr.herdr(['tab', 'close', opened.tabId]);
   return f.layout.withHerdrLayoutLock(() => f.layout.closeHerdrRunLayout({...f.input, layout: opened}, f.ports), f.ports);

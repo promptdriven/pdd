@@ -6,8 +6,16 @@ this exact environment. Exchange newline-delimited JSON: initialize id 1 with
 clientInfo name pdd_health, title PDD health, version 1; after its successful
 reply send initialized and account/rateLimits/read id 2. Send no other method,
 including model, thread, turn, auth, logout, credit, purchase or reset methods.
-Discard stderr. Stop this child after a response or failure; bound it to 10 seconds
-and 1 MiB output. Never log or return raw messages, errors, credentials, account
+Discard stderr. Stop this child after a response or failure; bound the exchange to
+10 seconds and 1 MiB output. End its input and send SIGTERM, then wait for the
+child's close before returning the selected result, with at most 1 second for
+cleanup after selecting that result. After 500 milliseconds, send SIGKILL if
+the direct child has not exited. If close still has not arrived after another
+500 milliseconds, destroy this connection's stdin, stdout and stderr, unref the
+child and return the selected result. A descendant holding an inherited pipe
+must not prevent completion. An already closed child or a failed spawn needs no
+stop. This allows ordinary shutdown effects to complete while keeping failed
+health observations finite. Never log or return raw messages, errors, credentials, account
 identity, credit balances or reset-credit metadata. Export `parseCodexLimits(reply)`
 for the same response normalization.
 

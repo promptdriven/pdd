@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as queue from '../src/test-suite-queue.mjs';
@@ -103,6 +103,7 @@ test('native run admission enforces calculated capacity while coordinator identi
   const claim={issue,active:true,owner:'c',coordinatorId:'c',machine:'m',commentId:'1',labelEventId:'2'};
   for(const [cap,explicit,expected] of [[1,undefined,false],[2,undefined,false],[3,undefined,true],[3,1,false],[1,3,true]]) {
     const ports={
+      github:{issue:async args=>({json:JSON.stringify(args.repository===repository&&args.issue===99?{number:99,labels:[]}: {error:'not-found'})})},
       settings:{read:async()=>({mode:'auto',activation:'a',capacityRuns:cap,...(explicit?{runs:explicit}:{})})},
       owners:{read:async()=>({json:JSON.stringify({localOwner:'c',runsKnown:true,claims:[claim],runs:[{issue:'https://github.com/example/repo/issues/1',runId:'one',state:'working'},{issue:'https://github.com/example/repo/issues/2',runId:'two',state:'working'}]})})},
       snapshots:{read:async()=>({snapshot:{repository,complete:true,issues:[{key:issue,nodeId:'99',title:'Ready',revision:'a'.repeat(64),state:'open',authority:'trusted',assignees:[],conditions:[],execution:'idle',holds:[]}],edges:[],reviews:[{id:'review',issue,authority:'trusted',intact:true,outcome:'complete',analysis:'Independent work',base:[],continuation:'',inputs:[{key:issue,revision:'a'.repeat(64)}],candidates:[{key:issue,revision:'a'.repeat(64)}],dependencies:[],questions:[],effects:'none'}],impacts:[],inputs:[]}})},
@@ -250,7 +251,16 @@ test('repair 1: Linux desktop child receives its reserved affinity share',async 
   assert.equal(calls.length,1);
   assert.equal(calls[0].file,'/fake/taskset');
   assert.deepEqual(calls[0].args,['--cpu-list','8,9','/bin/bash','-c','controlled-build --fixture']);
-  assert.deepEqual(calls[0].options,{cwd:root,env:{...env,PDD_CHECK_CPUS:'2'},detached:true,stdio:['ignore','inherit','inherit']});
+  const childEnv=calls[0].options.env;
+  assert.equal(childEnv.PDD_CHECK_CPUS,'2');
+  assert.equal(childEnv.FIXTURE,undefined);assert.equal(childEnv.PDD_SUITE_QUEUE,undefined);
+  assert.equal(childEnv.PATH,'/usr/bin:/bin');
+  const environmentRoot=join(root,'queue');
+  for(const key of ['HOME','PDD_STATE_DIR','XDG_CONFIG_HOME','TMPDIR']) {
+    assert.ok(childEnv[key].startsWith(environmentRoot+'/suite-env-'));
+    assert.equal(existsSync(childEnv[key]),false,'suite folders are removed after execution');
+  }
+  assert.deepEqual(calls[0].options,{cwd:root,env:childEnv,detached:true,stdio:['ignore','inherit','inherit']});
   const ticket=JSON.parse(readFileSync(join(env.PDD_SUITE_QUEUE,'ticket-1.json')));
   assert.equal(ticket.state,'finished');assert.deepEqual(ticket.cpuIds,[8,9]);
   assert.equal(ticket.coresPerCheck,2);assert.equal(ticket.taskset,'/fake/taskset');assert.equal(ticket.reason,null);

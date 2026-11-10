@@ -58,6 +58,8 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
       if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"owner/repo","defaultBranchRef":{"name":"main"},"url":"https://github.com/owner/repo"}', stderr: '' };
       if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
       if (command === 'gh' && args[0] === 'api') {
+        const endpoint = args.find(word => /^repos\//.test(word)), subject = /^repos\/owner\/repo\/issues\/(\d+)$/.exec(endpoint ?? '');
+        if (subject) { const row = f.issues.find(row => row.number === Number(subject[1])); return {code:row ? 0 : 1, stdout:`HTTP/2.0 ${row ? 200 : 404}\r\n\r\n${JSON.stringify(row ?? {})}`}; }
         if (args.some(x => String(x).includes('/reviews?'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n[]', stderr: '' };
         if (args.some(x => String(x).includes('/permission'))) return { code: 0, stdout: 'HTTP/2.0 200 OK\r\n\r\n{"permission":"none"}', stderr: '' };
         return { code: 0, stdout: '{}', stderr: '' };
@@ -74,6 +76,8 @@ function fixture(t, origin = 'https://github.com/owner/repo.git', layout = 'norm
       if (args[0] === 'status') return { running: true };
       const live = { pane_id: 'p1', workspace_id: 'w1', cwd: f.cwd, foreground_cwd: f.cwd, tab_id: 't1', terminal_id: 'term1', agent: 'codex', agent_status: 'idle', agent_session: 'session' };
       if (args[0] === 'workspace') return { result: { type: 'workspace_info', workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'p1' } } };
+      // #3123 admission reads complete native pane inventory before allocation.
+      if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: [live]}};
       if (args[0] === 'pane' && args[1] === 'get') return { result: { type: 'pane_info', pane: live } };
       if (args[0] === 'agent' && args[1] === 'get') {
         if (!f.agentStarted) throw Object.assign(Error('agent_not_found'), { code: 'agent_not_found' });

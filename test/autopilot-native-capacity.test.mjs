@@ -65,7 +65,7 @@ assert.equal(statSync(assignmentPath).nlink, 2, 'allocation index must be a vali
 const chat = {
   area: 'code',
   agent: 'codex',
-  paneId: 'worker-pane-51',
+  paneId: 'worker-pane-51', workspaceId: 'worker-workspace-51', tabId: 'worker-tab-51', terminalId: 'worker-terminal-51',
   state: 'running',
   startedAt: 1,
   session: { agent: 'codex', id: sessionId },
@@ -103,9 +103,10 @@ const supplied = {
   github,
   authority: { read: async () => ({ authority: 'trusted' }) },
   herdr: async args => {
+    if (args[0] === 'pane' && args[1] === 'list') return {result: {type: 'pane_list', panes: [{pane_id: chat.paneId, workspace_id: chat.workspaceId, tab_id: chat.tabId, terminal_id: chat.terminalId}]}};
     assert.deepEqual(args, ['agent', 'get', chat.paneId]);
     return { result: { agent: {
-      agent_status: 'done',
+      pane_id: chat.paneId, agent: chat.agent, agent_status: 'done',
       agent_session: { kind: 'id', value: sessionId },
     } } };
   },

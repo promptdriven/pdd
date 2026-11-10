@@ -1,6 +1,6 @@
 # PDD usage guide
 
-This guide is for people who install pdd 0.1.26 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.27 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -77,7 +77,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" --version  # reports PATH conflicts without changing files
-pdd --version   # prints 0.1.26
+pdd --version   # prints 0.1.27
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -90,6 +90,22 @@ Important:
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
 
+### 2.3 Start Autopilot on your repository
+
+Follow [Autopilot on your own repository](../README.md#autopilot-on-your-own-repository)
+for the ordered installation, sign-in, setup, doctor, start, status and stop path.
+Use Node.js 22.20 or newer. Repository writes need write permission.
+`pdd autopilot doctor` reads readiness without GitHub writes or AI calls.
+Start runs the same checks before it changes local state or starts work.
+Only missing or signed-out agent sign-in refuses preflight. All other findings
+warn with fix commands in observe and auto mode. Native start keeps its own guards.
+Manual gates need your later approval. Explicit auto setup and start can delegate
+ordinary automatic gates and eligible merges. Strict approvals and required
+human reviews still need a person. An empty trust list still trusts the owner
+and write-access users. Draft prompts may need approval at the first check;
+doctor lists them without approving them. Interpreter access is checked without
+running a prompt, so native green CI and doctor do not prove prompt behavior.
+
 ## 3. If you have the old Python pdd
 
 The Python pdd (0.0.x) is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
@@ -100,7 +116,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # this pdd prints 0.1.26
+pdd --version   # this pdd prints 0.1.27
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -159,7 +175,7 @@ Where the skills go:
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.26`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.27`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -422,6 +438,13 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 | 3 | unknown or still running | Run `pdd test --read` later. Never send it again. |
 | 2 | command error | Run `pdd test --help`. |
 
+The optional Story scope uses one exact `pdd-boundary` fenced block with
+repository-relative prompt paths, one per line. See the [Story boundary
+format](cli.md#explain-resource-bindings). Links and headings never narrow scope.
+Without one valid block, pdd keeps the full dependency closure and gives a named
+`boundary-not-applied` note. Duplicate blocks or an unreadable path also keep the
+full closure.
+
 Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
 
 The interpreter address is set in one place in pdd. You do not need to set it.
@@ -430,7 +453,7 @@ Factories and method-bearing instances can bind through Runtime interface v2 han
 
 ### 7.1 Approve a prompt
 
-Only a person approves a prompt. An agent never sets `"status": "approved"`.
+In manual workflows, a person approves a prompt. Explicit Autopilot auto setup and start can delegate ordinary approval gates through the supported commands. Strict approvals and required human reviews still need a person. An agent never edits `"status": "approved"` directly.
 
 ```sh
 pdd approve prompts/place_order.prompt.md
@@ -568,7 +591,7 @@ This is a pre-release. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.26` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.27` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says an agent is not installed or signed in | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |

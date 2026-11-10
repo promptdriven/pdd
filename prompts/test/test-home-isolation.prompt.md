@@ -1,7 +1,7 @@
 # Native test home isolation
 
 Own the native test environment in `test/helpers/test-home.mjs` and its use by
-test entrypoints and shared fixtures. This is a test harness
+`package.json`, test entrypoints and shared fixtures. This is a test harness
 contract. Preserve production path rules, public commands, fixture fakes and
 existing behavioral expectations.
 
@@ -22,8 +22,18 @@ without account data. Tests of account-home fallback must inject their userInfo
 port. Cover both a direct lookup and a production caller that catches the error.
 
 Load isolation before production code in focused test entrypoints or their
-shared fixtures. Each process owns its home;
-parallel test files cannot remove another file's home. Remove only the allocated
+shared fixtures. The npm test command also preloads isolation, so a new test gets
+a temporary HOME even if it omits the shared import. Each process owns its home;
+parallel test files cannot remove another file's home.
+Before test code runs, remove inherited suite-runner controls `PDD_SUITE_QUEUE`,
+`PDD_VM_SUITE_LOCK` and `SUITE`. These select the outer queue and command; they
+must not change a test's subprocess environment or queue selection. Apply this
+to focused helper imports and the npm preload. Tests may set explicit fixture
+selectors after isolation loads. Keep the assigned `PDD_CHECK_CPUS` execution
+hint. Cover both entry routes with synthetic caller controls, verify child
+processes cannot inherit them, and leave the caller's environment and queue
+files unchanged.
+Remove only the allocated
 temporary directory when its owning process exits. Do not add a dependency.
 
 The regression guard runs real fixture tests with a synthetic caller home and
@@ -38,13 +48,14 @@ homes. Preserve the MCP pending, owned and aborted ownership cases and their
 supplied-state selection checks.
 A control using the old leaking fixture must fail the unchanged caller-home
 expectation. Also exercise default state and skill writes, a child process and a
-missing injected HOME inside the isolated process. Cleanup must leave
+missing injected HOME inside the isolated process. Run the actual npm test script in a synthetic
+checkout with a new test that omits the import, and check the same caller-home boundary. Cleanup must leave
 no owned test home after an ordinary success or test failure.
 
 The named launcher, runtime-slots and product saved-checks regressions must
 also work under a synthetic agent caller. Launcher fixtures explicitly mask an
 absent CODEX_HOME at the injected launcher boundary, including later ticks.
-Concurrent native runtime fixtures use a private interpreter queue and a real
+Concurrent native runtime fixtures use a real
 clock with real asynchronous waits for native filesystem locks; a rapidly
 advancing shared fake clock cannot stand in for elapsed lock time. Construct
 these fixture environments explicitly so caller job limits, queue selectors and
@@ -52,7 +63,8 @@ agent settings cannot affect their results. The slots fake must answer a GET
 before POST registration with HTTP 404, like the service, and retain its unique
 POST, capacity, wait barrier and completion checks. Exercise this order directly.
 VM suite command fakes keep their scenario paths in the fake executable itself,
-not in inherited environment variables.
+not in inherited environment variables. Affinity regressions check the clean
+child environment and reserved CPU list together.
 Keep the health transport's asynchronous shutdown marker and bounded observation
 from #3089. Bound the fake child lifetime if SIGTERM never arrives; its lifetime
 limit must not write the shutdown marker or satisfy the shutdown assertion.
@@ -71,7 +83,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"3912f634aa1b1ff181dfbac389c7053f2bbf3c5e9e55e11cb9de1286915d8d56","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"35f830d16449e7f44e261cfad857f187c79cca5d13db236d0b9a58c7f534602e","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>

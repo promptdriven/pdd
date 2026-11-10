@@ -1,6 +1,6 @@
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/agent-project.prompt.md (sha256: b89e9a07f900aa583f8bc96735a98a42e4e283f79267bd5c032b173540c89205).
+// Generated from prompts/cli/agent-project.prompt.md (sha256: a7a70a17fd19cc262ea3f563f17eb21fc9d851f582654bfa88d43d40fa80e168).
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {constants,lstatSync,realpathSync,openSync,fstatSync,readSync,closeSync,readdirSync} from 'node:fs';

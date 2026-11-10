@@ -58,6 +58,38 @@ npm pack --ignore-scripts --pack-destination /tmp/pdd-alpha-pack
 
 Use a fresh temporary directory if that destination already contains prior artifacts. Extract the returned archive into another clean directory, run its local CLI and inspect its files. Do not publish to npm or change a global `pdd` to test packaging.
 
+## Autopilot factory
+
+Run `scripts/factory-test.sh` for the complete offline Autopilot factory. It uses
+real Git and native PDD workflows with disposable service fakes and scripted
+agents. See [the factory test](docs/autopilot-factory.md) for its scenarios,
+isolation and limits. A candidate gap remains a failing test; retain its expected
+outcome and report the gap. This command does not run the public full suite.
+
 ## Scope and license
 
 Contributions are under the repository's [MIT license](LICENSE). Retain applicable notices. Keep the package self-contained, with no hosted services, private dependencies, operational fixtures or credentials in source or package artifacts. An optional proposal for a future capability is not an implemented public command.
+
+## Test homes
+
+Tests that use default home paths load `test/helpers/test-home.mjs` before
+production modules, either
+in the entrypoint or through a shared fixture. It gives each test process a
+private temporary HOME and clears inherited state and agent config directory
+overrides. Explicit fixture homes still select their own default state paths.
+It also clears inherited `PDD_SUITE_QUEUE`, `PDD_VM_SUITE_LOCK` and `SUITE`
+before test code runs. Tests can then set their own fixture queue selectors.
+The assigned `PDD_CHECK_CPUS` hint stays available.
+Import the helper first when adding a test without a shared fixture. `npm test`
+also preloads it. The owning process removes its temporary home on exit. OS account-home lookup
+requires an injected `userInfo` fake; an un-injected lookup fails the process
+with `PDD_TEST_ACCOUNT_HOME`, even if the caller catches the error.
+
+The runtime workspace fixture uses `f.env.HOME` for its private home. It leaves
+`<parent>/home` available for tests that need a separate consumer home.
+
+Run a focused file with `node --test test/<file>.test.mjs`. To preload the same
+isolation for a new test, use
+`node --import ./test/helpers/test-home.mjs --test test/<file>.test.mjs`.
+The home isolation regression uses synthetic caller folders and the existing
+GitHub, Herdr and interpreter fakes. It needs no account or live service.

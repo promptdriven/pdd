@@ -139,12 +139,12 @@ test('CLI rejects absent commands and invalid timeouts before execution', async 
   }
 });
 
-test('native CLI preserves cwd, env, closed stdin, stdout, stderr and exit code', async t => {
+test('native CLI preserves cwd, explicit command variables, closed stdin, stdout, stderr and exit code', async t => {
   const f = fixture(t), cwd = join(f.root,'native repo'); mkdirSync(cwd);
   const program = join(f.root,'fake-suite.cjs'), output = join(f.root,'native.json');
   writeFileSync(program, `const fs=require('node:fs'); fs.writeFileSync(process.env.SUITE_OBSERVATION, JSON.stringify({cwd:process.cwd(),value:process.env.SUITE_VALUE,stdin:fs.readFileSync(0,'utf8')})); console.log('suite-out'); console.error('suite-err'); process.exitCode=7;`);
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
-  const child = spawn(process.execPath, [resolve('bin/pdd.mjs'),'workflow','suite','--command',`${quote(process.execPath)} ${quote(program)}`], {cwd, env:{...f.env,SUITE_VALUE:'literal $() value',SUITE_OBSERVATION:output}});
+  const child = spawn(process.execPath, [resolve('bin/pdd.mjs'),'workflow','suite','--command',`SUITE_VALUE=${quote('literal $() value')} SUITE_OBSERVATION=${quote(output)} ${quote(process.execPath)} ${quote(program)}`], {cwd, env:f.env});
   let stdout = '', stderr = ''; child.stdout.on('data', value => stdout += value); child.stderr.on('data', value => stderr += value);
   const code = await new Promise(done => child.on('close', done));
   assert.equal(code, 7, stderr);
