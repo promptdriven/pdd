@@ -10,7 +10,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f3011ef6a920abb53e3a3b6e27d103f8da7ec502f617441419ec1de451e887f4).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: af1c9bcee1edd1bf94c5702ec5833065165a875a2ea1e61b4ea19240184e62f1).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4264,11 +4264,12 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
   return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
 }
 
-async function cancelRunCommand({ ref, cwd }, ports) {
+async function cancelRunCommand({ ref, cwd }, ports, expectedIdentity = null) {
   const p = deps(ports);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
+  if (expectedIdentity && runIdentity(run) !== expectedIdentity) return fail('The selected workflow run changed. Retry cancellation.');
   const automatic = !ports?.claimReleased && validSavedAutomaticOrigin(run);
   p.say('Closing the chat tabs in Herdr…');
   const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
@@ -5684,7 +5685,21 @@ export const approveRun=saveGuard(approveRunCommand);
 
 export const askPerson=saveGuard(askPersonCommand);
 
-export const cancelRun=saveGuard(cancelRunCommand);
+export const cancelRun=saveGuard(async (args, ports = {}) => {
+  const p = deps(ports), found = await resolveRun(args.ref, {cwd: args.cwd}, p);
+  if (!found.run || found.error || !validSavedAutomaticOrigin(found.run)) return cancelRunCommand(args, ports);
+  let release;
+  try {
+    release = acquireRunLock(found.run.runDir);
+    const latest = readRun(found.run.runDir);
+    if (!latest || runIdentity(latest) !== runIdentity(found.run))
+      return fail('The selected workflow run changed. Retry cancellation.');
+    return await cancelRunCommand(args, ports, runIdentity(latest));
+  } catch (error) {
+    if (error.code === 'run_busy') return fail(error.message);
+    throw error;
+  } finally { release?.(); }
+});
 
 export const runStatus=saveGuard(async(options,ports)=>{
   ports = { ...ports, skipCostSessions: true };

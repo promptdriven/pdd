@@ -1642,6 +1642,46 @@ function installClaimEra(github, run, {coordinatorId = run.automaticOrigin.coord
   return {comment, eventId, coordinatorId, machine};
 }
 
+test('3157: legacy parked release finishes old working-first cleanup and preserves a replacement claim', async t => {
+  const {releaseParkedClaim} = await import('../src/issue-dependencies-github.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, ports} = await setup(t), run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  const old = installClaimEra(github, run);
+  const oldRecord = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(old.comment.body)[1]);
+  oldRecord.parkRelease = {runId: run.runId, branch: run.branch};
+  github.editComment(17, old.comment.id, `Autopilot claim.\n\n\`\`\`json\n${JSON.stringify(oldRecord)}\n\`\`\``);
+  github.label(17, 'pdd:stuck');
+  github.unlabel(17, 'pdd:working');
+  assert.deepEqual(github.issues.get(17).labels, ['pdd:stuck'], 'legacy partial cleanup has no working label but retains its old stuck label');
+  wireClaimGithub(f, ports, github);
+  const input = {cwd: f.source, repository: run.repo,
+    claim: {issue: run.issue.url, coordinatorId: old.coordinatorId, machine: old.machine,
+      commentId: old.comment.id, labelEventId: old.eventId},
+    coordinatorId: old.coordinatorId, machine: old.machine, runId: run.runId, branch: run.branch};
+  const deleted = [], execute = ports.execFile;
+  ports.execFile = f.ports.execFile = async (file, args, options) => {
+    const path = args.find(arg => arg.includes('/labels/'));
+    if (file === 'gh' && args[0] === 'api' && args.includes('--method')
+      && args[args.indexOf('--method') + 1] === 'DELETE' && path) deleted.push(path.split('/labels/').at(-1));
+    return execute(file, args, options);
+  };
+  const resumed = await releaseParkedClaim(input, ports);
+  assert.equal(resumed.state, 'released');
+  assert.deepEqual(github.issues.get(17).labels, []);
+  assert.deepEqual(deleted, ['pdd%3Astuck'], 'retry completes the saved old state without another working-label delete');
+  assert.match(github.issues.get(17).comments.find(comment => comment.id === old.comment.id).body,
+    new RegExp(`parkRelease.*${run.runId}`));
+
+  const replacement = installClaimEra(github, run, {coordinatorId: 'replacement-coordinator', machine: old.machine});
+  github.label(17, 'pdd:stuck');
+  const replaced = await releaseParkedClaim(input, ports);
+  assert.equal(replaced.state, 'skipped');
+  assert.notEqual(replacement.comment.id, old.comment.id);
+  assert.deepEqual(deleted, ['pdd%3Astuck'], 'the old saved marker cannot delete labels from the replacement era');
+  assert.deepEqual([...github.issues.get(17).labels].sort(), ['pdd:stuck', 'pdd:working']);
+});
+
 for (const loss of ['expired', 'lost']) for (const status of ['working', 'unknown'])
   test(`3157: ${loss} claim keeps allocation and labels while worker status is ${status}`, async t => {
     const {f, tick, stateFile, ports} = await setup(t);
@@ -1755,6 +1795,106 @@ test('3157: explicit release of saved claim era A preserves same-machine replace
   assert.deepEqual(github.issues.get(17).labels.sort(), ['pdd:stuck', 'pdd:working']);
 });
 
+test('3157: release rechecks claim identity after stuck removal before working removal', async t => {
+  const {releaseParkedClaim} = await import('../src/issue-dependencies-github.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, ports} = await setup(t), run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  const old = installClaimEra(github, run);
+  save(f, run); github.label(17, 'pdd:stuck');
+  wireClaimGithub(f, ports, github);
+  const deleted = [], execute = ports.execFile;
+  let replaced = false;
+  ports.execFile = f.ports.execFile = async (file, args, options) => {
+    const path = args.find(arg => arg.includes('/labels/'));
+    const deleting = file === 'gh' && args[0] === 'api' && args.includes('--method')
+      && args[args.indexOf('--method') + 1] === 'DELETE' && path;
+    if (deleting) deleted.push(path.split('/labels/').at(-1));
+    const result = await execute(file, args, options);
+    if (deleting && !replaced) {
+      replaced = true;
+      if (github.issues.get(17).labels.includes('pdd:working')) github.unlabel(17, 'pdd:working');
+      installClaimEra(github, run, {coordinatorId: 'replacement-coordinator', machine: old.machine});
+      if (!github.issues.get(17).labels.includes('pdd:stuck')) github.label(17, 'pdd:stuck');
+    }
+    return result;
+  };
+  const result = await releaseParkedClaim({
+    cwd: f.source, repository: run.repo,
+    claim: {issue: run.issue.url, coordinatorId: old.coordinatorId, machine: old.machine,
+      commentId: old.comment.id, labelEventId: old.eventId},
+    coordinatorId: old.coordinatorId, machine: old.machine, reason: 'release',
+  }, ports);
+  assert.equal(replaced, true);
+  assert.deepEqual(deleted, ['pdd%3Astuck']);
+  assert.equal(result.state, 'skipped');
+  assert.deepEqual([...github.issues.get(17).labels].sort(), ['pdd:stuck', 'pdd:working']);
+});
+
+test('3157: manual cancel contends on the existing run lock used by coordinator recovery', async t => {
+  const {cancelRun, acquireRunLock, recoverAutomaticRunOwner} = await import('../src/workflow-runner.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, ports} = await setup(t), run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  installClaimEra(github, run); save(f, run); github.label(17, 'pdd:stuck');
+  wireClaimGithub(f, ports, github);
+  let recoveryCalls = 0;
+  ports.recoverCoordinatorClaim = async () => { recoveryCalls++; return {state: 'recovered'}; };
+  const herdrCalls = f.herdr.calls.length, unlock = acquireRunLock(run.runDir);
+  let recovery, cancelled;
+  try {
+    recovery = await recoverAutomaticRunOwner({ref: '17', cwd: f.source,
+      coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine}, ports);
+    cancelled = await cancelRun({ref: '17', cwd: f.source}, ports);
+  } finally { unlock(); }
+  assert.notEqual(recovery.exitCode, 0);
+  assert.notEqual(cancelled.exitCode, 0);
+  assert.equal(recoveryCalls, 0);
+  assert.equal(f.herdr.calls.length, herdrCalls);
+  assert.equal(f.record().state, run.state);
+  assert.equal(f.record().claimRelease, undefined);
+  assert.deepEqual([...github.issues.get(17).labels].sort(), ['pdd:stuck', 'pdd:working']);
+  const retry = await cancelRun({ref: '17', cwd: f.source}, ports);
+  assert.equal(retry.exitCode, 0, retry.message);
+  assert.equal(f.record().state, 'cancelled');
+  assert.deepEqual(github.issues.get(17).labels, []);
+});
+
+test('3157: repeated cancel recovers both lost label acknowledgements', async t => {
+  const {cancelRun} = await import('../src/workflow-runner.mjs');
+  const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
+  const {f, ports} = await setup(t), run = f.record();
+  const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
+  installClaimEra(github, run); save(f, run); github.label(17, 'pdd:stuck');
+  wireClaimGithub(f, ports, github);
+  const lostAck = new Set(['pdd%3Astuck', 'pdd%3Aworking']), deleted = [];
+  const execute = ports.execFile;
+  ports.execFile = f.ports.execFile = async (file, args, options) => {
+    const path = args.find(arg => arg.includes('/labels/'));
+    const deleting = file === 'gh' && args[0] === 'api' && args.includes('--method')
+      && args[args.indexOf('--method') + 1] === 'DELETE' && path;
+    const label = deleting ? path.split('/labels/').at(-1) : null;
+    if (label) deleted.push(label);
+    const result = await execute(file, args, options);
+    if (label && lostAck.delete(label)) throw Error('controlled lost label-delete acknowledgement');
+    return result;
+  };
+  const cancel = () => cancelRun({ref: '17', cwd: f.source}, ports);
+  const first = await cancel();
+  assert.equal(first.exitCode, 0);
+  assert.deepEqual([...github.issues.get(17).labels], ['pdd:working']);
+  assert.equal(f.record().claimRelease?.state, 'pending');
+  const second = await cancel();
+  assert.equal(second.exitCode, 0);
+  assert.deepEqual(github.issues.get(17).labels, []);
+  assert.equal(f.record().claimRelease?.state, 'pending');
+  const third = await cancel();
+  assert.equal(third.exitCode, 0);
+  assert.deepEqual(github.issues.get(17).labels, []);
+  assert.equal(f.record().claimRelease, undefined);
+  assert.deepEqual(deleted, ['pdd%3Astuck', 'pdd%3Aworking']);
+});
+
 test('3157: cancel keeps retry state when local allocation is unreadable and remote labels are already clear', async t => {
   const {cancelRun} = await import('../src/workflow-runner.mjs');
   const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
@@ -1780,7 +1920,7 @@ test('3157: cancel keeps retry state when local allocation is unreadable and rem
   }
 });
 
-test('3157: parked release retries partial label removal and verifies both labels before freeing allocation', async t => {
+test('3157: parked release retries after lost stuck-label acknowledgement before freeing allocation', async t => {
   const {releaseParkedRun} = await import('../src/workflow-runner.mjs');
   const {releaseParkedClaim} = await import('../src/issue-dependencies-github.mjs');
   const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
@@ -1796,7 +1936,11 @@ test('3157: parked release retries partial label removal and verifies both label
     const deletingStuck = file === 'gh' && args.includes('--method')
       && args[args.indexOf('--method') + 1] === 'DELETE'
       && args.some(arg => arg.includes('/labels/pdd%3Astuck'));
-    if (deletingStuck && failStuckRemoval) {failStuckRemoval = false; throw Error('controlled stuck-label deletion failure');}
+    if (deletingStuck && failStuckRemoval) {
+      failStuckRemoval = false;
+      await execute(file, args, options);
+      throw Error('controlled lost stuck-label deletion acknowledgement');
+    }
     return execute(file, args, options);
   };
   ports.releaseParkedClaim = fresh => releaseParkedClaim({cwd: f.source, repository: fresh.repo,
@@ -1807,7 +1951,7 @@ test('3157: parked release retries partial label removal and verifies both label
   let first;
   try { first = await release(); } catch (error) { first = {threw: error.message}; }
   assert.equal(failStuckRemoval, false, 'the injected failure reaches the stuck-label deletion');
-  assert.deepEqual(github.issues.get(17).labels, ['pdd:stuck']);
+  assert.deepEqual(github.issues.get(17).labels, ['pdd:working']);
   const allocation = join(run.commonDir, 'pdd/worktree-assignments/issues/17.json');
   assert.ok(existsSync(allocation), 'a partial remote release cannot free local ownership');
   await release();

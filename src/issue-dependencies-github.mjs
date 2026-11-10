@@ -3,7 +3,7 @@ import {readSuiteProgress} from './test-suite-queue.mjs';
 import {readInterpreterProgress} from './interpreter-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 5234dc39a622bf4519e044ef888bd5a34edc323ec3c13f7aaa61ce731e7d3ba5).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: b502659d0e61032b8ab07ace70be7b007a0b26197b3d0306655937efffba9d3d).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1699,7 +1699,8 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
     const raw = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
     if (raw.error) throw Error('Current claim issue unavailable');
     let labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
-    const hasWorking = labels.includes('pdd:working'), current = hasWorking ? await winner(raw) : null;
+    const hasWorking = labels.includes('pdd:working');
+    let current = hasWorking ? await winner(raw) : null;
     if (hasWorking && !current) return reason === 'release' ? {state: 'refused', machine: 'unknown'} : skipped;
     const suppliedIdentity = {
       coordinatorId: claim?.coordinatorId ?? coordinatorId,
@@ -1720,8 +1721,29 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
         || !claim?.commentId || !claim?.labelEventId
         || current.commentId !== String(claim.commentId) || current.labelEventId !== String(claim.labelEventId)) return skipped;
     }
-    if (labels.includes('pdd:working')) await removeLabel('pdd%3Aworking');
+    // Clear the old stuck marker while the saved working claim still owns it.
     if (labels.includes('pdd:stuck')) await removeLabel('pdd%3Astuck');
+    const beforeWorking = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
+    if (beforeWorking.error) throw Error('Current claim issue unavailable');
+    labels = beforeWorking.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
+    current = labels.includes('pdd:working') ? await winner(beforeWorking) : null;
+    if (labels.includes('pdd:working') && !current) return reason === 'release' ? {state: 'refused', machine: 'unknown'} : skipped;
+    if (current) {
+      if (reason === 'release' && current.active === true && (!current.machine || current.machine !== machine))
+        return {state: 'refused', machine: current.machine || 'unknown'};
+      if (reason === 'release' && !identityMatches(current)) return skipped;
+      if (reason !== 'release') {
+        const expectedCoordinator = claim?.coordinatorId ?? coordinatorId;
+        if (current.active === true && (!current.machine || current.machine !== machine)) return skipped;
+        if (current.machine && current.machine !== machine || !expectedCoordinator
+          || current.coordinatorId !== String(expectedCoordinator)
+          || !claim?.commentId || !claim?.labelEventId
+          || current.commentId !== String(claim.commentId) || current.labelEventId !== String(claim.labelEventId)) return skipped;
+      }
+    }
+    if (labels.includes('pdd:working')) await removeLabel('pdd%3Aworking');
+    // The working-label deletion is the final label write. A later read confirms
+    // the result but must never delete a label from a replacement claim era.
     const after = parse((await github.issue({repository, issue: i.issue, purpose: 'claims', safety: true})).json);
     if (after.error) throw Error('Claim label cleanup is not confirmed');
     labels = after.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
@@ -1755,15 +1777,15 @@ export async function releaseParkedClaim({cwd = '', repository, claim, coordinat
   current = labels.includes('pdd:working') ? await winner(observed) : null;
   if ((labels.includes('pdd:working') && !current) || (current && !matches(current))) return skipped;
   const parkedStuck = current?.stuckSince !== undefined;
-  if (current) await removeLabel('pdd%3Aworking');
-  // If the working label was already removed by an earlier attempt, the saved
-  // marker identifies the parked era whose leftover stuck label may be removed.
-  observed = await readIssue(); labels = labelsOf(observed);
-  const afterWorking = labels.includes('pdd:working') ? await winner(observed) : null;
-  if (labels.includes('pdd:working') && (!afterWorking || !matches(afterWorking))) return skipped;
-  if (afterWorking && !matches(afterWorking)) return skipped;
+  // If working was removed by an earlier attempt, the saved marker can identify
+  // its leftover stuck label. Remove stuck before working in every release era.
   if (labels.includes('pdd:stuck') && (parkedStuck
-    || !afterWorking && record.value.parkRelease?.runId === runId)) await removeLabel('pdd%3Astuck');
+    || !current && record.value.parkRelease?.runId === runId)) await removeLabel('pdd%3Astuck');
+  observed = await readIssue(); labels = labelsOf(observed);
+  const beforeWorking = labels.includes('pdd:working') ? await winner(observed) : null;
+  if (labels.includes('pdd:working') && (!beforeWorking || !matches(beforeWorking))) return skipped;
+  if (labels.includes('pdd:working')) await removeLabel('pdd%3Aworking');
+  // After working is released, only read back. Never delete a replacement label.
   observed = await readIssue(); labels = labelsOf(observed);
   if (labels.includes('pdd:working') || labels.includes('pdd:stuck')) return skipped;
   const marker = `<!-- pdd:park-release:${runId} -->`;
