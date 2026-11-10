@@ -1,3 +1,4 @@
+// Generated from prompts/cli/runtime-workspace.prompt.md (sha256: 433a0b67c78602fbc28d766f441a5572b0f9e979312607465c49a7f44429ca10).
 // Implements prompts/cli/runtime-workspace.prompt.md.
 import {constants,lstatSync,openSync,fstatSync,readFileSync,closeSync,realpathSync} from 'node:fs';
 import {join,resolve,parse,sep} from 'node:path';

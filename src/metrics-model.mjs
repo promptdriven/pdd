@@ -1,3 +1,4 @@
+// Generated from prompts/cli/metrics-model.prompt.md (sha256: 920dde213c236682ab2a07f3df7e3a11ab609dabd4b4cf5ad013e7d55356d264).
 const stable = value => {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;

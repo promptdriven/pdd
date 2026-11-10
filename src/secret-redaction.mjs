@@ -1,3 +1,4 @@
+// Generated from prompts/cli/secret-redaction.prompt.md (sha256: eec6ecce797bc1cf5ec5231c8771b115b5a72b8d9c946e3d1dadd5c9109bbf56).
 // Owned by prompts/cli/secret-redaction.prompt.md.
 const SECRET = /token|password|secret|api[_-]?key|authorization|cookie|credential/i;
 const remembered = new Set();

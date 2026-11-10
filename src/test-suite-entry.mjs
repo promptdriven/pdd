@@ -1,3 +1,4 @@
+// Generated from prompts/cli/test-suite-queue.prompt.md.
 // Compatibility entrypoint owned by prompts/cli/test-suite-queue.prompt.md.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';

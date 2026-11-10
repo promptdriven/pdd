@@ -1,3 +1,4 @@
+// Generated from prompts/cli/issue-dependency-graph.prompt.md (sha256: a8f464a199b7ebe683ebd70b027397acb0656236c2dc49919dc4aa7c28371b97).
 // Implements prompts/cli/issue-dependency-graph.prompt.md.
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
