@@ -6,7 +6,7 @@ If the pdd-prompting skill has a RUNBOOK.md, run `pdd simulate STORY` as it says
 - If the repo has a safe local preview or demo, use it to show the plan.
 - Report what ran and what you saw. A link or a mockup is not a try.
 
-`pdd simulate <story>` selects shell, localhost with an example request, Screen or Form. `pdd simulate` opens the whole project. `--page` forces the page; `--cli` prints launcher/PATH without opening a shell.
+`pdd simulate <story>` selects shell, localhost, Screen or Form. `pdd simulate` opens the whole project. `--page` forces the page; `pdd simulate <story> --cli` prints launcher/PATH without opening a shell.
 
 In a normal run, pdd skips this step itself. In strict mode, if no person is there to try it, run `pdd workflow done try --skipped "REASON"`. Never write run files such as try.md by hand.
 
