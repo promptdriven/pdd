@@ -85,9 +85,10 @@ for (const kind of ['lint', 'try']) test(`2704: ${kind} has no local wait behind
 
 for (const limit of [undefined, Infinity]) test(`2704: ${String(limit)} slot limit preserves records without FIFO or occupancy wait`, async t => {
   const setup = selected(t, 1), origin = 'http://localhost:453';
-  const seeded = seed(setup, origin, Date.now()); let sleeps = 0, probes = 0; const lines = [];
-  const reservation = await acquireRuntimeSlot({ stateDir: setup.state, origin, kind: 'check', ...(limit === undefined ? {} : { limit }), deadline: Date.now() + 100 }, {
-    say: line => lines.push(line), sleep: async () => { sleeps++; await pause(10); }, readRun: async () => { probes++; return 'unknown'; },
+  // Filesystem load must not consume the deadline in this no-wait fixture.
+  const now = Date.now(), seeded = seed(setup, origin, now); let sleeps = 0, probes = 0; const lines = [];
+  const reservation = await acquireRuntimeSlot({ stateDir: setup.state, origin, kind: 'check', ...(limit === undefined ? {} : { limit }), deadline: now + 100 }, {
+    now: () => now, say: line => lines.push(line), sleep: async () => { sleeps++; throw new Error('unexpected local-slot wait'); }, readRun: async () => { probes++; return 'unknown'; },
   });
   try {
     assert.ok(reservation, 'no-cap admission bypasses older waiting tickets');
