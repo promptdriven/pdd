@@ -400,6 +400,47 @@ test('two machine launchers offer the same issue to the skill without making a c
   // The bundled skill owns the cross-machine claim; this proves separate launcher state.
 });
 
+test('the core engine timer fires every 10 minutes, the full engine every 30; start --engine rewrites the timer; status says the interval', async t => {
+  for (const platform of ['linux', 'darwin']) {
+    const f = await fixture(t, {tempPrefix: 'pdd-autopilot-iv-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
+    const env = { HOME: f.home, PATH: '/fixture/bin', XDG_CONFIG_HOME: join(f.home, '.config') };
+    const run = f.ports.run, serviceCalls = [];
+    // Every timer tool is a fake, so no real launchd or systemd job is made.
+    f.ports.run = async (command, args, opts) => {
+      if (['systemctl', 'launchctl', 'loginctl'].includes(command)) { serviceCalls.push([command, args]); return { code: 0, stdout: command === 'loginctl' ? 'yes\n' : '', stderr: '' }; }
+      return run(command, args, opts);
+    };
+    const folder = platform === 'linux' ? join(f.home, '.config', 'systemd', 'user') : join(f.home, 'Library', 'LaunchAgents');
+    const definition = () => readFileSync(join(folder, readdirSync(folder).find(x => x.endsWith(platform === 'linux' ? '.timer' : '.plist'))), 'utf8');
+    const minutes = () => {
+      const text = definition();
+      if (platform === 'darwin') return Number(/<key>StartInterval<\/key><integer>(\d+)<\/integer>/.exec(text)[1]) / 60;
+      const first = Number(/^OnActiveSec=(\d+)min$/m.exec(text)[1]), every = Number(/^OnUnitActiveSec=(\d+)min$/m.exec(text)[1]);
+      assert.equal(first, every); assert.match(text, new RegExp(`^Description=PDD Autopilot every ${every} minutes$`, 'm'));
+      return every;
+    };
+    const full = await f.invoke('start', { env });
+    assert.equal(full.exitCode, 0, full.message);
+    assert.equal(minutes(), 30); assert.equal(f.state().timerMinutes, 30);
+    assert.match((await f.invoke('status', { env })).message, /timer active, every 30 minutes;/);
+    const reloads = serviceCalls.length;
+    const core = await f.invoke('start', { env, engine: 'core' });
+    assert.equal(core.exitCode, 0, core.message);
+    assert.equal(minutes(), 10, `${platform}: the switch rewrites the timer`); assert.equal(f.state().timerMinutes, 10);
+    assert.ok(serviceCalls.length > reloads, 'the new timer definition is loaded');
+    assert.ok(f.state().nextTick <= f.time + 10 * 60000, 'the next tick is at most 10 minutes away');
+    const status = await f.invoke('status', { env });
+    assert.match(status.message, /timer active, every 10 minutes;/); assert.doesNotMatch(status.message, /run pdd autopilot start to use/);
+    // A timer installed before the switch (or by an older pdd) keeps its interval until the next start; status says so.
+    writeFileSync(f.stateFile(), JSON.stringify({ ...f.state(), timerMinutes: 30 }));
+    assert.match((await f.invoke('status', { env })).message, /timer active, every 30 minutes \(run pdd autopilot start to use 10 minutes for the core engine\)/);
+    const back = await f.invoke('start', { env, engine: 'full' });
+    assert.equal(back.exitCode, 0, back.message);
+    assert.equal(minutes(), 30); assert.equal(f.state().timerMinutes, 30);
+    assert.equal(serviceCalls.some(([command]) => command === (platform === 'linux' ? 'launchctl' : 'systemctl')), false);
+  }
+});
+
 test('native Linux and macOS user timers pin Node, script, state and environment without a shell', async t => {
   for (const platform of ['linux', 'darwin']) {
     const f = await fixture(t, {tempPrefix: 'pdd-autopilot-sh-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;

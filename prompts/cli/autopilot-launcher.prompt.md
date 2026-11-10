@@ -197,8 +197,9 @@ After these checks and rechecking the current control revision under admission o
 
 If an explicit start finds an active scan holding the tick lock, arrange one detached current-state follow-up after that scan releases the lock. Wait outside admission and tick locks; do not clear the lock or replay an old payload. Before the follow-up, verify the same enabled start and control, repository and coordinator identity, then use the existing guarded scan. A later stop or start supersedes the pending follow-up. A busy lock is not completed work.
 
-Start persists a repo/machine state outside the checkout, installs a 30-minute
-user timer and runs the first tick immediately. Repeated start reuses the timer
+Start persists a repo/machine state outside the checkout, installs a user timer
+(every 30 minutes; every 10 minutes for the [core engine](#core-engine-switch)) and
+runs the first tick immediately. Repeated start reuses the timer
 and saved activation time. An explicit start rearms the existing one-shot worker completion bridge for saved current automatic chats belonging to this repository and coordinator; timer ticks do not recreate listeners, except for the fresh pane after a [coordinator relaunch](#coordinator-relaunch) or a [gone coordinator pane](#gone-coordinator-pane). Yield retains its current claim and ownership checks. If observation is unavailable, report the manual completion-evidence and yield fallback. In auto mode, on every fresh reconciliation, including ordinary timer ticks, explicit start, completion and capacity refill, reconsider currently graph-eligible, open, unassigned and unclaimed work even when an earlier packet was acknowledged and its trusted content is unchanged. Delivery alone is not worker admission; preserve trust, ownership, custody and waiting checks and make a fresh selection observation. In observe mode retain unchanged notification deduplication; in all modes keep it for work that is not currently ready and for empty scans. Each reconciliation considers all open eligible
 backlog, regardless of creation or activation time.
 Optional --runs and --checks are positive safe integers with no product maximum.
@@ -1383,6 +1384,15 @@ through this machine's alert destination with the core's cause, tried and need (
   start verifies the saved profile; a core state saved without one selects the agent
   again instead of refusing. Its message names
   `pdd autopilot status` instead of the Herdr session.
+- Timer: the core tick makes no AI call and each job phase needs a tick, so the core
+  engine's timer fires every 10 minutes; the full engine's fires every 30. Start writes
+  the effective engine's interval into the timer (`StartInterval`, or `OnActiveSec`
+  and `OnUnitActiveSec`, and the unit description) and, after the timer starts, saves
+  it as `timerMinutes`. So a start that switches the engine rewrites the interval. A
+  core tick saves `nextTick` as now plus `timerMinutes` (30 when absent, as an older
+  pdd installed). Both status texts show `timer active, every N minutes` with the
+  installed interval; when it differs from the effective engine's, they add `(run pdd
+  autopilot start to use M minutes for the ENGINE engine)`.
 - Status (without `--all` or `--json`): a core engine shows the enabled and timer
   line, `coreStatus` from local files, and the last tick message. No Herdr read.
 - Report: catalog command `report` lists the machine's local report drafts
