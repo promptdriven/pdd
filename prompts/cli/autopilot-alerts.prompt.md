@@ -10,7 +10,14 @@ on the GitHub issue, so it stays with the original run.
 Export module functions `runAutopilotAlerts(input, ports)` and
 `alertStatusLine(input, ports)`. `runAutopilotAlerts` takes `action` `set`,
 `test`, `clear`, `alert` or native-only `digest` and returns `{exitCode, message}` with a one-line
-message. The [CLI](pdd-cli.prompt.md) owns streams and reads stdin into
+message. An `alert` call also returns optional `deliveryAttempted`, total saved
+`deliveryAttempts` and `deliveryResult`: `delivered`,
+`failed`, `unconfirmed`, `not-configured` or `not-sent`. This is the latest
+saved incident delivery state; `deliveryAttempted` means this call made an
+outbound request and `deliveryAttempts` counts saved outbound requests. A
+missing destination or failed token lookup does not count. `exitCode` reports the
+command and local record result, not whether a person received the alert. A repeated call returns the
+latest saved incident result and whether this call sent a request. The [CLI](pdd-cli.prompt.md) owns streams and reads stdin into
 `input.text`. The [launcher](autopilot-launcher.prompt.md) shows the status line.
 This is a new public interface.
 
@@ -121,8 +128,10 @@ Each send has one result:
 
 ## Alerts
 
-`alert` input: `cwd`, `issue` (a positive integer as text), `kind`, `update`
-(Boolean) and `text`, a JSON object from stdin. Kinds:
+`alert` input: `cwd`, optional `issue` (a positive integer as text), `kind`,
+`update` (Boolean) and `text`, a JSON object from stdin. An issue is required
+for issue incidents. Machine incidents may omit it when no affected issue is
+known. Kinds:
 
 | Kind | Use | One incident per |
 | --- | --- | --- |
@@ -136,16 +145,26 @@ Each send has one result:
 | `long-running` | Information only: an issue claimed 24 hours ago with no merge | repository, issue and kind |
 | `recovered` | A matching open incident ended | |
 
-`usage-limit`, `resource`, `interpreter` and `interpreter-access` are machine incidents: they are not specific to
-one issue. One usage limit that blocks 5 runs is one incident and one alert. The
-incident lists every affected issue. An access or spending decision belongs to
-its issue, so two different decisions on two issues are two incidents and two
-alerts, and a recovery of one leaves the other open.
+`usage-limit`, `resource`, `interpreter` and `interpreter-access` are machine
+incidents: their identity is repository, machine and kind, not one issue. A
+machine alert can have an empty affected-issue list. When no issue is known, omit
+the Issue/Issues line and the instruction to answer on the GitHub issue.
+`usage-limit` also accepts `incidentSource` in its JSON fields: `codex` or
+`github`. An omitted source is the legacy Codex source. These sources are
+separate incidents on the same machine. The alert text does not include this
+internal source field. An access or spending decision belongs to its issue, so
+two different decisions on two issues are two incidents and two alerts, and a
+recovery of one leaves the other open.
 
-The JSON has nonblank string fields `cause`, `tried` and `need`. For `recovered`
-only `cause` (what changed) is needed, and an optional `kind` names the one
-incident that ended: `usage-limit`, `resource`, `interpreter`, `interpreter-access`, `access`, `decision`, `stuck` or `long-running`.
-A missing or invalid issue, kind or field exits 2 with one line that names the
+`alert` JSON has nonblank string fields `cause`, `tried` and `need`. For
+`recovered`, only `cause` (what changed) is needed. Optional `kind` names one
+incident to end: `usage-limit`, `resource`, `interpreter`,
+`interpreter-access`, `access`, `decision`, `stuck` or `long-running`.
+Optional `incidentSource` is `codex` or `github` for a `usage-limit`; a caller
+that recovers one source supplies the same source. Without `kind`, recovery
+keeps its existing issue-based matching. A missing issue is valid only for a
+machine alert or for a recovery that names a machine kind and source. A supplied
+invalid issue, kind, source or field exits 2 with one line that names the
 problem, and records nothing.
 
 Find the repository with `gh repo view --json nameWithOwner` in `cwd`. If that
@@ -178,15 +197,18 @@ Needs: NEED
 Answer on the GitHub issue.
 ```
 
-When the incident lists more than one issue, the third line is
-`Issues: LINK, LINK` in issue-number order. It shows at most 10 links and then
-` and N more`. An update starts with `PDD Autopilot update: KIND (HOST)`. A
-recovery starts with `PDD Autopilot recovered: KIND, KIND (HOST)` and has the
-Repository line, the Issue or Issues line of the closed incidents and
+When the incident lists more than one issue, the Issue/Issues line shows at
+most 10 links in issue-number order, then ` and N more`. If no issue is known,
+omit this line and `Answer on the GitHub issue.` An update starts with
+`PDD Autopilot update: KIND (HOST)`. A recovery starts with
+`PDD Autopilot recovered: KIND, KIND (HOST)`, has the Repository line, includes
+the Issue/Issues line only when the closed incidents have known issues, then has
 `What changed: CAUSE`.
 
-The incident of a call is its machine incident (this repository, HOST and kind)
-for `usage-limit`, `resource`, `interpreter` and `interpreter-access`, else the incident of its issue and kind. This answers the question **when does a call send, and what ends an
+A machine incident is keyed by this repository, HOST and kind. For
+`usage-limit`, `incidentSource: "github"` has a separate identity from the
+legacy/Codex source. Other machine incidents keep their existing identity.
+Issue incidents remain keyed by repository, issue and kind. This answers the question **when does a call send, and what ends an
 incident?**
 
 ```mermaid
@@ -215,10 +237,12 @@ the latest result of its incident and the issues that its message named.
 
 A recovery for issue N matches:
 
-- with `kind`: the open incident of that kind, which is the machine incident of
-  this HOST for a machine kind, else the incident of issue N;
-- without `kind`: every open incident of issue N and every machine incident of
-  this HOST that lists issue N.
+- with a machine `kind` and `incidentSource`: only that source's incident on
+  this HOST, even when it has no affected issue;
+- with `kind` and no source: existing matching for that machine kind on HOST or
+  the issue incident for N;
+- without `kind`: every open incident for issue N and every machine incident
+  on this HOST that lists issue N.
 
 A closed incident has no further sends. The next alert for that incident opens a
 new one.
@@ -228,9 +252,8 @@ Record every call that reaches the diagram, also one that sends nothing, in
 `ports.stateRoot`, else `<home folder>/.local/state/pdd/autopilot` (the
 launcher's state folder), with the [home folder](#an-absolute-home-folder)
 above. ID is the first 20 hex characters of the SHA-256 of the lowercase
-`OWNER/REPO`. The record keeps the open incidents (kind, affected issues,
-issues in the last sent message, fields, open and update times, latest result
-and detail) and the newest 200 log rows (time, issue, kind, action `alert`,
+`OWNER/REPO`. The record keeps the open incidents (kind, optional source, affected issues,
+issues in the last sent message, fields, open and update times, total delivery attempts, latest result and detail) and the newest 200 log rows (time, issue or null, kind, action `alert`,
 `update`, `retry`, `repeat`, `recovered` or `test`, result and detail). It never
 holds the URL.
 

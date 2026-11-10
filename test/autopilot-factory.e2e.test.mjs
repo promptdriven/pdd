@@ -695,25 +695,34 @@ test('factory 3125: a full workflow session admits healthy coordinator reuse in 
   assert.ok(w.herdrTransportCalls.slice(offset).some(a=>a[1]==='pdd-autopilot'&&a[2]==='agent'&&a[3]==='get'&&a[4]===prior.paneId));
 });
 
-test('factory 6a: GitHub budget or rate-limit pause sends one usage-limit alert with reset time and one recovered alert after reset',async t=>{
+test('factory 6a: GitHub limit alert retries a failed delivery, has no invented issue, and recovers once',async t=>{
   const w=await factoryWorld(t);
   const resetSec=Math.floor(w.time/1000)+600,resetIso=new Date(resetSec*1000).toISOString();
-  w.github.resetAt=resetSec;w.github.remaining=400;
+  w.github.resetAt=resetSec;w.github.remaining=400;w.github.issues.clear();
+  w.alertResponse={status:500,text:''};
   await w.start();
-  assert.equal(w.alertDeliveries.length,1,'GitHub budget reserve pause sends one usage-limit alert');
+  assert.equal(w.alertDeliveries.length,1,'GitHub budget reserve pause tries one usage-limit alert');
   assert.match(w.alertDeliveries[0],/usage-limit/);
   assert.ok(w.alertDeliveries[0].includes(resetIso),'alert includes the GitHub reset time');
   assert.equal(w.alerts.at(-1).kind,'usage-limit');
+  assert.equal(w.alerts.at(-1).issue,undefined,'no affected issue is known');
+  assert.doesNotMatch(w.alertDeliveries[0],/issues\/1(?:\D|$)/,'the machine alert does not invent issue 1');
+  assert.equal(w.state().githubLimit.alerted,false,'HTTP 500 is not a successful delivery');
+  assert.equal(w.state().githubLimit.failedSends,1);
+  w.alertResponse={status:200,text:'ok'};
+  w.time+=60_000;await w.tick();
+  assert.equal(w.alertDeliveries.length,2,'the next tick retries the recorded failure');
+  assert.equal(w.state().githubLimit.alerted,true,'confirmed delivery is saved');
   w.time+=60_000;await w.tick();
   w.time+=60_000;await w.tick();
-  assert.equal(w.alertDeliveries.length,1,'repeated ticks while paused for the GitHub limit do not repeat the alert');
+  assert.equal(w.alertDeliveries.length,2,'delivered pause alert is not repeated');
   w.time=resetSec*1000+1000;
   await w.tick();
-  assert.equal(w.alertDeliveries.length,2,'resuming GitHub reads sends one recovered alert');
-  assert.match(w.alertDeliveries[1],/recovered/);
+  assert.equal(w.alertDeliveries.length,3,'resuming GitHub reads sends one recovered alert');
+  assert.match(w.alertDeliveries[2],/recovered/);
   assert.equal(w.alerts.at(-1).kind,'recovered');
   await w.tick();
-  assert.equal(w.alertDeliveries.length,2,'no extra recovery alert on later ticks');
+  assert.equal(w.alertDeliveries.length,3,'no extra recovery alert on later ticks');
   assert.deepEqual(w.leadActions,[]);
 });
 

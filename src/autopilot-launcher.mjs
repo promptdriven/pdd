@@ -10,7 +10,7 @@ import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { readInterpreterProgress, configureInterpreterTestMode } from './interpreter-queue.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b0e887eef23526a7ca82287ae9681d73543bd48979523e7300c741f4ed5be589).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b6234d5e49c1a9198dc02afe7c4ef9c3b5b6f32b154310ee276d115d1820d6fe).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -49,6 +49,7 @@ const CLAIM_IDLE_AFTER = 60 * 60 * 1000;
 const STUCK_CLAIM_AFTER = 4 * 60 * 60 * 1000;
 const LONG_RUNNING_AFTER = 24 * 60 * 60 * 1000;
 const HEARTBEAT_SLACK = 5 * 1000;
+const MAX_GITHUB_ALERT_FAILURES = 3;
 // With a low GitHub budget the dependency re-sync runs at most once in this time.
 const LOW_BUDGET_INTAKE_EVERY = 60 * 60 * 1000;
 // The issue list reads only changed issues; the whole open list is read again after this time.
@@ -723,12 +724,12 @@ async function healthAlerts(state, p, stateRoot) {
   for (const kind of ['resource', 'usage-limit']) {
     const healthy = kind === 'resource' ? health.resource?.healthy === true : ['healthy', 'not-applicable'].includes(health.usage?.state);
     if (healthy) {
-      if (health.incidents[kind] && await alert(health.incidents[kind], 'recovered', { kind, cause: kind === 'resource' ? 'Memory and disk are available again' : 'The Codex limit read permits work again' })) delete health.incidents[kind];
+      if (health.incidents[kind] && await alert(health.incidents[kind], 'recovered', { kind, ...(kind === 'usage-limit' ? { incidentSource: 'codex' } : {}), cause: kind === 'resource' ? 'Memory and disk are available again' : 'The Codex limit read permits work again' })) delete health.incidents[kind];
     } else if (issues.length) {
       health.incidents[kind] ??= issues[0];
       const cause = kind === 'resource' ? (health.resource?.causes ?? ['Machine resources cannot be read']).join('; ')
         : `Codex usage ${health.usage?.state === 'limited' ? 'limit reached' : 'cannot be read'}${health.usage?.resetAt == null ? '' : `; resets ${new Date(health.usage.resetAt).toISOString()}`}`;
-      for (const number of issues) await alert(number, kind, { cause, tried: 'Paused new admissions; kept claims, progress and heartbeats',
+      for (const number of issues) await alert(number, kind, { ...(kind === 'usage-limit' ? { incidentSource: 'codex' } : {}), cause, tried: 'Paused new admissions; kept claims, progress and heartbeats',
         need: kind === 'resource' ? 'Free disk space or memory; the tick checks again' : 'Wait for the ordinary usage window; the tick reads the limit again' });
     }
   }
@@ -737,20 +738,26 @@ async function githubLimitAlert(state, p, stateRoot, pause) {
   const send = input => (p.sendAlert ?? (item => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...item },
     { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now, hostname: () => state.machine })))({ action: 'alert', cwd: state.cwd, ...input });
   const alert = async (issue, kind, fields) => {
-    try { const reply = await send({ issue: String(issue), kind, text: JSON.stringify(fields) }); return reply?.exitCode === 0; }
-    catch { return false; }
+    const input = { kind, text: JSON.stringify(fields) };
+    if (Number.isSafeInteger(issue) && issue > 0) input.issue = String(issue);
+    try { return await send(input); }
+    catch { return { exitCode: 1, deliveryAttempted: true, deliveryResult: 'unconfirmed' }; }
   };
   if (!pause) {
     if (!state.githubLimit) return;
-    const codexLimited = state.health && !['healthy', 'not-applicable'].includes(state.health.usage?.state);
-    if (!state.githubLimit.alerted || codexLimited || await alert(state.githubLimit.issue, 'recovered', { kind: 'usage-limit', cause: 'GitHub budget and rate limit permit work again' })) {
-      delete state.githubLimit;
+    const result = await alert(state.githubLimit.issue, 'recovered', {
+      kind: 'usage-limit', incidentSource: 'github', cause: 'GitHub budget and rate limit permit work again',
+    });
+    // A zero exit means the local incident record was updated. Delivery status is kept separate.
+    if (result?.exitCode === 0) delete state.githubLimit;
+    else {
+      state.githubLimit.recoveryResult = ['delivered', 'failed', 'unconfirmed', 'not-configured'].includes(result?.deliveryResult)
+        ? result.deliveryResult : 'unconfirmed';
     }
     return;
   }
   const issues = [...new Set([
     state.githubLimit?.issue,
-    ...Object.values(state.health?.incidents ?? {}),
     ...(state.githubIntake?.claims ?? []).map(claim => Number(/\/issues\/(\d+)$/.exec(claim.issue)?.[1])),
     ...(state.githubIntake?.eligible ?? []).map(url => Number(/\/issues\/(\d+)$/.exec(url)?.[1])),
     ...Object.keys(p.dependencySnapshot?.list?.rows ?? {}).map(Number),
@@ -758,22 +765,36 @@ async function githubLimitAlert(state, p, stateRoot, pause) {
     ...Object.keys(p.dependencySnapshot?.issues ?? {}).map(Number),
     ...(state.cachedIssues ?? []).filter(issue => !issue.pull_request).map(issue => issue.number),
   ].filter(number => Number.isSafeInteger(number) && number > 0))];
-  const issue = issues[0] ?? 1;
+  const issue = issues[0] ?? null;
   const resetAt = Number.isFinite(pause.resetAt) && pause.resetAt > 0 ? pause.resetAt
     : typeof pause.resetAt === 'string' && Number.isFinite(Date.parse(pause.resetAt)) ? Date.parse(pause.resetAt) : null;
   const resetText = resetAt !== null ? `; resets ${new Date(resetAt).toISOString()}` : '';
   const cause = `${pause.kind === 'budget' ? 'GitHub budget reserve floor reached' : 'GitHub rate limit reached'}${resetText}`;
-  if (!state.githubLimit) state.githubLimit = { issue, kind: pause.kind, resetAt, cause, alerted: false };
-  else { state.githubLimit.issue ??= issue; if (resetAt !== null) state.githubLimit.resetAt = resetAt; state.githubLimit.cause = cause; }
-  if (!state.githubLimit.alerted) {
-    if (await alert(state.githubLimit.issue, 'usage-limit', {
-      cause,
-      tried: 'Paused GitHub intake and issue reads until reset; kept claims, progress and heartbeats',
-      need: 'Wait for the GitHub limit reset; the tick checks again',
-    })) state.githubLimit.alerted = true;
+  if (!state.githubLimit) state.githubLimit = { ...(issue === null ? {} : { issue }), kind: pause.kind, resetAt, cause, alerted: false, failedSends: 0 };
+  else {
+    if (state.githubLimit.issue == null && issue !== null) state.githubLimit.issue = issue;
+    if (resetAt !== null) state.githubLimit.resetAt = resetAt;
+    state.githubLimit.cause = cause;
   }
+  const incident = state.githubLimit;
+  // Old launcher state saved command success as delivery. Reconcile it from the alert service's durable record.
+  if (incident.deliveryResult === 'delivered') incident.alerted = true;
+  else incident.alerted = false;
+  if (incident.alerted || incident.deliveryResult === 'unconfirmed'
+    || (incident.failedSends ?? 0) >= MAX_GITHUB_ALERT_FAILURES) return;
+  const result = await alert(incident.issue, 'usage-limit', {
+    incidentSource: 'github', cause,
+    tried: 'Paused GitHub intake and issue reads until reset; kept claims, progress and heartbeats',
+    need: 'Wait for the GitHub limit reset; the tick checks again',
+  });
+  const deliveryResult = ['delivered', 'failed', 'unconfirmed', 'not-configured', 'not-sent'].includes(result?.deliveryResult)
+    ? result.deliveryResult : 'unconfirmed';
+  incident.deliveryResult = deliveryResult;
+  incident.deliveryAttempted = result?.deliveryAttempted === true;
+  if (deliveryResult === 'delivered') incident.alerted = true;
+  else if (deliveryResult === 'failed' && incident.deliveryAttempted) incident.failedSends = Math.max((incident.failedSends ?? 0) + 1,
+    Number.isSafeInteger(result?.deliveryAttempts) ? result.deliveryAttempts : 0);
 }
-
 // The proof of a test wake is a verdict saved after the wake was offered.
 async function readRuntimeProbe(state, p, probe) {
   const commonDir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();

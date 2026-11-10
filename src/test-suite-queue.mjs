@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: dd5d4eaeae31f0642fef43806a67dfe86c56923bb7d5b560b12e2c7891be7f64).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 798a0c3fd2183ae4958fedb1b5eb2e10be5d269fccf31335dbef3a4d6efbae62).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -35,12 +35,6 @@ export function calculateCheckCapacity({checks, runs, autopilotLoad} = {}, ports
     coresPerCheck:Math.max(1, Math.floor(usable.length / selected)), busy:load > usable.length};
 }
 const CAPACITY_LIFETIME = 31 * 60_000;
-function runningAutopilotLoad(p) {
-  try {
-    return records(p).filter(row => row.state === 'running')
-      .reduce((sum, row) => sum + (Number.isSafeInteger(row.coresPerCheck) && row.coresPerCheck > 0 ? row.coresPerCheck : Array.isArray(row.cpuIds) && row.cpuIds.length ? row.cpuIds.length : 12), 0);
-  } catch { return 0; }
-}
 export async function configureCheckCapacity({env = process.env, checks, runs, autopilotLoad, owner = null, resources}, ports = {}) {
   const p = portsFor(env, ports), observedAt = p.now();
   if (owner !== null && (typeof owner !== 'string' || !owner)) throw Error('Invalid check capacity owner.');
@@ -51,7 +45,7 @@ export async function configureCheckCapacity({env = process.env, checks, runs, a
   } : {};
   p.fs.mkdirSync(p.root, {recursive:true,mode:0o700});
   return underLock(p, () => {
-    const ownLoad = autopilotLoad ?? resources?.autopilotLoad ?? runningAutopilotLoad(p);
+    const ownLoad = autopilotLoad ?? resources?.autopilotLoad ?? 0;
     const capacity = {...calculateCheckCapacity({checks,runs,autopilotLoad:ownLoad}, {...p,env,...shared}), owner, observedAt, expiresAt:observedAt + CAPACITY_LIFETIME};
     const path = join(p.root, 'capacity.json'), temp = `${path}.${p.uuid()}.tmp`;
     try { p.fs.writeFileSync(temp, JSON.stringify(capacity), {mode:0o600}); p.fs.renameSync(temp,path); }
@@ -73,7 +67,7 @@ export async function releaseCheckCapacity({env = process.env, owner}, ports = {
 function admissionCapacity(p, env) {
   let value;
   try { value = JSON.parse(p.fs.readFileSync(join(p.root,'capacity.json'),'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return calculateCheckCapacity({autopilotLoad:runningAutopilotLoad(p)}, {...p,env}); throw error; }
+  catch (error) { if (error.code === 'ENOENT') return calculateCheckCapacity({}, {...p,env}); throw error; }
   if (!value || typeof value.personal !== 'boolean' || typeof value.affinity !== 'boolean'
     || value.owner !== null && (typeof value.owner !== 'string' || !value.owner)
     || !Number.isFinite(value.observedAt) || value.expiresAt !== value.observedAt + CAPACITY_LIFETIME
@@ -91,7 +85,7 @@ function admissionCapacity(p, env) {
     || result.busy !== value.busy || result.calculatedChecks !== value.calculatedChecks
     || result.calculatedRuns !== value.calculatedRuns
     || value.outsideLoad !== undefined && result.outsideLoad !== value.outsideLoad) throw Error('Invalid saved machine check capacity.');
-  if (p.now() >= value.expiresAt) return calculateCheckCapacity({autopilotLoad:runningAutopilotLoad(p)}, {...p,env});
+  if (p.now() >= value.expiresAt) return calculateCheckCapacity({}, {...p,env});
   return {...result, cores:value.cores, personal:value.personal, affinity:value.affinity, taskset:value.taskset};
 }
 export function readCheckStatus({env = process.env, checks, runs}, ports = {}) {

@@ -521,17 +521,28 @@ machine and the settings' `github` value:
   work selection stay as usual.
 - `normal`: as before.
 
-When Autopilot pauses for the GitHub budget reserve floor (before or during intake
-or issue pagination) or for a GitHub rate limit (HTTP 429, `rateLimited`, or a
-rate-limit error with `resetAt`), send one `usage-limit` alert through
-[Autopilot alerts](autopilot-alerts.prompt.md) (or injected `sendAlert`, using the
-same port wiring as `healthAlerts`) with the reset ISO time in `cause`. Persist
-`githubLimit` on the launcher state so repeated ticks during the same pause send
-no repeat alert (only an undelivered alert retries). When a later tick completes
-its GitHub budget and issue-list check without a budget or rate-limit pause, send
-one `recovered` alert (`kind: "usage-limit"`) and clear `githubLimit` when Codex
-usage is not also holding `usage-limit`. Never send more than one GitHub limit
-alert or recovery per tick.
+When Autopilot pauses for the GitHub budget reserve floor (before or during
+intake or issue pagination) or for a GitHub rate limit (HTTP 429, `rateLimited`,
+or a rate-limit error with `resetAt`), send one `usage-limit` alert through
+[Autopilot alerts](autopilot-alerts.prompt.md) (or injected `sendAlert`, using
+the same port wiring as `healthAlerts`) with `incidentSource: "github"` and
+the reset ISO time in `cause`. Include a known affected issue when available;
+omit `issue` when none is known. This GitHub incident has a separate identity
+from Codex's `usage-limit` incident. A command exit code of zero only proves
+that the local alert record was saved. Set `githubLimit.alerted` only when
+`deliveryResult` is `delivered`; an existing saved delivered result also
+counts. Persist its delivery result and failed-send count. Retry an HTTP or
+unreached delivery failure on a later tick through the alert record, for at most
+three failed sends for one pause. A missing destination does not use a send
+attempt; retry the existing alert record on later ticks. Do not blindly resend
+an unconfirmed result, because the message may exist. Never send more than one
+GitHub limit attempt per tick.
+
+When a later tick completes its GitHub budget and issue-list check without a
+budget or rate-limit pause, send one `recovered` alert with `kind:
+"usage-limit"` and `incidentSource: "github"`, even when Codex is still
+limited. Clear only `githubLimit`; the separate Codex incident remains open.
+Never send more than one GitHub recovery per tick.
 
 After each intake the tick saves `{at, eligible, claims}` (when `eligible` is a
 list), and a successful heartbeat updates the saved claim's `lastSeen`. These

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { launcher } from './helpers/environment-launcher-fixture.mjs';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 const issue = number => ({ number, state: 'open', title: 'Synthetic work', body: 'Check local behavior', user: { login: 'owner' }, author_association: 'OWNER',
@@ -169,4 +171,74 @@ test('GitHub budget reserve and rate-limit pauses send one usage-limit alert wit
   await f.tick();
   assert.equal(f.sent.length, 4);
   assert.match(f.sent[3], /recovered/);
+});
+
+
+test('Codex recovery leaves a GitHub limit open; failed GitHub alert retries after HTTP 500', async t => {
+  const f = await launcher(t); await f.start(); f.prompts.length = 0;
+  f.issues = [issue(12)];
+  save(f, { cachedIssues: [issue(12)] });
+  const reset = f.time + 60_000;
+  f.ports.codexLimits = async () => limited(reset);
+  f.ports.queryIssues = async () => ({ status: 429, rateLimited: true, resetAt: reset, issues: [] });
+  const http = f.ports.alertPorts.http;
+  let fail = true;
+  f.ports.alertPorts.http = async request => {
+    if (fail && request.body.content.includes('GitHub rate limit reached')) { fail = false; f.sent.push(request.body.content); return { status: 500, text: '' }; }
+    return http(request);
+  };
+  await f.tick();
+  assert.equal(state(f).githubLimit.alerted, false, 'HTTP 500 is not a delivered alert');
+  assert.equal(state(f).githubLimit.failedSends, 1);
+  assert.equal(f.sent.length, 2, 'Codex and GitHub incidents are each sent once');
+  const id = createHash('sha256').update('owner/repo').digest('hex').slice(0, 20);
+  const recordPath = join(f.ports.stateRoot, 'alerts', id + '.json');
+  let record = JSON.parse(readFileSync(recordPath, 'utf8'));
+  assert.ok(record.incidents['usage-limit@' + state(f).machine], 'Codex alert remains open');
+  assert.ok(record.incidents['usage-limit@' + state(f).machine + ':github'], 'GitHub alert remains open');
+
+  f.ports.codexLimits = async () => healthy();
+  await f.tick();
+  assert.equal(state(f).githubLimit.alerted, true, 'the next tick retries and confirms delivery');
+  assert.equal(state(f).githubLimit.failedSends, 1);
+  assert.equal(f.sent.length, 4, 'Codex recovery and one GitHub retry are delivered');
+  record = JSON.parse(readFileSync(recordPath, 'utf8'));
+  assert.equal(record.incidents['usage-limit@' + state(f).machine], undefined, 'Codex recovery closes only Codex');
+  assert.ok(record.incidents['usage-limit@' + state(f).machine + ':github'], 'GitHub stays paused');
+  assert.match(f.sent[1], /Issue: https:\/\/github\.com\/owner\/repo\/issues\/12/);
+  assert.match(f.sent[2], /recovered/);
+  assert.match(f.sent[3], /usage-limit/);
+
+  f.ports.queryIssues = async () => ({ status: 200, etag: '"fresh"', issues: [issue(12)] });
+  f.time = reset + 1_000;
+  await f.tick();
+  assert.equal(state(f).githubLimit, undefined);
+  record = JSON.parse(readFileSync(recordPath, 'utf8'));
+  assert.deepEqual(Object.keys(record.incidents), [], 'GitHub recovery closes its own incident');
+  assert.match(f.sent.at(-1), /recovered/);
+});
+
+
+test('GitHub alert retry cap uses the durable alert attempt count', async t => {
+  const f = await launcher(t); await f.start(); f.prompts.length = 0;
+  const reset = f.time + 60 * 60_000;
+  f.ports.codexLimits = async () => healthy();
+  f.ports.queryIssues = async () => ({ status: 429, rateLimited: true, resetAt: reset, issues: [] });
+  f.ports.alertPorts.http = async request => {
+    if (request.body.content.includes('GitHub rate limit reached')) f.sent.push(request.body.content);
+    return { status: 500, text: '' };
+  };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await f.tick();
+    assert.equal(state(f).githubLimit.failedSends, attempt);
+    f.time += 30_000;
+  }
+  // Model a restart after the alert record is saved but before the launcher count is saved.
+  save(f, { githubLimit: { ...state(f).githubLimit, failedSends: 0 } });
+  await f.tick();
+  assert.equal(state(f).githubLimit.failedSends, 3, 'the alert record restores the total');
+  f.time += 30_000;
+  await f.tick();
+  assert.equal(f.sent.length, 3, 'three failed sends exhaust this pause and stop future retries');
+  assert.equal(state(f).githubLimit.failedSends, 3);
 });

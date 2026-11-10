@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 1398972c19e472bb84a2452375f61198b342c4c18613bdf26757beb8c55d9a34).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 49cb6f516cc9b2bd4a6b1fabf545b5e8933d1cfa1e607606f5994b1ec2ea4b10).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -30,7 +30,7 @@ const oneLine = value => String(value).replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
 // Defense in depth: no reply of this module may carry a webhook address or a bot token, even one that a bug let through.
 const scrub = text => String(text).replace(/https?:\/\/\S*(?:webhooks|hooks\.slack\.com)\S*/gi, '[webhook]')
   .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{20,}/g, '[token]');
-const done = (exitCode, message) => ({ exitCode, message: scrub(message) });
+const done = (exitCode, message, extra = {}) => ({ exitCode, message: scrub(message), ...extra });
 const repoName = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(value);
 const clip = (value, size) => value.length > size ? `${value.slice(0, size - 1)}…` : value;
 // HOME counts only when it is absolute; else the account home from the OS (os.homedir() returns the same bad HOME).
@@ -174,7 +174,8 @@ async function botSend(destination, token, text, ports) {
 async function deliver(destination, text, ports, cwd) {
   if (destination.service === 'discord-bot') {
     const auth = await botToken(destination, ports, cwd);
-    return auth.error ? { result: 'failed', detail: auth.error } : botSend(destination, auth.token, text, ports);
+    return auth.error ? { result: 'failed', detail: auth.error, attempted: false }
+      : { ...await botSend(destination, auth.token, text, ports), attempted: true };
   }
   const discord = destination.service === 'discord';
   const body = discord ? { content: text, allowed_mentions: { parse: [] } }
@@ -183,17 +184,17 @@ async function deliver(destination, text, ports, cwd) {
   if (discord) { const address = new URL(url); address.searchParams.set('wait', 'true'); url = address.href; }
   let reply;
   try { reply = await (ports.http ?? nativeHttp)({ url, body }); }
-  catch (error) { return error?.code === 'unreached' ? { result: 'failed', detail: 'not reached' } : { result: 'unconfirmed', detail: 'no reply' }; }
+  catch (error) { return error?.code === 'unreached' ? { result: 'failed', detail: 'not reached', attempted: true } : { result: 'unconfirmed', detail: 'no reply', attempted: true }; }
   const status = Number(reply?.status), raw = typeof reply?.text === 'string' ? reply.text.trim() : '';
   if (!(Number.isInteger(status) && status >= 200 && status < 300)) {
     const word = !discord && /^[a-z_]{1,40}$/.test(raw) ? ` ${raw}` : '';
-    return { result: 'failed', detail: `HTTP ${Number.isInteger(status) ? status : 'unknown'}${word}` };
+    return { result: 'failed', detail: `HTTP ${Number.isInteger(status) ? status : 'unknown'}${word}`, attempted: true };
   }
-  if (!discord) return status === 200 && raw === 'ok' ? { result: 'delivered' } : { result: 'unconfirmed', detail: 'no readback' };
+  if (!discord) return status === 200 && raw === 'ok' ? { result: 'delivered', attempted: true } : { result: 'unconfirmed', detail: 'no readback', attempted: true };
   let message;
   try { message = JSON.parse(raw); } catch { /* Checked below. */ }
   return typeof message?.id === 'string' && sameText(message.content, text)
-    ? { result: 'delivered' } : { result: 'unconfirmed', detail: 'no readback' };
+    ? { result: 'delivered', attempted: true } : { result: 'unconfirmed', detail: 'no readback', attempted: true };
 }
 
 async function nativeRepository({ cwd }) {
@@ -223,9 +224,13 @@ const issueTags = issues => `${issues.slice(0, ISSUE_LIMIT).map(n => `#${n}`).jo
 const issuesOf = item => (Array.isArray(item?.issues) ? item.issues.filter(Number.isInteger) : []);
 
 function alertText(heading, { kinds, host, repo, issues, fields }) {
-  const lines = [`PDD Autopilot ${heading}: ${kinds.join(', ')} (${host})`, `Repository: ${repo}`, issueLine(repo, issues)];
+  const lines = [`PDD Autopilot ${heading}: ${kinds.join(', ')} (${host})`, `Repository: ${repo}`];
+  if (issues.length) lines.push(issueLine(repo, issues));
   if (heading === 'recovered') lines.push(`What changed: ${clip(fields.cause, FIELD_LIMIT)}`);
-  else lines.push(`Cause: ${clip(fields.cause, FIELD_LIMIT)}`, `Tried: ${clip(fields.tried, FIELD_LIMIT)}`, `Needs: ${clip(fields.need, FIELD_LIMIT)}`, 'Answer on the GitHub issue.');
+  else {
+    lines.push(`Cause: ${clip(fields.cause, FIELD_LIMIT)}`, `Tried: ${clip(fields.tried, FIELD_LIMIT)}`, `Needs: ${clip(fields.need, FIELD_LIMIT)}`);
+    if (issues.length) lines.push('Answer on the GitHub issue.');
+  }
   return clip(lines.join('\n'), TEXT_LIMIT);
 }
 
@@ -256,8 +261,6 @@ const destinationFor = (fs, env, ports, kind) => MACHINE_KINDS.includes(kind)
   : readDestination(fs, env, ports);
 
 async function sendAlert(input, ports, env, fs) {
-  const issue = String(input.issue ?? '');
-  if (!/^[1-9][0-9]{0,9}$/.test(issue)) return done(2, 'Use pdd autopilot alert --issue N with a positive issue number.');
   if (!ALERT_KINDS.includes(input.kind)) return done(2, `Use --kind ${ALERT_KINDS.join('|')}.`);
   const recovery = input.kind === 'recovered', names = recovery ? ['cause'] : ['cause', 'tried', 'need'];
   let fields;
@@ -268,6 +271,16 @@ async function sendAlert(input, ports, env, fs) {
   const target = recovery ? fields.kind : undefined;
   if (target !== undefined && (target === 'recovered' || !ALERT_KINDS.includes(target)))
     return done(2, `Give "kind" in a recovery as one of ${ALERT_KINDS.filter(kind => kind !== 'recovered').join('|')}, or leave it out. Nothing was recorded.`);
+  const identityKind = recovery ? target : input.kind, incidentSource = fields.incidentSource;
+  if (incidentSource !== undefined && (identityKind !== 'usage-limit' || !['codex', 'github'].includes(incidentSource)))
+    return done(2, 'Use incidentSource codex or github only for usage-limit alerts. Nothing was recorded.');
+  const issue = String(input.issue ?? ''), hasIssue = /^[1-9][0-9]{0,9}$/.test(issue);
+  const mayOmitIssue = !recovery ? MACHINE_KINDS.includes(input.kind)
+    : target !== undefined && MACHINE_KINDS.includes(target) && (target !== 'usage-limit' || incidentSource !== undefined);
+  if (issue && !hasIssue || !hasIssue && !mayOmitIssue)
+    return done(2, 'Use pdd autopilot alert --issue N with a positive issue number, unless this is a machine alert without a known affected issue.');
+  const number = hasIssue ? Number(issue) : null;
+  const source = identityKind === 'usage-limit' ? incidentSource ?? 'codex' : null;
   const clean = Object.fromEntries(names.map(name => [name, fields[name].trim()]));
   if (!ports.stateRoot && !homeFolder(env, ports)) return noHome('Nothing was recorded or sent. Continue other work.');
   let repo;
@@ -275,25 +288,29 @@ async function sendAlert(input, ports, env, fs) {
   if (!repoName(repo)) return done(1, 'Autopilot alerts need a GitHub repository; run pdd autopilot alert in its checkout.');
   return withRecord(repo, env, ports, fs, async (file, record) => {
     const at = new Date((ports.now ?? Date.now)()).toISOString(), host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd);
-    const destination = destinationFor(fs, env, ports, input.kind), number = Number(issue);
+    const destination = destinationFor(fs, env, ports, identityKind ?? input.kind);
     const confirmer = destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook';
-    const send = text => destination ? deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
+    const send = text => destination ? deliver(destination, text, ports, input.cwd) : { result: 'not-configured', attempted: false };
     const route = MACHINE_KINDS.includes(input.kind) && readDestination(fs, env, ports, 'infrastructure') ? { destination: 'infrastructure' } : {};
     const log = (kind, action, outcome, routeInfo = route) => {
       record.log = [...record.log, { at, issue: number, kind, action, ...routeInfo, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) }].slice(-LOG_LIMIT);
     };
     const save = () => { try { writePrivate(fs, file, record); return true; } catch { return false; } };
     const unsaved = done(1, 'Cannot save the Autopilot alert record on this machine.');
-    const machineKey = kind => `${kind}@${host}`;
+    const machineKey = (kind, sourceId = source) => `${kind}@${host}${kind === 'usage-limit' && sourceId === 'github' ? ':github' : ''}`;
     if (recovery) {
       // A machine incident of this host matches when it lists the issue, or when the recovery names its kind.
       const matches = (key, item) => object(item) && (target === undefined || item.kind === target) && (MACHINE_KINDS.includes(item.kind)
-        ? key === machineKey(item.kind) && (target !== undefined || issuesOf(item).includes(number))
-        : key === `${issue}:${item.kind}`);
+        ? (target !== undefined
+          ? target !== 'usage-limit' || key === machineKey(item.kind, source)
+          : (key === machineKey(item.kind, 'codex') || item.kind === 'usage-limit' && key === machineKey(item.kind, 'github'))
+            && issuesOf(item).includes(number))
+        : number !== null && key === `${number}:${item.kind}`);
       const keys = Object.keys(record.incidents).filter(key => matches(key, record.incidents[key]));
       if (!keys.length) {
         log(target ?? 'recovered', 'recovered', { result: 'not-sent' });
-        return save() ? done(0, `No open alert ${target ? `of kind ${target} ` : ''}for #${issue}; nothing sent.`) : unsaved;
+        const where = number === null ? 'on this machine' : `for #${number}`;
+        return save() ? done(0, `No open alert ${target ? `of kind ${target} ` : ''}${where}; nothing sent.`) : unsaved;
       }
       const infrastructure = readDestination(fs, env, ports, 'infrastructure');
       const groups = infrastructure ? [keys.filter(key => !MACHINE_KINDS.includes(record.incidents[key].kind)),
@@ -303,35 +320,42 @@ async function sendAlert(input, ports, env, fs) {
         const kinds = group.map(key => record.incidents[key].kind);
         const issues = [...new Set(group.flatMap(key => issuesOf(record.incidents[key])))].sort((a, b) => a - b);
         const route = destinationFor(fs, env, ports, kinds[0]);
-        const outcome = route ? await deliver(route, alertText('recovered', { kinds, host, repo, issues: issues.length ? issues : [number], fields: clean }), ports, input.cwd)
+        const recoveryIssues = issues.length ? issues : number === null ? [] : [number];
+        const outcome = route ? await deliver(route, alertText('recovered', { kinds, host, repo, issues: recoveryIssues, fields: clean }), ports, input.cwd)
           : { result: 'not-configured' };
         for (const key of group) delete record.incidents[key];
         log(kinds.join(','), 'recovered', outcome, infrastructure && MACHINE_KINDS.includes(kinds[0]) ? { destination: 'infrastructure' } : {});
-        messages.push(outcomeMessage('Recovery', `${kinds.join(', ')} (${issueTags(issues.length ? issues : [number])})`, outcome,
+        const tags = issueTags(recoveryIssues), label = `${kinds.join(', ')}${tags ? ` (${tags})` : ''}`;
+        messages.push(outcomeMessage('Recovery', label, outcome,
           route?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook'));
       }
       return save() ? done(0, messages.join(' ')) : unsaved;
     }
-    const machine = MACHINE_KINDS.includes(input.kind), key = machine ? machineKey(input.kind) : `${issue}:${input.kind}`;
+    const machine = MACHINE_KINDS.includes(input.kind), key = machine ? machineKey(input.kind, source) : `${number}:${input.kind}`;
     const open = object(record.incidents[key]) ? record.incidents[key] : null;
-    const known = issuesOf(open), issues = [...new Set([...known, number])].sort((a, b) => a - b), listed = Array.isArray(open?.listed) ? open.listed : [];
+    const known = issuesOf(open), issues = [...new Set([...known, ...(number === null ? [] : [number])])].sort((a, b) => a - b), listed = Array.isArray(open?.listed) ? open.listed : [];
     // A material change is new field text or an affected issue that no sent message has named yet.
     const changed = open && (['cause', 'need'].some(name => open.fields?.[name] !== clean[name]) || issues.some(item => !listed.includes(item)));
     const action = !open ? 'alert' : input.update && changed ? 'update' : ['failed', 'not-configured'].includes(open.result) && destination ? 'retry' : 'repeat';
-    const label = `${issueTags(issues)} ${input.kind}`;
+    const tags = issueTags(issues), label = `${tags ? `${tags} ` : ''}${input.kind}`;
     if (action === 'repeat') {
-      const joined = !known.includes(number);
+      const joined = number !== null && !known.includes(number);
       if (joined) record.incidents[key] = { ...open, issues, updatedAt: at };
       log(input.kind, 'repeat', { result: 'not-sent' });
       if (!save()) return unsaved;
-      return done(0, joined ? `Added #${issue} to the open ${input.kind} alert on this machine; nothing sent. Use --update to send the new issue list.`
-        : `Alert for ${label} is already open; nothing sent. Use --update only for a material change.`);
+      const deliveryResult = ['delivered', 'failed', 'unconfirmed', 'not-configured'].includes(open?.result) ? open.result : 'not-sent';
+      const message = joined ? `Added #${number} to the open ${input.kind} alert on this machine; nothing sent. Use --update to send the new issue list.`
+        : `Alert for ${label} is already open; nothing sent. Use --update only for a material change.`;
+      return done(0, message, { deliveryAttempted: false, deliveryResult, deliveryAttempts: open?.deliveryAttempts ?? 0 });
     }
     const outcome = await send(alertText(action === 'update' ? 'update' : 'alert', { kinds: [input.kind], host, repo, issues, fields: clean }));
-    record.incidents[key] = { kind: input.kind, host, ...route, issues, listed: issues, fields: clean, openedAt: open?.openedAt ?? at, updatedAt: at,
-      result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) };
+    const attempted = outcome.attempted === true, deliveryAttempts = (open?.deliveryAttempts ?? 0) + Number(attempted);
+    record.incidents[key] = { kind: input.kind, ...(machine && input.kind === 'usage-limit' ? { incidentSource: source } : {}), host, ...route, issues, listed: issues, fields: clean, openedAt: open?.openedAt ?? at, updatedAt: at,
+      deliveryAttempts, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) };
     log(input.kind, action, outcome);
-    return save() ? done(0, outcomeMessage(action === 'update' ? 'Update' : 'Alert', label, outcome, confirmer)) : unsaved;
+    const delivery = { deliveryAttempted: attempted, deliveryResult: outcome.result, deliveryAttempts };
+    return save() ? done(0, outcomeMessage(action === 'update' ? 'Update' : 'Alert', label, outcome, confirmer), delivery)
+      : done(1, unsaved.message, delivery);
   });
 }
 

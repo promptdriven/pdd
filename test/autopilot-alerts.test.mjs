@@ -280,10 +280,12 @@ test('a failed delivery is recorded, does not stop work, shows in status, and th
 
 test('without a destination an alert is recorded locally, work continues and status says how to set one', async t => {
   const f = setup(t);
-  const result = await f.alert(12, 'usage-limit', usage);
+  const result = await runAutopilotAlerts({ action: 'alert', cwd: f.cwd, env: f.env, issue: '12', kind: 'usage-limit',
+    text: JSON.stringify(usage) }, f.ports);
   assert.equal(result.exitCode, 0);
-  assert.match(result.stdout, /recorded on this machine/);
-  assert.match(result.stdout, /pdd autopilot alerts set/);
+  assert.deepEqual([result.deliveryAttempted, result.deliveryResult, result.deliveryAttempts], [false, 'not-configured', 0]);
+  assert.match(result.message, /recorded on this machine/);
+  assert.match(result.message, /pdd autopilot alerts set/);
   assert.equal(f.requests.length, 0);
   assert.deepEqual(f.record().incidents['usage-limit@test-host'].fields, usage);
   assert.equal(f.record().incidents['usage-limit@test-host'].result, 'not-configured');
@@ -496,7 +498,7 @@ test('invalid alert input is refused with its problem named, and records and sen
     [['autopilot', 'alert', '--issue', '12', '--kind', 'usage-limit', '--input', 'file.json'], JSON.stringify(usage), /--input - with the alert JSON on stdin/],
     [['autopilot', 'alert', '--issue', 'twelve', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--issue', '0', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
-    [['autopilot', 'alert', '--kind', 'usage-limit', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
+    [['autopilot', 'alert', '--kind', 'decision', '--input', '-'], JSON.stringify(usage), /--issue N with a positive issue number/],
     [['autopilot', 'alert', '--issue', '12', '--input', '-'], JSON.stringify(usage), /--kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered/],
     [alert, 'not json', /JSON object on stdin with nonblank "cause", "tried", "need"\. Nothing was recorded/],
     [alert, '[]', /JSON object on stdin/],
@@ -931,4 +933,40 @@ test('two native processes share incident custody and post the same alert once',
     'separate processes must not both post the same open incident');
   assert.equal(Object.keys(f.record().incidents).length, 1);
   assert.deepEqual(f.record().log.map(row => row.action), ['alert', 'repeat']);
+});
+
+
+test('machine usage alerts omit unknown issues, return delivery facts, and separate Codex from GitHub', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  f.replies.push({ status: 500, text: '' });
+  const first = await runAutopilotAlerts({ action: 'alert', cwd: f.cwd, env: f.env, kind: 'usage-limit',
+    text: JSON.stringify({ ...usage, incidentSource: 'github' }) }, f.ports);
+  assert.equal(first.exitCode, 0);
+  assert.deepEqual([first.deliveryAttempted, first.deliveryResult, first.deliveryAttempts], [true, 'failed', 1]);
+  const failed = f.requests[0].body.content;
+  assert.match(failed, /^PDD Autopilot alert: usage-limit \(test-host\)\n/);
+  assert.doesNotMatch(failed, /Issue:|Answer on the GitHub issue|issues\/1/);
+  assert.deepEqual(f.record().incidents['usage-limit@test-host:github'].issues, []);
+  assert.equal(f.record().incidents['usage-limit@test-host:github'].result, 'failed');
+
+  f.replies.push(echo);
+  const sent = await runAutopilotAlerts({ action: 'alert', cwd: f.cwd, env: f.env, kind: 'usage-limit',
+    text: JSON.stringify({ ...usage, incidentSource: 'github' }) }, f.ports);
+  assert.equal(sent.exitCode, 0);
+  assert.deepEqual([sent.deliveryAttempted, sent.deliveryResult, sent.deliveryAttempts], [true, 'delivered', 2]);
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.record().incidents['usage-limit@test-host:github'].result, 'delivered');
+
+  f.replies.push(echo);
+  await f.alert(12, 'usage-limit', { ...usage, incidentSource: 'codex' });
+  assert.deepEqual(Object.keys(f.record().incidents).sort(), ['usage-limit@test-host', 'usage-limit@test-host:github']);
+  f.replies.push(echo);
+  const recovered = await f.pdd(['autopilot', 'alert', '--kind', 'recovered', '--input', '-'],
+    JSON.stringify({ cause: 'Codex usage is available', kind: 'usage-limit', incidentSource: 'codex' }));
+  assert.equal(recovered.exitCode, 0);
+  assert.deepEqual(Object.keys(f.record().incidents), ['usage-limit@test-host:github'],
+    'Codex recovery keeps the active GitHub incident open');
+  assert.match(f.requests.at(-1).body.content, /^PDD Autopilot recovered: usage-limit \(test-host\)/);
+  f.noSecret();
 });

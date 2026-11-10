@@ -233,9 +233,10 @@ searches PATH for an executable. Native Linux virtualization detection runs
 timeout or any other result conservatively reserves personal-machine capacity.
 These adapters make no AI calls.
 
-`calculateCheckCapacity({checks, runs}, ports)` returns `{cores, usableCores,
-cpuIds, freeMemory, load, personal, affinity, taskset, calculatedChecks, checks,
-calculatedRuns, runs, coresPerCheck, busy}`. Counts are positive integers; memory
+`calculateCheckCapacity({checks, runs, autopilotLoad}, ports)` returns
+`{cores, usableCores, cpuIds, freeMemory, load, autopilotLoad, outsideLoad,
+personal, affinity, taskset, calculatedChecks, checks, calculatedRuns, runs,
+coresPerCheck, busy}`. Counts are positive integers; memory
 is bytes, load is a nonnegative number, CPU IDs are unique nonnegative integers,
 personal/affinity/busy are Booleans, taskset is a path or null. Invalid observations
 fail closed before admission. Overrides are positive safe integers when supplied.
@@ -244,10 +245,13 @@ Personal means macOS, or Linux with a battery or without established virtualizat
 This includes Linux desktops without batteries; detected Linux VMs and containers
 without batteries retain the full machine budget. Use the first max(1, floor(cores/2))
 CPU IDs on a personal machine, else all IDs. Let U be this usable count and M be
-free bytes. Let `autopilotLoad` be the reserved CPU count of currently running
-suite tickets in the shared queue (or optional `autopilotLoad` input, default 0),
-and let `outsideLoad = max(0, load - autopilotLoad)` be the machine load from
-processes outside Autopilot. Let `A = max(0, U - outsideLoad)` be the usable
+free bytes. Machine observations affect check concurrency and each check's CPU
+share; they do not change issue eligibility. `autopilotLoad` is the explicitly supplied count of CPU cores reserved by
+verified Autopilot-owned running suites, from the input, shared resources or
+injected port; its default is zero. Do not infer it from all running queue
+tickets. The queue includes operator and worker suites that do not carry trusted
+Autopilot provenance. Let `outsideLoad = max(0, load - autopilotLoad)` be
+measured machine load not already represented by those verified reservations. Let `A = max(0, U - outsideLoad)` be the usable
 cores remaining after outside work. Calculated slots are
 `max(1, min(floor(A/12), floor(M/4294967296)))`, so high outside load reduces
 Autopilot's check slots for that tick instead of overloading the machine.
