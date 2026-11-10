@@ -22,6 +22,7 @@ record in analysis.sorts. It has this shape (values below are illustrative):
   "belongs": {"kind": "area", "area": "cli", "repository": ""},
   "status": {"state": "still-happens", "release": "1.0.0", "fix": "", "evidence": ["src/cli.mjs:12"]},
   "genuine": {"kind": "bug", "duplicateOf": "", "reason": ""},
+  "changeScope": {"kind": "behavior", "evidence": ["The issue asks to correct current CLI output.", "The current CLI behavior contract defines that output."]},
   "paths": ["src/cli.mjs"],
   "rootCause": "missing-current-context",
   "severity": "medium",
@@ -44,9 +45,12 @@ Do not bypass a person assignee or live claim. Keep expected cases separate from
 code output. PDD validates the record; it does not verify the semantic assessment.
 
 PDD routes closed proposals, external owners and questions. Do not start them.
-When a work issue's fix changes only tests, test tooling, CI or docs, and no program
-behavior, its sort route derives the `small-change` workflow (`route.workflow`), while
-the small-change checklist and independent checker still verify every requested item.
+New sort records state `changeScope` from current issue requirements and the behavior
+contract, with evidence for both. `paths` are examined paths, not changed scope; neither
+paths nor `genuine.kind` proves a no-behavior fix. Only an explicit `tests-only`,
+`test-tooling-only`, `ci-only` or `docs-only` scope with evidence derives the
+`small-change` workflow (`route.workflow`). Missing or uncertain scope uses bug or
+feature. The small-change checklist and independent checker still verify every request.
 In auto, a close comment gives evidence and a reopen hint before closure. Observe
 keeps it open with pdd:close-proposed. Person assignees and live claims win.
 

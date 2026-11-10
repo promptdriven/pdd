@@ -67,7 +67,7 @@ export function fixture(numbers = [1], options = {}) {
     const record = { schema_version: 'pdd.issue-sort.v1', issue: key(number), base: [],
       inputs: [{ key: key(number), revision: revision(issue) }, { key: `${key(number)}#sort-labels`, revision: hash(JSON.stringify(routingLabels(issue.labels, context.areas))) }, { key: contextKey, revision: hash(JSON.stringify({ areas: context.areas, codeowners: context.codeowners, release: context.release })) }],
       belongs: { kind: 'area', area: 'cli', repository: '' }, status: { state: 'still-happens', release: context.release, fix: '', evidence: ['src/cli.mjs:12'] },
-      genuine: { kind: 'bug', duplicateOf: '', reason: '' }, paths: ['src/cli.mjs'], rootCause: 'shared-context', severity: 'medium', question: '', ...changes };
+      genuine: { kind: 'bug', duplicateOf: '', reason: '' }, changeScope: { kind: 'behavior', evidence: ['The issue asks to correct current CLI output.', 'The current CLI behavior contract defines that output.'] }, paths: ['src/cli.mjs'], rootCause: 'shared-context', severity: 'medium', question: '', ...changes };
     for (const path of record.paths) {
       const key = `https://github.com/${repository}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
       if (!files.has(key)) files.set(key, 'source-v1');

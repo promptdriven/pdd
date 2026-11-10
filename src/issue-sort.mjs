@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-sort.prompt.md (sha256: 7a3e864feb2901ab1f8d9d848f437927f1f129c19cfcb835918174352899a63c).
+// Generated from prompts/cli/issue-sort.prompt.md (sha256: c78d24988f5b370e7b70de1648bb824e35a0c5a24d4a08aed89d53939d4b2619).
 import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea } from './autopilot-areas.mjs';
 const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/.test(x);
@@ -7,11 +7,14 @@ const list = x => Array.isArray(x) && x.every(text);
 const exact = (x, keys) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).sort().join() === keys.split(',').sort().join();
 const fixLocator = value => /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull\/[1-9]\d*|commit\/[a-f\d]{7,64})\b/i.test(value)
   || /\b[a-f\d]{7,64}\b/i.test(value) || /(?:^|[\s(`])(?:[\w.-]+\/)*[\w.-]+\.[a-z\d]+:[1-9]\d*\b/i.test(value);
+const scopeKinds = ['behavior','tests-only','test-tooling-only','ci-only','docs-only','mixed','unclear'];
+const validChangeScope = value => exact(value, 'kind,evidence') && scopeKinds.includes(value.kind) && list(value.evidence) && value.evidence.length > 0 && value.evidence.every(x => x.trim());
+const smallChangeScopes = ['tests-only','test-tooling-only','ci-only','docs-only'];
 export function validSort(record) {
   const r = record;
-  return !!(exact(Object.fromEntries(Object.entries(r ?? {}).filter(([k]) => !['touchedAreas','splitOrder'].includes(k))), 'schema_version,issue,base,inputs,belongs,status,genuine,paths,rootCause,severity,question')
+  return !!(exact(Object.fromEntries(Object.entries(r ?? {}).filter(([k]) => !['touchedAreas','splitOrder','changeScope'].includes(k))), 'schema_version,issue,base,inputs,belongs,status,genuine,paths,rootCause,severity,question')
     && (r.touchedAreas === undefined || Array.isArray(r.touchedAreas) && r.touchedAreas.length > 0 && r.touchedAreas.every(x => exact(x, 'area,evidence') && text(x.area) && x.area.trim() && list(x.evidence) && x.evidence.length && x.evidence.every(v => v.trim())) && new Set(r.touchedAreas.map(x => x.area)).size === r.touchedAreas.length)
-    && (r.splitOrder === undefined || exact(r.splitOrder, 'first,evidence') && text(r.splitOrder.first) && r.splitOrder.first.trim() && list(r.splitOrder.evidence) && r.splitOrder.evidence.length && r.splitOrder.evidence.every(v => v.trim())) && r.schema_version === 'pdd.issue-sort.v1' && issueURL(r.issue)
+    && (r.splitOrder === undefined || exact(r.splitOrder, 'first,evidence') && text(r.splitOrder.first) && r.splitOrder.first.trim() && list(r.splitOrder.evidence) && r.splitOrder.evidence.length && r.splitOrder.evidence.every(v => v.trim())) && (r.changeScope === undefined || validChangeScope(r.changeScope)) && r.schema_version === 'pdd.issue-sort.v1' && issueURL(r.issue)
     && list(r.base) && new Set(r.base).size === r.base.length && Array.isArray(r.inputs) && r.inputs.length && r.inputs.every(x => exact(x, 'key,revision') && text(x.key) && x.key && text(x.revision) && x.revision) && new Set(r.inputs.map(x => x.key)).size === r.inputs.length
     && exact(r.belongs, 'kind,area,repository') && ['area','repository','old-code','unknown'].includes(r.belongs.kind) && text(r.belongs.area) && text(r.belongs.repository)
     && (r.belongs.kind !== 'repository' || /^[\w.-]+\/[\w.-]+$/.test(r.belongs.repository))
@@ -43,12 +46,9 @@ export function selectedSort(snapshot, issue) {
   if (r.paths.some(path => !r.inputs.some(x => x.key === sortSourceKey(snapshot.repository, path))) || r.inputs.some(x => current.get(x.key) !== x.revision) || sortInputs(snapshot, issue).some(x => !r.inputs.some(y => y.key === x.key && y.revision === x.revision))) return null;
   return r;
 }
-const nonBehaviorPath = path => typeof path === 'string' && (/^(?:tests?|__tests__|specs?|e2e|docs?|ci|scripts|\.github|\.circleci)\//i.test(path)
-  || /^prompts\/tests?\//i.test(path) || /^\.gitlab-ci\.ya?ml$/i.test(path) || /\.(?:test|spec)\.[a-z\d]+$/i.test(path)
-  || /\.md$/i.test(path) && !/\.prompt\.md$/i.test(path) && !/^(?:prompts|skills|user_stories)\//i.test(path));
 export function sortWorkflow(record) {
   if (!record || ['fixed','unclear'].includes(record.status?.state) || ['old-code','unknown'].includes(record.belongs?.kind) || record.question || !['bug','feature','docs'].includes(record.genuine?.kind)) return '';
-  if (record.genuine.kind === 'docs' || Array.isArray(record.paths) && record.paths.length > 0 && record.paths.every(nonBehaviorPath)) return 'small-change';
+  if (validChangeScope(record.changeScope) && smallChangeScopes.includes(record.changeScope.kind)) return 'small-change';
   return record.genuine.kind === 'feature' ? 'feature' : 'bug';
 }
 export function sortPlan({ snapshot }) {

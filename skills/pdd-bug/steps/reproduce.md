@@ -1,7 +1,7 @@
 # reproduce
 
 - Read the issue, repo instructions and the prompt that owns the behavior.
-- Fix in tests, test tooling, CI or docs only (no program behavior): use `pdd-small-change`; its checklist and checker still check every requested item.
+- Use `pdd-small-change` only when the issue requirements and behavior contract show that the fix changes tests, test tooling, CI or docs only. Examined paths alone do not prove scope; its checklist and checker still check every requested item.
 - Find the smallest safe input that shows the bug. Write down the setup, input, command, expected and actual result.
 - If a prompt owns this behavior, follow section 14 of RUNBOOK.md (pdd-prompting skill): write a test from the issue and run `pdd test` on the CURRENT prompt. Report ✗ or ✓, and put its `Prompt tests` line(s) and the report link(s) in your `done` summary as the "before" report.
 - If no prompt exists, say so plainly, in the words of section 14.

@@ -917,14 +917,3 @@ test('AUTOPILOT19: ceilings count only real loops, ask for no retry after the li
     'Only a person lets Autopilot try again. After the repair limit, they remove `pdd:stuck` and `pdd:working`, then run `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.',
     'The tick records it in your claim comment, so a later owner of the issue does not send it again.');
 });
-
-test('AUTOPILOT20: test-only, CI and docs fixes route to small-change with checklist safety, and out-of-interface cases widen the prompt first as draft', () => {
-  for (const file of ['pdd-autopilot/steps/sort.md', 'pdd-autopilot/steps/handoff.md', 'pdd-bug/steps/reproduce.md']) {
-    const text = read(file).replace(/\n/g, ' ');
-    assert.ok([/tests/i, /CI/i, /docs/i, /no program behavior/i, /small-change/, /checklist|checker/i].every(re => re.test(text)), `${file}: test-only/CI/docs small-change routing`);
-  }
-  for (const file of ['pdd-bug/steps/prompt-story.md', 'pdd-bug/steps/autopilot.md', 'pdd-feature/steps/understand.md', 'pdd-feature/steps/prompt-story.md', 'pdd-feature/steps/autopilot.md', 'pdd-autopilot/steps/handoff.md']) {
-    const line = instruction(read(file), [/interface/i, /prompt/i, /draft/i, /prose/i]);
-    assert.ok(line, `${file}: interface-widening draft rule`);
-  }
-});

@@ -220,7 +220,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
       const analysis=analysisFor(request);
       if(w.testOnly && analysis.sorts) {
         const context=JSON.parse(request.contextJson);
-        analysis.sorts=analysis.sorts.map(s=>({...s,paths:['test/value.vectors.test.mjs'],status:{...s.status,evidence:['test/value.vectors.test.mjs:1']},inputs:[...s.inputs,...(context.source??[]).filter(r=>r.issues.includes(s.issue)).map(({key,revision})=>({key,revision}))]}));
+        analysis.sorts=analysis.sorts.map(s=>({...s,changeScope:{kind:'tests-only',evidence:['The issue reports that the vector helper accepts entries with empty checks.','The issue requests a test-helper correction; the current value behavior contract stays unchanged.']},paths:['test/value.vectors.test.mjs'],status:{...s.status,evidence:['test/value.vectors.test.mjs:1']},inputs:[...s.inputs,...(context.source??[]).filter(r=>r.issues.includes(s.issue)).map(({key,revision})=>({key,revision}))]}));
       }
       await w.command(['dependencies','complete','--input','-'],{actor:'coordinator',env:w.context(),stdin:JSON.stringify({request,analysis})});w.messages();
     }
