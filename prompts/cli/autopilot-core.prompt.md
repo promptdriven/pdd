@@ -380,14 +380,27 @@ a build/review/suite/repair, advancing a job, and cleaning it up. Before deletin
 job also preserve its actual `started` and saved agent/PR work timestamps, so
 upgrading a surviving job retains known work without inventing earlier steps.
 
-After confirming the PR matches the job head, record only allowlisted fixed
-Evidence lines from the result/PR body at first local observation. Any malformed
-Evidence line in that observation rejects the whole set; never discard a
-conflicting malformed line while retaining a pass. Keep the
-observed `(head, evidence)` signatures on the job: unchanged lines never create
-new check events on later ticks. Newly observed evidence has the current time,
-never a mutable PR/comment timestamp or a caller-supplied backdated time. No line
-means zero; other body content is never copied into metric history.
+Before recording result, body or comment evidence, confirm the PR head, branch
+and base match this job. Keep validated canonical result evidence pending on the
+job through a failed PR read; a mismatched or unrelated PR records no evidence,
+including after cleanup. The scorecard's canonical parser owns validation and
+normalization. Reject the whole observation on malformed or conflicting lines.
+Deduplicate `(head, canonical evidence)` facts, including equivalent signatures
+saved by older jobs; duplicate lines and presentation edits never create a later
+check event. Without producer execution identity, repeated equivalent facts are
+not a recorded rerun. Use the first successful local observation time, never
+mutable PR/comment timestamps or caller-supplied backdated times.
+
+Read the associated PR's issue comments through the GitHub port. Only consider
+comments whose first line is `Autopilot merge check passed for head SHA.` and
+whose marker is `<!-- pdd:autopilot-core:merge:SHA -->`, both bound to the verified
+job head. Parse only their complete fixed Evidence observations. A failed comment
+read warns locally without holding work. This text supplies recorded check facts
+only: it never establishes review freshness, validation or merge attribution.
+The core's own successful merge-note POST includes its latest canonical Evidence
+line when one was observed. Observe it durably before cleanup; missing lines are
+zero. A confirmed core merge stores its actual `mergeCommit` SHA with its metric
+when available, for subsequent exact-merge regression discovery.
 
 When fresh review PASS, the full suite pass and green CI coincide on this head,
 record a `validated` event with `head`, and `validation` containing
@@ -440,6 +453,8 @@ with the native defaults named above.
 
 ## Dependencies
 
+- [Scorecard](autopilot-metrics.prompt.md): required canonical evidence validation
+  and signatures for lifecycle generation and verification.
 - [Metrics recorder](autopilot-metrics-source.prompt.md): required durable event
   schema and append boundary for the lifecycle observations above.
 

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
+import {createHash,randomUUID} from 'node:crypto';
+import {auditMerge} from '../src/autopilot-audit.mjs';
 import {coreWorld} from './helpers/core-world.mjs';
 import {readAutopilotMetrics,recordAutopilotMetric} from '../src/autopilot-metrics-source.mjs';
 
@@ -30,7 +32,8 @@ async function lifecycle(t) {
     const r=await w.gh(['api','--include','--method','GET',`repos/${repo}/${path}`]);
     return JSON.parse(r.stdout.split(/\r?\n\r?\n/).slice(1).join('\n\n'));
   };
-  w.read=(observedAt='2026-11-11T10:00:00Z')=>readAutopilotMetrics({timezone:'UTC',observedAt},{stateRoot:root,github});
+  w.metricsRoot=root;
+  w.read=(observedAt='2026-11-11T10:00:00Z',ports={})=>readAutopilotMetrics({timezone:'UTC',observedAt},{stateRoot:root,github,now:w.now,...ports});
   return w;
 }
 
@@ -136,4 +139,87 @@ test('R5 native GitHub status objects bind to the requested merge SHA without a 
   const w=fixture(t);recordAutopilotMetric({root:w.core,repo:'owner/repo',issue:1,kind:'merged',at:monday,pr:10,head});
   const report=await w.read(async(repo,path)=>path === 'pulls/10' ? {head:{sha:head},merge_commit_sha:merge} : path.endsWith('/check-runs') ? {check_runs:[]} : [{id:123,state:'failure',context:'ci',created_at:tuesday}]);
   assert.equal(rows(report).regressions,1);
+});
+
+
+for(const mismatch of ['head','branch','base']) test(`round 2: rejected result ${mismatch} never records check passes after cleanup`,async t=>{
+  const w=await lifecycle(t);w.issue(17);await w.tick();
+  const {pr}=w.build(17,{result:{evidence,...(mismatch === 'head' ? {head:foreign} : {})}});
+  if(mismatch === 'branch')pr.branch='unrelated-branch';
+  if(mismatch === 'base')pr.base='unrelated-base';
+  await w.tick();
+  assert.equal(fs.existsSync(join(w.root,'jobs','17.json')),false);
+  const report=rows(await w.read());
+  for(const key of ['runtime','vectors','formal','merged'])assert.equal(report[key],0,key);
+  const history=fs.readFileSync(join(w.root,'history.jsonl'),'utf8');
+  assert.equal(history.split('\n').some(line=>{try{return JSON.parse(line).metric?.kind==='evidence';}catch{return false;}}),false);
+});
+
+for(const edit of ['duplicate','spacing'])test(`round 2: ${edit} evidence presentation keeps first observation across reporting days`,async t=>{
+  const w=await lifecycle(t);w.clock.at=Date.parse(monday);w.issue(17);await w.tick();
+  const {pr}=w.build(17,{body:`Runtime: PASS\n${evidence}`});await w.tick();
+  for(let i=0;i<8;i++){w.advance(3*3600000);await w.tick();}
+  pr.body=edit === 'duplicate' ? `Runtime: PASS\n${evidence}\n${evidence}` : `Runtime: PASS\r\n  ${evidence.replaceAll('; ',';')}  `;
+  await w.tick();
+  for(const key of ['runtime','vectors','formal']) {
+    assert.equal(rows(await w.read())[key],0,key);
+    assert.equal(rows(await w.read('2026-11-10T10:00:00Z'))[key],1,key);
+  }
+});
+
+for(const invalid of ['conflicting','impossible-count'])test(`round 2: ${invalid} complete observations never enter evidence history`,async t=>{
+  const w=await lifecycle(t);w.issue(17);await w.tick();
+  const bad=invalid === 'conflicting' ? `${evidence}\n${evidence.replace('formal=pass','formal=fail')}` : evidence.replace('2/2','3/2');
+  w.build(17,{body:`Runtime: PASS\n${bad}`,result:{evidence:bad}});await w.tick();
+  assert.equal(fs.readFileSync(join(w.root,'history.jsonl'),'utf8').includes('"kind":"evidence"'),false);
+});
+
+for(const stale of [false,true])test(`round 2: ${stale ? 'stale' : 'exact-head'} merge-comment-only evidence flows through core cleanup and reader`,async t=>{
+  const w=await lifecycle(t);w.issue(17);await w.tick();const {pr,head:actual}=w.build(17);await w.tick();
+  const sha=stale ? foreign : actual;
+  pr.comments.push({id:987,created_at:monday,updated_at:monday,user:{login:'producer'},body:`Autopilot merge check passed for head ${sha}.\n\n${evidence}\n<!-- pdd:autopilot-core:merge:${sha} -->`});
+  w.review(17,'PASS');w.suite(17);await w.tick();
+  const report=rows(await w.read());
+  for(const key of ['runtime','vectors','formal'])assert.equal(report[key],stale ? 0 : 1,key);
+  assert.equal(report.merged,1);assert.equal(report.validated,1);
+  assert.equal(fs.existsSync(join(w.root,'jobs','17.json')),false);
+  if(!stale)assert.ok(pr.comments.some(c=>c.id!==987 && c.body.includes(evidence)),'core merge-note producer retains fixed Evidence');
+});
+
+async function mergedWorld(t) {
+  const w=await lifecycle(t);w.clock.at=Date.parse(monday);w.issue(17);await w.tick();
+  const {pr}=w.build(17);await w.tick();w.review(17,'PASS');w.suite(17);await w.tick();
+  w.advance(24*3600000);return {w,pr};
+}
+
+for(const match of ['owned','foreign-merge','manual'])test(`round 2: real BAD audit discovery ${match} feeds metrics with green merge CI`,async t=>{
+  const {w,pr}=await mergedWorld(t);
+  if(match === 'manual') {
+    const file=join(w.root,'history.jsonl');fs.writeFileSync(file,fs.readFileSync(file,'utf8').split('\n').filter(line=>!line.includes('"kind":"merged"')).join('\n'));
+  }
+  const auditRoot=join(w.dir,'audits'),auditStateRoot=join(auditRoot,createHash('sha256').update(w.state.repo.toLowerCase()).digest('hex').slice(0,20));
+  const run={repo:w.state.repo,number:17,runId:randomUUID(),runDir:join(w.dir,'run'),commonDir:join(w.dir,'common'),root:w.cwd,baseBranch:'main',agent:'codex',automaticOrigin:{machine:'test'},pr:[{number:pr.number,state:'merged'}]};
+  fs.mkdirSync(run.runDir);
+  const mergeSha=match === 'foreign-merge' ? foreign : pr.mergeSha;
+  const result={verdict:'BAD',kind:'',summary:'Synthetic regression',evidence:'Synthetic recorded audit evidence',revert:false};
+  const audit=await auditMerge({run,pr:pr.number},{now:w.now,env:{HOME:join(w.dir,'home')},auditStateRoot,readConfig:async()=>({autopilot:{mode:'auto'}}),agentDefinitions:()=>[{kind:'codex',command:'fake-codex'}],codexLimits:async()=>({state:'healthy'}),
+    execFile:async(file,args)=>({code:0,stdout:JSON.stringify(args.some(a=>String(a).includes('/pulls/')) ? {number:pr.number,merged:true,merge_commit_sha:mergeSha,base:{ref:'main',repo:{full_name:w.state.repo}}} : args.some(a=>String(a).includes('/commits/')) ? {sha:mergeSha,parents:[{sha:head}]} : {})}),
+    runAuditor:async()=>({code:0,stdout:JSON.stringify({type:'thread.started',thread_id:randomUUID()})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}})+'\n'}),
+    sendAlert:async()=>({exitCode:0,message:'Alert sent for #17 decision; the webhook confirmed it.'})});
+  assert.equal(audit.exitCode,0,audit.message);
+  for(let i=0;i<2;i++)assert.equal(rows(await w.read(undefined,{auditRoot})).regressions,match === 'owned' ? 1 : 0);
+  if(match === 'owned')assert.match(fs.readFileSync(join(w.root,'history.jsonl'),'utf8'),/"reason":"bad-audit"/);
+});
+
+for(const match of ['owned','foreign-merge','manual'])test(`round 2: base-history revert discovery ${match} persists first day after cleanup`,async t=>{
+  const {w,pr}=await mergedWorld(t);
+  if(match === 'manual') {
+    const file=join(w.root,'history.jsonl');fs.writeFileSync(file,fs.readFileSync(file,'utf8').split('\n').filter(line=>!line.includes('"kind":"merged"')).join('\n'));
+  }
+  const github=async(repo,path)=>path === `pulls/${pr.number}` ? {head:{sha:pr.head},base:{ref:'main'},merge_commit_sha:pr.mergeSha} : path.startsWith('commits?') ? [{sha:foreign,commit:{message:`Revert synthetic\n\nThis reverts commit ${match === 'foreign-merge' ? merge : pr.mergeSha}.`,committer:{date:monday}}}] : [];
+  const ports={github};
+  for(let i=0;i<2;i++)assert.equal(rows(await w.read(undefined,ports)).regressions,match === 'owned' ? 1 : 0);
+  w.advance(24*3600000);
+  assert.equal(rows(await w.read('2026-11-12T10:00:00Z',ports)).regressions,0,'repeat discovery is not a new day');
+  if(match === 'owned')assert.match(fs.readFileSync(join(w.root,'history.jsonl'),'utf8'),/"reason":"reverted"/);
 });

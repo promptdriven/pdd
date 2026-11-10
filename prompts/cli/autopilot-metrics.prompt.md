@@ -12,9 +12,15 @@ uncounted pass is recorded success. Missing, malformed, extra/duplicate/unknown
 fields yield four false values. Multiple lines must agree or all values are false.
 Do not interpret free prose or commands as evidence.
 
+`canonicalAutopilotEvidence(text)` validates the entire observation using those
+same rules and returns one normalized fixed line, or null when absent/invalid.
+Identical duplicate lines, CRLF, surrounding whitespace, semicolon spacing and
+equivalent integer spellings have the same canonical result. Preserve all four
+statuses and optional counts; do not collapse distinct failing/not-run facts.
+
 `calculateAutopilotMetrics({events,timezone,observedAt})` accepts events with
 `repo` (owner/name), positive integer `issue`, `kind`, `at` (epoch ms or UTC ISO),
-optional `head` (40 hex SHA), `pr` (positive integer), `evidence` (fixed line),
+optional `head` and `mergeCommit` (40 hex SHAs), `pr` (positive integer), `evidence` (fixed line),
 `validation`, `reason`. Ignore invalid identities/times, future events and unknown
 kinds. Kinds are `started`, `worked`, `evidence`, `validated`, `merged`,
 `regression`. Every valid event is work. Validation needs `head` and
@@ -25,7 +31,7 @@ for the same repo/issue and PR when supplied. A merge alone proves no checks.
 Deduplicate each day by lowercase repository + issue, across jobs/retries/PRs.
 
 `normalizeAutopilotMetric(event)` returns a fresh allowlisted event with lowercase
-repo/head and UTC ISO at, or null for an invalid event. Drop unknown fields,
+repo/head/mergeCommit and UTC ISO at, or null for an invalid event. Drop unknown fields,
 including inside validation, where only SHA heads, PASS/FAIL/NOT SURE review
 verdicts, boolean freshness and pass/fail/not-run states survive.
 Evidence and reason must be strings when supplied.
