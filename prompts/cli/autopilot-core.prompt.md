@@ -147,7 +147,7 @@ flowchart TD
 
 `readyIssues({state, settings}, ports, rows)` returns the issue numbers in intake
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
-assignee; it has no `pdd:stuck` and no `pdd:needs-decision`; it is not cooling down (no `noResult` history
+assignee; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it is not cooling down (no `noResult` history
 line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
 opt-in label when `label` is set; no
@@ -185,8 +185,12 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    read shows that the winning label event is still the expired claim's event: a
    newer event is someone's fresh claim. Add `pdd:working`. The winning label event
    is the first `pdd:working` label event after the last removal. Post one claim
-   comment with a fenced JSON record
-   `{repository, coordinatorId, machine, labelEventId, lastSeen: ""}`. The machine
+   comment `Autopilot core claim.` with a fenced JSON record
+   `{repository, coordinatorId, machine, labelEventId, lastSeen: ""}`, where `machine`
+   is this machine's id (`state.machineId`, else `m-` and the first 12 hex digits of
+   the SHA-256 of the host name), never the host name. The job saves it as
+   `claim.machine` and heartbeats with it. A claim whose record names this machine's
+   host name (an older build) or its id is this machine's. The machine
    wins only when its comment is by the winning event's actor and is the earliest
    such comment that names that event, and a read of the winning claim through the
    owners port shows no other live owner. A loser deletes its own comment, removes
@@ -201,7 +205,8 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    whose head branch starts with `pdd/core-N-` and is not the new branch, and that
    is not merged, gets `state: closed` and one short note with the marker
    `<!-- pdd:autopilot-core:superseded:N:BRANCH -->`; its branch stays. A PR from
-   another branch prefix is never touched. A failure only warns.
+   another branch prefix, or one with a `would-merge` note (observe mode validated
+   it), is never touched. A failure only warns.
 4. Save the job file, then start the build job (below). A start error, also one that
    the spawn reports later, ends the job as `no-result`; it never stops the tick.
 
@@ -301,7 +306,11 @@ any other pdd (for example an older global install).
   that starts with `Evidence:` after the Runtime-line marks go, else the result's
   `evidence`; each `key=value` part with a known key and value is kept once, with its
   count when it is `n/m` with n ≤ m (never for formal); anything else is dropped. The
-  parsed value is saved on the job (`evidence`, or null) and in its history line.
+  parsed value is saved on the job (`evidence`, or null) and in its history line. The
+  merge check parses it from the PR body each time and makes it a red finding when it
+  contradicts itself or the checks: a `fail` (or `formal=failed`), a `pass` with fewer
+  passed than total or 0 of 0, or a runtime value other than `fail` that disagrees
+  with the PR's Runtime line (PASS or not run).
 - **Repair** (same worktree and branch): the red findings, the job log folder, then
   the build rules; push to the same branch, no new PR, and update the `Runtime:` and
   `Evidence:` lines when they change.
@@ -407,12 +416,15 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    `behind_by` 0). When the base moved, refresh natively in the job worktree: reset to
    the job head, merge `origin/BASE` (identity "PDD Autopilot", no hooks, no signing),
    push the branch and take the new head; this is not a repair. The suite and CI
-   always run again for the new head. When the merge was clean and the PR's own
-   change is the same (the diff `origin/BASE...HEAD` before and after, without its
-   `index` lines and hunk line numbers, has the same SHA-256), the PASS review is
-   kept for the new head (`review.kept`, `keptFrom`) and the refresh does not count.
-   Otherwise the review runs again and the refresh counts (at most 3 counted
-   refreshes, then END `base-moving`). A merge conflict is aborted and starts a
+   always run again for the new head. The PASS review is kept for the new head
+   (`review.kept`, `keptFrom`), and the refresh does not count, only when the merge
+   was clean, the PR's own change is the same (the diff `origin/BASE...HEAD` before
+   and after has the same SHA-256) and the base changed none of the PR's files since
+   the PR's merge base (`git diff --name-only` of both sides from `git merge-base
+   origin/BASE HEAD`). Otherwise the review runs again and the refresh counts (at most
+   3 counted refreshes, then END `base-moving`). Every refresh counts in
+   `allRefreshes`: after 6, the PR is not refreshed again; it waits with that
+   `lastError`, and the quiet rule ends it (`checks-quiet`) when nothing changes. A merge conflict is aborted and starts a
    repair job with the conflict as its red finding.
    Run `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md). A
    read failure ("could not verify", "unavailable", "retry") waits; another
@@ -433,10 +445,11 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    Autopilot does not merge it.` with the marker
    `<!-- pdd:autopilot-core:would-merge:HEAD -->`. Then a draft PR is marked ready
    (`gh pr ready`; a refusal only warns), this machine's claim comment and
-   `pdd:working` go (no issue comment, no label), the result counts (`produced`), and
-   local cleanup records `would-merge` with the evidence: validation passed, not
-   merged. The ready rule skips an issue with a `would-merge` line after its latest
-   reset, because its PR waits for a person.
+   `pdd:working` go, the issue gets the label `pdd:would-merge` (visible to every
+   machine), the result counts (`produced`), and local cleanup records `would-merge`
+   with the evidence: validation passed, not merged. The ready rule of every machine
+   skips an issue with `pdd:would-merge`, because its PR waits for a person; a person
+   removes the label to have it built again.
 
 ## END
 
@@ -502,14 +515,17 @@ of local report drafts.
 ## Text on GitHub
 
 Every comment that this engine posts (review verdict, merge note, END comment, PR
-notes) first becomes public text: an absolute path (`/a/b…` or `~/a/b…`, two parts or
-more, after a space, quote, bracket, `=` or `,`) keeps only its file name; this
-machine's host name becomes `this machine`; and the local user name (the last part of
-HOME, or `ports.user`) becomes `[user]`. Texts never name another machine: a
+notes) first becomes public text, above its trailing hidden marker lines only (a
+marker never changes): an absolute path (`/a/b…` or `~/a/b…`, two parts or more,
+after a space, quote, bracket, `=` or `,`) keeps only its file name; this machine's
+host name becomes `this machine`; and the local user name (the last part of HOME, or
+`ports.user`) becomes `[user]`. A name is replaced only as a whole name (not inside a
+longer word or dotted host name). Texts never name another machine: a
 hand-over says "another machine holds the claim now". A cause sentence ends with one
 period, never two. Then it goes through [secret redaction](secret-redaction.prompt.md) and is cut to at
 most 20,000 characters; hidden markers at the end stay whole. A saved `lastError` is
-redacted and cut to 300 characters. The claim comment holds only the claim record.
+redacted and cut to 300 characters. The claim comment holds only the claim record,
+with the machine id.
 
 ## Machine settings
 

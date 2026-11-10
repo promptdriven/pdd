@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: c1695c48954c83bdc092069c9b339d80b2ce9c6d4b4ed065a950abae8dde74ed).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 849b6d8855d3e69d9364f8da397ef1c485f689104c28dcf00e89f4ecf9ddfb74).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,8 +17,10 @@ const BLOCK_MARKER = /<!-- pdd:core-blocked-by:([\w.-]+\/[\w.-]+)?#(\d+)(?::([a-
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // A job that needs a person's decision posts one question and adds this label; the person answers in a comment and
 // removes the label, and then the issue is ready again.
-const DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:autopilot-core:question:(\d+):[^ ]+ -->/;
+const WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:autopilot-core:question:(\d+):[^ ]+ -->/;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+// The machine id in claim records: a short hash of the host name, so no public text names the host.
+const machineIdOf = state => named(state?.machineId) ? state.machineId : `m-${createHash('sha256').update(String(state?.machine ?? '')).digest('hex').slice(0, 12)}`;
 const named = value => typeof value === 'string' && value.trim().length > 0;
 const short = sha => String(sha ?? '').slice(0, 7);
 const oneLine = (value, max = 300) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -73,10 +75,15 @@ const safeLine = (text, max = 300) => redactSecrets(oneLine(text, max * 2)).slic
 const PATH_TEXT = /(^|[\s`'"(\[=,])(~?(?:\/[^\s`'"()\[\],/]+){2,}\/?)/g;
 const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function publicText(text, machine, user) {
-  let value = String(text ?? '').replace(PATH_TEXT, (all, lead, path) => `${lead}${path.replace(/\/$/, '').split('/').pop()}`);
-  if (named(machine) && machine.length > 2) value = value.split(machine).join('this machine');
-  if (named(user) && user.length > 2) value = value.replace(new RegExp(`\\b${escape(user)}\\b`, 'g'), '[user]');
-  return value;
+  // The trailing hidden markers are machine records: they never change.
+  const lines = String(text ?? '').split('\n'), markers = [];
+  while (lines.length && /^<!-- pdd:[^>]*-->$/.test(lines.at(-1).trim())) markers.unshift(lines.pop());
+  let value = lines.join('\n').replace(PATH_TEXT, (all, lead, path) => `${lead}${path.replace(/\/$/, '').split('/').pop()}`);
+  // A whole name only: not inside a longer word or host name; a sentence period after it is fine.
+  const word = name => new RegExp(`(?<![\\w.-])${escape(name)}(?![\\w-]|\\.[\\w-])`, 'g');
+  if (named(machine) && machine.length > 2) value = value.replace(word(machine), 'this machine');
+  if (named(user) && user.length > 2) value = value.replace(word(user), '[user]');
+  return [value, ...markers].join('\n');
 }
 const sentence = text => `${String(text ?? '').trim().replace(/[.\s]+$/, '')}.`;
 // Evidence for metrics: one fixed line, "Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)".
@@ -97,6 +104,20 @@ function parseEvidence(text) {
     return Object.keys(found).length ? found : null;
   }
   return null;
+}
+// Evidence that contradicts itself or the checks is red: a fail, a pass with fewer passed than total (or 0 of 0), or a
+// runtime value that disagrees with the PR's Runtime line.
+function evidenceReds(e, runtimeLine) {
+  if (!e) return [];
+  const bad = [];
+  for (const key of ['runtime', 'vectors', 'tests']) {
+    const v = e[key];
+    if (v?.state === 'fail') bad.push(`${key}=fail`);
+    if (v?.state === 'pass' && v.total !== undefined && (v.total === 0 || v.passed < v.total)) bad.push(`${key}=pass (${v.passed}/${v.total})`);
+  }
+  if (e.formal?.state === 'failed') bad.push('formal=failed');
+  if (e.runtime && ['pass', 'not-run'].includes(runtimeLine) && e.runtime.state !== runtimeLine && e.runtime.state !== 'fail') bad.push(`runtime=${e.runtime.state} while the Runtime line says ${runtimeLine === 'pass' ? 'PASS' : 'not run'}`);
+  return bad.length ? [`The PR's Evidence line contradicts itself or the checks: ${bad.join(', ')}. Fix the cause, then write an Evidence line that matches what you ran.`] : [];
 }
 const evidenceText = e => e ? `Evidence: ${Object.keys(EVIDENCE).filter(key => e[key]).map(key => `${key}=${e[key].state}${e[key].total !== undefined ? ` (${e[key].passed}/${e[key].total})` : ''}`).join('; ')}` : 'Evidence: none';
 
@@ -194,9 +215,11 @@ function context({ state, settings, budget }, ports) {
     reader ??= createDependencyReadPorts({ cwd: '' }, { execFile, now });
     return JSON.parse((await reader.owners.read({ repository: repo, issues: numbers.map(n => issueKey(repo, n)) })).json).claims ?? [];
   });
-  const heartbeat = ports.heartbeat ?? (job => refreshClaimHeartbeat({ cwd: '', repository: repo, coordinatorId: state.coordinatorId, machine: state.machine, at: new Date(now()).toISOString(),
-    claim: { issue: issueKey(repo, job.issue), active: true, coordinatorId: state.coordinatorId, machine: state.machine, commentId: job.claim.commentId, labelEventId: job.claim.labelEventId } }, { execFile }));
-  const ctx = { state, settings, budget, ports, fs, now, root, dirs, repo, gh, jobs, git, owners, heartbeat, execFile, counts: { started: 0, merged: 0, wouldMerge: 0, ended: 0, repairs: 0 },
+  // Claims name this machine by an id, never by its host name. A claim from an older build names the host: also ours.
+  const machineId = machineIdOf(state);
+  const heartbeat = ports.heartbeat ?? (job => refreshClaimHeartbeat({ cwd: '', repository: repo, coordinatorId: state.coordinatorId, machine: job.claim.machine ?? state.machine, at: new Date(now()).toISOString(),
+    claim: { issue: issueKey(repo, job.issue), active: true, coordinatorId: state.coordinatorId, machine: job.claim.machine ?? state.machine, commentId: job.claim.commentId, labelEventId: job.claim.labelEventId } }, { execFile }));
+  const ctx = { state, settings, budget, ports, fs, now, root, dirs, repo, gh, jobs, git, owners, heartbeat, execFile, machineId, counts: { started: 0, merged: 0, wouldMerge: 0, ended: 0, repairs: 0 },
     quiet: settings.quietMinutes * MIN, pdd: join(state.packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs'), skip: new Set(), warn: ports.warn ?? (() => {}) };
   ctx.saveJob = job => save(fs, join(dirs.jobs, `${job.issue}.json`), job);
   // The local user name is the last part of HOME (/home/NAME, /Users/NAME).
@@ -219,7 +242,7 @@ function context({ state, settings, budget }, ports) {
     if (claim?.active && !claim.expired && named(claim.machine)) ctx.peers.set(claim.machine, now());
     return claim;
   };
-  ctx.ours = claim => claim?.coordinatorId === state.coordinatorId && claim?.machine === state.machine;
+  ctx.ours = claim => claim?.coordinatorId === state.coordinatorId && [machineId, state.machine].includes(claim?.machine);
   // This job still owns the issue only while the winning claim is this machine's claim comment.
   ctx.owns = (claim, job) => ctx.ours(claim) && String(claim.commentId) === String(job.claim?.commentId);
   ctx.lost = (claim, job) => Boolean(claim?.active && claim.coordinatorId && !ctx.owns(claim, job));
@@ -258,15 +281,13 @@ async function blocked(ctx, row) {
   return false;
 }
 async function* readyRows(ctx, rows) {
-  const local = new Set(readJobs(ctx.fs, ctx.root).map(job => job.issue)), self = { coordinatorId: ctx.state.coordinatorId, machine: ctx.state.machine };
+  const local = new Set(readJobs(ctx.fs, ctx.root).map(job => job.issue)), self = { coordinatorId: ctx.state.coordinatorId, machine: ctx.machineId };
   // An issue with a counted no-result in the last 24 hours (since its latest reset) cools down.
   const history = chronological(ctx.fs, ctx.root);
   const cooling = new Set([...new Set(history.map(row => row.issue))].filter(issue => issueRows(history, issue).some(row => row.noResult && ctx.now() - row.at < DAY)));
-  // An issue whose PR passed every check in observe mode waits for a person (its PR stays open).
-  const validated = new Set(history.filter(row => row.outcome === 'would-merge').map(row => row.issue).filter(issue => issueRows(history, issue).some(row => row.outcome === 'would-merge')));
   const candidates = rows.filter(row => !row.pull_request && row.state === 'open' && !row.assignees?.length && !row.assignee
-    && !labelsOf(row).includes('pdd:stuck') && !labelsOf(row).includes(DECISION) && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
-    && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number) && !validated.has(row.number))
+    && !labelsOf(row).includes('pdd:stuck') && !labelsOf(row).includes(DECISION) && !labelsOf(row).includes(WOULD_MERGE) && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
+    && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number))
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
   for (const row of candidates) {
     try {
@@ -324,7 +345,7 @@ async function claimIssue(ctx, n) {
   if (issue.state !== 'open' || labelsOf(issue).includes('pdd:stuck') || issue.assignees?.length) return null;
   if (labelsOf(issue).includes('pdd:working')) {
     const current = await ctx.readClaim(n);
-    if (!current?.expired || takeoverLimited(current, state)) return null;
+    if (!current?.expired || takeoverLimited(current, { coordinatorId: state.coordinatorId, machine: ctx.machineId })) return null;
     // Take over only the era that was read as expired: a newer label event is someone else's fresh claim.
     if (String((await labelWinner(ctx, n))?.id) !== String(current.labelEventId)) return null;
     await gh.call('DELETE', `repos/${repo}/issues/${n}/labels/${label}`);
@@ -334,13 +355,13 @@ async function claimIssue(ctx, n) {
     await gh.ok('POST', `repos/${repo}/issues/${n}/labels`, { labels: ['pdd:working'] });
     winner = await labelWinner(ctx, n);
     if (!winner?.actor?.login) throw Error('no winning pdd:working label event');
-    const record = { repository: repo.toLowerCase(), coordinatorId: state.coordinatorId, machine: state.machine, labelEventId: String(winner.id), lastSeen: '' };
-    mine = await gh.ok('POST', `repos/${repo}/issues/${n}/comments`, { body: `Autopilot core claim on ${state.machine}.\n\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\`` });
+    const record = { repository: repo.toLowerCase(), coordinatorId: state.coordinatorId, machine: ctx.machineId, labelEventId: String(winner.id), lastSeen: '' };
+    mine = await gh.ok('POST', `repos/${repo}/issues/${n}/comments`, { body: `Autopilot core claim.\n\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\`` });
     const actor = winner.actor.login.toLowerCase();
     const rivals = (await gh.all(`repos/${repo}/issues/${n}/comments?per_page=100`))
       .filter(c => c.user?.login?.toLowerCase() === actor && claimRecord(c.body)?.labelEventId === String(winner.id)).sort((a, b) => Number(a.id) - Number(b.id));
     if (mine.user?.login?.toLowerCase() !== actor || String(rivals[0]?.id) !== String(mine.id)) { won = 'lost'; return null; }
-    const claim = { commentId: String(mine.id), labelEventId: String(winner.id), lastSeen: ctx.now() };
+    const claim = { commentId: String(mine.id), labelEventId: String(winner.id), lastSeen: ctx.now(), machine: ctx.machineId };
     // One more read through the shared winner rule: another live owner means this claim lost.
     if (ctx.lost(await ctx.readClaim(n), { claim })) { won = 'lost'; return null; }
     won = true;
@@ -605,6 +626,8 @@ async function mergeCheck(ctx, job) {
   await runtimeNotRunReport(ctx, job);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge.
   const reds = runtimeReds(pr.body, job.runtime, job.promptChanged);
+  job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
+  reds.push(...evidenceReds(job.evidence, runtimeVerdicts(pr.body)[0]?.verdict));
   // In auto mode a changed prompt must carry the operator's approval; a draft interface is red (observe never approves).
   const drafts = await draftPrompts(ctx, job);
   if (drafts.length && ctx.settings.mode === 'auto') reds.push(`Changed prompts still have a draft Runtime interface: ${drafts.join(', ')}. Record the operator approval for each one and commit it: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -`);
@@ -683,6 +706,8 @@ async function wouldMerge(ctx, job, pr) {
   const { gh, repo } = ctx;
   if (pr.draft) { const ready = await ctx.ports.gh(['pr', 'ready', String(job.pr), '--repo', repo]); if (ready.code !== 0) ctx.warn(`Autopilot core could not mark PR #${job.pr} ready: ${oneLine(ready.stderr, 200)}`); }
   if (job.claim?.commentId) { const r = await gh.call('DELETE', `repos/${repo}/issues/comments/${job.claim.commentId}`); if (r.status >= 300 && r.status !== 404) throw Error(`GitHub DELETE claim comment returned ${r.status}`); }
+  // The label makes the validation visible on GitHub: no machine takes the issue again while it is on.
+  await gh.ok('POST', `repos/${repo}/issues/${job.issue}/labels`, { labels: [WOULD_MERGE] });
   const removed = await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
   if (removed.status >= 300 && removed.status !== 404) throw Error(`GitHub DELETE label returned ${removed.status}`);
   ctx.counts.wouldMerge++; ctx.produced();
@@ -695,22 +720,32 @@ function repairOrEnd(ctx, job, reds) {
   job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
   ctx.saveJob(job); ctx.counts.repairs++;
 }
-// The PR's own change: its diff against the merge base with the base tip, without index lines and hunk line numbers.
-// The same text before and after a refresh is the same change.
-async function ownChange(ctx, cwd, base, head) {
-  const diff = await ctx.git(['diff', '--no-color', '--no-ext-diff', `origin/${base}...${head}`], cwd);
-  return createHash('sha256').update(diff.split('\n').filter(line => !line.startsWith('index ')).map(line => line.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/, '@@')).join('\n')).digest('hex');
+// The PR's own change (its diff against the merge base with the base tip), and the files that it shares with the
+// base's changes since the PR's merge base.
+const ownChange = async (ctx, cwd, base, head) => createHash('sha256').update(await ctx.git(['diff', '--no-color', '--no-ext-diff', `origin/${base}...${head}`], cwd)).digest('hex');
+async function sharedFiles(ctx, cwd, base, head) {
+  const mergeBase = await ctx.git(['merge-base', `origin/${base}`, head], cwd);
+  const files = async range => new Set((await ctx.git(['diff', '--name-only', range], cwd)).split('\n').filter(Boolean));
+  const mine = await files(`${mergeBase}..${head}`), theirs = await files(`${mergeBase}..origin/${base}`);
+  return [...mine].filter(file => theirs.has(file));
 }
+const MAX_REFRESHES = 6;
 // The base moved after the checks: merge the base tip into the job branch natively and check the new head again.
-// This is not a repair. A conflict is: it starts a repair job. A clean merge that leaves the PR's own change the same
-// keeps the PASS review for the new head and does not count; the suite and CI always run again. Any other refresh
-// reviews again and counts: at most 3 per job.
+// This is not a repair. A conflict is: it starts a repair job. The PASS review is kept for the new head only when the
+// merge was clean, the PR's own change is the same and the base changed none of the PR's files; such a refresh does
+// not count against the cap of 3. The suite and CI always run again. After 6 refreshes of any kind the PR waits and is
+// not refreshed again; the quiet rule ends it when nothing changes.
 async function refreshBase(ctx, job) {
   const base = ctx.state.baseBranch, cwd = job.worktree;
   if ((job.refreshes ?? 0) >= 3) return end(ctx, job, cause('job', 'base-moving', `the base ${base} moved again after 3 refreshes of the PR head`));
+  if ((job.allRefreshes ?? 0) >= MAX_REFRESHES) {
+    Object.assign(job, { lastError: `the base ${base} moved again after ${MAX_REFRESHES} refreshes; the PR waits and is not refreshed again`, lastErrorTool: false }); ctx.saveJob(job);
+    return;
+  }
   await ctx.git(['fetch', '-q', 'origin', base], cwd);
   await ctx.git(['reset', '-q', '--hard', job.head], cwd);
   const before = await ownChange(ctx, cwd, base, job.head).catch(() => null);
+  const shared = await sharedFiles(ctx, cwd, base, job.head).catch(() => null);
   const merged = await ctx.ports.git(['-c', 'user.name=PDD Autopilot', '-c', 'user.email=pdd@noreply.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
     'merge', '--no-edit', '-m', `Merge ${base} into ${job.branch}`, `origin/${base}`], { cwd });
   if (merged.code !== 0) {
@@ -719,9 +754,10 @@ async function refreshBase(ctx, job) {
   }
   await ctx.git(['push', '-q', 'origin', `HEAD:${job.branch}`], cwd);
   const head = await ctx.git(['rev-parse', 'HEAD'], cwd), old = job.head;
-  const keep = job.review?.verdict === 'PASS' && job.review.head === old && before !== null && before === await ownChange(ctx, cwd, base, head).catch(() => undefined);
+  const keep = job.review?.verdict === 'PASS' && job.review.head === old && Array.isArray(shared) && !shared.length
+    && before !== null && before === await ownChange(ctx, cwd, base, head).catch(() => undefined);
   Object.assign(job, { head, prAt: ctx.now(), suite: null, progress: { sig: null, at: ctx.now(), running: false },
-    review: keep ? { ...job.review, head, kept: true, keptFrom: old } : null,
+    review: keep ? { ...job.review, head, kept: true, keptFrom: old } : null, allRefreshes: (job.allRefreshes ?? 0) + 1,
     refreshes: (job.refreshes ?? 0) + (keep ? 0 : 1), cleanRefreshes: (job.cleanRefreshes ?? 0) + (keep ? 1 : 0) });
   delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job);
 }
@@ -784,6 +820,8 @@ async function closeOtherPrs(ctx, n, branch) {
       const ref = pr.head?.ref;
       if (typeof ref !== 'string' || !ref.startsWith(prefix) || ref === branch || pr.merged || pr.state !== 'open'
         || String(pr.head?.repo?.full_name ?? '').toLowerCase() !== ctx.repo.toLowerCase()) continue;
+      // A PR that observe mode validated ("would merge") waits for a person: never close it.
+      if ((await ctx.gh.all(`repos/${ctx.repo}/issues/${pr.number}/comments?per_page=100`)).some(c => String(c.body ?? '').includes('<!-- pdd:autopilot-core:would-merge:'))) continue;
       await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${pr.number}`, { state: 'closed' });
       await ctx.comment(pr.number, `Autopilot closed this PR: a new job for issue #${n} starts on branch \`${branch}\`. The branch \`${ref}\` stays.\n\n<!-- pdd:autopilot-core:superseded:${n}:${branch} -->`);
     }
@@ -1023,7 +1061,7 @@ export async function tickCore(input, ports) {
   ctx.gap = before.lastTick !== null && ctx.now() - before.lastTick > ctx.quiet ? { from: before.lastTick, hours: (ctx.now() - before.lastTick) / HOUR } : null;
   ctx.saveMachine({ ...before, lastTick: ctx.now() });
   const own = readJobs(ctx.fs, ctx.root).some(job => job.phase !== 'ending' && job.claim && ctx.now() - job.claim.lastSeen < CLAIM_EXPIRES);
-  const machines = Math.max(1, new Set([...Object.keys(before.peers), ...(own ? [state.machine] : [])]).size);
+  const machines = Math.max(1, new Set([...Object.keys(before.peers), ...(own ? [ctx.machineId] : [])]).size);
   ctx.budget = coreBudget(input.budget, machines);
   let rows = null;
   if (input.budget?.state !== 'reserve') try { rows = await ports.listIssues(); } catch (error) { ctx.warn(`Autopilot core could not list issues: ${error.message}`); }

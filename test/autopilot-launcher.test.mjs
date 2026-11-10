@@ -400,6 +400,22 @@ test('two machine launchers offer the same issue to the skill without making a c
   // The bundled skill owns the cross-machine claim; this proves separate launcher state.
 });
 
+test('core start --mode off saves mode off and stops the timer; the next tick starts nothing; auto turns it on again', async t => {
+  const f = await fixture(t, { tempPrefix: 'pdd-mode-off-' });
+  const env = { HOME: f.home, PATH: process.env.PATH };
+  const auto = await f.invoke('start', { env, engine: 'core', mode: 'auto' });
+  assert.equal(auto.exitCode, 0, auto.message); assert.equal(f.state().mode, 'auto'); assert.equal(f.active, true);
+  const off = await f.invoke('start', { env, engine: 'core', mode: 'off' });
+  assert.equal(off.exitCode, 0, off.message);
+  assert.match(off.message, /mode off is saved and the timer is stopped/); assert.match(off.message, /--mode auto or --mode observe/);
+  assert.equal(f.state().mode, 'off'); assert.equal(f.state().enabled, false); assert.equal(f.active, false, 'the timer is stopped');
+  const tick = await f.tick();
+  assert.doesNotMatch(tick?.message ?? '', /[1-9]\d* started/);
+  assert.match((await f.invoke('status', { env })).message, /mode off \(this machine\)/);
+  const again = await f.invoke('start', { env, engine: 'core', mode: 'auto' });
+  assert.equal(again.exitCode, 0, again.message); assert.equal(f.state().mode, 'auto'); assert.equal(f.state().enabled, true); assert.equal(f.active, true);
+});
+
 test('the core engine timer fires every 10 minutes, the full engine every 30; start --engine rewrites the timer; status says the interval', async t => {
   for (const platform of ['linux', 'darwin']) {
     const f = await fixture(t, {tempPrefix: 'pdd-autopilot-iv-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;

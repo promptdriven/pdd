@@ -1365,7 +1365,11 @@ stays `full`. The full engine below is unchanged; this section only adds a branc
   auto|observe|off` saves `state.mode`, which replaces the core's `mode` (the tick,
   the start's off check and status, which names the source `this machine`); it never
   writes `pdd.json` (unlike `pdd autopilot observe`). With an effective engine that
-  is not core, `--mode` is refused before any change. Other values of `--engine` or
+  is not core, `--mode` is refused before any change. A core start whose machine mode
+  is `off` saves the state as disabled with mode off, stops the timer and returns exit
+  0 with `Autopilot core is off on this machine for REPO: mode off is saved and the
+  timer is stopped. To turn it on, run pdd autopilot start --engine core --mode auto or
+  --mode observe.` (a timer stop failure is named; the ticks do nothing while off). Other values of `--engine` or
   `--mode`, or a blank label, return exit code 2 before any effect. Doctor gets
   the effective engine as `engine` in its input.
 - Tick: after the tick lock and the coordinator identity are settled, and before any

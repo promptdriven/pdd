@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: cdc07a04b6f072ea784624e31f6f28a53e5e57bb5afe900ed693d4d39b986b7b).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 44cb704f588bed94bc588e6a0f284ea9dd8fbc40d41497d3097d01ceee259792).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -2685,6 +2685,13 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if ((read(stateFile)?.controlRevision ?? null) !== priorRevision) return bad('Autopilot changed while starting; retry.');
     const currentConfig = await settings(state, p);
     if (core && machineMode(state)) currentConfig.mode = machineMode(state);
+    // A machine mode off is saved, and the timer stops: no tick runs until a start with --mode auto or observe.
+    if (core && machineMode(state) === 'off') {
+      Object.assign(state, { enabled: false, timerInstalled: false, nextTick: null, controlRevision: randomUUID() }); save(stateFile, state);
+      let stopped = '';
+      try { await timer('stop', state, p); } catch (error) { stopped = ` The timer could not stop (${line(error.message)}); its ticks do nothing while the mode is off.`; }
+      return ok(`Autopilot core is off on this machine for ${state.repo}: mode off is saved and the timer is stopped.${stopped} To turn it on, run pdd autopilot start --engine core --mode auto or --mode observe.`);
+    }
     if (currentConfig.mode === 'off') return ok(`${line(currentConfig.message)} Choose observe or auto with pdd autopilot observe or pdd autopilot auto.`);
     if (resumeCustody) {
       state = await verifiedCustody(state, resolve(input.cwd, resumeCustody), p, runs);

@@ -1368,9 +1368,11 @@ machine only, run `pdd autopilot start --engine core`; `--label NAME` sets the
 opt-in label and `--mode auto|observe|off` the mode the same way, on this machine
 only (`pdd autopilot observe` changes `pdd.json` instead). The machine values win over
 `pdd.json`, and `pdd autopilot status` says where the engine, the label and the mode
-come from. In `observe` mode the core does everything except the merge: when all
-checks pass, it posts "Autopilot would merge this PR (observe mode)" with the same
-evidence, keeps the PR open and ready for review, and releases the issue. Comments
+come from. `--mode off` saves the mode and stops the timer of this machine. In
+`observe` mode the core does everything except the merge: when all checks pass, it
+posts "Autopilot would merge this PR (observe mode)" with the same evidence, keeps
+the PR open and ready for review, releases the issue and adds `pdd:would-merge`, so
+no machine builds it again. Remove the label to have it built again. Comments
 that the core engine posts are redacted for secrets and cut in length. The core engine needs no
 Herdr: `pdd autopilot doctor` skips the Herdr checks, `start` opens no Herdr
 session, and each job is a headless Codex or Claude process with a log file. A

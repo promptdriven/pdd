@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 47dc0b1b1b0ff66f06f7bfa93648f51d27fe1aa07b640f1fff1887c29b973141).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: fcfce32bfc9eb27cc8e713936ddb21b7815ab01798f672a2ace5331b15a58a9f).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -104,10 +104,18 @@ const PDD_OWNED = /scenario|vector|replay|safe-integer|integer-out-of-range|runt
 export function reportKind(cause) {
   return cause?.kind === 'runtime' && PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) ? 'pdd' : cause?.kind;
 }
+// Stable fingerprints: an agent writes the code and the component as free text, so each is mapped to a fixed word.
+const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['no-verdict', /verdict/],
+  ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
+  ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['interpreter-error', /interpreter/],
+  ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
+  ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
+export const stableCode = code => CODES.find(([, test]) => test.test(slug(code)))?.[0] ?? 'other';
+export const stableComponent = component => slug(component).split('-').slice(0, 2).join('-') || 'unknown';
 // File, count or keep one report for a Runtime or PDD cause. It never throws: a failed send keeps a local draft.
 export async function fileReport({ cause, mode, root, machine, versions = {}, step, words = [], runtimeRepo = null }, ports = {}) {
   if (!['runtime', 'pdd'].includes(cause?.kind) || mode === 'off') return { state: 'off' };
-  cause = { ...cause, kind: reportKind(cause) };
+  cause = { ...cause, kind: reportKind(cause), code: stableCode(cause.code), component: stableComponent(cause.component) };
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), draft = { ...draftFor({ cause, versions, step, words }), ...(runtimeRepo ? { runtimeRepo } : {}) };
   if (mode === 'file') {
     try { return { ...await sendDraft(draft, { root, machine, runtimeRepo }, ports), fingerprint: draft.fingerprint }; }

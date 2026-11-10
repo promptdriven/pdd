@@ -14,6 +14,13 @@ most once a day.
 
 - Only causes of kind `runtime` and `pdd` produce reports. Kind `job` and mode `off`
   return `{state: "off"}` and write nothing.
+- Stable causes: before the fingerprint, the code becomes one fixed word
+  (`stableCode`): merge-check-tool, suite-broken, no-verdict, scenario-limit,
+  vector-replay, runtime-case, lint-refusal, interface-refusal, binding-refusal,
+  interpreter-error, server-incompatible, crash, claim-error, not-run, timeout,
+  cli-error, else other (matched in this order on the slug), and the component keeps
+  its first two slug words (`stableComponent`, for example `pdd-test`). So spellings
+  of one cause are one report.
 - Fingerprint: `reportFingerprint({kind, component, code, version})` is
   `KIND.COMPONENT.CODE.MINOR`, each part lowercased with runs of other characters
   as `-` (at most 40 characters; empty is `unknown`), and MINOR is the first two
