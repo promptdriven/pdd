@@ -63,8 +63,8 @@ repeated full-subtree size walks. A deeply nested fitting schema remains eligibl
 its depth alone must not multiply full-size accounting. Cached targets, exact
 numbers, key order and errors retain their existing meaning; this adds no timing
 threshold or input restriction. Recording source spans takes time linear in the
-source length, and any valid JSON within the limit, including one long string or
-a string dense with escapes, keeps its exact spans instead of failing as invalid.
+source length. A valid JSON string of any length within the limit, including one
+dense with escapes, keeps its exact span instead of failing as invalid.
 
 <details>
 <summary>Record selection, pointers and cycles</summary>
@@ -231,7 +231,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "d5f11dd6e019fcb53a8b885cb0542bb2aeee939ccbfc7849b0ec52a9e800c88e",
+  "status": "approved", "prose_sha256": "3a84aa203ba844948e320226a44f28c86e4392bd60bb6a2f13aa3e0fd973a585",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
