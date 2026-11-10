@@ -288,3 +288,10 @@ test('repair: a recorded suite cause can acquire its first real person ask',asyn
   const f=setup(t);await f.config();await f.alert(1,'test-suite');
   await f.alert(2,'decision');assert.equal(f.requests.length,1);
 });
+
+for(const action of ['alert','digest'])test(`repair 2: coordinated ampersand requests stay out of ${action} chat`,async t=>{
+  const f=setup(t);await f.config();const need='Approve the deployment & grant write access?';
+  if(action==='alert')await f.alert(1,'decision',{...ask,need});
+  else await f.digest([{number:1,category:'decision',need}]);
+  assert.equal(f.requests.length,0);
+});

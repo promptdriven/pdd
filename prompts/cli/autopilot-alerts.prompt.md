@@ -147,7 +147,7 @@ consequence remain recorded and are not sent.
 An eligible ask is a single line containing one question ending in `?`, or one
 imperative sentence beginning Approve, Choose, Grant, Provide, Supply, Sign,
 Release, Review, Restore, Renew, Increase, Allow or Run. Require substantive words in a question; punctuation alone is not an ask. Reject multiple action clauses separated by semicolons, commas, colons or dashes as well as conjunctions. Reject multiple questions,
-multiple sentences or coordinated actions (such as "approve and grant"), blank/generic needs (including "Identify the blocker" and
+multiple sentences or coordinated actions (including an ampersand, such as "approve & grant"), blank/generic needs (including "Identify the blocker" and
 "No named blocker is saved"), and informational/no-action wording in any need.
 This is structural validation; the coordinator owns whether only a person can
 answer. A sendable message must retain its full ask and all issue links. There is no separate ask-length limit: measure the complete message.

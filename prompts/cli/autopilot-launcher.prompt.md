@@ -869,9 +869,15 @@ per wait, and every path ends in a wake or in the stuck rule:
 | Health `healthy`, a run used its wake | A `runtime-stuck` rule, also during an open outage; it is never the test |
 | No open outage, health `healthy` | Waits from one or many issues are no outage: offer each run one `retry` |
 
-Add a waiting issue to an incident's saved issue list only after the alert owner
-confirms delivery with exit code 0. A failed or thrown delivery stays eligible
-for the existing incident retry route.
+The alert owner's exit code 0 confirms local recording, not delivery. Keep
+offering the incident's first issue on each tick, with all current issue numbers
+in `issues`, so deferred observations and failed deliveries remain eligible.
+Keep the saved issue list after successful recording. Machine observations carry
+stable codes (`interpreter-health` and `interpreter-access`), `paused: true`, and
+the current observation time as `tick`. A fixed single ask (`Run pdd autopilot
+doctor?`) accompanies the measured health detail in `tried` and an `ifNoAnswer`
+explaining that interpreter work waits while other work continues. The alerts
+owner controls debounce, budgets and confirmed recovery; a recovery uses the same code.
 
 An offered wake is a `runtime-ready` time rule with one reason line: the run
 number, why it wakes (`one retry`, `the test` or the interpreter back), and the exact
@@ -1189,9 +1195,15 @@ Use existing alerts for one incident per repository and machine: resource for
 low/unknown machine readings, usage-limit for limited/unknown Codex readings.
 Use an existing run/claim or observed issue number; if none exists, retain health
 and open the alert when an issue exists. Join other affected issues via that
-same incident, retry failed delivery through the existing alert store. Include
-safe cause and known reset ISO time, ask only to wait for the ordinary reset or
-free resources. Never suggest a reset purchase, credits or account logout.
+same incident, retry failed delivery through the existing alert store. Every
+paused tick carries stable `machine-resource` or `codex-usage` code, `paused:
+true`, observation time `tick`, the full affected `issues` list, a single ask
+(`Run pdd autopilot doctor?`), and `ifNoAnswer` explaining that admissions wait
+while claims and heartbeats continue. `tried` names the failed resource/usage
+check and known measurement or explicitly unknown reading; retain safe cause
+and known reset ISO time. The alert owner controls its two-tick/15-minute
+debounce and quiet recoveries, which name the same code.
+Never suggest a reset purchase, credits or account logout.
 Recover each kind only on a positively healthy reading, using kind-scoped
 recovered alerts. When all blockers clear retain a recoveryPending timestamp
 until the existing guarded wake confirms delivery; wake even without fresh work.
@@ -1266,9 +1278,19 @@ Packet `parking` is `{working,parked,blockers,wakePending,limit}`; blockers maps
 
 ## Lost-verdict decision after recovery (#3097)
 
-When the free health read is healthy, gather all current unknown-outcome waits into one lost-verdict decision alert. List run numbers, batch identifiers and saved earlier call costs in compact rows (unknown remains unknown). For a recorded resend of the current wait batch, follow its saved newBatch and later recorded replacements as the current recovery batch, with cycle protection. A verdict receipt is ready for an ordinary capacity-limited read-only wake; tell the worker to read that batch and continue from its verdict without sending another check. A new no-verdict receipt remains unknown and needs a separate decision. A sending or uncertain resend without a new receipt remains held, never an automatic wake. Native waits include cost read with workflow-results savedLostCheck; injected waits may supply cost or omit it. Ask for one decision for the group using `pdd workflow resend N... --said -`. Ordinary auto setup/start does not authorize this paid resend. Send no check from the tick.
+When the free health read is healthy, gather all current unknown-outcome waits into one lost-verdict decision alert. Retain run numbers, batch identifiers and saved earlier call costs in the local cause (unknown remains unknown); the compact chat ask omits batch identifiers and costs. For a recorded resend of the current wait batch, follow its saved newBatch and later recorded replacements as the current recovery batch, with cycle protection. A verdict receipt is ready for an ordinary capacity-limited read-only wake; tell the worker to read that batch and continue from its verdict without sending another check. A new no-verdict receipt remains unknown and needs a separate decision. A sending or uncertain resend without a new receipt remains held, never an automatic wake. Native waits include cost read with workflow-results savedLostCheck; injected waits may supply cost or omit it. Ask for one decision for the group using `pdd workflow resend N... --said -`. Ordinary auto setup/start does not authorize this paid resend. Send no check from the tick.
 
-Persist runtime.lostDecision with the sorted number/batch identities so unchanged ticks and restarts ask only once for that group. Send one alert (kind decision, attached to the oldest run, update true) for the complete group; a failed alert remains retryable. During unavailable/access health ask nothing. Select the interpreter-access incident's first run from all current waits, including lost-verdict waits. Attach later waits to that incident even when all waits have lost verdicts; repair a saved access incident with no first run when a current wait exists. A lost-verdict wait remains parked: exclude it from retry/probe/recovered wakes and repeated-wake stuck escalation. Ordinary known-unsent/service recovery retains its current rules. Never carry a resend authorization from an earlier batch into a new no-verdict batch. Keep the decision identity while other runtime state changes, and clear it only when no lost waits remain.
+Persist runtime.lostDecision with the sorted number/batch identities only after
+the alert owner confirms delivery (the `Alert`/`Update sent` result explicitly
+says the webhook or bot readback confirmed it). Exit 0 with a recorded, deferred,
+failed or unconfirmed result is not delivery: keep handing the group to the owner
+on later ticks, whose deduplication prevents an uncertain send being repeated.
+Send one alert (kind decision, attached to the oldest run, update true) for the
+complete group, with stable code `lost-verdict`, all group issue numbers in
+`issues`, single ask `Run pdd workflow resend N... --said -?`, a compact tried
+line and an `ifNoAnswer` stating that these runs wait and other work continues.
+Changed batches keep the same cause code; the owner decides whether the changed
+ask and budgets permit sending. During unavailable/access health ask nothing. Select the interpreter-access incident's first run from all current waits, including lost-verdict waits. Attach later waits to that incident even when all waits have lost verdicts; repair a saved access incident with no first run when a current wait exists. A lost-verdict wait remains parked: exclude it from retry/probe/recovered wakes and repeated-wake stuck escalation. Ordinary known-unsent/service recovery retains its current rules. Never carry a resend authorization from an earlier batch into a new no-verdict batch. Keep the decision identity while other runtime state changes, and clear it only when no lost waits remain.
 
 ## Route question ledger
 

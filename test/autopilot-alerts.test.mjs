@@ -457,3 +457,88 @@ test('two native processes share incident custody and post the same alert once',
   assert.equal(Object.keys(f.record().incidents).length, 1);
   assert.deepEqual(f.record().log.map(row => row.action), ['alert', 'repeat']);
 });
+
+const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
+const realAsk = {cause:'Disk available 3%',tried:'Read disk usage: available 3%',need:'Run pdd autopilot doctor?',paused:true};
+async function persistent(f, issue, fields=realAsk) {
+  await f.alert(issue,'resource',fields);f.time+=15*MINUTE;return f.alert(issue,'resource',fields);
+}
+
+test('restored: infrastructure set/test/clear, issue routing, recovery isolation and fallback',async t=>{
+  const f=setup(t), selected=['--destination','infrastructure'];
+  await f.pdd(['autopilot','alerts','set'],DISCORD);
+  const configured=await f.pdd(['autopilot','alerts','set',...selected],SLACK);
+  assert.equal(configured.exitCode,0);assert.match(configured.stdout,/--destination infrastructure/);
+  const infra=join(f.home,'.config','pdd','autopilot-infrastructure-alerts.json');
+  assert.equal(statSync(infra).mode&0o777,0o600);const ordinary=readFileSync(f.config,'utf8');
+  f.replies.push({status:200,text:'ok'});await persistent(f,41);
+  f.replies.push(echo);await f.alert(42,'decision',{cause:'Policy choice',tried:'Read policy',need:'Choose retention days?'});
+  assert.ok(f.requests[0].url.startsWith(SLACK));assert.ok(f.requests[1].url.startsWith(DISCORD));
+  f.time+=DAY;f.replies.push({status:200,text:'ok'},echo);
+  await f.alert(41,'recovered',{cause:'Disk restored',kind:'resource',code:'41:resource'});
+  await f.alert(42,'recovered',{cause:'Policy chosen',kind:'decision',code:'42:decision'});
+  assert.ok(f.requests[2].url.startsWith(SLACK),'infrastructure recovery stays on infrastructure');
+  assert.ok(f.requests[3].url.startsWith(DISCORD),'person recovery stays on ordinary destination');
+  assert.deepEqual(f.record().incidents,{});
+  const length=f.record().log.length;f.replies.push({status:200,text:'ok'});
+  assert.equal((await f.pdd(['autopilot','alerts','test',...selected])).exitCode,0);
+  assert.equal(f.record().log.length,length+1);assert.equal(f.record().log.at(-1).destination,'infrastructure');
+  assert.equal((await f.pdd(['autopilot','alerts','clear',...selected])).exitCode,0);
+  assert.equal(existsSync(infra),false);assert.equal(readFileSync(f.config,'utf8'),ordinary);
+  f.replies.push(echo);await persistent(f,43);assert.ok(f.requests.at(-1).url.startsWith(DISCORD),'unset infrastructure falls back');
+  assert.equal((await f.pdd(['autopilot','alerts','clear','--destination','unknown'])).exitCode,2);
+  assert.equal(readFileSync(f.config,'utf8'),ordinary);f.noSecret();
+});
+
+test('restored: destination tests retain a concurrent alert save and isolate failures by route',async t=>{
+  const f=setup(t);await f.pdd(['autopilot','alerts','set'],DISCORD);
+  await f.pdd(['autopilot','alerts','set','--destination','infrastructure'],SLACK);
+  const fields={cause:'Missing policy choice',tried:'Read policy',need:'Choose policy A?'};
+  f.replies.push(echo);await f.alert(40,'decision',fields);
+  let release,entered;const hold=new Promise(r=>{release=r;}),started=new Promise(r=>{entered=r;});
+  f.replies.push(async request=>{entered();await hold;return echo(request);},echo);
+  const sending=f.alert(41,'decision',fields);await started;
+  const testing=f.pdd(['autopilot','alerts','test']);release();
+  assert.deepEqual((await Promise.all([sending,testing])).map(r=>r.exitCode),[0,0]);
+  assert.equal(Object.keys(f.record().incidents).length,2);assert.equal(f.record().log.at(-1).action,'test');
+  f.replies.push({status:403,text:''});await persistent(f,42);
+  let status=alertStatusLine({repo:'owner/repo',env:f.env},f.ports);assert.match(status,/--destination infrastructure/);
+  f.replies.push(echo);await f.pdd(['autopilot','alerts','test']);
+  status=alertStatusLine({repo:'owner/repo',env:f.env},f.ports);assert.match(status,/403/,'ordinary test cannot hide infrastructure failure');
+  f.replies.push({status:200,text:'ok'});await f.pdd(['autopilot','alerts','test','--destination','infrastructure']);
+  status=alertStatusLine({repo:'owner/repo',env:f.env},f.ports);
+  assert.doesNotMatch(status,/403/);assert.match(status,/--destination infrastructure/,'open undelivered incident still shows');
+  // Reverse the routes: a successful infrastructure test cannot hide an ordinary failure.
+  f.replies.push({status:500,text:''});await f.alert(44,'decision',fields);
+  f.replies.push({status:200,text:'ok'});await f.pdd(['autopilot','alerts','test','--destination','infrastructure']);
+  status=alertStatusLine({repo:'owner/repo',env:f.env},f.ports);assert.match(status,/500/);
+});
+
+test('restored: saved machine identity survives hostname changes and ignores other repositories',async t=>{
+  const f=setup(t);await f.pdd(['autopilot','alerts','set'],DISCORD);mkdirSync(f.ports.stateRoot,{recursive:true});
+  for(const [name,repo,machine] of [['a','owner/other','other-machine'],['b','Owner/Repo','saved-machine']])
+    writeFileSync(join(f.ports.stateRoot,`${name.repeat(20)}.json`),JSON.stringify({repo,machine}));
+  f.ports.hostname=()=> 'renamed-host';f.replies.push(echo);
+  await persistent(f,12,{...realAsk,code:'disk'});
+  assert.equal(Object.values(f.record().incidents)[0].host,'saved-machine');
+  f.ports.hostname=()=> 'renamed-again';await f.alert(13,'resource',{...realAsk,code:'disk'});
+  assert.equal(f.requests.length,1);assert.equal(Object.keys(f.record().incidents).length,1);
+  f.time+=DAY;f.replies.push(echo);await f.alert(13,'recovered',{cause:'Disk restored',kind:'resource',code:'disk'});
+  assert.equal(f.requests.length,2);assert.deepEqual(f.record().incidents,{});f.noSecret();
+});
+
+test('restored: current checkout saved machine wins over sorted matching repository state',async t=>{
+  const f=setup(t);await f.pdd(['autopilot','alerts','set'],DISCORD);mkdirSync(f.ports.stateRoot,{recursive:true});
+  const id=createHash('sha256').update(f.cwd).digest('hex').slice(0,20);
+  writeFileSync(join(f.ports.stateRoot,`${'0'.repeat(20)}.json`),JSON.stringify({repo:'owner/repo',machine:'machine-a'}));
+  writeFileSync(join(f.ports.stateRoot,`${id}.json`),JSON.stringify({repo:'owner/repo',machine:'machine-b'}));
+  f.replies.push(echo);await persistent(f,51);
+  assert.equal(Object.values(f.record().incidents)[0].host,'machine-b');f.noSecret();
+});
+
+test('restored: failed digest status names digest without an invented issue',async t=>{
+  const f=setup(t);await f.pdd(['autopilot','alerts','set'],DISCORD);f.replies.push({status:403,text:''});
+  await runAutopilotAlerts({action:'digest',cwd:f.cwd,env:f.env,attention:[{number:41,category:'decision',need:'Choose policy A?'}]},f.ports);
+  const status=alertStatusLine({repo:'owner/repo',env:f.env},f.ports);
+  assert.match(status,/digest/);assert.match(status,/403/);assert.doesNotMatch(status,/#undefined/);
+});
