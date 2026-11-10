@@ -379,7 +379,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "24b9ef2e0e37eee6537c435ad41bd895073c6ff30ac5b3cbce54424886992048",
   "entries": [
     {
