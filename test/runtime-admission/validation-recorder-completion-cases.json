@@ -1,0 +1,17 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/validation-recorder-completion.md",
+  "criteria": [
+    {"id": "AC1", "text": "A validation that exits with status 7 retains that status, its complete output and its final test counts when the caller resumes reading after the terminal receipt is saved."},
+    {"id": "AC2", "text": "Small output and output large enough to queue IPC writes follow the same completion rules, without repeating the validation command."}
+  ],
+  "cases": [
+    {"id": "small", "lines": 1},
+    {"id": "queued", "lines": 180},
+    {"id": "larger-queue", "lines": 540}
+  ],
+  "expected": {
+    "exitCode": 7,
+    "counts": {"tests": 2, "suites": 0, "pass": 1, "fail": 1, "cancelled": 0, "skipped": 0, "todo": 0}
+  }
+}

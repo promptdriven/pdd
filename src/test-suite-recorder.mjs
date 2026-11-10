@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: f372251fc1f0bc0fc3c23cfd8a61822bbb46d2af1501320e4e0b702faea9efe3).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 1cd2dec95431bbcda8c3ab2fe1dca261f4b197b55f5ea4bc302a1e8e3d327b27).
 // This process keeps validation evidence when the calling chat disappears.
 import {rememberSecrets} from './secret-redaction.mjs';
 import * as fs from 'node:fs';
@@ -7,9 +7,10 @@ import {serializeValidationReceipt, redactingLines, validationLog, safeEvidenceT
 import {executeSuite} from './test-suite-queue.mjs';
 
 let started = false;
-const send = message => {
-  if (process.connected) try { process.send(message, () => {}); } catch {}
-};
+const send = message => new Promise(resolve => {
+  if (!process.connected) { resolve(); return; }
+  try { process.send(message, () => resolve()); } catch { resolve(); }
+});
 // Losing the caller is not a request to cancel an already admitted command.
 process.on('disconnect', () => { if (!started) process.exitCode = 1; });
 process.on('message', async message => {
@@ -85,7 +86,8 @@ process.on('message', async message => {
     record.state = record.outcome === 'completed' ? 'finished' : 'running'; record.finishedAt = record.state === 'finished' ? Date.now() : null;
     record.reason = result.reason == null ? (result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null) : safeEvidenceText(result.reason);
     save();
-    send({result:{...result,record}});
+    // Disconnect only after queued output and the terminal result are flushed.
+    await send({result:{...result,record}});
   } catch (error) {
     // No terminal message may claim a receipt that was not saved.
     process.exitCode = 1;

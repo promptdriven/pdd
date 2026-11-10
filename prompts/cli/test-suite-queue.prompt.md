@@ -185,6 +185,14 @@ Save bounded, sanitized stdout/stderr evidence at `logPath` before forwarding it
 A closed caller must not stop recording or cause a resend. On completion, stop
 owned descendants, drain output, remove the owned temporary environment, and
 atomically save the terminal receipt before returning or forwarding completion.
+Keep the recorder's IPC channel connected until the terminal send callback
+settles, so queued output and completion are not discarded by disconnect.
+Caller loss or a failed send must still leave the saved receipt available.
+When observing the recorder, process exit alone does not establish that a
+terminal receipt is missing: drain its IPC messages through channel closure
+before reporting that failure. Preserve output and the reported suite exit code
+when completion arrives after exit. A closed recorder without completion still
+fails explicitly; never infer completion from exit status alone.
 
 Receipts and `readSuiteProgress` expose the added fields above plus `exitCode`
 (integer or null), `signal` (termination signal or null), `outcome` (`running`,

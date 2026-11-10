@@ -234,7 +234,7 @@ test('validation saves full output, source and terminal counts before forwarding
   const output={write(bytes){const row=read(f.receipt);assert.ok(fs.readFileSync(row.logPath).includes(bytes));forwarded+=bytes;}};
   const command=`${quote(process.execPath)} ${quote(program)}`;
   const result=await runTestSuite({cwd,command,env:f.env},{...f.ports,stdout:output,stderr:output});
-  assert.equal(result.exitCode,7);
+  assert.equal(result.exitCode,7,result.message);
   const row=read(f.receipt),log=fs.readFileSync(row.logPath,'utf8');
   assert.ok(log.includes(data));assert.ok(log.includes('stderr-end'));assert.ok(forwarded.includes(data));
   assert.equal(row.command.includes(command),false);assert.equal(row.commandFingerprint,createHash('sha256').update(command).digest('hex'));assert.equal(row.source.head,head);assert.match(row.source.fingerprint,/^[a-f0-9]{64}$/);

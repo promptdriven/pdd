@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: f372251fc1f0bc0fc3c23cfd8a61822bbb46d2af1501320e4e0b702faea9efe3).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 1cd2dec95431bbcda8c3ab2fe1dca261f4b197b55f5ea4bc302a1e8e3d327b27).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -366,7 +366,7 @@ async function executeRecordedSuite(command, options, ports) {
     process.on('SIGINT',interrupt); process.on('SIGTERM',terminate);
     const cleanup = () => { process.off('SIGINT',interrupt); process.off('SIGTERM',terminate); };
     child.once('error', error => { cleanup(); reject(error); });
-    child.once('exit', () => { cleanup(); if (!terminal) reject(Error('Validation recorder ended without a terminal receipt.')); });
+    child.once('close', () => { cleanup(); if (!terminal) reject(Error('Validation recorder ended without a terminal receipt.')); });
     child.on('message', message => {
       if (message.stream) {
         const output = ports[message.stream] ?? process[message.stream];
