@@ -112,6 +112,8 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
 | `pdd autopilot status [--all] [--json]` | Show this machine's repo, the folder Autopilot works in, selected base, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
+| `pdd autopilot report` | List this machine's local Autopilot report drafts ([core engine](#core-engine)). No GitHub call |
+| `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report |
 | `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
@@ -1357,6 +1359,67 @@ Automatic native-test commands use `node --test TEST...`, `npm test` or
 `npm run test:NAME`. Node files must be committed test files. The command must
 finish with a TAP report, at least one test, all tests passed, and no failures.
 Build scripts and commands without test results do not qualify.
+
+## Core engine
+
+Set `autopilot.engine` to `core` in `pdd.json` to run the small native engine
+instead of the coordinator chat. The default is `full`. The core engine needs no
+Herdr: `pdd autopilot doctor` skips the Herdr checks, `start` opens no Herdr
+session, and each job is a headless Codex or Claude process with a log file.
+
+```json
+{"autopilot":{"mode":"auto","trust":[],"engine":"core","runs":2,"label":"pdd:autopilot",
+  "jobTimeoutMinutes":120,"report":"draft","repairs":2,"testCommand":"npm test"}}
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `runs` | Issues in progress at the same time on this machine | 2 |
+| `label` | Take only issues with this label | none: every ready issue |
+| `jobTimeoutMinutes` | Time limit for one agent job, and for the checks of one PR | 120 |
+| `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `draft` |
+| `repairs` | Repair jobs for one PR after a red check | 2 |
+| `testCommand` | Full test command that runs on the PR head | `npm test` when `package.json` has a test script |
+
+Each tick, without AI calls:
+
+1. List the open issues. An issue is ready when it has no assignee, no live
+   `pdd:working` claim, no `pdd:stuck`, no open issue that blocks it (a GitHub
+   issue dependency or a `blocked by #N` line in its body), a trusted author and,
+   when `label` is set, that label. The oldest ready issue goes first.
+2. Refresh the heartbeat of this machine's claims.
+3. Check each job. A job that ran past its time limit, failed, died or left no
+   result ends. A job with a PR goes to the merge check.
+4. Merge check: the PR head is the job's head, CI is green for that head, the
+   full test suite passes for that head, a fresh reviewer agent that did not write
+   the change gives PASS for that head (the tick posts the verdict on the PR), the
+   PR does not say `Runtime: FAIL`, and the base check passes. Then
+   `gh pr merge --merge --match-head-commit HEAD` merges it, and the issue closes.
+   A red check starts one repair job on the same branch, up to `repairs` times.
+5. Fill free slots: claim the oldest ready issue with `pdd:working` and a claim
+   comment, make a worktree and start one headless job. The job makes one PR with
+   prompt, tests and code, and writes one `Runtime:` line in the PR body.
+
+When a job ends, the issue gets one comment with the cause and the log path, the
+label `pdd:stuck`, and loses `pdd:working`. Nothing else waits on it. To retry,
+remove `pdd:stuck`. To stop a running job, close the issue, assign it or add
+`pdd:stuck`. After three jobs in a row end with no
+result, for example when the agent is signed out, intake pauses for one hour on
+this machine. `pdd autopilot status` shows the jobs, the busy slots, a pause and
+the last results from local files.
+
+A Runtime problem (no verdict, lint or binding refusal, interpreter error) or a PDD
+problem (CLI error, crash, claim or merge-check tool error) also gets one report
+for its owners in promptdriven/pdd: label `pdd:runtime` (assigned to the Runtime
+owner) or `pdd:autopilot-report`. One cause has one report: a repeat on another
+day adds one "seen again" comment. Each machine files at most 3 new reports a day.
+Reports hold versions, the step, the error code and a short redacted detail,
+never code or text from your repository. With `report` `draft` (the default) the
+report stays on this machine until you run `pdd autopilot report send
+FINGERPRINT`; with `off` nothing is saved. The ended issue's comment says
+`Blocked by` the report when it was filed. When a job's PR says
+`Runtime: not run (reason)` for a Runtime cause, the PR still can merge; the tick
+files or counts the report and rewrites the line to `Runtime: not run (#N)`.
 
 ## Post-merge audit settings
 

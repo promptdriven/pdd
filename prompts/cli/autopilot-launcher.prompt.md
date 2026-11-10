@@ -9,10 +9,12 @@ Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(
 `tickAutopilot(stateFile, ports)` and `requestAutopilotCompletion({cwd,env}, ports)`, and the pure
 `autopilotLaunchFingerprint(state)` that returns the launch fingerprint below for a saved state. This launcher connects a repository to the
 person's interactive coding agent in a dedicated Herdr session. It adds no
-approval, merge, quota-reset or headless execution route. Its read-only base check refuses unsafe merge targets without performing a merge. Preserve existing
+approval, merge, quota-reset or headless execution route of its own; with
+`autopilot.engine: "core"` it hands each tick to the [core engine](autopilot-core.prompt.md),
+which owns those for that engine. Its read-only base check refuses unsafe merge targets without performing a merge. Preserve existing
 setup, workflow and interpreter behavior.
 
-`runAutopilotLauncher` accepts command start, stop, status, add or release, cwd, packageRoot, env,
+`runAutopilotLauncher` accepts command start, stop, status, add, release or report, cwd, packageRoot, env,
 issues (argv issue references), and optional runs and checks text. Tests may inject `checkCapacityPorts` for the
 shared queue machine/filesystem ports independently of the launcher process port. Return `{exitCode,message}`.
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
@@ -1340,6 +1342,37 @@ unavailability. A binding-missing/missing-binding reason or refusal, or matched
 missing-binding compatibility state, parks as binding. Preserve independent
 person questions and explicit blockers.
 
+## Core engine switch
+
+`autopilot.engine` in the checkout's `pdd.json` selects the engine; the
+[core owner](autopilot-core.prompt.md) reads it with `autopilotEngine`, and any
+value other than `core` (or an unreadable file) is the full engine. The default
+stays `full`. The full engine below is unchanged; this section only adds a branch.
+
+- Tick: after the tick lock and the coordinator identity are settled, and before any
+  workflow cleanup, a core engine runs the core tick and returns its result. A
+  completion request returns `inactive` with no work. The core tick selects the
+  automatic base, computes the machine GitHub budget, and calls `tickCore` with this
+  launcher's counted `gh` and `git` process port, its issue list (`queryIssues` with
+  the saved ETag pages), its trust rule for authors (`trusted`, with the core trust
+  list), the read-only Codex limits as `agentReady` (only `limited` holds intake),
+  the package version, `ROOT` = the state file path without `.json` plus `-core`,
+  and the machine report folder `core-reports` beside the state files. Tests may
+  replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
+  only while still enabled, save the issue-list cache, base fields, `nextTick` and
+  `core: {at, message}`.
+- Start: a core engine skips the workflow-readiness check, the Herdr check and the
+  coordinator workspace; it still checks sign-ins, the agent, the base and the
+  timer, saves the agent profile and runs the first tick. Its message names
+  `pdd autopilot status` instead of the Herdr session.
+- Status (without `--all` or `--json`): a core engine shows the enabled and timer
+  line, `coreStatus` from local files, and the last tick message. No Herdr read.
+- Report: catalog command `report` lists the machine's local report drafts
+  (`FINGERPRINT: title; seen N time(s), last TIME`, or `No local Autopilot report
+  drafts.`); `report send FINGERPRINT` sends one through `sendReportDraft` of the
+  [report owner](autopilot-reports.prompt.md) with the counted `gh` port. It needs
+  no repository. Other operands return exit code 2 with the usage line.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
@@ -1357,6 +1390,8 @@ person questions and explicit blockers.
 - [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake and display size, cause and umbrella in status without a GitHub read.
 
 - [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
+
+- [Autopilot core](autopilot-core.prompt.md) and [Autopilot reports](autopilot-reports.prompt.md): required native generation and verification context for the engine switch, the core tick, core status and the report command.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage, run discovery and guarded custody updates.
 

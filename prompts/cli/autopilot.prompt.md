@@ -20,6 +20,12 @@ Autopilot config optionally accepts `parking: {hours,maxParked}`. Positive finit
 `autopilot.audit` is an optional Boolean; false disables post-merge audits.
 Preserve it on settings writes. The audit owner reads it from the source checkout.
 
+`autopilot.engine` (`full`, the default, or `core`) and the core keys `runs`,
+`label`, `jobTimeoutMinutes`, `report`, `repairs` and `testCommand` belong to the
+[Autopilot core](autopilot-core.prompt.md), which reads and validates them. This
+module does not add them to its result; settings writes preserve them like other
+unknown Autopilot keys.
+
 ## Dependencies
 
 - [GitHub calls](github-calls.prompt.md#budget): required generation and verification context for reading `autopilot.github` with `githubBudgetSettings`.

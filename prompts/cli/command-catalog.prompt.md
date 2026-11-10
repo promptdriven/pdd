@@ -277,6 +277,15 @@ In PDD, prompts are the source. Code follows the prompts.
 ```
 
 
+## Autopilot report route
+
+Catalog `autopilot.report` with prefix `autopilot report`, local `autopilot-report`,
+an optional choice operand `send` and an optional text operand FINGERPRINT, no
+options. Forms: `pdd autopilot report` (List the local Autopilot report drafts of
+this machine; no GitHub call.) and `pdd autopilot report send FINGERPRINT` (File
+one local report draft to promptdriven/pdd, or count it on the matching open
+report.).
+
 ## Post-merge audit route
 
 Catalog `autopilot.audit` with prefix `autopilot audit`, local `autopilot-audit`,
