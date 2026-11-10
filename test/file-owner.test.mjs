@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { headerPrompts, promptClaims, resolveOwners, findOwners } from '../src/file-owner.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 
-const HEX = 'a'.repeat(64);
+const HEX = 'a'.repeat(64), CUT = '// Generated from prompts/cut.prompt.md';
 const capture = () => ({ text: '', write(value) { this.text += value; } });
 function repo(t, files) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-owner-')));
@@ -28,8 +28,7 @@ test('3200 headerPrompts reads every strict header line in the first 4 KiB', () 
     ' * Generated from prompts/d.prompt.md', '// Generated from prompts/a.prompt.md.'].join('\n');
   assert.deepEqual(headerPrompts(forms), ['prompts/a.prompt.md', 'prompts/b.prompt.md', 'prompts/c.prompt.md', 'prompts/d.prompt.md'], 'line order, no duplicates');
   assert.deepEqual(headerPrompts(`${' '.repeat(4100)}\n// Generated from prompts/far.prompt.md.\n`), [], 'a header after 4 KiB is not read');
-  const cut = '// Generated from prompts/cut.prompt.md';
-  assert.deepEqual(headerPrompts(`${' '.repeat(4096 - cut.length - 1)}\n${cut} (sha256: ${HEX}).\n`), [], 'a line cut by the window is not read');
+  assert.deepEqual(headerPrompts(`${' '.repeat(4096 - CUT.length - 1)}\n${CUT} (sha256: ${HEX}).\n`), [], 'a line cut by the window is not read');
   assert.deepEqual(headerPrompts([
     'Generated from the canonical m1_policy prompt.', 'const x = "Generated from prompts/s.prompt.md.";',
     '// see Generated from prompts/t.prompt.md for details', '// Generated from ../outside.prompt.md.', '// Generated from /abs/x.prompt.md.',
@@ -96,14 +95,16 @@ test('3200 findOwners reads the working tree of a real repository', t => {
   const root = repo(t, {
     'pdd-bindings.json': JSON.stringify({ schema_version: 'pdd.bindings.v1', modules: [{ module: 'src/bound.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' }] }),
     'prompts/bound.prompt.md': '# Bound\n', 'prompts/new.prompt.md': '# New\n\nOwn `src/new.mjs`.\n', 'prompts/late.prompt.md': '# Late\n',
-    'src/late.mjs': `${'// license\n'.repeat(11)}// Generated from prompts/late.prompt.md (sha256: ${HEX}).\nexport const x = 1;\n`, 'src/bound.mjs': 'export {};\n' });
-  const result = findOwners({ root, paths: ['src/late.mjs', 'src/bound.mjs', 'src/new.mjs', 'README.md'] });
+    'src/late.mjs': `${'// license\n'.repeat(11)}// Generated from prompts/late.prompt.md (sha256: ${HEX}).\nexport const x = 1;\n`, 'src/bound.mjs': 'export {};\n',
+    'prompts/cut.prompt.md': '# Cut\n', 'src/cut.mjs': `${' '.repeat(4096 - CUT.length - 1)}\n${CUT} (sha256: ${HEX}).\n` });
+  const result = findOwners({ root, paths: ['src/late.mjs', 'src/bound.mjs', 'src/new.mjs', 'README.md', 'src/cut.mjs'] });
   assert.deepEqual(result.files.map(({ path, owner, source, certain }) => [path, owner, source, certain]), [
     ['src/late.mjs', 'prompts/late.prompt.md', 'header', true], ['src/bound.mjs', 'prompts/bound.prompt.md', 'binding', true],
-    ['src/new.mjs', 'prompts/new.prompt.md', 'prose', false], ['README.md', null, null, true]]);
+    ['src/new.mjs', 'prompts/new.prompt.md', 'prose', false], ['README.md', null, null, true],
+    ['src/cut.mjs', null, null, true]], 'a header cut by the 4 KiB window names no owner, as in replay');
   const reads = [];
   findOwners({ root, paths: ['src/late.mjs'] }, { files: () => ['prompts/late.prompt.md', 'src/late.mjs', 'pdd-bindings.json'], read: (path, limit) => { reads.push([path, limit]); return null; } });
-  assert.deepEqual(reads.sort(), [['pdd-bindings.json', 65536], ['prompts/late.prompt.md', 65536], ['src/late.mjs', 4096]]);
+  assert.deepEqual(reads.sort(), [['pdd-bindings.json', 65536], ['prompts/late.prompt.md', 65536], ['src/late.mjs', 4097]]);
 });
 
 // Wrong: the command is missing from the catalog, prints a different shape or accepts a path outside the repository.

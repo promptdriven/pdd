@@ -35,8 +35,8 @@ Callers treat a path with `certain: false` as owned. It is false when:
 - no binding names a prompt and the file exists but cannot be read.
 
 Otherwise `certain` is true. A binding entry without `prompt` (it has `reason`
-and `port_attempt` instead) names no owner; it is certain that no prompt owns
-the path. Binding entries that are not objects with a string `module` are
+and `port_attempt` instead) names no owner; prose claims still apply, and without
+a header or a claim it is certain that no prompt owns the path. Binding entries that are not objects with a string `module` are
 skipped; a string `prompt` names the owner.
 
 `note` explains an uncertain or prompt-less answer in one line, else it is `''`.
@@ -86,7 +86,8 @@ paths: later sentences often name files that the module reads, such as `pdd.json
 The claimed paths are:
 
 - each Markdown link target `[text](TARGET)` in the sentence, without its
-  `#fragment`, resolved against the prompt's folder;
+  `#fragment`, resolved against the prompt's folder; skip a target with an empty
+  file part or a URL scheme (such as `https:`);
 - each other run of the characters `A-Z a-z 0-9 _ @ + ~ . / -` that contains a `/`
   or a `.`, without trailing `.` characters. A run that starts with `./` or
   `../` resolves against the prompt's folder; any other run is
@@ -108,9 +109,10 @@ exist: a prompt is written before its code.
   of canonical repository paths to answer, in order; a repeated path is answered
   once, at its first place. `bindings` is the text of `pdd-bindings.json`, or
   null when it is absent; `false` when it exists but cannot be read. `heads` is
-  a list of `{path, content}` rows: content is the file's first bytes as a
-  string or `Uint8Array`, null when the file is absent, or `false` when it
-  exists but cannot be read. A path without a row has no header. `prompts` is a
+  a list of `{path, content}` rows: content is the file's first 4,097 bytes (the
+  whole file when it is shorter) as a string or `Uint8Array`, null when the file
+  is absent, or `false` when it exists but cannot be read. The extra byte shows
+  whether the last line of the 4 KiB window is cut. A path without a row has no header. `prompts` is a
   list of `{path, content}` rows for every Git-visible `*.prompt.md` file.
   Return `{schema_version: 'pdd.owner.v1', files}`, where each row is
   `{path, owner, owners, source, certain, note}` as above, in `paths` order.
@@ -121,7 +123,8 @@ exist: a prompt is written before its code.
   returns at most `limit` bytes of the working file as a `Uint8Array`, or null
   when it does not exist (default: read the regular file at `root/path`; a
   missing file or a missing parent folder is null; other errors throw, and the
-  caller records `false`). Read 4,096 bytes of each requested path, 65,536
+  caller records `false`). Read 4,097 bytes of each requested path (one byte
+  more than the header window, so that a cut last line is dropped), 65,536
   bytes of each prompt and of `pdd-bindings.json` (a longer bindings file does
   not parse, so it counts as unreadable).
 - `runOwner({cwd, paths, json}, {stdout, stderr, files, read})`: the

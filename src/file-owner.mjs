@@ -1,4 +1,4 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: 8355b570b5c57dbcd24f71f255749f344198e0d1f7f830a275fb04f5fbdb482a).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: e37e6c657ea6c99a1d39bcbe1365aec5addbcc8f7bdb280c24fd70aef5fe0ebf).
 import { execFileSync } from 'node:child_process';
 import { closeSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
@@ -104,7 +104,8 @@ export function findOwners({ root, paths = [] }, ports = {}) {
   const raw = attempt('pdd-bindings.json', PROMPT);
   const bindings = raw ? decode(raw, PROMPT) : raw;
   const prompts = files().filter(path => path.endsWith('.prompt.md')).map(path => ({ path, content: attempt(path, PROMPT) || null }));
-  const heads = unique(paths).map(path => ({ path, content: attempt(path, HEAD) }));
+  // One byte more than the window, so headerPrompts can see that its last line is cut.
+  const heads = unique(paths).map(path => ({ path, content: attempt(path, HEAD + 1) }));
   return resolveOwners({ paths, bindings, heads, prompts });
 }
 
