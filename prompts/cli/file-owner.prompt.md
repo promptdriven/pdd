@@ -63,12 +63,43 @@ hex digits, optionally `.`, optional white space, an optional closer (`*/`,
 ends in `.prompt.md`. Other text, such as `Generated from the canonical m1_policy
 prompt` or a `Generated from` inside a string, is no header. A file can have
 more than one header; each names an owner. The header can be on any line in the
-window, for example after a `#!` line, a license or imports. The hash is not
-read here.
+window, for example after a `#!` line, a license or imports. HEX is the
+[header hash](#header-hash) of the prompt that the file follows.
 
 A canonical path is a nonblank string of at most 1,000 characters, not absolute,
 with no backslash, no control character and no empty, `.`, `..` or `.git`
 (any case) segment. Drop header paths that are not canonical.
+
+### Header hash
+
+The header hash of a prompt is the SHA-256 (64 lowercase hex digits) of the
+UTF-8 bytes of its behavior text. The behavior text is the prompt text with
+the approval metadata taken out: replace the JSON of each Runtime interface
+block (found with the shared [interface block reader](runtime-preflight.prompt.md))
+that parses as a JSON object with `JSON.stringify` of that object without its
+top-level `status` and `prose_sha256` keys. Keep all other bytes. A block whose
+JSON does not parse as an object stays as written.
+
+So the hash covers the prose and every interface declaration: entries,
+operations, schemas, errors, calls, resources, limits, kind, reason and
+conventions. It ignores the approval metadata: `pdd approve` and
+`pdd test --fill-hash` change only `status` and `prose_sha256`, and approval
+evidence is kept outside the prompt. Approving a prompt therefore leaves its
+headers current. It also ignores white space inside the interface JSON.
+
+Each header has a hash state:
+
+| State | When |
+|---|---|
+| `current` | HEX equals the header hash of the named prompt. |
+| `current` with `legacy: true` | HEX equals the SHA-256 of the whole prompt file (the earlier form, which every approval changed). pdd accepts this form as current through pdd 0.1.28 only, so one release can refresh headers without making every file stale at once; remove this row after that release. |
+| `stale` | HEX is any other value: the prompt changed after the header was written. |
+| `none` | The header has no hash. |
+| `unknown` | The named prompt is not a Git-visible prompt, or its content is not available. |
+
+A stale or missing hash is a report, not an error. Writing the hash is the
+writer's claim that the file follows that prompt version; pdd computes the hash
+and never rewrites a header.
 
 ### Prompt claims
 
@@ -103,6 +134,15 @@ exist: a prompt is written before its code.
   Buffer), `null` or `undefined`. A string is read as its UTF-8 bytes. Return
   the canonical header paths in line order, without duplicates; `[]` for no
   content.
+- `headerEntries(content)`: like `headerPrompts`, but return `{prompt, sha256}`
+  rows, with `sha256` the header's HEX or null. When a prompt is named twice,
+  keep its first row.
+- `promptHeaderHash(content)`: the [header hash](#header-hash) of one prompt's
+  content (a string or `Uint8Array`).
+- `headerHashState(sha256, promptContent)`: return `{expected, state, legacy}`
+  for one header. `expected` is the header hash, or null when `promptContent`
+  is null or `false` (then `state` is `unknown`). `legacy` is true only for the
+  whole-file form.
 - `promptClaims(promptPath, content)`: return the sorted, unique claimed paths
   of one prompt; `[]` for no content.
 - `resolveOwners({paths, bindings, heads, prompts})`: pure. `paths` is the list
@@ -113,9 +153,13 @@ exist: a prompt is written before its code.
   whole file when it is shorter) as a string or `Uint8Array`, null when the file
   is absent, or `false` when it exists but cannot be read. The extra byte shows
   whether the last line of the 4 KiB window is cut. A path without a row has no header. `prompts` is a
-  list of `{path, content}` rows for every Git-visible `*.prompt.md` file.
+  list of `{path, content}` rows for every Git-visible `*.prompt.md` file, with
+  the whole file as content, or `false` when it cannot be read whole. Claims read
+  the first 65,536 bytes of it.
   Return `{schema_version: 'pdd.owner.v1', files}`, where each row is
-  `{path, owner, owners, source, certain, note}` as above, in `paths` order.
+  `{path, owner, owners, source, certain, note, headers}` as above, in `paths`
+  order. `headers` lists one `{prompt, sha256, expected, state, legacy}` row for
+  each `headerEntries` row of the file, in line order; `[]` without a header.
 - `findOwners({root, paths}, ports = {})`: read the inputs of `resolveOwners`
   from the working tree of the Git root `root`, then return its result.
   `ports.files()` returns the Git-visible repository paths (default: the shared
@@ -125,8 +169,9 @@ exist: a prompt is written before its code.
   missing file or a missing parent folder is null; other errors throw, and the
   caller records `false`). Read 4,097 bytes of each requested path (one byte
   more than the header window, so that a cut last line is dropped), 65,536
-  bytes of each prompt and of `pdd-bindings.json` (a longer bindings file does
-  not parse, so it counts as unreadable).
+  bytes of `pdd-bindings.json` (a longer bindings file does not parse, so it
+  counts as unreadable) and up to 10 MiB of each prompt (read 10 MiB and one
+  byte; a longer prompt counts as `false`).
 - `runOwner({cwd, paths, json}, {stdout, stderr, files, read})`: the
   `pdd owner PATH... [--json]` command. Return the exit code.
 
@@ -145,7 +190,12 @@ it, print one line for each path:
 - `PATH: OWNERS (SOURCE)` with the owners joined with `, `;
 - with `certain: false`, add `, not certain: treat as owned` inside the brackets;
 - with no owner: `PATH: no owner`, or `PATH: no owner (not certain: treat as owned)`;
-- when the note is not empty, print it on the next line after two spaces.
+- when the note is not empty, print it on the next line after two spaces;
+- for each header that is not plain `current`, print one more line after two
+  spaces: `PROMPT header hash is stale (HEX); current is EXPECTED`,
+  `PROMPT header has no hash; current is EXPECTED` or
+  `PROMPT header uses the whole-file hash; current is EXPECTED`. An `unknown`
+  state adds no line.
 
 Return 0. The answer is an inventory, not a check: an uncertain or missing owner
 is no error.
@@ -154,9 +204,11 @@ is no error.
 
 [Code replay](workflow-replay.prompt.md) and the [check plan](runtime-check-plan.prompt.md)
 read headers with `headerPrompts`. They use bindings and headers only; prose
-claims never select replay scenarios or check targets.
+claims never select replay scenarios or check targets. They read the prompt
+path of a header, not its hash.
 
 ## Dependencies
 
 - [Runtime preflight](runtime-preflight.prompt.md): required generation context
-  for `gitFiles(root)`, the Git-visible file list.
+  for `gitFiles(root)`, the Git-visible file list, and `interfaceBlocks(text)`,
+  the Runtime interface block reader.

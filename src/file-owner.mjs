@@ -1,22 +1,52 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: e37e6c657ea6c99a1d39bcbe1365aec5addbcc8f7bdb280c24fd70aef5fe0ebf).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: e2da2bbb20ca838e010e6e7ba8a7a947e6f41bc61fc41e6c0b510ddff03d4d69).
 import { execFileSync } from 'node:child_process';
-import { closeSync, openSync, readSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
-import { gitFiles } from './runtime-preflight.mjs';
+import { gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
 
-const HEAD = 4096, PROMPT = 65536, LINE = 1100;
-const HEADER = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: [a-f0-9]{64}\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const HEAD = 4096, PROMPT = 65536, LINE = 1100, WHOLE = 10 * 1024 * 1024;
+const HEADER = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const unique = values => [...new Set(values)];
 const bytesOf = content => typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
 const decode = (content, limit) => content ? new TextDecoder().decode(bytesOf(content).subarray(0, limit)) : '';
 const canonicalPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 
-export function headerPrompts(content) {
+export function headerEntries(content) {
   if (!content) return [];
-  const bytes = bytesOf(content), lines = decode(bytes, HEAD).split(/\r?\n/);
+  const bytes = bytesOf(content), lines = decode(bytes, HEAD).split(/\r?\n/), rows = new Map();
   if (bytes.length > HEAD) lines.pop();
-  return unique(lines.filter(line => line.length <= LINE).map(line => HEADER.exec(line)?.[1]).filter(canonicalPath));
+  for (const line of lines.filter(line => line.length <= LINE)) {
+    const match = HEADER.exec(line);
+    if (match && canonicalPath(match[1]) && !rows.has(match[1])) rows.set(match[1], { prompt: match[1], sha256: match[2] ?? null });
+  }
+  return [...rows.values()];
+}
+export const headerPrompts = content => headerEntries(content).map(row => row.prompt);
+
+// The behavior text: each Runtime interface JSON object loses its approval metadata (status, prose_sha256).
+export function promptHeaderHash(content) {
+  const text = typeof content === 'string' ? content : new TextDecoder('utf-8', { ignoreBOM: true }).decode(content);
+  let behavior = '', at = 0;
+  for (const match of interfaceBlocks(text)) {
+    const [start, end] = match.indices[1];
+    let value; try { value = JSON.parse(text.slice(start, end)); } catch { continue; }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const { status, prose_sha256, ...declarations } = value;
+    behavior += text.slice(at, start) + JSON.stringify(declarations); at = end;
+  }
+  return sha256(Buffer.from(behavior + text.slice(at), 'utf8'));
+}
+
+// The whole-file form is accepted as current through pdd 0.1.28 only (legacy: true).
+export function headerHashState(hash, promptContent) {
+  if (promptContent === null || promptContent === undefined || promptContent === false) return { expected: null, state: 'unknown', legacy: false };
+  const expected = promptHeaderHash(promptContent);
+  if (hash === null || hash === undefined) return { expected, state: 'none', legacy: false };
+  if (hash === expected) return { expected, state: 'current', legacy: false };
+  return hash === sha256(bytesOf(promptContent)) ? { expected, state: 'current', legacy: true } : { expected, state: 'stale', legacy: false };
 }
 
 function openingSentence(text) {
@@ -71,7 +101,7 @@ function bindingTable(text) {
 export function resolveOwners({ paths = [], bindings = null, heads = [], prompts = [] } = {}) {
   const table = bindings === false ? null : bindingTable(bindings);
   const content = new Map(heads.map(row => [row.path, row.content]));
-  const visible = new Set(prompts.map(row => row.path));
+  const visible = new Set(prompts.map(row => row.path)), whole = new Map(prompts.map(row => [row.path, row.content]));
   const claims = prompts.map(row => [row.path, new Set(promptClaims(row.path, row.content))]);
   const files = unique(paths).map(path => {
     const bound = table?.get(path), head = content.get(path);
@@ -85,7 +115,8 @@ export function resolveOwners({ paths = [], bindings = null, heads = [], prompts
     if (bound && !bound.length) notes.push('pdd-bindings.json declares it with no prompt');
     const certain = recorded.length ? !missing.length : !owners.length && table !== null && head !== false;
     const source = owners.length ? (bound?.includes(owners[0]) ? 'binding' : recorded.length ? 'header' : 'prose') : bound ? 'binding' : null;
-    return { path, owner: owners[0] ?? null, owners, source, certain, note: notes.join('; ') };
+    const headers = headerEntries(head || null).map(({ prompt, sha256: hash }) => ({ prompt, sha256: hash, ...headerHashState(hash, whole.get(prompt) ?? null) }));
+    return { path, owner: owners[0] ?? null, owners, source, certain, note: notes.join('; '), headers };
   });
   return { schema_version: 'pdd.owner.v1', files };
 }
@@ -94,8 +125,12 @@ function readHead(root, path, limit) {
   let fd;
   try { fd = openSync(resolve(root, path), 'r'); }
   catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; }
-  try { const buffer = Buffer.alloc(limit); return buffer.subarray(0, readSync(fd, buffer, 0, limit, 0)); }
-  finally { closeSync(fd); }
+  try {
+    const buffer = Buffer.alloc(Math.min(limit, fstatSync(fd).size + 1));
+    let total = 0;
+    while (total < buffer.length) { const count = readSync(fd, buffer, total, buffer.length - total, total); if (!count) break; total += count; }
+    return buffer.subarray(0, total);
+  } finally { closeSync(fd); }
 }
 
 export function findOwners({ root, paths = [] }, ports = {}) {
@@ -103,7 +138,11 @@ export function findOwners({ root, paths = [] }, ports = {}) {
   const attempt = (path, limit) => { try { return read(path, limit); } catch { return false; } };
   const raw = attempt('pdd-bindings.json', PROMPT);
   const bindings = raw ? decode(raw, PROMPT) : raw;
-  const prompts = files().filter(path => path.endsWith('.prompt.md')).map(path => ({ path, content: attempt(path, PROMPT) || null }));
+  // A whole prompt for its header hash; one byte more shows a prompt that is too large.
+  const prompts = files().filter(path => path.endsWith('.prompt.md')).map(path => {
+    const content = attempt(path, WHOLE + 1);
+    return { path, content: content && content.length > WHOLE ? false : content };
+  });
   // One byte more than the window, so headerPrompts can see that its last line is cut.
   const heads = unique(paths).map(path => ({ path, content: attempt(path, HEAD + 1) }));
   return resolveOwners({ paths, bindings, heads, prompts });
@@ -125,7 +164,9 @@ export function runOwner({ cwd = process.cwd(), paths = [], json = false } = {},
     const doubt = row.certain ? '' : 'not certain: treat as owned';
     const line = row.owners.length ? `${row.path}: ${row.owners.join(', ')} (${[row.source, doubt].filter(Boolean).join(', ')})`
       : `${row.path}: no owner${doubt ? ` (${doubt})` : ''}`;
-    stdout.write(`${line}\n${row.note ? `  ${row.note}\n` : ''}`);
+    const hashes = row.headers.map(({ prompt, sha256: hash, expected, state, legacy }) => state === 'stale' ? `${prompt} header hash is stale (${hash}); current is ${expected}`
+      : state === 'none' ? `${prompt} header has no hash; current is ${expected}` : legacy ? `${prompt} header uses the whole-file hash; current is ${expected}` : '');
+    stdout.write([line, row.note, ...hashes].filter(Boolean).map((text, index) => `${index ? '  ' : ''}${text}\n`).join(''));
   }
   return 0;
 }

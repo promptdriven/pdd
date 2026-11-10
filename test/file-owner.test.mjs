@@ -1,12 +1,16 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { headerPrompts, promptClaims, resolveOwners, findOwners } from '../src/file-owner.mjs';
+import { headerPrompts, headerEntries, headerHashState, promptHeaderHash, promptClaims, resolveOwners, findOwners } from '../src/file-owner.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
+import { runApprove } from '../src/prompt-approve.mjs';
+import { PLACE, harbor, sink } from './runtime-fake.mjs';
 
 const HEX = 'a'.repeat(64), CUT = '// Generated from prompts/cut.prompt.md';
 const capture = () => ({ text: '', write(value) { this.text += value; } });
@@ -18,6 +22,10 @@ function repo(t, files) {
   return root;
 }
 const row = (path, owners, source, certain, note = '') => ({ path, owner: owners[0] ?? null, owners, source, certain, note });
+const plain = files => files.map(({ headers, ...rest }) => rest);
+const sha = text => createHash('sha256').update(text).digest('hex');
+const asDraft = text => text.replace('"status": "approved"', '"status": "draft"').replace(/("prose_sha256": )"[a-f0-9]{64}"/, '$1""');
+const headerRows = (root, path) => findOwners({ root, paths: [path] }).files[0].headers;
 
 // Wrong: the reader stops after 10 lines, so a header after a license or imports names no owner.
 test('3200 headerPrompts reads every strict header line in the first 4 KiB', () => {
@@ -68,7 +76,7 @@ test('3200 resolveOwners: binding, header, prose, and the uncertain cases', () =
   const result = resolveOwners({ paths, bindings, heads, prompts });
   assert.equal(result.schema_version, 'pdd.owner.v1');
   const prose = names => `named only in the opening sentence of ${names}; add a Generated from header or a pdd-bindings.json entry`;
-  assert.deepEqual(result.files, [
+  assert.deepEqual(plain(result.files), [
     row('src/bound.mjs', ['prompts/a.prompt.md'], 'binding', true),
     row('src/b.mjs', ['prompts/b.prompt.md'], 'header', true),
     row('src/both.mjs', ['prompts/a.prompt.md', 'prompts/b.prompt.md'], 'binding', true),
@@ -82,11 +90,11 @@ test('3200 resolveOwners: binding, header, prose, and the uncertain cases', () =
     row('src/c.mjs', ['prompts/c.prompt.md'], 'prose', false, `${prose('prompts/c.prompt.md')}; the file could not be read, so a header may be missing`),
     row('docs/x.md', [], null, true)]);
   for (const bad of ['{', JSON.stringify({ schema_version: 'pdd.bindings.v2', modules: [] }), JSON.stringify({ schema_version: 'pdd.bindings.v1' }), false]) {
-    const [plain, headed] = resolveOwners({ paths: ['docs/x.md', 'src/b.mjs'], bindings: bad, heads, prompts }).files;
-    assert.deepEqual(plain, row('docs/x.md', [], null, false, 'pdd-bindings.json could not be read, so a binding may be missing'), String(bad));
+    const [unowned, headed] = plain(resolveOwners({ paths: ['docs/x.md', 'src/b.mjs'], bindings: bad, heads, prompts }).files);
+    assert.deepEqual(unowned, row('docs/x.md', [], null, false, 'pdd-bindings.json could not be read, so a binding may be missing'), String(bad));
     assert.deepEqual(headed, row('src/b.mjs', ['prompts/b.prompt.md'], 'header', true), 'a header owner stays certain');
   }
-  assert.deepEqual(resolveOwners({ paths: ['src/c.mjs'], bindings: null, heads: [{ path: 'src/c.mjs', content: false }], prompts: [] }).files,
+  assert.deepEqual(plain(resolveOwners({ paths: ['src/c.mjs'], bindings: null, heads: [{ path: 'src/c.mjs', content: false }], prompts: [] }).files),
     [row('src/c.mjs', [], null, false, 'the file could not be read, so a header may be missing')]);
 });
 
@@ -104,7 +112,7 @@ test('3200 findOwners reads the working tree of a real repository', t => {
     ['src/cut.mjs', null, null, true]], 'a header cut by the 4 KiB window names no owner, as in replay');
   const reads = [];
   findOwners({ root, paths: ['src/late.mjs'] }, { files: () => ['prompts/late.prompt.md', 'src/late.mjs', 'pdd-bindings.json'], read: (path, limit) => { reads.push([path, limit]); return null; } });
-  assert.deepEqual(reads.sort(), [['pdd-bindings.json', 65536], ['prompts/late.prompt.md', 65536], ['src/late.mjs', 4097]]);
+  assert.deepEqual(reads.sort(), [['pdd-bindings.json', 65536], ['prompts/late.prompt.md', 10 * 1024 * 1024 + 1], ['src/late.mjs', 4097]]);
 });
 
 // Wrong: the command is missing from the catalog, prints a different shape or accepts a path outside the repository.
@@ -114,13 +122,16 @@ test('3200 pdd owner prints text and JSON answers and refuses paths outside the 
   const run = async (argv, cwd = root) => { const stdout = capture(), stderr = capture(); const code = await runPdd(argv, { stdout, stderr, cwd }); return { code, out: stdout.text, err: stderr.text }; };
   const text = await run(['owner', 'src/b.mjs', 'src/a.mjs', 'docs/none.md']);
   assert.equal(text.code, 0, text.err);
-  assert.equal(text.out, ['src/b.mjs: prompts/b.prompt.md (header)',
+  assert.equal(text.out, ['src/b.mjs: prompts/b.prompt.md (header)', `  prompts/b.prompt.md header has no hash; current is ${promptHeaderHash('# B\n')}`,
     'src/a.mjs: prompts/a.prompt.md (prose, not certain: treat as owned)',
     '  named only in the opening sentence of prompts/a.prompt.md; add a Generated from header or a pdd-bindings.json entry',
     'docs/none.md: no owner', ''].join('\n'));
   const json = await run(['owner', 'b.mjs', '--json'], join(root, 'src'));
   assert.equal(json.code, 0, json.err);
-  assert.deepEqual(JSON.parse(json.out), { schema_version: 'pdd.owner.v1', files: [row('src/b.mjs', ['prompts/b.prompt.md'], 'header', true)] });
+  const answer = JSON.parse(json.out);
+  assert.equal(answer.schema_version, 'pdd.owner.v1');
+  assert.deepEqual(plain(answer.files), [row('src/b.mjs', ['prompts/b.prompt.md'], 'header', true)]);
+  assert.deepEqual(answer.files[0].headers, [{ prompt: 'prompts/b.prompt.md', sha256: null, expected: promptHeaderHash('# B\n'), state: 'none', legacy: false }]);
   for (const argv of [['owner', '../outside.mjs'], ['owner', '.'], ['owner', join(tmpdir(), 'x.mjs')]]) {
     const refused = await run(argv);
     assert.equal(refused.code, 2, argv.join(' '));
@@ -132,4 +143,66 @@ test('3200 pdd owner prints text and JSON answers and refuses paths outside the 
   t.after(() => rmSync(outside, { recursive: true, force: true }));
   const none = await run(['owner', 'x.mjs'], outside);
   assert.deepEqual([none.code, none.out, none.err], [2, '', 'pdd owner works inside a Git repository.\n']);
+});
+
+// Wrong: the header hash covers the approval metadata, so approving a prompt makes every header of it stale.
+test('3200 header hash: approval metadata and JSON spacing do not count; prose and interface declarations do', t => {
+  const approved = readFileSync(new URL('./fixtures/harbor/prompts/place_order.prompt.md', import.meta.url), 'utf8'), draft = asDraft(approved);
+  assert.notEqual(draft, approved);
+  const hash = promptHeaderHash(draft);
+  assert.match(hash, /^[a-f0-9]{64}$/);
+  assert.equal(promptHeaderHash(approved), hash, 'status and prose_sha256 are approval metadata');
+  assert.equal(promptHeaderHash(Buffer.from(approved)), hash, 'bytes and strings hash the same');
+  const block = /```json\n([\s\S]*?)\n```/.exec(approved)[1];
+  assert.equal(promptHeaderHash(approved.replace(block, JSON.stringify(JSON.parse(block)))), hash, 'interface JSON white space does not count');
+  assert.notEqual(promptHeaderHash(approved.replace('in whole cents.', 'in cents.')), hash, 'a prose change counts');
+  assert.notEqual(promptHeaderHash(approved.replace('"maximum": 20', '"maximum": 30')), hash, 'an interface entry change counts');
+  assert.notEqual(promptHeaderHash(approved.replace('"status": "approved",', '"status": "approved", "kind": "partial",')), hash, 'other interface fields count');
+  assert.equal(promptHeaderHash('# No interface\n\nOwn `src/x.mjs`.\n'), sha('# No interface\n\nOwn `src/x.mjs`.\n'), 'without an interface the behavior text is the file');
+  assert.deepEqual(headerHashState(hash, approved), { expected: hash, state: 'current', legacy: false });
+  assert.deepEqual(headerHashState(sha(approved), approved), { expected: hash, state: 'current', legacy: true }, 'the whole-file form still reads as current');
+  assert.deepEqual(headerHashState(sha(draft), approved), { expected: hash, state: 'stale', legacy: false });
+  assert.deepEqual(headerHashState(null, approved), { expected: hash, state: 'none', legacy: false });
+  assert.deepEqual(headerHashState(hash, null), { expected: null, state: 'unknown', legacy: false });
+  assert.deepEqual(headerEntries(`// Generated from prompts/a.prompt.md (sha256: ${HEX}).\n# Generated from prompts/b.prompt.md.\n// Generated from prompts/a.prompt.md.\n`),
+    [{ prompt: 'prompts/a.prompt.md', sha256: HEX }, { prompt: 'prompts/b.prompt.md', sha256: null }]);
+});
+
+// Wrong: pdd approve makes the code header stale, or a prose change keeps it current.
+test('3200 header hash: pdd approve leaves headers current; a prose change makes them stale', async t => {
+  const setup = harbor(t, repo => {
+    const file = join(repo, PLACE), draft = asDraft(readFileSync(file, 'utf8'));
+    writeFileSync(file, draft);
+    mkdirSync(join(repo, 'src'));
+    writeFileSync(join(repo, 'src/order.mjs'), `// Generated from ${PLACE} (sha256: ${promptHeaderHash(draft)}).\nexport {};\n`);
+    writeFileSync(join(repo, 'src/legacy.mjs'), `// Generated from ${PLACE} (sha256: ${sha(draft)}).\nexport {};\n`);
+  });
+  const state = path => headerRows(setup.repo, path).map(({ state, legacy }) => [state, legacy]);
+  assert.deepEqual(state('src/order.mjs'), [['current', false]]);
+  assert.deepEqual(state('src/legacy.mjs'), [['current', true]], 'an old whole-file header reads as current');
+  const ports = { stdout: sink(), stderr: sink(), stdin: Readable.from(['y\n']), interactive: true };
+  assert.equal(await runApprove({ words: [PLACE], cwd: setup.repo }, ports), 0, ports.stdout.text + ports.stderr.text);
+  assert.match(readFileSync(join(setup.repo, PLACE), 'utf8'), /"status": "approved"/);
+  assert.deepEqual(state('src/order.mjs'), [['current', false]], 'approval leaves the header current');
+  assert.deepEqual(state('src/legacy.mjs'), [['stale', false]], 'the whole-file form changes with each approval');
+  const file = join(setup.repo, PLACE);
+  writeFileSync(file, readFileSync(file, 'utf8').replace('in whole cents.', 'in cents.'));
+  assert.deepEqual(state('src/order.mjs'), [['stale', false]], 'a prose change makes it stale');
+});
+
+// Wrong: the owner command hides a stale or missing header hash, or prints no current hash to write.
+test('3200 pdd owner shows each header hash that is not current', async t => {
+  const prompt = '# A\n\nOwn `src/a.mjs`.\n', hash = promptHeaderHash(prompt);
+  const root = repo(t, { 'prompts/a.prompt.md': prompt,
+    'src/ok.mjs': `// Generated from prompts/a.prompt.md (sha256: ${hash}).\n`, 'src/stale.mjs': `// Generated from prompts/a.prompt.md (sha256: ${HEX}).\n`,
+    'src/bare.mjs': '// Generated from prompts/a.prompt.md.\n', 'src/gone.mjs': `// Generated from prompts/gone.prompt.md (sha256: ${HEX}).\n` });
+  const stdout = capture(), stderr = capture();
+  assert.equal(await runPdd(['owner', 'src/ok.mjs', 'src/stale.mjs', 'src/bare.mjs', 'src/gone.mjs'], { stdout, stderr, cwd: root }), 0, stderr.text);
+  assert.equal(stdout.text, ['src/ok.mjs: prompts/a.prompt.md (header)',
+    'src/stale.mjs: prompts/a.prompt.md (header)', `  prompts/a.prompt.md header hash is stale (${HEX}); current is ${hash}`,
+    'src/bare.mjs: prompts/a.prompt.md (header)', `  prompts/a.prompt.md header has no hash; current is ${hash}`,
+    'src/gone.mjs: prompts/gone.prompt.md (header, not certain: treat as owned)', '  names prompts/gone.prompt.md, which is not a Git-visible prompt', ''].join('\n'));
+  const json = capture();
+  await runPdd(['owner', 'src/stale.mjs', '--json'], { stdout: json, stderr, cwd: root });
+  assert.deepEqual(JSON.parse(json.text).files[0].headers, [{ prompt: 'prompts/a.prompt.md', sha256: HEX, expected: hash, state: 'stale', legacy: false }]);
 });

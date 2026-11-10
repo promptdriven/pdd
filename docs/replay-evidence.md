@@ -226,7 +226,9 @@ any complete line in the first 4 KiB of the file, for example after a `#!` line,
 
 The line can start with a comment mark (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`, `"""` or `'''`). Then it
 has `Generated from` and a repository path that ends in `.prompt.md`. After the path, it can have
-` (sha256: HEX)` with 64 lowercase hex characters, and a `.`. A line without such a path is not a header.
+` (sha256: HEX)` with 64 lowercase hex characters, and a `.`. HEX is the prompt's header hash; `pdd owner`
+shows it ([Find the prompt that owns a file](cli.md#find-the-prompt-that-owns-a-file)). Replay reads only the
+path. A line without such a path is not a header.
 For example, `Generated from the canonical m1_policy prompt` names no file, so it adds no link.
 Lines longer than 1,100 characters are not parsed as headers. A file can have more than one header; each
 one links its prompt. `pdd owner` and `pdd test` read headers with the same rule. Git color settings do not
