@@ -245,3 +245,13 @@ test('native agent-job wrapper runs a scripted process and the next check reads 
   assert.deepEqual(result, ready); assert.equal(jobs.length, 1);
   assert.deepEqual(await checkIssue(w.issue, w.ports()), ready);
 });
+
+
+test('overlapping improvement and question calls post each marked comment once', async t => {
+  const w = world(t, [ready]);
+  await Promise.all([improveIssue(w.issue, improve, w.ports()), improveIssue(w.issue, improve, w.ports())]);
+  assert.equal(comments(w).length, 1); assert.equal(w.started.length, 1);
+  await Promise.all([askPerson(w.issue, ask, w.ports()), askPerson(w.issue, ask, w.ports())]);
+  assert.equal(comments(w).length, 2);
+  assert.equal(w.writes.filter(x => x[0] === 'label').length, 1);
+});

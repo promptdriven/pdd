@@ -79,7 +79,9 @@ before posting; retries after an uncertain response reuse it.
 `pdd:needs-decision` exists and adds it. It returns `{state: 'waiting'}`. Save the
 question episode before writes, the comment before the label, and completion
 afterwards. A failed write propagates and later calls retry the unfinished step,
-reconciling comments by marker. Label failures never duplicate the question.
+reconciling comments by marker. Serialize effects per issue within a host process;
+concurrent callers re-read the saved step before any write. As with the core, a
+state directory has one active host writer. Label failures never duplicate the question.
 While the episode is active, do not ask or check again. Resume only after a
 person comment changes and the decision label is removed; the host never removes
 that label or calls approval commands.
