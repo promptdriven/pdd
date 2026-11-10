@@ -1415,7 +1415,12 @@ Each tick, without AI calls:
    missing or unclear `Runtime:` line is red, unless the job says no prompt
    changed. A non-zero exit of the test command is red; a failure of the suite
    runner itself (it could not start, was killed or timed out) runs the suite again
-   and never uses a repair. When the base moved, Autopilot merges the base into the
+   and never uses a repair. Merges go through one **merge lane** per repository
+   (the label `pdd:merge-lane` on the PR in its final step, shared by all
+   machines): other green PRs wait in claim order with their reviews, and waiting
+   never ends a job. In the final step Autopilot checks for an exact conflict with
+   `git merge-tree`, brings the PR up to the newest base, runs the suite and CI
+   again and merges. `pdd autopilot status` shows each PR's place in the lane. When the base moved, Autopilot merges the base into the
    PR branch itself and checks the new head again: the full suite and CI run again,
    and the PASS review is kept only when the merge was clean and the PR's own change
    is the same. A merge conflict starts a repair.

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 849b6d8855d3e69d9364f8da397ef1c485f689104c28dcf00e89f4ecf9ddfb74).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 76bf1448adc8d9353abfb225f6efe03d5284168b759f02397027033727ab1a73).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,7 @@ const BLOCK_MARKER = /<!-- pdd:core-blocked-by:([\w.-]+\/[\w.-]+)?#(\d+)(?::([a-
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // A job that needs a person's decision posts one question and adds this label; the person answers in a comment and
 // removes the label, and then the issue is ready again.
-const WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:autopilot-core:question:(\d+):[^ ]+ -->/;
+const LANE = 'pdd:merge-lane', WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:autopilot-core:question:(\d+):[^ ]+ -->/;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 // The machine id in claim records: a short hash of the host name, so no public text names the host.
 const machineIdOf = state => named(state?.machineId) ? state.machineId : `m-${createHash('sha256').update(String(state?.machine ?? '')).digest('hex').slice(0, 12)}`;
@@ -647,6 +647,10 @@ async function mergeCheck(ctx, job) {
   noteProgress(ctx, job, [job.head, ci.state, review.state, suite.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
     ci.state === 'pending' || review.state === 'running' || suite.state === 'running');
   if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
+  // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
+  if (await enterLane(ctx, job) !== 'final') return;
+  const conflict = await laneConflict(ctx, job);
+  if (conflict) return repairOrEnd(ctx, job, [conflict]);
   // The head must contain the current base tip, so that what merges is what was tested.
   const compare = await gh.ok('GET', `repos/${repo}/compare/${encodeURIComponent(state.baseBranch)}...${job.head}`);
   if (!(compare?.behind_by === 0)) return refreshBase(ctx, job);
@@ -667,6 +671,7 @@ async function mergeCheck(ctx, job) {
     await ctx.comment(job.pr, [observe ? `Autopilot would merge this PR (observe mode): every check passed for head ${job.head}. It stays open and ready for review; Autopilot does not merge it.` : `Autopilot merge check passed for head ${job.head}.`, '',
       `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
       '- Full test suite: pass', job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- ${evidenceText(job.evidence)}`, `- Base: ${oneLine(base.message)}`,
+      `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
       ...(drafts.length ? [`- Draft prompts (observe mode does not approve): ${drafts.join(', ')}`] : []), '',
       `<!-- pdd:autopilot-core:${observe ? 'would-merge' : 'merge'}:${job.head} -->`].join('\n'));
     job.mergeNote = job.head; ctx.saveJob(job);
@@ -676,6 +681,57 @@ async function mergeCheck(ctx, job) {
   if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false }); ctx.saveJob(job); return; }
   return finishMerge(ctx, job);
 }
+// ---- The merge lane -------------------------------------------------------------------------------------
+// The label pdd:merge-lane on a PR is the repository's one final step, shared by every machine. A green PR takes it
+// when no other open PR holds it and no older green PR of this machine waits; two machines at once keep the lower PR
+// number. A PR that waits restarts its quiet clock each tick: waiting never ends a job.
+const laneHolders = async ctx => (await ctx.gh.all(`repos/${ctx.repo}/issues?state=open&labels=${encodeURIComponent(LANE)}&per_page=100`)).filter(row => row.pull_request).map(row => row.number);
+// A holder is stale when its core issue has no live claim (its machine stopped, or a person stopped the job).
+async function staleLane(ctx, number) {
+  const ref = (await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${number}`))?.head?.ref, n = Number(/^pdd\/core-(\d+)-/.exec(String(ref ?? ''))?.[1]);
+  if (!Number.isSafeInteger(n)) return false;
+  if (readJobs(ctx.fs, ctx.root).some(j => j.issue === n && j.pr === number && j.lane?.state === 'final')) return false;
+  const claim = await ctx.readClaim(n);
+  return !(claim?.active && !claim.expired);
+}
+async function enterLane(ctx, job) {
+  const { gh, repo } = ctx, label = encodeURIComponent(LANE);
+  const wait = holder => {
+    job.lane = { state: 'waiting', holder, since: job.lane?.state === 'waiting' ? job.lane.since : ctx.now() };
+    job.progress = { ...job.progress, at: ctx.now(), running: true }; ctx.saveJob(job);
+    return 'wait';
+  };
+  let held = await laneHolders(ctx);
+  for (const number of held.filter(n => n !== job.pr)) if (await staleLane(ctx, number)) { await gh.call('DELETE', `repos/${repo}/issues/${number}/labels/${label}`); held = held.filter(n => n !== number); }
+  const others = held.filter(n => n !== job.pr);
+  if (others.length) return wait(Math.min(...others));
+  if (!held.includes(job.pr)) {
+    const older = readJobs(ctx.fs, ctx.root).filter(j => j.issue !== job.issue && j.phase === 'pr' && j.lane?.state === 'waiting' && j.started < job.started).sort((a, b) => a.started - b.started)[0];
+    if (older) return wait(older.pr);
+    await gh.ok('POST', `repos/${repo}/issues/${job.pr}/labels`, { labels: [LANE] });
+    const now = await laneHolders(ctx), first = Math.min(...now);
+    if (first !== job.pr) { await gh.call('DELETE', `repos/${repo}/issues/${job.pr}/labels/${label}`); return wait(first); }
+  }
+  if (job.lane?.state !== 'final') { job.lane = { state: 'final', since: ctx.now(), waited: job.lane?.since ? ctx.now() - job.lane.since : 0 }; ctx.saveJob(job); }
+  return 'final';
+}
+// Leave the lane (a repair, an END, a hand-over, an observe validation): the next green PR takes it.
+async function leaveLane(ctx, job) {
+  if (job.lane?.state !== 'final' || !job.pr) return;
+  const r = await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${job.pr}/labels/${encodeURIComponent(LANE)}`);
+  if (r.status >= 300 && r.status !== 404) throw Error(`GitHub DELETE label returned ${r.status}`);
+  job.lane = null; ctx.saveJob(job);
+}
+// The exact conflict check of the final step (git merge-tree, no work tree change). The conflict rule lives here only.
+async function laneConflict(ctx, job) {
+  const base = ctx.state.baseBranch, cwd = job.worktree;
+  await ctx.git(['fetch', '-q', 'origin', base, job.branch], cwd);
+  const r = await ctx.ports.git(['merge-tree', '--write-tree', '--name-only', '--no-messages', `origin/${base}`, job.head], { cwd });
+  if (r.code !== 1) return null;   // 0: clean; any other code: merge-tree could not run, and the refresh merge decides
+  const files = String(r.stdout ?? '').split('\n').slice(1).map(line => line.trim()).filter(Boolean);
+  return `The PR head ${short(job.head)} has a merge conflict with the current ${base}${files.length ? ` in ${files.join(', ')}` : ''}. Merge origin/${base} into ${job.branch}, resolve the conflict, run the focused tests and push.`;
+}
+
 // The changed prompts of the PR head that still have a draft Runtime interface (read once per head, in the job worktree).
 async function draftPrompts(ctx, job) {
   if (job.approvals?.head === job.head) return job.approvals.drafts;
@@ -704,6 +760,7 @@ async function runtimeNotRunReport(ctx, job) {
 // no label) and record "would-merge": validation passed, not merged. The ready rule skips the issue from then on.
 async function wouldMerge(ctx, job, pr) {
   const { gh, repo } = ctx;
+  await leaveLane(ctx, job);
   if (pr.draft) { const ready = await ctx.ports.gh(['pr', 'ready', String(job.pr), '--repo', repo]); if (ready.code !== 0) ctx.warn(`Autopilot core could not mark PR #${job.pr} ready: ${oneLine(ready.stderr, 200)}`); }
   if (job.claim?.commentId) { const r = await gh.call('DELETE', `repos/${repo}/issues/comments/${job.claim.commentId}`); if (r.status >= 300 && r.status !== 404) throw Error(`GitHub DELETE claim comment returned ${r.status}`); }
   // The label makes the validation visible on GitHub: no machine takes the issue again while it is on.
@@ -713,8 +770,9 @@ async function wouldMerge(ctx, job, pr) {
   ctx.counts.wouldMerge++; ctx.produced();
   return finishLocal(ctx, job, 'would-merge', `observe mode: PR #${job.pr} passed every check at ${short(job.head)}; not merged`);
 }
-function repairOrEnd(ctx, job, reds) {
+async function repairOrEnd(ctx, job, reds) {
   stopChecks(ctx, job);
+  await leaveLane(ctx, job);
   if (job.repairs >= ctx.settings.repairs) return end(ctx, job, cause('job', 'checks-red', `the PR checks stayed red after ${job.repairs} repair(s): ${reds.join(' ')}`));
   Object.assign(job, { phase: 'running', role: 'repair', repairs: job.repairs + 1, review: null, suite: null, progress: { sig: null, at: ctx.now(), running: false } });
   job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
@@ -781,6 +839,7 @@ async function report(ctx, job, why, step) {
 // as a draft with a note. One try only; the other machine's work is never touched.
 async function handOver(ctx, job, text) {
   stopChecks(ctx, job);
+  try { await leaveLane(ctx, job); } catch (error) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${error.message}`); }
   await draftOwnPr(ctx, job, text);
   return finishLocal(ctx, job, 'handed-over', text);
 }
@@ -828,6 +887,7 @@ async function closeOtherPrs(ctx, n, branch) {
   } catch (error) { ctx.warn(`Autopilot core could not close older PRs of #${n}: ${error.message}`); }
 }
 async function end(ctx, job, why) {
+  try { await leaveLane(ctx, job); } catch (error) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${error.message}`); }
   // A sleep gap is this machine, not the agent or the issue: release only, with no count and no streak.
   if (!job.end && why.code === 'no-result' && why.machine) why = { ...why, release: true, counted: false };
   else if (!job.end && why.code === 'no-result') {
@@ -1122,7 +1182,8 @@ export function coreStatus({ state, settings, sources = {} }, ports) {
   lines.push(machine.pausedUntil ? `New jobs paused until ${new Date(machine.pausedUntil).toISOString()} (${machine.pausedHours} h): the agent ended ${machine.streak} jobs in a row with no result; then intake goes on.`
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);
   for (const job of jobs) {
-    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}, suite ${job.suite ? 'started' : '-'}, repairs ${job.repairs}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
+    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}, suite ${job.suite ? 'started' : '-'}, repairs ${job.repairs}${
+      job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
     else lines.push(`#${job.issue} ${job.role} running ${age(job.agent?.started ?? job.started)} (log ${job.agent?.log ?? 'none'})`);
   }

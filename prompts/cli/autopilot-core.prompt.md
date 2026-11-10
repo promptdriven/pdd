@@ -78,7 +78,7 @@ ended or moved to the merge check before free slots are counted.
    (now). A **sleep gap** is a gap since the saved `lastTick` that is longer than the
    quiet period (a laptop sleep; a clock that went back is no gap). Mode `observe`
    does everything that `auto` does (claim, build, PR, review, suite, CI, Runtime,
-   base check, repairs, END) **except the merge** (merge check step 7); its message
+   base check, repairs, END) **except the merge** (merge check step 8); its message
    starts `Autopilot core (observe: no merge):`.
 2. Read the open issues through `ports.listIssues()`. A failed list skips the
    person checks and intake for this tick; jobs still advance.
@@ -412,7 +412,25 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    or repair job reports a head), CI is `none`: the full suite and the fresh review
    decide alone. A pending check still waits, as long as it takes; save `progress`
    first.
-6. The head must contain the current base tip (`compare/BASE...HEAD`,
+6. **Merge lane** (one final step per repository). A green PR (CI green or none,
+   review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
+   one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
+   PRs only). A holder whose core issue (`pdd/core-N-…` branch) has no live claim, and
+   that is no local final-step job, is stale: remove its label. When another PR holds
+   the lane, or an older green PR of this machine (claim order, `started`) waits, the
+   PR waits: `lane {state: waiting, holder, since}`, and its quiet clock starts again
+   each tick (`progress.running`), so waiting never ends a job and never counts as a
+   refresh. Else the PR adds the label and reads the holders again; when two machines
+   added it, the lower PR number keeps it and the other removes its own label. The
+   holder is in the final step: `lane {state: final, since, waited}`. A repair, an
+   END (of any kind, before its other steps), a hand-over and an observe validation
+   leave the lane (remove the label); a merge closes the PR.
+   In the final step, first the exact conflict check (`laneConflict`, the one place of
+   the conflict rule): fetch the base and the branch and run `git merge-tree
+   --write-tree --name-only --no-messages origin/BASE HEAD`; exit 1 is a conflict (a
+   red finding with the conflicted files: one repair), any code other than 0 or 1
+   leaves the decision to the refresh merge below.
+7. The head must contain the current base tip (`compare/BASE...HEAD`,
    `behind_by` 0). When the base moved, refresh natively in the job worktree: reset to
    the job head, merge `origin/BASE` (identity "PDD Autopilot", no hooks, no signing),
    push the branch and take the new head; this is not a repair. The suite and CI
@@ -429,9 +447,10 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    Run `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md). A
    read failure ("could not verify", "unavailable", "retry") waits; another
    refusal ends `base-check`.
-7. Read the winning claim again: another live owner means hand-over and no merge; a
+8. Read the winning claim again: another live owner means hand-over and no merge; a
    claim that is not confirmed as this job's waits. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
-   `CI: none (…)`, the suite, the review (`Review: PASS from a fresh reviewer`, or
+   `CI: none (…)`, the suite, the lane (`Merge lane: final step`, with the queue
+   minutes when it waited), the review (`Review: PASS from a fresh reviewer`, or
    `Review: PASS (kept after a clean base refresh, same change)`), the PR's Runtime
    line, the parsed evidence
    (`Evidence: runtime=pass (11/11); …` in the fixed key order, or `Evidence: none`)
@@ -509,7 +528,7 @@ agent's commits may exist only there.
 files only: the engine line (mode, repository, folder, base, agent), the slot line
 (`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
-suite …`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
+suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
 of local report drafts.
 
 ## Text on GitHub

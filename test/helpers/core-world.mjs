@@ -19,7 +19,7 @@ function extend(f, w) {
   const restPr = pr => ({ number: pr.number, state: pr.state, merged: pr.merged, body: pr.body, title: pr.title, html_url: `https://github.com/${f.repo}/pull/${pr.number}`,
     head: { sha: pr.head, ref: pr.branch, repo: { full_name: f.repo } }, base: { ref: pr.base, repo: { full_name: f.repo } }, merge_commit_sha: pr.mergeSha ?? null, draft: Boolean(pr.draft) });
   f.openPr = ({ branch, head, body = 'Fixes the issue.\n\nRuntime: PASS', base = 'main', title = 'Change' }) => {
-    const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, comments: [] };
+    const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, comments: [], labels: [] };
     f.prs.set(pr.number, pr); return pr;
   };
   f.setChecks = (sha, conclusion = 'success', status = 'completed') => f.checks.set(sha, [{ name: 'ci', status, conclusion: status === 'completed' ? conclusion : null }]);
@@ -32,6 +32,12 @@ function extend(f, w) {
       if (head !== pr.head) return { code: 1, stdout: '', stderr: 'head changed' };
       if (!args.includes('--merge')) return { code: 1, stdout: '', stderr: 'merge method' };
       pr.state = 'closed'; pr.merged = true; pr.mergeSha = 'f'.repeat(40); f.merges.push(pr.number);
+      // With mergeMovesBase, the merge lands on the remote main like on GitHub (a merge commit of the PR head).
+      if (f.mergeMovesBase) {
+        const seed = join(w.dir, `merge-${pr.number}`); git(w.dir, 'clone', '-q', w.remote, seed);
+        git(seed, 'fetch', '-q', 'origin', pr.branch); git(seed, 'merge', '-q', '--no-ff', '-m', `Merge PR #${pr.number}`, 'FETCH_HEAD'); git(seed, 'push', '-q', 'origin', 'HEAD:main');
+        pr.mergeSha = git(seed, 'rev-parse', 'HEAD');
+      }
       return { code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'pr' && args[1] === 'ready') {
@@ -61,6 +67,15 @@ function extend(f, w) {
       if (/^[0-9a-f]{40}$/.test(tip) && tip !== pr.syncedTip) { pr.head = tip; pr.syncedTip = tip; }
       if (method === 'PATCH') { if (input.body !== undefined) pr.body = input.body; if (input.state) pr.state = input.state; }
       return ok(200, restPr(pr));
+    }
+    // Labels on PRs (the merge lane) and the open issues-and-PRs list for one label.
+    if ((m = /^\/issues\/(\d+)\/labels(?:\/(.+))?$/.exec(route)) && f.prs.has(Number(m[1]))) {
+      const pr = f.prs.get(Number(m[1]));
+      if (method === 'POST') { for (const name of input.labels) if (!pr.labels.includes(name)) pr.labels.push(name); return ok(200, pr.labels.map(name => ({ name }))); }
+      if (method === 'DELETE') { const name = decodeURIComponent(m[2] ?? ''); if (!pr.labels.includes(name)) return ok(404, { message: 'Label does not exist' }); pr.labels = pr.labels.filter(x => x !== name); return ok(200, []); }
+    }
+    if (route === '/issues' && method === 'GET' && new URLSearchParams(endpoint.split('?')[1] ?? '').get('labels') === 'pdd:merge-lane') {
+      return ok(200, [...f.prs.values()].filter(pr => pr.state === 'open' && pr.labels.includes('pdd:merge-lane')).map(pr => ({ number: pr.number, state: 'open', labels: pr.labels.map(name => ({ name })), pull_request: {} })));
     }
     if ((m = /^\/issues\/(\d+)\/comments$/.exec(route)) && f.prs.has(Number(m[1]))) {
       const pr = f.prs.get(Number(m[1]));

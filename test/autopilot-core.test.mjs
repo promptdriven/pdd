@@ -1912,3 +1912,96 @@ test('K9 a merge resets the streak by itself (the verdict came on an earlier tic
   await w.tick(extra);                                                   // one more no-result: no pause after the merge
   assert.equal(alerts.length, 0, alerts.join(' | '));
 });
+
+// ---- E (#3191): the merge lane ----------------------------------------------------------------------------------
+const laneLabel = pr => pr.labels.includes('pdd:merge-lane');
+const greenPr = async (w, n, edit) => {
+  if (edit) edit(w.job(n, 'build').cwd);
+  return w.build(n);
+};
+
+test('L1 two green PRs on different files go through one lane in claim order; the second waits, then keeps its review', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } }); w.github.mergeMovesBase = true;
+  w.issue(17); w.issue(18); await w.tick();
+  const a = await greenPr(w, 17), b = await greenPr(w, 18); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); w.review(18, 'PASS'); w.suite(18, 0);
+  w.baseCommit('person.txt', 'main moved\n');
+  await w.tick();                                    // #17 (older claim) takes the lane and refreshes; #18 waits
+  assert.ok(laneLabel(a.pr) && !laneLabel(b.pr));
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), new RegExp(`#18 PR #${b.pr.number} at \\w+: review PASS.*merge lane: waiting for PR #${a.pr.number}`));
+  await w.tick(); let job = jobFile(w, 17); w.github.setChecks(job.head); w.suite(17, 0);
+  w.advance(10 * MIN); await w.tick();               // #17 merges; #18 takes the lane at once and refreshes (no shared file)
+  assert.deepEqual(w.github.merges, [a.pr.number]);
+  job = jobFile(w, 18);
+  assert.equal(job.lane.state, 'final'); assert.equal(job.review.kept, true); assert.ok(laneLabel(b.pr));
+  await w.tick(); job = jobFile(w, 18); w.github.setChecks(job.head); w.suite(18, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [a.pr.number, b.pr.number]);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 2, 'one review each: none lost');
+  assert.match(mergeComment(b.pr), /- Review: PASS \(kept after a clean base refresh, same change\)/); assert.match(mergeComment(b.pr), /- Merge lane: final step after \d+ minutes in the queue/);
+});
+
+test('L1b two green PRs on the same file merge in order; the second reviews again (the base changed its file) and nothing ends', async t => {
+  const lines = edit => Array.from({ length: 20 }, (_, i) => (edit[i + 1] ?? `line ${i + 1}`)).join('\n') + '\n';
+  const w = await coreWorld(t, { settings: { runs: 2 } }); w.github.mergeMovesBase = true;
+  w.baseCommit('list.txt', lines({}));
+  w.issue(17); w.issue(18); await w.tick();
+  const a = await greenPr(w, 17, cwd => writeFileSync(join(cwd, 'list.txt'), lines({ 2: 'item from #17' })));
+  const b = await greenPr(w, 18, cwd => writeFileSync(join(cwd, 'list.txt'), lines({ 15: 'item from #18' })));
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [a.pr.number]);
+  assert.equal(jobFile(w, 18).review, null, 'a shared file: review again');
+  await w.tick(); const job = jobFile(w, 18); w.github.setChecks(job.head); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [a.pr.number, b.pr.number]); assert.equal(endComments(w, 18).length, 0);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 3);
+});
+
+test('L2 a push to main during the final step only reruns the suite and CI; the PR keeps the lane and its review', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { pr } = await greenPr(w, 17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
+  w.baseCommit('person-1.txt', 'a person pushed\n');
+  await w.tick();                                    // final step: refresh
+  assert.ok(laneLabel(pr));
+  await w.tick(); let job = jobFile(w, 17); w.github.setChecks(job.head);
+  w.baseCommit('person-2.txt', 'a person pushed again\n'); w.suite(17, 0);
+  await w.tick();                                    // the base moved again: refresh again, still in the lane
+  assert.ok(laneLabel(pr)); job = jobFile(w, 17); assert.equal(job.review.kept, true); assert.equal(job.lane.state, 'final');
+  await w.tick(); job = jobFile(w, 17); w.github.setChecks(job.head); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]); assert.equal(w.started.filter(j => j.role === 'review').length, 1);
+  assert.equal(w.started.filter(j => j.role === 'suite').length, 3, 'the suite ran again for each new head');
+});
+
+test('L3 two machines on one repository respect one lane; a lane whose machine stopped is freed', async t => {
+  const a = await coreWorld(t, { settings: { runs: 1 } }); a.github.mergeMovesBase = true;
+  a.issue(17); a.issue(18);
+  await a.tick();
+  const b = await a.peer({ settings: { runs: 1 } });
+  await b.tick();
+  assert.ok(a.job(17, 'build') && b.job(18, 'build'));
+  const pa = a.build(17), pb = b.build(18);
+  await a.tick(); await b.tick();
+  a.review(17, 'PASS'); a.suite(17, 0); b.review(18, 'PASS'); b.suite(18, 0);
+  a.baseCommit('person.txt', 'main moved\n');
+  await a.tick();                                    // A takes the lane: refresh, suite again
+  await b.tick();                                    // B is green, and A holds the lane
+  assert.ok(laneLabel(pa.pr) && !laneLabel(pb.pr), 'one lane for both machines');
+  assert.equal(jobFile(b, 18).lane.state, 'waiting'); assert.equal(jobFile(b, 18).lane.holder, pa.pr.number);
+  for (let i = 0; i < 6; i++) { a.advance(10 * MIN); await b.tick(); }
+  assert.ok(jobFile(b, 18), 'waiting in the lane never ends a job'); assert.deepEqual(a.github.merges, []);
+  // A stops (no more ticks): its claim expires after 4 hours, and B (still ticking) frees the lane.
+  for (let i = 0; i < 20 && !laneLabel(pb.pr); i++) { a.advance(10 * MIN); await b.tick(); }
+  assert.ok(!laneLabel(pa.pr) && laneLabel(pb.pr), 'the stale lane is freed');
+  await b.tick(); const job = jobFile(b, 18); b.github.setChecks(job.head); b.suite(18, 0); await b.tick();
+  assert.deepEqual(b.github.merges, [pb.pr.number]);
+});
+
+test('L4 an exact conflict in the final step starts a repair and leaves the lane', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { pr } = await greenPr(w, 17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
+  w.baseCommit('change-17.txt', 'conflicting base text\n');
+  await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair); assert.match(repair.input, /merge conflict with the current main in change-17\.txt/);
+  assert.ok(!laneLabel(pr), 'the lane is free during the repair');
+});
