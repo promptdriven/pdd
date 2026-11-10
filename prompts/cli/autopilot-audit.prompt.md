@@ -3,6 +3,11 @@
 Own `src/autopilot-audit.mjs`. `auditMerge({run, pr}, ports={})` returns
 `{exitCode,message}`. `pendingAudits({run}, ports={})` returns PR numbers needing
 an audit or a known unsent follow-up. Preserve workflow gates and merge policy.
+`isRecordedAutopilotAudit(value)` returns a Boolean: true only for a complete
+valid saved audit under this module's schema in state `recorded`. It has no
+file, model or publication effects and lets metrics reuse the same admission
+rules rather than accepting a damaged result.
+
 This behavior is authorized by issues #3111 and #3138 and the build task. No prompt
 approval is implied. Files, programs, clock, limits and alert delivery use ports.
 

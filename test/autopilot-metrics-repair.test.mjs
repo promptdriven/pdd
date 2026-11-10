@@ -192,7 +192,7 @@ async function mergedWorld(t) {
   w.advance(24*3600000);return {w,pr};
 }
 
-for(const match of ['owned','foreign-merge','manual'])test(`round 2: real BAD audit discovery ${match} feeds metrics with green merge CI`,async t=>{
+for(const match of ['owned','foreign-merge','manual','damaged-record'])test(`round 2: real BAD audit discovery ${match} feeds metrics with green merge CI`,async t=>{
   const {w,pr}=await mergedWorld(t);
   if(match === 'manual') {
     const file=join(w.root,'history.jsonl');fs.writeFileSync(file,fs.readFileSync(file,'utf8').split('\n').filter(line=>!line.includes('"kind":"merged"')).join('\n'));
@@ -207,6 +207,11 @@ for(const match of ['owned','foreign-merge','manual'])test(`round 2: real BAD au
     runAuditor:async()=>({code:0,stdout:JSON.stringify({type:'thread.started',thread_id:randomUUID()})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}})+'\n'}),
     sendAlert:async()=>({exitCode:0,message:'Alert sent for #17 decision; the webhook confirmed it.'})});
   assert.equal(audit.exitCode,0,audit.message);
+  if(match === 'damaged-record') {
+    const dir=join(auditStateRoot,'records'),file=join(dir,fs.readdirSync(dir)[0]),record=JSON.parse(fs.readFileSync(file,'utf8'));
+    delete record.chat.session;fs.writeFileSync(file,JSON.stringify(record));
+  }
+  if(match === 'owned')assert.equal(rows(await w.read(undefined,{auditRoot,github:async()=>{throw Error('offline');}})).regressions,1,'local exact-merge BAD discovery survives GitHub outage');
   for(let i=0;i<2;i++)assert.equal(rows(await w.read(undefined,{auditRoot})).regressions,match === 'owned' ? 1 : 0);
   if(match === 'owned')assert.match(fs.readFileSync(join(w.root,'history.jsonl'),'utf8'),/"reason":"bad-audit"/);
 });
@@ -222,4 +227,29 @@ for(const match of ['owned','foreign-merge','manual'])test(`round 2: base-histor
   w.advance(24*3600000);
   assert.equal(rows(await w.read('2026-11-12T10:00:00Z',ports)).regressions,0,'repeat discovery is not a new day');
   if(match === 'owned')assert.match(fs.readFileSync(join(w.root,'history.jsonl'),'utf8'),/"reason":"reverted"/);
+});
+
+
+test('round 2: multiple recorded BAD audits retain earliest discovery regardless of directory order',async t=>{
+  const w=fixture(t);recordAutopilotMetric({root:w.core,repo:'owner/repo',issue:1,pr:10,kind:'merged',head,mergeCommit:merge,at:monday});
+  const auditRoot=join(w.root,'audits'),hash=createHash('sha256').update('owner/repo').digest('hex').slice(0,20),dir=join(auditRoot,hash,'records');fs.mkdirSync(dir,{recursive:true});
+  const files=[];
+  for(const at of ['2026-11-11T12:00:00Z',tuesday]) {
+    const record={schema:'pdd.audit.v1',repository:'owner/repo',runId:randomUUID(),pr:10,merge,parent:head,at:Date.parse(at),completedAt:Date.parse(at),state:'recorded',chat:{agent:'codex',configDir:null,startedAt:Date.parse(at),session:{id:randomUUID()}},result:{verdict:'BAD',kind:'',summary:'Synthetic',evidence:'Recorded',revert:false}};
+    const name=createHash('sha256').update(JSON.stringify([record.runId,10,merge])).digest('hex')+'.json';fs.writeFileSync(join(dir,name),JSON.stringify(record));files.push(name);
+  }
+  const github=async(repo,path)=>path === 'pulls/10' ? {head:{sha:head},merge_commit_sha:merge} : [];
+  const ports={stateRoot:w.root,auditRoot,github,now:()=>Date.parse('2026-11-11T13:00:00Z'),fs:{...fs,readdirSync:path=>path === dir ? files : fs.readdirSync(path)}};
+  const report=await readAutopilotMetrics({timezone:'UTC',observedAt:'2026-11-11T10:00:00Z'},ports);
+  assert.equal(rows(report).regressions,1,'Tuesday discovery is retained, not later Wednesday result');
+});
+
+
+test('round 2: pending result evidence never transfers to a refreshed head',async t=>{
+  const w=await lifecycle(t);w.issue(17);await w.tick();const {head:old}=w.build(17,{result:{evidence}});await w.tick();
+  w.baseCommit('base.txt','Updated base');w.review(17,'PASS');w.suite(17);await w.tick();
+  const job=JSON.parse(fs.readFileSync(join(w.root,'jobs','17.json'),'utf8'));assert.notEqual(job.head,old);
+  await w.tick();
+  const observations=fs.readFileSync(join(w.root,'history.jsonl'),'utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line)).filter(row=>row.metric?.kind === 'evidence');
+  assert.deepEqual([...new Set(observations.map(row=>row.metric.head))],[old]);
 });

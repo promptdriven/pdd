@@ -44,7 +44,9 @@ For an explicitly attributed local merge only, collect existing structured BAD
 audit records from `auditRoot/HASH/records/IDENTITY.json`, using the audit owner's
 repository hash, identity and recorded-result schema. Require matching repository,
 PR and exact merge SHA; discovery time is the saved `completedAt`. Malformed,
-foreign, manual-merge and unrelated findings count zero. No auditor is launched.
+foreign, manual-merge and unrelated findings count zero. If multiple matching BAD records exist before the first read, use the earliest
+`completedAt`, regardless of directory order. Exact locally saved merge SHAs
+permit this audit collection even when GitHub is unavailable. No auditor is launched.
 Also GET the merged PR's base-branch commits since its recorded merge time. Only
 a reachable commit with a valid SHA and a standard git-revert line naming that
 exact merge (`This reverts commit SHA.` or `This reverts commit SHA, reversing`)

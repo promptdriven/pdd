@@ -382,7 +382,8 @@ upgrading a surviving job retains known work without inventing earlier steps.
 
 Before recording result, body or comment evidence, confirm the PR head, branch
 and base match this job. Keep validated canonical result evidence pending on the
-job through a failed PR read; a mismatched or unrelated PR records no evidence,
+job with its producing head through a failed PR read; never reuse pending result
+evidence after a head change. A mismatched or unrelated PR records no evidence,
 including after cleanup. The scorecard's canonical parser owns validation and
 normalization. Reject the whole observation on malformed or conflicting lines.
 Deduplicate `(head, canonical evidence)` facts, including equivalent signatures

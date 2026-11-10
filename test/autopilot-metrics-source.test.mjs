@@ -103,7 +103,8 @@ test('native adapter collects paginated check runs and commit statuses through a
   const w=world(t), calls=[];
   w.save(join(w.core,'history.jsonl'),JSON.stringify(metric('merged')));
   recordAutopilotMetric({root:w.core,repo:'owner/alpha',issue:1,kind:'validated',at,pr:10,head,validation});
-  const report=await w.read({github:undefined,execFile:async(file,args)=>{
+  const report=await w.read({github:undefined,execFile:async(file,args,options)=>{
+    assert.equal(options.timeout,15000);
     calls.push([file,args]);
     const endpoint=args.at(-1);
     if(endpoint.includes('/statuses')) return {stdout:JSON.stringify([[],[{sha:merge,state:'error',created_at:'2026-11-10T14:00:00Z'}]])};
