@@ -1,0 +1,77 @@
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 2c6071800fd9cabb454eb6e1cbf0a8727cf4f838c7a8950d135470f9d652bdf1).
+import { spawn, spawnSync } from 'node:child_process';
+import { closeSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const self = fileURLToPath(import.meta.url);
+const SESSION_KEYS = /^(?:CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
+const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+function writeAtomic(file, text) {
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, text, { mode: 0o600 }); renameSync(temp, file);
+}
+
+export function agentCommand(agent, { model } = {}) {
+  const extra = model ? ['--model', model] : [];
+  if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', ...extra, '-'] };
+  if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--output-format', 'json', '--permission-mode', 'bypassPermissions', ...extra] };
+  throw Error('Autopilot core jobs need codex or claude');
+}
+
+export function jobEnvironment(env = {}) {
+  return Object.fromEntries(Object.entries(env).filter(([key, value]) => typeof value === 'string' && !SESSION_KEYS.test(key)));
+}
+
+export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {} }, ports = {}) {
+  if (!/^[A-Za-z0-9._-]+$/.test(String(id))) throw Error('Invalid job id');
+  const base = join(resolve(dir), id), now = ports.now ?? Date.now;
+  const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input` };
+  writeFileSync(job.input, input, { mode: 0o600 });
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit }));
+  const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
+  child.unref?.();
+  return { ...job, pid: child.pid, started: now() };
+}
+
+function nativeAlive(pid, token) {
+  try { process.kill(pid, 0); } catch (error) { if (error.code !== 'EPERM') return false; }
+  const row = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000 });
+  return row.status === 0 && String(row.stdout).includes(token);
+}
+
+export function readAgentJob(job, ports = {}) {
+  const alive = Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token);
+  const exit = readJson(job.exit), result = readJson(job.result);
+  return { state: alive ? 'running' : object(exit) ? 'exited' : 'dead', exit: object(exit) ? exit : null,
+    result: result === undefined ? null : object(result) ? result : 'invalid' };
+}
+
+export function stopAgentJob(job, ports = {}) {
+  if (!(Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token))) return false;
+  try { (ports.kill ?? process.kill)(-job.pid, 'SIGTERM'); } catch { try { (ports.kill ?? process.kill)(job.pid, 'SIGTERM'); } catch { return false; } }
+  return true;
+}
+
+// The detached wrapper: it owns the agent process and records how it ended.
+function wrap(specFile) {
+  const spec = JSON.parse(readFileSync(specFile, 'utf8'));
+  const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
+  let finished = false, child;
+  const finish = (code, signal) => {
+    if (finished) return; finished = true;
+    try { writeAtomic(spec.exit, JSON.stringify({ code, signal: signal ?? null, at: Date.now() })); } finally { closeSync(stdin); closeSync(out); }
+    process.exit(0);
+  };
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => {
+    try { child?.kill('SIGTERM'); } catch { /* The child may already be gone. */ }
+    setTimeout(() => { try { child?.kill('SIGKILL'); } catch {} finish(null, signal); }, 2000).unref();
+  });
+  try { child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
+  catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
+  child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
+  child.on('exit', (code, signal) => finish(code, signal));
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === self && process.argv[2] === '--wrapper') wrap(process.argv[3]);
