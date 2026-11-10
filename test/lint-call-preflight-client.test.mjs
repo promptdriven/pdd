@@ -86,10 +86,26 @@ for (const mode of ['warning', 'within', 'unknown', 'mismatch']) test(`issue820:
   assert.equal(c.f.posts.length, 1, 'saved standalone lint reads never start paid work or repeat lint');
 });
 
-test('issue820: old server refuses a selected cap before lint and ordinary lint still works', async t => {
+test('issue820: existing test --lint alias forwards the selected cap without paid intent', async t => {
+  const plan = parseArgv(['test', 'place-order', '--lint', '--max-calls', '5', '--json']);
+  const modern = parseArgv(['lint', 'place-order', '--max-calls', '5', '--json']);
+  assert.deepEqual(plan.options, modern.options);
+  assert.deepEqual(plan.operands, modern.operands);
+  const c = await client(t);
+  c.f.capacity = () => capacity(features);
+  const result = await c.run('check', plan.options, plan.operands);
+  assert.equal(result.code, 0, result.err + result.out);
+  assert.deepEqual(c.f.posts.map(post => [post.command, post.request.max_calls]), [['lint', 5]]);
+  assert.equal(result.json.call_preflight_requested_cap, 5);
+  assert.equal(c.saved(result).batch.intent, 'lint-only');
+  assert.equal(c.saved(result).batch.rows[0].max_calls, undefined, 'the alias cannot establish paid intent');
+});
+
+for (const argv of [['lint'], ['test', '--lint']]) test(`issue820: old server refuses a selected cap for ${argv.join(' ')} before lint and ordinary lint still works`, async t => {
   const c = await client(t);
   c.f.capacity = () => capacity(['lint-tests']);
-  const selected = await c.run('lint', { '--max-calls': '25' });
+  const plan = parseArgv([...argv, 'place-order', '--max-calls', '25']);
+  const selected = await c.run('check', plan.options, plan.operands);
   assert.equal(selected.code, 4, selected.err + selected.out);
   assert.match(selected.out, /lint-call-preflight-unsupported/);
   assert.match(selected.out, /does not support selected-cap call preflight/);
