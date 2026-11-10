@@ -173,6 +173,17 @@ that issue for this tick.
 
 ## Claim and start
 
+**Collisions at start (debate B 5.1, 5.2; notes and hints, never a lock).** S2: intake
+reads up to the free slots plus 4 ready issues and starts first those whose named
+paths (paths in the title and body) meet no other running job (its named paths and its
+changed files); else the oldest. A slot is never left idle for it. S3: the build brief
+lists each other running job of the repository (this machine's job files; for other
+machines the `files` of the claim records of `pdd:working` issues, at most 10) with
+"Other jobs change these files now. Change them only when the issue needs it. Keep such
+edits small and on their own lines.", and the base merges of the last 24 hours that
+touched files that the issue names. P1: at each push (once per head) the job's changed
+files are written into its claim record (`files`) with a PATCH of its own claim comment.
+
 For each ready issue while slots are free, at most 3 claim attempts per tick:
 
 1. Make the job worktree first, so that a local failure touches no issue. Fetch
@@ -491,33 +502,59 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    holder is in the final step: `lane {state: final, since, waited}`. A repair, an
    END (of any kind, before its other steps), a hand-over and an observe validation
    leave the lane (remove the label); a merge closes the PR.
-   In the final step, first the exact conflict check (`laneConflict`, the one place of
-   the conflict rule): fetch the base and the branch and run `git merge-tree
-   --write-tree --name-only --no-messages origin/BASE HEAD`; exit 1 is a conflict (a
-   red finding with the conflicted files: one repair), any code other than 0 or 1
-   leaves the decision to the refresh merge below.
-7. The head must contain the current base tip (`compare/BASE...HEAD`,
-   `behind_by` 0). When the base moved, refresh natively in the job worktree: reset to
-   the job head, merge `origin/BASE` (identity "PDD Autopilot", no hooks, no signing),
-   push the branch and take the new head; this is not a repair. The suite and CI
-   always run again for the new head. The PASS review is kept for the new head
-   (`review.kept`, `keptFrom`), and the refresh does not count, only when the merge
-   was clean, the PR's own change is the same (the diff `origin/BASE...HEAD` before
-   and after has the same SHA-256) and the base changed none of the PR's files since
-   the PR's merge base (`git diff --name-only` of both sides from `git merge-base
-   origin/BASE HEAD`). Otherwise the review runs again and the refresh counts (at most
-   3 counted refreshes, then END `base-moving`). Every refresh counts in
-   `allRefreshes`: after 6, the PR is not refreshed again; it waits with that
-   `lastError`, and the quiet rule ends it (`checks-quiet`) when nothing changes. A merge conflict is aborted and starts a
-   repair job with the conflict as its red finding.
+   The order (debate B L6, C1, C2): a PR that came back from a conflict update
+   (`lanePriority`) goes first, then claim order; a PR whose changed files meet a live
+   reservation of another PR (this machine's job files, or the `reserved {files,
+   until}` of other core PRs' claim records) waits for it. `nativeMergeQueue` is the
+   hook for GitHub's merge queue (decision D4, later): today it returns null.
+   **Final step, conflicts (debate B 5.4; `laneConflict` is the one place of the
+   conflict rule).** Fetch the base and the branch and run `git merge-tree --write-tree
+   --name-only --no-messages origin/BASE HEAD`. Exit 0 is clean; any code other than 0
+   or 1 leaves the decision to the refresh merge. On exit 1, merge with
+   `merge.conflictStyle=diff3` in the job worktree and classify each conflicted file. A
+   conflict never goes to a repair. Mechanical (fixed in the lane, no agent, the review
+   kept as `mechanical`, never a repair): M-a a hunk that differs only in derived
+   `Generated from P (sha256: …)` header lines (the header is then recomputed from the
+   merged prompt P); M-b pure inserts (one copy of identical text, else the base side
+   first); M-c adjacent hunks that do not overlap (both applied); M-d a JSON file merged
+   3-way (union of keys, a key changed on both sides is not mechanical, arrays that
+   both sides only extend keep both additions). The fixed merge is committed and
+   pushed; the suite and CI run on it; red checks on that head start an agent update
+   instead of a repair. Anything else (the same lines edited on both sides, an add/add
+   of one path, a missing side, binary) is an **agent conflict update** outside the
+   lane: leave the lane, count `conflictExits`, start a `conflict` job in the job
+   worktree with the three-sided hunks and the rules (merge the base, change only lines
+   inside the conflict hunks, add no files, run the focused tests; an add/add with
+   disagreeing specs ends with code `duplicate-design`). It is a base update, not a
+   repair, when the PR's changed lines outside the conflict files and its file set stay
+   the same; else it uses a repair (with none left, END `checks-red`). The PR then goes
+   first in the lane. C2: at the 2nd conflict exit the PR reserves its conflict files
+   for an hour (job and claim record); C3: the 3rd ends the job `base-moving`.
+7. The head must contain the current base tip (`compare/BASE...HEAD`, `behind_by` 0).
+   When the base moved, refresh natively in the job worktree (L3): reset to the job
+   head, merge `origin/BASE` (identity "PDD Autopilot", no hooks, no signing), push the
+   branch and take the new head; this is not a repair, and the suite and CI always run
+   again. A base move after the first refresh of one lane entry (a person's merge) is
+   a recheck: at the 3rd recheck the PR leaves the lane with no penalty and goes first
+   again (L4); rechecks never count as conflict exits. There is no other refresh cap.
+   **Review keep (debate B 5.5)**: F is the SHA-256 of the `+` and `-` lines of `git
+   diff -U0` from the merge base (without derived header lines), in path order. R1:
+   the same F and file set before and after keeps the PASS review (`kept`). R2: a scoped
+   check (`review.scoped {reason, detail, files}`: a short reviewer that reads only that
+   part and answers "does the result keep both changes and break neither?") when the
+   base changed a line within 10 lines of a PR hunk, or a prompt that owns a file of the
+   PR, or after a conflict update that changed F only in the conflict files. R3: a
+   fresh full review for any other change of F.
    Run `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md). A
    read failure ("could not verify", "unavailable", "retry") waits; another
    refusal ends `base-check`.
 8. Read the winning claim again: another live owner means hand-over and no merge; a
    claim that is not confirmed as this job's waits. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
    `CI: none (…)`, the suite, the lane (`Merge lane: final step`, with the queue
-   minutes when it waited), the review (`Review: PASS from a fresh reviewer`, or
-   `Review: PASS (kept after a clean base refresh, same change)`), the PR's Runtime
+   minutes when it waited), the review (`Review: PASS from a fresh reviewer`,
+   `Review: PASS (kept after a clean base refresh, same change)`, `Review: PASS (kept:
+   the lane fixed only mechanical conflict hunks)` or `Review: PASS (a scoped check
+   after REASON, on top of the earlier full review)`), the PR's Runtime
    line, the parsed evidence
    (`Evidence: runtime=pass (11/11); …` in the fixed key order, or `Evidence: none`)
    and the base check,

@@ -826,8 +826,8 @@ test('R13 base drift: a PR behind the base is refreshed natively without a repai
   v.review(17, 'PASS'); v.suite(17, 0);
   v.baseCommit('change-17.txt', 'conflicting base text\n');
   await v.tick();
-  assert.ok(v.job(17, 'repair'), 'a merge conflict with the base starts a repair job');
-  assert.match(v.job(17, 'repair').input, /conflict/i);
+  assert.ok(v.job(17, 'conflict'), 'a merge conflict with the base starts an agent conflict update (debate B), not a repair');
+  assert.equal(v.job(17, 'repair'), undefined); assert.match(v.job(17, 'conflict').input, /conflict/i);
 });
 
 test('R14 a machine engine and label saved by start win over pdd.json; status names the source', async t => {
@@ -1538,7 +1538,7 @@ test('D1 base refresh: a clean merge with the same change keeps the PASS review;
   w.baseCommit('other.txt', 'base moved\n');
   await w.tick();
   let saved = job(w);
-  assert.notEqual(saved.head, built.head); assert.equal(saved.refreshes, 0, 'a kept-review refresh does not count'); assert.equal(saved.review.kept, true);
+  assert.notEqual(saved.head, built.head); assert.equal(saved.review.kept, true);
   await w.tick();
   assert.equal(w.started.filter(j => j.role === 'review').length, 1, 'no new review');
   assert.equal(w.job(17, 'suite').head, saved.head, 'the full suite runs again on the new head');
@@ -1547,21 +1547,22 @@ test('D1 base refresh: a clean merge with the same change keeps the PASS review;
   w.github.setChecks(saved.head); await w.tick();
   assert.deepEqual(w.github.merges, [built.pr.number]);
   assert.match(mergeComment(built.pr), /^- Review: PASS \(kept after a clean base refresh, same change\)$/m);
-  // 2. The base changes a line near the PR's change: the merge is clean, but the PR's diff is not the same.
+  // 2. The base changes a line near the PR's change (within 10 lines): the merge is clean and the PR's lines are the
+  // same, so a scoped check (debate B R2) runs, not a fresh full review.
   ({ w, built } = await world());
   w.baseCommit('notes.txt', lines({ 5: 'line 5 changed on the base' }));
   await w.tick();
   saved = job(w);
-  assert.equal(saved.review, null); assert.equal(saved.refreshes, 1, 'a refresh that reviews again counts');
+  assert.match(saved.review?.scoped?.reason ?? '', /near the PR's lines/);
   await w.tick();
-  assert.equal(w.job(17, 'review').head, saved.head, 'a fresh review for the new head');
+  assert.equal(w.job(17, 'review').head, saved.head); assert.match(w.job(17, 'review').input, /short scoped check/);
   w.github.setChecks(saved.head); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
-  assert.match(mergeComment(built.pr), /^- Review: PASS from a fresh reviewer$/m);
-  // 3. The base changes the same line: a conflict starts a repair.
+  assert.match(mergeComment(built.pr), /^- Review: PASS \(a scoped check after a base change near the PR's lines, on top of the earlier full review\)$/m);
+  // 3. The base changes the same line: a conflict is an agent conflict update (debate B), not a repair.
   ({ w } = await world());
   w.baseCommit('notes.txt', lines({ 2: 'line 2 changed on the base' }));
   await w.tick();
-  assert.ok(w.job(17, 'repair'), 'a conflict starts a repair'); assert.match(w.job(17, 'repair').input, /conflict/i);
+  assert.ok(w.job(17, 'conflict'), 'a conflict update'); assert.equal(w.job(17, 'repair'), undefined); assert.match(w.job(17, 'conflict').input, /conflict/i);
 });
 
 test('E1 report owner: a scenario or test-vector cause is a PDD report; interface, binding, interpreter and no-verdict causes stay Runtime', async t => {
@@ -1827,29 +1828,24 @@ for (const name of ['autopilot', 'pdd', 'core', 'end']) test(`K3 user or host na
   assert.equal(w.started.filter(job => job.issue === 17 && job.role === 'build').length, 1, 'no loop: the issue waits for its report');
 });
 
-test('K4 refreshes are capped: after 6 (kept or not) the PR waits, is not refreshed again, and ends when quiet; the slot comes back', async t => {
+test('K4 debate B removed the refresh caps: 8 base moves never end the PR; it leaves the lane after 2 rechecks per entry and comes back first', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); w.issue(18); await w.tick();
   const built = w.build(17); await w.tick();
   w.review(17, 'PASS'); w.suite(17, 0);
   for (let i = 0; i < 8; i++) {
     w.baseCommit(`other-${i}.txt`, `base ${i}\n`);
-    await w.tick();
-    await w.tick();
+    await w.tick(); await w.tick();
     const job = jobFile(w, 17);
     if (job) { w.github.setChecks(job.head); if (w.job(17, 'suite') && w.alive.has(w.job(17, 'suite').pid)) w.suite(17, 0); }
     w.advance(5 * MIN);
   }
-  const held = jobFile(w, 17);
-  assert.equal(held.allRefreshes, 6); assert.equal(held.refreshes, 0, 'kept refreshes do not count against the cap of 3');
-  assert.match(held.lastError, /after 6 refreshes/);
-  assert.equal(w.started.filter(job => job.role === 'review').length, 1);
-  for (let i = 0; i < 6; i++) { w.advance(10 * MIN); await w.tick(); }
-  assert.match(endComments(w, 17)[0] ?? '', /Cause: job \/ checks-quiet/); assert.equal(built.pr.merged, false);
-  assert.ok(w.job(18, 'build'), 'the slot is free');
+  const job = jobFile(w, 17);
+  assert.ok(job, 'never ended for refreshing'); assert.equal(endComments(w, 17).length, 0); assert.equal(built.pr.merged, false);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 1, 'the review is kept on every clean refresh');
 });
 
-test('K5 a base change in a file of the PR (even outside the diff context) reviews again', async t => {
+test('K5 (debate B) a base change in a file of the PR, far from its lines, keeps the review', async t => {
   const lines = edit => Array.from({ length: 30 }, (_, i) => (edit[i + 1] ?? `  step ${i + 1};`)).join('\n') + '\n';
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('calc.js', lines({ 1: 'function total(x) {', 30: '}' }));
@@ -1860,9 +1856,9 @@ test('K5 a base change in a file of the PR (even outside the diff context) revie
   w.baseCommit('calc.js', lines({ 1: 'function total(x) {', 3: '  if (x > 0) return 0; // base: early return', 30: '}' }));
   await w.tick();
   const job = jobFile(w, 17);
-  assert.equal(job.review, null, 'the base changed calc.js, a file of the PR: review again'); assert.equal(job.refreshes, 1);
+  assert.equal(job.review?.kept, true, 'debate B R1: the PR\'s changed lines are the same and the base change is 22 lines away: keep');
   await w.tick();
-  assert.equal(w.started.filter(j => j.role === 'review').length, 2);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 1);
 });
 
 test('K6 evidence that contradicts itself or the Runtime line is red', async t => {
@@ -1949,16 +1945,16 @@ test('L1 two green PRs on different files go through one lane in claim order; th
   assert.match(mergeComment(b.pr), /- Review: PASS \(kept after a clean base refresh, same change\)/); assert.match(mergeComment(b.pr), /- Merge lane: final step after \d+ minutes in the queue/);
 });
 
-test('L1b two green PRs on the same file merge in order; the second reviews again (the base changed its file) and nothing ends', async t => {
+test('L1b two green PRs on the same file, 6 lines apart, merge in order; the second gets a scoped check and nothing ends', async t => {
   const lines = edit => Array.from({ length: 20 }, (_, i) => (edit[i + 1] ?? `line ${i + 1}`)).join('\n') + '\n';
   const w = await coreWorld(t, { settings: { runs: 2 } }); w.github.mergeMovesBase = true;
   w.baseCommit('list.txt', lines({}));
   w.issue(17); w.issue(18); await w.tick();
   const a = await greenPr(w, 17, cwd => writeFileSync(join(cwd, 'list.txt'), lines({ 2: 'item from #17' })));
-  const b = await greenPr(w, 18, cwd => writeFileSync(join(cwd, 'list.txt'), lines({ 15: 'item from #18' })));
+  const b = await greenPr(w, 18, cwd => writeFileSync(join(cwd, 'list.txt'), lines({ 8: 'item from #18' })));
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
   assert.deepEqual(w.github.merges, [a.pr.number]);
-  assert.equal(jobFile(w, 18).review, null, 'a shared file: review again');
+  assert.match(jobFile(w, 18).review?.scoped?.reason ?? '', /near the PR's lines/, 'a base change within 10 lines: a scoped check');
   await w.tick(); const job = jobFile(w, 18); w.github.setChecks(job.head); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
   assert.deepEqual(w.github.merges, [a.pr.number, b.pr.number]); assert.equal(endComments(w, 18).length, 0);
   assert.equal(w.started.filter(j => j.role === 'review').length, 3);
@@ -2004,15 +2000,15 @@ test('L3 two machines on one repository respect one lane; a lane whose machine s
   assert.deepEqual(b.github.merges, [pb.pr.number]);
 });
 
-test('L4 an exact conflict in the final step starts a repair and leaves the lane', async t => {
+test('L4 an exact conflict in the final step (add/add) starts an agent conflict update and leaves the lane', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); await w.tick();
   const { pr } = await greenPr(w, 17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
   w.baseCommit('change-17.txt', 'conflicting base text\n');
   await w.tick();
-  const repair = w.job(17, 'repair');
-  assert.ok(repair); assert.match(repair.input, /merge conflict with the current main in change-17\.txt/);
-  assert.ok(!laneLabel(pr), 'the lane is free during the repair');
+  const fix = w.job(17, 'conflict');
+  assert.ok(fix, 'an agent conflict update, not a repair'); assert.match(fix.input, /conflicts in: change-17\.txt/);
+  assert.ok(!laneLabel(pr), 'the lane is free during the update');
 });
 
 // ---- Review 9 regressions (each failed on 5c8b7426c) -----------------------------------------------------------
@@ -2226,4 +2222,167 @@ test('O4 path e: the job result proposes adopting PDD; the tick files one dedupe
   w.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: e — change-18.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-18.txt'] } }); await w.tick();
   const drafts = listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
   assert.equal(drafts.length, 1); assert.equal(drafts[0].count, 2); assert.match(drafts[0].body, /^Autopilot changed existing code that no prompt owns/); assert.match(drafts[0].body, /change-18\.txt/);
+});
+
+// ---- Debate B (B-VERDICT.md section 5): collisions between parallel jobs and a moving main ----------------------
+const greenLane = async (w, n) => { await w.tick(); w.review(n, 'PASS'); w.suite(n, 0); };
+const roles = (w, n) => w.started.filter(j => j.issue === n).map(j => j.role);
+const claimOf = (w, n) => w.comments(n).map(body => { try { return JSON.parse(/```json\n(.*)\n```/.exec(body)?.[1] ?? 'null'); } catch { return null; } }).filter(Boolean).at(-1);
+
+test('Q1 P1/S2/S3: a job writes its changed files into its claim; the next brief lists them; a disjoint issue starts first', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.issue(17); await w.tick();
+  editIn(w, 17, 'src/a.js', 'export const a = 1;\n');
+  w.build(17); await w.tick();
+  assert.deepEqual(claimOf(w, 17).files, ['change-17.txt', 'src/a.js'], 'P1: the files are in the claim record');
+  w.issue(18, { title: 'Fix src/a.js', created: w.now() - 500 * MIN }); w.issue(19, { title: 'Fix src/b.js', created: w.now() - 400 * MIN });
+  await w.tick();
+  assert.ok(w.job(19, 'build') && !w.job(18), 'S2: the issue that names no busy file starts first (the slot is not idle)');
+  assert.match(w.job(19, 'build').input, /Other jobs change these files now\. Change them only when the issue needs it\.[\s\S]*#17 .*: change-17\.txt, src\/a\.js/);
+});
+
+test('Q2 mechanical conflicts are fixed in the lane with no agent and no repair: JSON keys (M-d), identical inserts (M-b), derived headers (M-a)', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0' }, null, 2) + '\n');
+  w.baseCommit('CHANGELOG.md', '# Changes\n\n## 1.0.0\n\n- First.\n');
+  w.issue(17); await w.tick();
+  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', version: '1.0.0', repository: 'acme/widgets' }, null, 2) + '\n');
+  editIn(w, 17, 'CHANGELOG.md', '# Changes\n\n## Unreleased\n\n## 1.0.0\n\n- First.\n');
+  const { pr } = w.build(17); await greenLane(w, 17);
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', keywords: ['money'] }, null, 2) + '\n');
+  w.baseCommit('CHANGELOG.md', '# Changes\n\n## Unreleased\n\n## 1.0.0\n\n- First.\n');
+  await w.tick();                                    // the lane: merge-tree conflict, all hunks mechanical
+  const job = jobFile(w, 17);
+  assert.ok(job.mechanical, 'a mechanical lane merge'); assert.equal(job.repairs, 0); assert.deepEqual(roles(w, 17).filter(r => r === 'conflict' || r === 'repair'), []);
+  const pkg = JSON.parse(w.git(job.worktree, 'show', `${job.head}:package.json`));
+  assert.equal(pkg.repository, 'acme/widgets'); assert.deepEqual(pkg.keywords, ['money']);
+  assert.equal(w.git(job.worktree, 'show', `${job.head}:CHANGELOG.md`).match(/## Unreleased/g).length, 1, 'M-b: one copy of an identical insert');
+  await w.tick(); w.github.setChecks(job.head); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /Review: PASS \(kept: the lane fixed only mechanical conflict hunks\)/);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 1);
+});
+
+test('Q2b M-a: a conflict only in a derived hash header is fixed by recomputing it from the merged prompt', async t => {
+  const prompt = lines => `# X\n\n${lines.join('\n')}\n`;
+  const sha = text => createHash('sha256').update(text).digest('hex');
+  const base = prompt(['Rule 1.', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
+  const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
+  w.baseCommit('prompts/x.prompt.md', base);
+  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(base)})\nexport const x = 1;\n`);
+  w.issue(17); await w.tick();
+  const mine = prompt(['Rule 1 (PR).', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
+  editIn(w, 17, 'prompts/x.prompt.md', mine); editIn(w, 17, 'src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(mine)})\nexport const x = 1;\n`);
+  w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: b — src/x.js, prompts/x.prompt.md — prompts/x.prompt.md — prompt changed — Test: done check' }); await greenLane(w, 17);
+  const theirs = prompt(['Rule 1.', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6 (base).']);
+  w.baseCommit('prompts/x.prompt.md', theirs); w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(theirs)})\nexport const x = 1;\n`);
+  await w.tick();
+  const job = jobFile(w, 17);
+  assert.ok(job.mechanical, roles(w, 17).join(','));
+  const merged = w.git(job.worktree, 'show', `${job.head}:prompts/x.prompt.md`) + '\n';
+  assert.match(merged, /Rule 1 \(PR\)\.[\s\S]*Rule 6 \(base\)\./);
+  assert.match(w.git(job.worktree, 'show', `${job.head}:src/x.js`), new RegExp(`sha256: ${sha(merged)}`), 'the header is recomputed from the merged prompt');
+});
+
+test('Q3 an agent conflict is a base update outside the lane (not a repair); a change inside the conflict file gets a scoped check, then it merges', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
+  w.baseCommit('list.txt', 'alpha\nbeta\ngamma\n');
+  w.issue(17); await w.tick();
+  editIn(w, 17, 'list.txt', 'alpha\nbeta from the PR\ngamma\n');
+  const { pr } = w.build(17); await greenLane(w, 17);
+  w.baseCommit('list.txt', 'alpha\nbeta from the base\ngamma\n');
+  await w.tick();
+  const fix = w.job(17, 'conflict');
+  assert.ok(fix, 'an agent conflict job'); assert.equal(w.job(17, 'repair'), undefined);
+  assert.match(fix.input, /conflicts in: list\.txt/); assert.match(fix.input, /<<<<<<< HEAD[\s\S]*beta from the PR[\s\S]*beta from the base/);
+  assert.ok(!pr.labels.includes('pdd:merge-lane'), 'the PR left the lane');
+  // The agent merges the base and keeps both lines inside the hunk.
+  const cwd = fix.cwd; w.git(cwd, 'fetch', '-q', 'origin', 'main');
+  try { w.git(cwd, 'merge', '-q', 'origin/main'); } catch { /* the conflict */ }
+  writeFileSync(join(cwd, 'list.txt'), 'alpha\nbeta from the PR\nbeta from the base\ngamma\n'); w.git(cwd, 'add', '.'); w.git(cwd, 'commit', '-qm', 'merge main');
+  w.build(17, { role: 'conflict', write: false }); await w.tick();
+  const job = jobFile(w, 17);
+  assert.equal(job.repairs, 0, 'a base update, not a repair'); assert.equal(job.lanePriority, true);
+  assert.match(w.job(17, 'review').input, /short scoped check[\s\S]*the former conflict hunks in list\.txt/);
+  w.review(17, 'PASS'); w.suite(17, 0); w.github.setChecks(job.head); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /a scoped check after a conflict update/);
+});
+
+test('Q4 anti-chase: the 2nd conflict exit reserves the files in the claim record, the 3rd ends the job (base-moving)', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('list.txt', 'one\n');
+  w.issue(17); await w.tick();
+  editIn(w, 17, 'list.txt', 'PR\n'); w.build(17); await w.tick();
+  w.baseCommit('list.txt', 'base 1\n');
+  w.review(17, 'PASS'); w.suite(17, 0);
+  for (let exit = 1; exit <= 3; exit++) {
+    await w.tick();                                  // green, the lane, a conflict: exit N
+    if (exit === 3) break;
+    assert.ok(w.job(17, 'conflict'), `exit ${exit}`);
+    if (exit === 2) { assert.deepEqual(claimOf(w, 17).reserved.files, ['list.txt']); assert.ok(claimOf(w, 17).reserved.until > w.now()); }
+    const cwd = w.job(17, 'conflict').cwd; w.git(cwd, 'fetch', '-q', 'origin', 'main');
+    try { w.git(cwd, 'merge', '-q', 'origin/main'); } catch { /* the conflict */ }
+    writeFileSync(join(cwd, 'list.txt'), `PR and base ${exit}\n`); w.git(cwd, 'add', '.'); w.git(cwd, 'commit', '-qm', 'merge main');
+    w.build(17, { role: 'conflict', write: false }); await w.tick();
+    w.baseCommit('list.txt', `base ${exit + 1}\n`);   // main changes the same line again before the PR merges
+    w.review(17, 'PASS'); w.suite(17, 0);
+  }
+  assert.match(endComments(w, 17)[0] ?? '', /Cause: job \/ base-moving/); assert.match(endComments(w, 17)[0], /3rd time/);
+});
+
+test('Q5 review keep by changed lines: a base change far from the PR keeps the review; near it (10 lines) or in an owning prompt is a scoped check', async t => {
+  const lines = edit => Array.from({ length: 40 }, (_, i) => (edit[i + 1] ?? `line ${i + 1}`)).join('\n') + '\n';
+  for (const [name, baseEdit, scoped] of [['far', w => w.baseCommit('calc.js', lines({ 3: 'base change far away' })), false],
+    ['near', w => w.baseCommit('calc.js', lines({ 30: 'base change near the PR' })), /near the PR's lines/],
+    ['prompt', w => w.baseCommit('prompts/calc.prompt.md', '# Calc\n\nOwn `calc.js`: totals. Changed on the base.\n'), /a prompt that owns a PR file/]]) {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.baseCommit('calc.js', lines({}));
+    w.baseCommit('prompts/calc.prompt.md', '# Calc\n\nOwn `calc.js`: totals.\n');
+    w.issue(17); await w.tick();
+    editIn(w, 17, 'calc.js', lines({ 25: 'the PR change' }));
+    w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: b — calc.js — prompts/calc.prompt.md — no contract change — Test: done check' }); await greenLane(w, 17);
+    baseEdit(w);
+    await w.tick();
+    const job = jobFile(w, 17);
+    if (!scoped) assert.equal(job.review?.kept, true, name);
+    else { assert.match(job.review?.scoped?.reason ?? '', scoped, name); await w.tick(); assert.match(w.job(17, 'review').input, /short scoped check/, name); }
+  }
+});
+
+test('Q6 people moving the base during the final step: at most 2 rechecks, then the PR leaves the lane with no penalty and goes first again', async t => {
+  const v = await coreWorld(t, { settings: { runs: 1 } });
+  v.issue(17); await v.tick();
+  v.build(17); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0);
+  const leaves = [];
+  for (let i = 0; i < 4; i++) {
+    v.baseCommit(`person-${i}.txt`, `${i}\n`);
+    await v.tick();                                  // the final step: a refresh, or a recheck
+    leaves.push(jobFile(v, 17)?.lane?.state ?? 'out');
+    await v.tick(); const job = jobFile(v, 17); v.github.setChecks(job.head); if (v.job(17, 'suite') && v.alive.has(v.job(17, 'suite').pid)) v.suite(17, 0);
+  }
+  const job = jobFile(v, 17);
+  assert.ok(job, 'not ended'); assert.equal(job.lanePriority, true, 'it left the lane once and goes first'); assert.equal(job.conflictExits ?? 0, 0, 'rechecks never count as conflict exits');
+  assert.deepEqual(leaves, ['final', 'final', 'final', 'out'], 'the 3rd recheck of one lane entry leaves the lane');
+  assert.equal(v.started.filter(j => j.role === 'review').length, 1, 'the review is kept');
+});
+
+test('Q7 C1 a PR back from a conflict update goes first in the lane; C2 a reservation keeps other PRs with those files out', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } }); w.github.mergeMovesBase = true;
+  w.issue(17); w.issue(18); await w.tick();
+  const a = w.build(17), b = w.build(18); await w.tick();
+  const mark = (n, extra) => writeFileSync(join(w.root, 'jobs', `${n}.json`), JSON.stringify({ ...jobFile(w, n), ...extra }));
+  mark(18, { lanePriority: true, lane: { state: 'waiting', holder: null, since: w.now() } });
+  w.review(17, 'PASS'); w.suite(17, 0); w.review(18, 'PASS'); w.suite(18, 0);
+  await w.tick();
+  assert.deepEqual(w.github.merges, [b.pr.number, a.pr.number].slice(0, w.github.merges.length));
+  assert.equal(w.github.merges[0], b.pr.number, 'the returning PR (#18) merged first, before the older #17');
+  // C2: another PR reserved change-19.txt: #19 waits for it.
+  const v = await coreWorld(t, { settings: { runs: 2 } });
+  v.issue(19); v.issue(20); await v.tick();
+  v.build(19); v.build(20); await v.tick();
+  const reserve = n => writeFileSync(join(v.root, 'jobs', `${n}.json`), JSON.stringify({ ...jobFile(v, n), reserved: { files: ['change-19.txt'], until: v.now() + HOUR } }));
+  reserve(20);
+  writeFileSync(join(v.root, 'jobs', '19.json'), JSON.stringify({ ...jobFile(v, 19), files: ['change-19.txt'] }));
+  v.review(19, 'PASS'); v.suite(19, 0);
+  await v.tick();
+  assert.equal(jobFile(v, 19).lane.state, 'waiting', 'a reservation of its file keeps #19 waiting'); assert.equal(jobFile(v, 19).lane.holder, jobFile(v, 20).pr);
 });

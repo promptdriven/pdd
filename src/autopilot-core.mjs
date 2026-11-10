@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 906de41d0f921b9299ba4ea2227fac62dd2bebc2f631071213317dfd0f4e41f2).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 56e76271f4855e5d2c0da0e3e8cb3c629ca2dfa92553de5a964f2020638019f0).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -450,7 +450,7 @@ Work only in this folder: ${job.worktree} (branch ${job.branch}, made from origi
 ${issueText(job)}
 ${answerText(job)}
 ${ownerBrief(ctx, job.worktree)}
-
+${job.note ? `\n${job.note}\n` : ''}
 ${workRules(ctx, job)}
 
 ${RESULT_RULES(result)}
@@ -479,6 +479,25 @@ Check: (1) the change does what the issue asks; (2) Path: the Path lines match t
 Read the change with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD. You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
 Before you exit, write this JSON file: ${result}
 {"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix.
+`;
+
+const scopedPrompt = (ctx, job, scoped, result) => `You are a short scoped check for an Autopilot core job in ${ctx.repo}. You did not write this change.
+PR #${job.pr} at head ${job.head} for issue #${job.issue} passed a full review before the base moved. This folder is a clean checkout of the head.
+The base moved: ${scoped.reason}. Read only this part: ${scoped.detail}
+Answer one question: does the result keep both changes (the PR's and the base's) and break neither? Read with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD -- ${(scoped.files ?? []).join(' ')}. You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
+Before you exit, write this JSON file: ${result}
+{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix.
+`;
+const conflictPrompt = (ctx, job, info, result) => `You are an Autopilot core conflict job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
+Work only in this folder: ${job.worktree}. The base origin/${ctx.state.baseBranch} moved, and merging it into ${job.branch} conflicts in: ${info.files.join(', ')}.
+${info.reds?.length ? `A mechanical merge of the base gave red checks:\n${info.reds.map(red => `- ${red}`).join('\n')}\n` : ''}The conflict hunks (ours = the PR, base, theirs = the base branch):
+${info.hunks || '(see git merge)'}
+
+Merge origin/${ctx.state.baseBranch} into ${job.branch} (git fetch origin ${ctx.state.baseBranch} && git merge origin/${ctx.state.baseBranch}), resolve only these conflicts, commit and push to the same branch. Change only lines inside the conflict hunks; add no files; run the focused tests. For an add/add of one new path, make one file from both; if the two specs disagree, stop and say so with the result {"outcome":"failed","kind":"job","code":"duplicate-design","cause":"<both specs and how they disagree>"}. Do not open a new PR, never force-push, never close the issue.
+
+${issueText(job)}
+
+${RESULT_RULES(result)}
 `;
 
 // ---- Progress (no fixed time limits) --------------------------------------------------------------------
@@ -556,6 +575,37 @@ async function undoClaim(ctx, n, claim) {
   if (claim?.commentId) await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/comments/${claim.commentId}`).catch(() => {});
   await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${n}/labels/${encodeURIComponent('pdd:working')}`).catch(() => {});
 }
+// The file paths that a text names (an issue's title and body).
+const namedPaths = text => [...new Set([...String(text ?? '').matchAll(PATH_WORD)].map(m => m[1]).filter(p => p.includes('/') || /\.(?:json|md|ya?ml|toml|js|mjs|ts|py|sh)$/.test(p)))];
+// The other running jobs of this repository: this machine's jobs, and the claim records (files) of other machines'
+// pdd:working issues. Read once per tick.
+async function otherJobs(ctx, rows) {
+  if (ctx.others) return ctx.others;
+  const local = readJobs(ctx.fs, ctx.root).filter(j => j.phase !== 'ending').map(j => ({ issue: j.issue, title: j.title, text: `${j.title}\n${j.body}`, files: j.files ?? [] }));
+  const remote = [];
+  for (const row of (rows ?? []).filter(row => labelsOf(row).includes('pdd:working') && !local.some(j => j.issue === row.number)).slice(0, 10)) {
+    try {
+      const record = (await ctx.gh.all(`repos/${ctx.repo}/issues/${row.number}/comments?per_page=100`)).map(c => claimRecord(c.body)).filter(Boolean).at(-1);
+      remote.push({ issue: row.number, title: oneLine(row.title, 200), text: `${row.title}\n${row.body}`, files: Array.isArray(record?.files) ? record.files.filter(named) : [] });
+    } catch { /* A note only. */ }
+  }
+  return ctx.others = [...local, ...remote];
+}
+// S3: the build brief's concurrency note: other running jobs and their files, and the base merges of the last 24
+// hours that touched files that the issue names. A note, never a block.
+async function concurrencyNote(ctx, row, others, cwd) {
+  const lines = others.filter(o => o.issue !== row.number).map(o => `- #${o.issue} ${o.title}: ${o.files.length ? o.files.join(', ') : '(no files yet)'}`);
+  const named = new Set(namedPaths(`${row.title}\n${row.body}`)), merges = [];
+  if (named.size) {
+    let subject = '';
+    for (const line of (await ctx.git(['log', '--since=24.hours.ago', '--name-only', '--format=%x00%s', `origin/${ctx.state.baseBranch}`], cwd)).split('\n')) {
+      if (line.startsWith('\0')) subject = line.slice(1); else if (named.has(line.trim())) merges.push(`- ${line.trim()}: ${oneLine(subject, 120)}`);
+    }
+  }
+  if (!lines.length && !merges.length) return '';
+  return [lines.length ? `Other jobs change these files now. Change them only when the issue needs it. Keep such edits small and on their own lines.\n${lines.join('\n')}` : '',
+    merges.length ? `Base merges of the last 24 hours that touched files that the issue names:\n${[...new Set(merges)].join('\n')}` : ''].filter(Boolean).join('\n');
+}
 async function intake(ctx, rows) {
   const { state, settings } = ctx, jobs = readJobs(ctx.fs, ctx.root);
   const busy = jobs.filter(holdsSlot).length;
@@ -566,7 +616,13 @@ async function intake(ctx, rows) {
   const pausedText = () => { const m = ctx.machineState(); return m.pausedUntil ? `new jobs paused until ${new Date(m.pausedUntil).toISOString()} (${m.pausedHours} h): the agent ended ${STRIKES} or more jobs in a row with no result` : null; };
   if (pausedText()) return pausedText();
   let checked = false;
-  for await (const row of readyRows(ctx, rows)) {
+  // S2 (debate B): among the first ready issues, start first one whose named paths meet no running job (its named
+  // paths and its changed files); else the oldest. A hint only: it never leaves a slot idle.
+  const ready = [];
+  for await (const row of readyRows(ctx, rows)) { ready.push(row); if (ready.length >= free + 4) break; }
+  const others = await otherJobs(ctx, rows), busyPaths = new Set(others.flatMap(o => [...o.files, ...namedPaths(o.text)]));
+  const order = [...ready.filter(row => !namedPaths(`${row.title}\n${row.body}`).some(p => busyPaths.has(p))), ...ready.filter(row => namedPaths(`${row.title}\n${row.body}`).some(p => busyPaths.has(p)))];
+  for (const row of order) {
     if (free <= 0 || tries++ >= CLAIM_TRIES) break;
     if (!checked) {
       if (!await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
@@ -596,7 +652,8 @@ async function intake(ctx, rows) {
       continue;
     }
     await closeOtherPrs(ctx, n, branch);
-    const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
+    const note = await concurrencyNote(ctx, row, others, worktree).catch(() => '');
+    const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000), ...(note ? { note } : {}),
       branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), progress: { sig: null, at: ctx.now(), running: false }, ...(answer ? { answer } : {}) };
     ctx.saveJob(job);
     try { job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result)); ctx.saveJob(job); ctx.counts.started++; free--; }
@@ -624,9 +681,11 @@ async function ciState(ctx, head, job) {
   return checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig };
 }
 async function reviewState(ctx, job) {
-  if (!job.review || job.review.head !== job.head || job.review.retry) {
-    const cwd = await checkout(ctx, job, 'review');
-    job.review = { head: job.head, attempts: (job.review?.head === job.head ? job.review.attempts : 0) + 1, agent: startJob(ctx, job, 'review', cwd, result => reviewPrompt(ctx, job, result)) };
+  if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
+    // A scoped check (debate B R2) is a short review of one part; a fresh review reads the whole PR.
+    const cwd = await checkout(ctx, job, 'review'), scoped = job.review?.head === job.head ? job.review.scoped : null;
+    job.review = { head: job.head, attempts: (job.review?.head === job.head ? job.review.attempts ?? 0 : 0) + 1, ...(scoped ? { scoped } : {}),
+      agent: startJob(ctx, job, 'review', cwd, result => scoped ? scopedPrompt(ctx, job, scoped, result) : reviewPrompt(ctx, job, result)) };
     ctx.saveJob(job); return { state: 'running' };
   }
   if (job.review.verdict) return { state: job.review.verdict === 'PASS' ? 'pass' : 'fail', mustFix: job.review.mustFix };
@@ -730,7 +789,8 @@ async function mergeCheck(ctx, job) {
     if (review.state === 'fail') reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`);
     if (suite.state === 'fail') reds.push(suite.text);
   }
-  if (reds.length) return repairOrEnd(ctx, job, reds);
+  // Red checks on a head that a mechanical lane merge made are a conflict for an agent, not a repair (debate B 5.4).
+  if (reds.length) return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds);
   // Pending CI waits while its picture changes, and at most ciStuckMinutes with no change: then it is stuck (a no-result
   // end), so it never holds a slot for good.
   if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, at: ctx.now() };
@@ -744,11 +804,24 @@ async function mergeCheck(ctx, job) {
   if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
   // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
   if (await enterLane(ctx, job) !== 'final') return;
+  // L2: the exact conflict check. A conflict never goes to repairOrEnd: mechanical hunks are fixed in the lane, other
+  // hunks go to an agent base update outside the lane.
   const conflict = await laneConflict(ctx, job);
-  if (conflict) return repairOrEnd(ctx, job, [conflict]);
-  // The head must contain the current base tip, so that what merges is what was tested.
+  if (conflict?.agent) return conflictFix(ctx, job, conflict.agent);
+  if (conflict?.mechanical) {
+    Object.assign(job, { head: conflict.mechanical.head, prAt: ctx.now(), suite: null, mechanical: conflict.mechanical, progress: { sig: null, at: ctx.now(), running: false },
+      review: job.review?.verdict === 'PASS' ? { ...job.review, head: conflict.mechanical.head, kept: 'mechanical' } : null });
+    job.lane.refreshed = true; ctx.saveJob(job); return;
+  }
+  // L3/L4: the head must contain the current base tip, so that what merges is what was tested. A base move after the
+  // first refresh of this lane entry (a person's merge) is a recheck: at most 2, then the PR leaves the lane with no
+  // penalty and goes first again.
   const compare = await gh.ok('GET', `repos/${repo}/compare/${encodeURIComponent(state.baseBranch)}...${job.head}`);
-  if (!(compare?.behind_by === 0)) return refreshBase(ctx, job);
+  if (!(compare?.behind_by === 0)) {
+    if (job.lane.refreshed && (job.lane.rechecks = (job.lane.rechecks ?? 0) + 1) > 2) { await leaveLane(ctx, job); job.lanePriority = true; ctx.saveJob(job); return; }
+    job.lane.refreshed = true; ctx.saveJob(job);
+    return refreshBase(ctx, job);
+  }
   const base = await (ctx.ports.checkBase ?? (input => checkAutopilotBase(input, { execFile: ctx.execFile })))({ run: { repo, baseBranch: state.baseBranch, root: state.cwd, pr: [{ number: job.pr }] }, pr: job.pr });
   if (base.exitCode !== 0) {
     if (/could not verify|unavailable|retry/i.test(base.message)) { Object.assign(job, { lastError: safeLine(base.message), lastErrorTool: false }); ctx.saveJob(job); return; }
@@ -765,7 +838,7 @@ async function mergeCheck(ctx, job) {
     job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
     await ctx.comment(job.pr, [observe ? `Autopilot would merge this PR (observe mode): every check passed for head ${job.head}. It stays open and ready for review; Autopilot does not merge it.` : `Autopilot merge check passed for head ${job.head}.`, '',
       `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
-      '- Full test suite: pass', job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- ${evidenceText(job.evidence)}`, `- Base: ${oneLine(base.message)}`,
+      '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- ${evidenceText(job.evidence)}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
       ...(drafts.length ? [`- Prompts not approved (observe mode does not approve): ${drafts.join('; ')}`] : []), '',
       `<!-- pdd:autopilot-core:${observe ? 'would-merge' : 'merge'}:${job.head} -->`].join('\n'));
@@ -789,8 +862,12 @@ async function staleLane(ctx, number) {
   const claim = await ctx.readClaim(n);
   return !(claim?.active && !claim.expired);
 }
+// D4 hook: a repository whose base has GitHub's native merge queue will use it instead of this lane (L7). Not yet:
+// this returns null, and the lane serves every repository.
+async function nativeMergeQueue(ctx) { return null; }
 async function enterLane(ctx, job) {
   const { gh, repo } = ctx, label = encodeURIComponent(LANE);
+  if (await nativeMergeQueue(ctx)) return 'final';
   const wait = holder => {
     job.lane = { state: 'waiting', holder, since: job.lane?.state === 'waiting' ? job.lane.since : ctx.now() };
     job.progress = { ...job.progress, at: ctx.now(), running: true }; ctx.saveJob(job);
@@ -801,11 +878,16 @@ async function enterLane(ctx, job) {
   const others = held.filter(n => n !== job.pr);
   if (others.length) return wait(Math.min(...others));
   if (!held.includes(job.pr)) {
-    const older = readJobs(ctx.fs, ctx.root).filter(j => j.issue !== job.issue && j.phase === 'pr' && j.lane?.state === 'waiting' && j.started < job.started).sort((a, b) => a.started - b.started)[0];
-    if (older) return wait(older.pr);
+    // L6/C1: a PR that came back from a conflict update goes first; then claim order. C2: files that another PR
+    // reserved at its 2nd conflict wait for it.
+    const first = (a, b) => Number(Boolean(b.lanePriority)) - Number(Boolean(a.lanePriority)) || a.started - b.started;
+    const ahead = readJobs(ctx.fs, ctx.root).filter(j => j.issue !== job.issue && j.phase === 'pr' && j.lane?.state === 'waiting' && first(j, job) < 0).sort(first)[0];
+    if (ahead) return wait(ahead.pr);
+    const reserved = await reservations(ctx, job);
+    if (reserved) return wait(reserved);
     await gh.ok('POST', `repos/${repo}/issues/${job.pr}/labels`, { labels: [LANE] });
-    const now = await laneHolders(ctx), first = Math.min(...now);
-    if (first !== job.pr) { await gh.call('DELETE', `repos/${repo}/issues/${job.pr}/labels/${label}`); return wait(first); }
+    const now = await laneHolders(ctx), lowest = Math.min(...now);
+    if (lowest !== job.pr) { await gh.call('DELETE', `repos/${repo}/issues/${job.pr}/labels/${label}`); return wait(lowest); }
   }
   if (job.lane?.state !== 'final') { job.lane = { state: 'final', since: ctx.now(), waited: job.lane?.since ? ctx.now() - job.lane.since : 0 }; ctx.saveJob(job); }
   return 'final';
@@ -817,14 +899,188 @@ async function leaveLane(ctx, job) {
   if (r.status >= 300 && r.status !== 404) throw Error(`GitHub DELETE label returned ${r.status}`);
   job.lane = null; ctx.saveJob(job);
 }
-// The exact conflict check of the final step (git merge-tree, no work tree change). The conflict rule lives here only.
+// ---- Collision rules (debate B) -------------------------------------------------------------------------
+const IDENTITY = ['-c', 'user.name=PDD Autopilot', '-c', 'user.email=pdd@noreply.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
+const HEADER_LINE = /Generated from \S+\.prompt\.md \(sha256: [0-9a-f]*\)/;
+const RESERVE = HOUR;
+// The PR's changed lines: the + and - lines of `git diff -U0` in path order, without derived hash headers (M-a), its
+// file set and its hunks (start and length on the old side).
+function changedLines(diff, exclude = new Set()) {
+  const files = [], hunks = [], lines = [];
+  let path = null;
+  for (const line of String(diff ?? '').split('\n')) {
+    const file = /^diff --git a\/.* b\/(.*)$/.exec(line);
+    if (file) { path = file[1]; files.push(path); continue; }
+    if (!path || exclude.has(path) || /^(?:---|\+\+\+) /.test(line)) continue;
+    const h = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
+    if (h) { hunks.push({ path, start: Number(h[1]), length: h[2] === undefined ? 1 : Number(h[2]) }); continue; }
+    if (/^[+-]/.test(line) && !HEADER_LINE.test(line)) lines.push(`${path}\t${line}`);
+  }
+  return { files: files.sort(), hunks, fingerprint: createHash('sha256').update(lines.join('\n')).digest('hex') };
+}
+const changeOf = async (ctx, cwd, from, to, exclude) => changedLines(await ctx.git(['diff', '-U0', '--no-color', '--no-ext-diff', `${from}...${to}`], cwd), exclude);
+const sameList = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
+// M-a to M-c for one diff3 block (arrays of lines; ours = the PR, theirs = the base branch). Null: an agent hunk.
+function resolveBlock(ours, base, theirs) {
+  if (sameList(ours, theirs) || sameList(theirs, base)) return ours;
+  if (sameList(ours, base)) return theirs;
+  if (!base.length) return [...theirs, ...ours];                                          // M-b: pure inserts, base side first
+  const strip = lines => lines.filter(line => !HEADER_LINE.test(line));
+  if (sameList(strip(ours), strip(theirs)) && sameList(strip(ours), strip(base))) return ours;   // M-a: only derived headers
+  const region = side => { let from = 0, back = 0; while (from < base.length && from < side.length && side[from] === base[from]) from++;
+    while (back < base.length - from && back < side.length - from && side[side.length - 1 - back] === base[base.length - 1 - back]) back++;
+    return { from, to: base.length - back, lines: side.slice(from, side.length - back) }; };
+  const a = region(ours), b = region(theirs);
+  if (a.to <= b.from || b.to <= a.from) {                                                  // M-c: adjacent, not overlapping
+    const [first, second] = a.from <= b.from ? [a, b] : [b, a];
+    return [...base.slice(0, first.from), ...first.lines, ...base.slice(first.to, second.from), ...second.lines, ...base.slice(second.to)];
+  }
+  return null;
+}
+// M-d: a 3-way merge of parsed JSON. Union of keys; an array that both sides only extend keeps both additions; a key
+// that both sides changed differently is an agent hunk (CONFLICT).
+const CONFLICT = Symbol('conflict');
+const deepSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function mergeJson(base, ours, theirs) {
+  if (deepSame(ours, theirs) || deepSame(theirs, base)) return ours;
+  if (deepSame(ours, base)) return theirs;
+  if (object(ours) && object(theirs) && (base === undefined || object(base))) {
+    const out = {};
+    for (const key of [...new Set([...Object.keys(ours), ...Object.keys(theirs)])]) {
+      const has = side => Object.hasOwn(side, key), b = base && Object.hasOwn(base, key) ? base[key] : undefined;
+      if (has(ours) && has(theirs)) { const merged = mergeJson(b, ours[key], theirs[key]); if (merged === CONFLICT) return CONFLICT; out[key] = merged; continue; }
+      const side = has(ours) ? ours : theirs, other = has(ours) ? theirs : ours;
+      if (b === undefined) { out[key] = side[key]; continue; }                             // a new key on one side
+      if (!has(other) && deepSame(side[key], b)) continue;                                  // deleted on the other side
+      return CONFLICT;
+    }
+    return out;
+  }
+  if (Array.isArray(ours) && Array.isArray(theirs) && Array.isArray(base) && deepSame(ours.slice(0, base.length), base) && deepSame(theirs.slice(0, base.length), base)) {
+    const seen = new Set(base.map(x => JSON.stringify(x)));
+    return [...base, ...[...ours.slice(base.length), ...theirs.slice(base.length)].filter(x => !seen.has(JSON.stringify(x)) && seen.add(JSON.stringify(x)))];
+  }
+  return CONFLICT;
+}
+// One conflicted file after `git merge` with diff3 markers: its resolved text, or null with the agent hunks.
+async function resolveFile(ctx, cwd, file) {
+  const stage = n => ctx.git(['show', `:${n}:${file}`], cwd).then(text => text, () => null);
+  if (file.endsWith('.json')) {
+    const [b, o, t] = await Promise.all([stage(1), stage(2), stage(3)]);
+    try {
+      if (o === null || t === null) return { text: null };
+      const merged = mergeJson(b === null ? undefined : JSON.parse(b), JSON.parse(o), JSON.parse(t));
+      if (merged === CONFLICT) return { text: null };
+      const indent = /^\{\n(\s+)"/.exec(o)?.[1]?.length ?? (o.includes('\n') ? 2 : 0);
+      return { text: `${JSON.stringify(merged, null, indent)}\n` };
+    } catch { return { text: null }; }
+  }
+  let text;
+  try { text = ctx.fs.readFileSync(join(cwd, file), 'utf8'); } catch { return { text: null }; }
+  if (text.includes('\0')) return { text: null };
+  // A-b: an add/add of one path (no base stage) is never mechanical: an agent makes one file from both.
+  if (await stage(1) === null) return { text: null, hunks: [`(${file}: both sides added this file)\n${text.slice(0, 4000)}`] };
+  const out = [], hunks = [], lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith('<<<<<<< ')) { out.push(lines[i]); continue; }
+    const part = { ours: [], base: [], theirs: [] };
+    let where = 'ours', j = i + 1;
+    for (; j < lines.length && !lines[j].startsWith('>>>>>>> '); j++) {
+      if (lines[j].startsWith('||||||| ')) where = 'base'; else if (lines[j] === '=======') where = 'theirs'; else part[where].push(lines[j]);
+    }
+    hunks.push(lines.slice(i, j + 1).join('\n'));
+    const resolved = where === 'theirs' ? resolveBlock(part.ours, part.base, part.theirs) : null;
+    if (!resolved) return { text: null, hunks };
+    out.push(...resolved); i = j;
+  }
+  return { text: out.join('\n'), hunks };
+}
+// The conflict rule of the final step (debate B 5.4; this is the one place). git merge-tree first: clean is null.
+// Otherwise merge with diff3 in the job worktree and resolve mechanical hunks (M-a derived hash headers, recomputed;
+// M-b inserts; M-c adjacent hunks; M-d JSON): all resolved is {mechanical: {head, files}}, pushed; else
+// {agent: {files, hunks}} for an agent base update.
 async function laneConflict(ctx, job) {
   const base = ctx.state.baseBranch, cwd = job.worktree;
   await ctx.git(['fetch', '-q', 'origin', base, job.branch], cwd);
-  const r = await ctx.ports.git(['merge-tree', '--write-tree', '--name-only', '--no-messages', `origin/${base}`, job.head], { cwd });
-  if (r.code !== 1) return null;   // 0: clean; any other code: merge-tree could not run, and the refresh merge decides
-  const files = String(r.stdout ?? '').split('\n').slice(1).map(line => line.trim()).filter(Boolean);
-  return `The PR head ${short(job.head)} has a merge conflict with the current ${base}${files.length ? ` in ${files.join(', ')}` : ''}. Merge origin/${base} into ${job.branch}, resolve the conflict, run the focused tests and push.`;
+  const tree = await ctx.ports.git(['merge-tree', '--write-tree', '--name-only', '--no-messages', `origin/${base}`, job.head], { cwd });
+  if (tree.code !== 1) return null;   // 0: clean; any other code: merge-tree could not run, and the refresh merge decides
+  await ctx.git(['reset', '-q', '--hard', job.head], cwd);
+  const merged = await ctx.ports.git([...IDENTITY, '-c', 'merge.conflictStyle=diff3', 'merge', '--no-commit', '--no-ff', `origin/${base}`], { cwd });
+  if (merged.code === 0) { await ctx.git(['merge', '--abort'], cwd).catch(() => {}); return null; }
+  const files = (await ctx.git(['diff', '--name-only', '--diff-filter=U'], cwd)).split('\n').filter(Boolean), hunks = [];
+  let mechanical = files.length > 0;
+  for (const file of files) {
+    const fixed = await resolveFile(ctx, cwd, file).catch(() => ({ text: null }));
+    hunks.push(...(fixed.hunks ?? [`(${file}: a whole-file conflict)`]));
+    if (fixed.text === null) { mechanical = false; continue; }
+    if (mechanical) ctx.fs.writeFileSync(join(cwd, file), fixed.text);
+  }
+  if (!mechanical) {
+    await ctx.git(['merge', '--abort'], cwd).catch(() => {});
+    return { agent: { files, hunks: hunks.join('\n\n').slice(0, 12000) } };
+  }
+  // M-a: recompute the derived hash headers of the fixed files from their prompts.
+  for (const file of files) {
+    const text = ctx.fs.readFileSync(join(cwd, file), 'utf8'), m = /Generated from (\S+\.prompt\.md) \(sha256: [0-9a-f]*\)/.exec(text);
+    if (m && ctx.fs.existsSync(join(cwd, m[1]))) ctx.fs.writeFileSync(join(cwd, file), text.replace(m[0], `Generated from ${m[1]} (sha256: ${createHash('sha256').update(ctx.fs.readFileSync(join(cwd, m[1]))).digest('hex')})`));
+  }
+  await ctx.git(['add', '--', ...files], cwd);
+  await ctx.git([...IDENTITY, 'commit', '-q', '--no-edit', '-m', `Merge ${base} into ${job.branch} (mechanical conflict fix)`], cwd);
+  await ctx.git(['push', '-q', 'origin', `HEAD:${job.branch}`], cwd);
+  return { mechanical: { head: await ctx.git(['rev-parse', 'HEAD'], cwd), files } };
+}
+// An agent base update for conflict hunks (outside the lane). It is not a repair when the PR's changed lines outside
+// the conflict files and its file set stay the same. C3: the 3rd conflict exit ends the job; C2: at the 2nd, the PR
+// reserves its conflict files for an hour.
+async function conflictFix(ctx, job, info) {
+  stopChecks(ctx, job);
+  await leaveLane(ctx, job);
+  job.conflictExits = (job.conflictExits ?? 0) + 1;
+  if (job.conflictExits >= 3) return end(ctx, job, cause('job', 'base-moving', `the PR met a conflict with the base for the 3rd time (${info.files.join(', ')})`));
+  if (job.conflictExits === 2) { job.reserved = { files: info.files, until: ctx.now() + RESERVE }; await writeClaimRecord(ctx, job, { reserved: job.reserved }); }
+  const base = `origin/${ctx.state.baseBranch}`, exclude = new Set(info.files);
+  const before = await changeOf(ctx, job.worktree, base, job.head).catch(() => null), outside = await changeOf(ctx, job.worktree, base, job.head, exclude).catch(() => null);
+  job.conflict = { files: info.files, full: before?.fingerprint ?? null, outside: outside?.fingerprint ?? null, set: before?.files ?? [], review: job.review?.verdict === 'PASS' ? job.review : null };
+  Object.assign(job, { phase: 'running', role: 'conflict', suite: null, mechanical: null, lanePriority: true, progress: { sig: null, at: ctx.now(), running: false } });
+  job.agent = startJob(ctx, job, 'conflict', job.worktree, result => conflictPrompt(ctx, job, info, result));
+  ctx.saveJob(job);
+}
+// After a conflict update: a base update keeps the repair budget; the review is kept (same F), scoped (F changed only in
+// the conflict files) or fresh (a change outside them, which also uses a repair).
+async function afterConflict(ctx, job) {
+  const c = job.conflict, base = `origin/${ctx.state.baseBranch}`;
+  delete job.conflict;
+  const now = await changeOf(ctx, job.worktree, base, job.head).catch(() => null), outside = await changeOf(ctx, job.worktree, base, job.head, new Set(c.files)).catch(() => null);
+  if (!now || !outside || outside.fingerprint !== c.outside || !sameList(now.files, c.set)) {
+    job.repairs += 1; job.review = null;
+    if (job.repairs > ctx.settings.repairs) return 'end';
+    return 'repair';
+  }
+  job.review = !c.review ? null : now.fingerprint === c.full ? { ...c.review, head: job.head, kept: true } : { head: job.head, scoped: { reason: 'a conflict update', detail: `the former conflict hunks in ${c.files.join(', ')}`, files: c.files } };
+  return 'base-update';
+}
+// The files that other PRs reserved (C2), from this machine's jobs and the claim records of other core PRs.
+async function reservations(ctx, job) {
+  const mine = new Set(job.files ?? []), hit = r => r && r.until > ctx.now() && (r.files ?? []).some(file => mine.has(file));
+  for (const other of readJobs(ctx.fs, ctx.root)) if (other.issue !== job.issue && other.pr && hit(other.reserved)) return other.pr;
+  try {
+    for (const pr of (await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls?state=open&per_page=100`) ?? []).slice(0, 30)) {
+      const n = Number(/^pdd\/core-(\d+)-/.exec(String(pr.head?.ref ?? ''))?.[1]);
+      if (!Number.isSafeInteger(n) || n === job.issue || readJobs(ctx.fs, ctx.root).some(j => j.issue === n)) continue;
+      const record = (await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`)).map(c => claimRecord(c.body)).filter(Boolean).at(-1);
+      if (hit(record?.reserved)) return pr.number;
+    }
+  } catch (error) { ctx.warn(`Autopilot core could not read lane reservations: ${error.message}`); }
+  return null;
+}
+// P1: write fields (the changed files, a reservation) into this job's claim record. No lock; a failure only warns.
+async function writeClaimRecord(ctx, job, fields) {
+  try {
+    const endpoint = `repos/${ctx.repo}/issues/comments/${job.claim.commentId}`, comment = await ctx.gh.ok('GET', endpoint), record = claimRecord(comment?.body);
+    if (!record) return;
+    const body = String(comment.body).replace(/```(?:json)?\s*\n[\s\S]*?\n```/, `\`\`\`json\n${JSON.stringify({ ...record, ...fields })}\n\`\`\``);
+    if (body !== comment.body) await ctx.gh.ok('PATCH', endpoint, { body });
+  } catch (error) { ctx.warn(`Autopilot core could not update the claim record of #${job.issue}: ${error.message}`); }
 }
 
 // A clean checkout of one commit for reading (the PR head or the base tip), made once per commit.
@@ -867,6 +1123,9 @@ async function pathChecks(ctx, job, body) {
   for (const { path } of changed) if (!before.has(path) && onBase.has(path) && !path.endsWith('.prompt.md'))
     for (const prompt of headFiles.filter(file => file.endsWith('.prompt.md'))) { try { if (ctx.fs.readFileSync(join(headRoot, prompt), 'utf8').includes(path)) hints.push(`${prompt} mentions ${path}`); } catch { /* Skipped. */ } }
   job.paths = { head: job.head, body: key, reds: [...new Set(reds)], hints: hints.slice(0, 20), owners: ownerLines(before, changed.map(c => c.path)) || '(no changed files)' };
+  // P1 (debate B): the job's changed files go into its claim record for other jobs (a note and an order hint, no lock).
+  const files = [...new Set(changed.map(c => c.path))].sort();
+  if (!sameList(files, job.files ?? [])) { job.files = files; await writeClaimRecord(ctx, job, { files }); }
   ctx.saveJob(job);
   return job.paths;
 }
@@ -941,46 +1200,41 @@ async function repairOrEnd(ctx, job, reds) {
   job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
   ctx.saveJob(job); ctx.counts.repairs++;
 }
-// The PR's own change (its diff against the merge base with the base tip), and the files that it shares with the
-// base's changes since the PR's merge base.
-const ownChange = async (ctx, cwd, base, head) => createHash('sha256').update(await ctx.git(['diff', '--no-color', '--no-ext-diff', `origin/${base}...${head}`], cwd)).digest('hex');
-async function sharedFiles(ctx, cwd, base, head) {
-  const mergeBase = await ctx.git(['merge-base', `origin/${base}`, head], cwd);
-  const files = async range => new Set((await ctx.git(['diff', '--name-only', range], cwd)).split('\n').filter(Boolean));
-  const mine = await files(`${mergeBase}..${head}`), theirs = await files(`${mergeBase}..origin/${base}`);
-  return [...mine].filter(file => theirs.has(file));
-}
-const MAX_REFRESHES = 6;
-// The base moved after the checks: merge the base tip into the job branch natively and check the new head again.
-// This is not a repair. A conflict is: it starts a repair job. The PASS review is kept for the new head only when the
-// merge was clean, the PR's own change is the same and the base changed none of the PR's files; such a refresh does
-// not count against the cap of 3. The suite and CI always run again. After 6 refreshes of any kind the PR waits and is
-// not refreshed again; the quiet rule ends it when nothing changes.
+// The base moved after the checks (L3): merge the base tip into the job branch natively, push, and run the suite and CI
+// on that exact head. Review keep (debate B 5.5): R1 keep when the PR's changed lines (F) and file set are the same;
+// R2 a scoped check when the base changed a line within 10 lines of a PR hunk, or a prompt that owns a file of the PR;
+// R3 a fresh review for any other change of F. A clean merge here is never a repair.
 async function refreshBase(ctx, job) {
-  const base = ctx.state.baseBranch, cwd = job.worktree;
-  if ((job.refreshes ?? 0) >= 3) return end(ctx, job, cause('job', 'base-moving', `the base ${base} moved again after 3 refreshes of the PR head`));
-  if ((job.allRefreshes ?? 0) >= MAX_REFRESHES) {
-    Object.assign(job, { lastError: `the base ${base} moved again after ${MAX_REFRESHES} refreshes; the PR waits and is not refreshed again`, lastErrorTool: false }); ctx.saveJob(job);
-    return;
-  }
+  const base = ctx.state.baseBranch, cwd = job.worktree, tip = `origin/${base}`;
   await ctx.git(['fetch', '-q', 'origin', base], cwd);
   await ctx.git(['reset', '-q', '--hard', job.head], cwd);
-  const before = await ownChange(ctx, cwd, base, job.head).catch(() => null);
-  const shared = await sharedFiles(ctx, cwd, base, job.head).catch(() => null);
-  const merged = await ctx.ports.git(['-c', 'user.name=PDD Autopilot', '-c', 'user.email=pdd@noreply.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
-    'merge', '--no-edit', '-m', `Merge ${base} into ${job.branch}`, `origin/${base}`], { cwd });
+  const mergeBase = await ctx.git(['merge-base', tip, job.head], cwd), before = await changeOf(ctx, cwd, mergeBase, job.head).catch(() => null);
+  const merged = await ctx.ports.git([...IDENTITY, 'merge', '--no-edit', '-m', `Merge ${base} into ${job.branch}`, tip], { cwd });
   if (merged.code !== 0) {
+    const files = (await ctx.git(['diff', '--name-only', '--diff-filter=U'], cwd).catch(() => '')).split('\n').filter(Boolean);
     await ctx.git(['merge', '--abort'], cwd).catch(() => {});
-    return repairOrEnd(ctx, job, [`The PR head ${short(job.head)} has a merge conflict with the current ${base}. Merge origin/${base} into ${job.branch}, resolve the conflict, run the focused tests and push.`]);
+    return conflictFix(ctx, job, { files, hunks: '' });
   }
   await ctx.git(['push', '-q', 'origin', `HEAD:${job.branch}`], cwd);
-  const head = await ctx.git(['rev-parse', 'HEAD'], cwd), old = job.head;
-  const keep = job.review?.verdict === 'PASS' && job.review.head === old && Array.isArray(shared) && !shared.length
-    && before !== null && before === await ownChange(ctx, cwd, base, head).catch(() => undefined);
-  Object.assign(job, { head, prAt: ctx.now(), suite: null, progress: { sig: null, at: ctx.now(), running: false },
-    review: keep ? { ...job.review, head, kept: true, keptFrom: old } : null, allRefreshes: (job.allRefreshes ?? 0) + 1,
-    refreshes: (job.refreshes ?? 0) + (keep ? 0 : 1), cleanRefreshes: (job.cleanRefreshes ?? 0) + (keep ? 1 : 0) });
+  const head = await ctx.git(['rev-parse', 'HEAD'], cwd), old = job.head, after = await changeOf(ctx, cwd, tip, head).catch(() => null);
+  let review = null;
+  if (job.review?.verdict === 'PASS' && job.review.head === old && before && after && before.fingerprint === after.fingerprint && sameList(before.files, after.files)) {
+    const scoped = await nearChange(ctx, job, cwd, mergeBase, tip, before).catch(() => ({ reason: 'a base change that could not be read', detail: before.files.join(', '), files: before.files }));
+    review = scoped ? { head, scoped } : { ...job.review, head, kept: true, keptFrom: old };
+  }
+  Object.assign(job, { head, prAt: ctx.now(), suite: null, mechanical: null, progress: { sig: null, at: ctx.now(), running: false }, review,
+    refreshes: (job.refreshes ?? 0) + 1, cleanRefreshes: (job.cleanRefreshes ?? 0) + (review?.kept ? 1 : 0) });
   delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job);
+}
+// R2: a base change near the PR (a changed line within 10 lines of a PR hunk) or in a prompt that owns a PR file.
+async function nearChange(ctx, job, cwd, mergeBase, tip, pr) {
+  const theirs = changedLines(await ctx.git(['diff', '-U0', '--no-color', '--no-ext-diff', `${mergeBase}..${tip}`, '--', ...pr.files], cwd));
+  const near = pr.hunks.filter(a => theirs.hunks.some(b => b.path === a.path && b.start <= a.start + Math.max(a.length, 1) + 10 && a.start <= b.start + Math.max(b.length, 1) + 10));
+  if (near.length) return { reason: 'a base change near the PR\'s lines', detail: `the lines near ${[...new Set(near.map(h => `${h.path}:${h.start}`))].join(', ')}`, files: [...new Set(near.map(h => h.path))] };
+  const baseRoot = await treeAt(ctx, job, 'base', await ctx.git(['rev-parse', tip], cwd)), owners = ownerTable(ctx.fs, baseRoot, treeFiles(baseRoot));
+  const moved = new Set((await ctx.git(['diff', '--name-only', `${mergeBase}..${tip}`], cwd)).split('\n').filter(Boolean));
+  const owning = pr.files.filter(file => owners.get(file) && moved.has(owners.get(file).prompt));
+  return owning.length ? { reason: 'a base change of a prompt that owns a PR file', detail: owning.map(file => `${file} (owned by ${owners.get(file).prompt})`).join(', '), files: owning } : null;
 }
 async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
@@ -1269,6 +1523,12 @@ async function advance(ctx, job) {
       evidence: parseEvidence(r.evidence) ?? job.evidence ?? null, prAt: ctx.now(), progress: { sig: null, at: ctx.now(), running: false } });
     delete job.lastError; delete job.lastErrorTool;
     ctx.saveJob(job); ctx.produced();
+    // A conflict update came back: a base update, or a repair when it changed lines outside the conflict files.
+    if (job.conflict) {
+      const was = await afterConflict(ctx, job);
+      ctx.saveJob(job);
+      if (was === 'end') return end(ctx, job, cause('job', 'checks-red', `the conflict update changed lines outside the conflict files, and no repair is left`));
+    }
     // Path e (decision D1): existing code that no prompt owns changed directly; propose adopting PDD for it, as one
     // deduped PDD report. It never blocks the job.
     const adopt = (Array.isArray(r.adopt) ? r.adopt : []).filter(named).map(path => oneLine(path, 200)).slice(0, 20);

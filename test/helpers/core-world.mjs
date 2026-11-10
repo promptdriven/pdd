@@ -167,11 +167,12 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.kill = (issue, role) => { const job = w.job(issue, role); w.alive.delete(job.pid); return job; };
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.
   // A scripted PR body gets a debate-A Path line unless it has one or the test asks for none (pathLine: false).
-  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true } = {}) => {
+  // write: false commits only what the test put in the worktree (a conflict fix), not the change-N.txt file.
+  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true, write = true } = {}) => {
     const job = w.job(issue, role);
     if (body && pathLine && !/^[\s>*-]*Path:/m.test(body)) body = `${body}\nPath: d — change-${issue}.txt — unowned — no contract change — Test: done check`;
-    writeFileSync(join(job.cwd, `change-${issue}.txt`), `change ${job.id}\n`);
-    git(job.cwd, 'add', '.'); git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
+    if (write) writeFileSync(join(job.cwd, `change-${issue}.txt`), `change ${job.id}\n`);
+    git(job.cwd, 'add', '.'); if (git(job.cwd, 'status', '--porcelain')) git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
     const head = git(job.cwd, 'rev-parse', 'HEAD');
     let pr = [...w.github.prs.values()].find(p => p.branch === job.branch);
     if (pr) { pr.head = head; if (body) pr.body = body; } else pr = w.github.openPr({ branch: job.branch, head, ...(body ? { body } : {}) });

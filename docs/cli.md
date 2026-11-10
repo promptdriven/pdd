@@ -1422,7 +1422,13 @@ Each tick, without AI calls:
    machines): other green PRs wait in claim order with their reviews, and waiting
    never ends a job. In the final step Autopilot checks for an exact conflict with
    `git merge-tree`, brings the PR up to the newest base, runs the suite and CI
-   again and merges. `pdd autopilot status` shows each PR's place in the lane. When the base moved, Autopilot merges the base into the
+   again and merges. Mechanical conflicts (derived hash headers, the same insert on
+   both sides, adjacent hunks, JSON keys) are fixed in the lane; other conflicts go
+   to a small agent update outside the lane that does not use a repair, and that PR
+   goes first when it comes back. A PR ends after its 3rd conflict. The review stays
+   when the PR's changed lines stay the same; a base change near those lines, or in a
+   prompt that owns one of its files, gets a short scoped check. Each job writes its
+   changed files into its claim, and the next job's brief lists them. `pdd autopilot status` shows each PR's place in the lane. When the base moved, Autopilot merges the base into the
    PR branch itself and checks the new head again: the full suite and CI run again,
    and the PASS review is kept only when the merge was clean and the PR's own change
    is the same. A merge conflict starts a repair.
