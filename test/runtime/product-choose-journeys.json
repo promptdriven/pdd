@@ -1,0 +1,140 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/product-choose-journeys.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Checking journeys selects only the journeys in my project\u2019s root journey folder, in their listed order."
+    },
+    {
+      "id": "AC2",
+      "text": "Choosing J1 selects J1-order and leaves out J10 and nested examples."
+    },
+    {
+      "id": "AC3",
+      "text": "If J1 names more than one journey, I get a clear request to choose one."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "all",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "selectJourneys",
+      "input": {
+        "tests": [
+          {
+            "testPath": "test/J1.json",
+            "storyPath": "user_stories/journeys/J1-order.md"
+          },
+          {
+            "testPath": "test/J10.json",
+            "storyPath": "user_stories/journeys/J10-other.md"
+          },
+          {
+            "testPath": "test/part.json",
+            "storyPath": "user_stories/P01-menu.md"
+          },
+          {
+            "testPath": "test/nested.json",
+            "storyPath": "examples/x/user_stories/journeys/J1-order.md"
+          }
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "test/J1.json",
+            "test/J10.json"
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "token",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "selectJourneys",
+      "input": {
+        "tests": [
+          {
+            "testPath": "test/J1.json",
+            "storyPath": "user_stories/journeys/J1-order.md"
+          },
+          {
+            "testPath": "test/J10.json",
+            "storyPath": "user_stories/journeys/J10-other.md"
+          },
+          {
+            "testPath": "test/part.json",
+            "storyPath": "user_stories/P01-menu.md"
+          },
+          {
+            "testPath": "test/nested.json",
+            "storyPath": "examples/x/user_stories/journeys/J1-order.md"
+          }
+        ],
+        "selector": "J1"
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "test/J1.json"
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "ambiguous",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "selectJourneys",
+      "input": {
+        "tests": [
+          {
+            "testPath": "test/J1.json",
+            "storyPath": "user_stories/journeys/J1-order.md"
+          },
+          {
+            "testPath": "test/J10.json",
+            "storyPath": "user_stories/journeys/J10-other.md"
+          },
+          {
+            "testPath": "test/part.json",
+            "storyPath": "user_stories/P01-menu.md"
+          },
+          {
+            "testPath": "test/nested.json",
+            "storyPath": "examples/x/user_stories/journeys/J1-order.md"
+          },
+          {
+            "testPath": "test/J1-b.json",
+            "storyPath": "user_stories/journeys/J1-b.md"
+          }
+        ],
+        "selector": "J1"
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-journey"
+        }
+      ],
+      "expected_error": "invalid-journey"
+    }
+  ]
+}

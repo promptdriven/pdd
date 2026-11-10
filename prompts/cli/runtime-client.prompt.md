@@ -912,6 +912,9 @@ pointer, but deduplication must retain the original location identity.
 
 ## Dependencies
 
+- [Product composition](product-composition.prompt.md): required generation/runtime/verification context for product assembly and journey selection under #808.
+
+
 - [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.
 
 - [Check planning](runtime-check-plan.prompt.md): required for affected Story
@@ -1203,3 +1206,21 @@ Local lint findings use a local heading; server findings retain interpreter attr
 User diagnostics name the PDD interpreter as the service; Runtime interface names the declaration. Preserve machine identifiers and server gate text.
 
 When a generic refusal does not identify a field, explain that the PDD interpreter did not identify the Runtime interface field. Preserve the supplied rule, null field and local findings without guessing a field.
+
+
+## Whole-product Simulator and journey checks (#808)
+
+`runTry` accepts --product with optional comma-separated --parts and --journey. Those options require product mode; --product and --app-map conflict. Keep ordinary one-Story and door modes, current names, budgets, auth, source boundaries and no-resend semantics. Resolve one existing scenario with existing discovery and the composition owner's journey selector; ambiguity requests an exact Story/test. Do not invent a seed Story or discard authored steps.
+
+Call the composition owner inside each existing captureSource prepareSource attempt, using only that attempt's read/stat ports. Return its two absent virtual artifacts, marking its map role app-map, plus effective replacement of only the selected tracked scenario's initial_world. Preserve every other scenario field and authored file. Capture failures and all pre-send composition/budget refusals create no hosted job or AI call. Print selected part/screen labels and distinguish the operation count from the separately established call bound.
+
+Saved records retain original product selection, parts and journey with their source baseline. Reuse/reopen/owner-tool paths preserve that context, source identity, session ID, world and allowance. Refused setup diagnostics name authored source files and reconstruct a command with --product and its original selection. Never tell the person to edit a generated map that is absent on disk. Explicit incompatible selection changes require --new; uncertain or pending jobs are read at the same ID, never silently replaced. All published command hints say pdd simulate or pdd test.
+
+`runCheck` accepts --journeys with zero or one journey selector. Use existing discovery, select only root user_stories/journeys/*.md through the composition selector, then delegate unchanged to normal checking. Preserve its cache, source, lint, cost, ordering and accounting rules. Reject incompatible read/retry/hash/screen modes before network. Do not add a local concurrency limit.
+
+Required context for these new boundaries: [product composition](product-composition.prompt.md) owns assembly/selection; [preflight](runtime-preflight.prompt.md) owns the prepared effective snapshot and app-map role. The runtime-client owns only CLI orchestration, saved setup and recovery.
+
+
+## Product presentation capability (#808)
+
+Before a new whole-product upload, read the existing hosted version endpoint and require its service feature product-parts-v1. Missing/unsupported capability refuses with an actionable server-upgrade explanation before upload/model dispatch. Do not retry after silently dropping ownership. Send the composer's product_parts as the admitted separate Try option, include it in retained setup, and preserve it on reopen. Source labels and service feature metadata do not attest deployed engine/UI bytes. Ordinary non-product sessions do not acquire this gate or field.
