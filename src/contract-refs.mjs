@@ -72,6 +72,7 @@ function writeJson(value, {canonical = false, collect = true, tooBig = () => { t
       const written=new Set(layout.keys), added = keys.filter(key => !written.has(key));
       if (added.length) {
         const first = layout.entries[0], last = layout.entries.at(-1);
+        if (!first) { append(layout.text.slice(offset,layout.start+1)); offset = layout.start+1; }
         const prefix = first ? layout.text.slice(layout.start+1,first.keyStart) : '';
         const colon = first ? layout.text.slice(first.keyEnd,first.start) : ':';
         const separator = layout.entries.length > 1 ? layout.text.slice(layout.entries[0].end,layout.entries[1].keyStart) : `,${prefix}`;

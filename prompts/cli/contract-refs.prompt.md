@@ -142,8 +142,8 @@ the selected world's layout and key order while replacements affect only their
 value subtrees; append a new object key after existing keys. Preserve literal
 replacement key order and apply overlapping overrides in written order. New
 members use the containing object's existing whitespace/separator layout, or
-compact separators for an empty object. No applicable references means no
-reserialization.
+compact separators for an empty object, with new members inside its opening and
+closing braces. No applicable references means no reserialization.
 Do not expand schemas into authored source during ordinary reads.
 
 Each reference has `consumer` (original input path), `source_pointer` (the authored
@@ -229,7 +229,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "approved", "prose_sha256": "6bb0382ab17f4e58e0e6d156ac6d9ab995f2237d1a2808f2f900e5f6ef961834",
+  "status": "draft", "prose_sha256": "ec8727b4eed27d825ee6d453147d5d25d1c0c3f8b6dbf6c8b6f4ff66048d5979",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

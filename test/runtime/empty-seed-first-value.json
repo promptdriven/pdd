@@ -1,0 +1,687 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/empty-seed-first-value.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A first starting value added to an empty shared world produces valid JSON and preserves false, null and the empty string as explicit values."
+    },
+    {
+      "id": "AC2",
+      "text": "Adding the first key to a nested empty object also keeps valid JSON, including when the key is `__proto__` or `constructor`."
+    },
+    {
+      "id": "AC3",
+      "text": "The surrounding scenario and the seed reference snapshot remain unchanged."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "contracts/empty.json": {
+        "content": "{}",
+        "is_symlink": false
+      },
+      "contracts/nested.json": {
+        "content": "{\"nested\":{}}",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "root-x-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/x\":false}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"x\":false},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "root-x-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/x\":null}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"x\":null},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "root-x-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/x\":\"\"}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"x\":\"\"},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "root-proto-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/__proto__\":false}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"__proto__\":false},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "root-proto-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/__proto__\":null}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"__proto__\":null},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "root-proto-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/__proto__\":\"\"}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"__proto__\":\"\"},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "root-constructor-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/constructor\":false}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"constructor\":false},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "root-constructor-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/constructor\":null}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"constructor\":null},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "root-constructor-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/constructor\":\"\"}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"constructor\":\"\"},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/empty.json#",
+              "kind": "seed",
+              "value_json": "{}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-x-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/x\":false}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"x\":false}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-x-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/x\":null}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"x\":null}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-x-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/x\":\"\"}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"x\":\"\"}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-proto-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/__proto__\":false}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"__proto__\":false}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-proto-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/__proto__\":null}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"__proto__\":null}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-proto-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/__proto__\":\"\"}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"__proto__\":\"\"}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-constructor-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/constructor\":false}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"constructor\":false}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-constructor-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/constructor\":null}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"constructor\":null}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nested-constructor-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty-seed.json",
+        "text": "{\"before\":1,\"initial_world\":{\"$seed\":\"contracts/nested.json\",\"set\":{\"/nested/constructor\":\"\"}},\"after\":2}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"before\":1,\"initial_world\":{\"nested\":{\"constructor\":\"\"}},\"after\":2}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/empty-seed.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/nested.json#",
+              "kind": "seed",
+              "value_json": "{\"nested\":{}}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
