@@ -281,3 +281,26 @@ for (const agent of ['codex', 'claude']) test(`${agent} gate text combines resum
   await f.write([identity, assistant('broken', gate + 9)], name('c'), '{bad}\n');
   assert.equal(await read(), null);
 });
+
+for (const agent of ['codex', 'claude']) test(`${agent} gate text uses observation time after the session-start window`, async t => {
+  const f = await fixture(t, agent);
+  const stage = { ...f.request.stage, sessionId: id };
+  const gateAt = start + 2000;
+  const observedAt = start + 5000;
+  f.ports.now = () => observedAt;
+  const assistant = (text, at) => agent === 'codex'
+    ? { type: 'response_item', timestamp: iso(at), payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text }] } }
+    : { type: 'assistant', sessionId: id, cwd, timestamp: iso(at), message: { role: 'assistant', content: [{ type: 'text', text }] } };
+  const identity = agent === 'codex' ? meta() : claude('start', start);
+  const file = agent === 'codex' ? join(f.directory, `rollout-${id}.jsonl`) : f.file;
+  const read = () => readGateMessage({ stage, gateAt }, f.ports);
+  await f.write([identity, assistant('before gate', gateAt - 1), assistant('eligible', start + 3000)], file);
+  assert.equal(await read(), 'eligible');
+  await f.write([identity, assistant('before gate', gateAt - 1)], file);
+  assert.equal(await read(), null);
+  await f.write([identity, assistant('at observation', observedAt), assistant('future', observedAt + 1)], file);
+  assert.equal(await read(), 'at observation');
+  const outside = agent === 'codex' ? meta({ timestamp: iso(stage.endedAt + 1) }) : claude('start', stage.endedAt + 1);
+  await f.write([outside, assistant('eligible', start + 3000)], file);
+  assert.equal(await read(), null);
+});

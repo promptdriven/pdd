@@ -199,12 +199,13 @@ export async function findNativeSessions(stage, ports = {}) {
 export async function readGateMessage({ stage, gateAt }, ports = {}) {
   if (!stage || !['codex', 'claude'].includes(stage.agent) || !sessionId.test(stage.sessionId ?? '') || !Number.isFinite(gateAt) || !Number.isFinite(stage.startedAt) || !Number.isFinite(stage.endedAt)) return null;
   try {
+    const now = (ports.now ?? Date.now)();
     const matches = await sessionCandidates(stage, ports);
     if (!matches.length || new Set(matches.map(match => match.meta.id)).size !== 1) return null;
     let result = null;
     for (const row of matches.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).flatMap(match => match.rows)) {
       const at = epoch(row.timestamp);
-      if (at === null || at < gateAt || at > stage.endedAt) continue;
+      if (at === null || at < gateAt || at > now) continue;
       let content;
       if (stage.agent === 'codex' && row.type === 'response_item' && row.payload?.type === 'message' && row.payload.role === 'assistant' && row.payload.phase !== 'analysis') content = textBlocks(row.payload.content, ['output_text', 'text']);
       if (stage.agent === 'claude' && row.type === 'assistant' && row.message?.role === 'assistant' && row.sessionId === stage.sessionId && row.cwd === stage.root && !row.isSidechain && !row.isMeta) content = textBlocks(row.message.content, ['text']);
