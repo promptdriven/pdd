@@ -51,6 +51,9 @@ function validAudit(audit) {
     || audit.concern.kind !== audit.result.kind)) return false;
   return true;
 }
+export function isRecordedAutopilotAudit(value) {
+  return validAudit(value) && value.state === 'recorded';
+}
 // This predicate permits a diagnostic alert only. It never admits damaged authority.
 function unavailableRecommendation(audit) {
   return object(audit?.result) && audit.result.verdict==='BAD' && typeof audit.result.revert!=='boolean'

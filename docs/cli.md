@@ -873,9 +873,15 @@ Core state is read from `~/.local/state/pdd/autopilot`. Completed core history
 without a recorded start cannot establish a start. Core records starts, steps,
 per-head check observations, exact-head validation and explicit merge attribution
 in durable local history before removing job files. Pass evidence uses its first
-local observation time; editing PR text or a public comment cannot move or
-establish a pass. Regressions include failing check runs and commit statuses on
-the exact merge commit. Missing local attribution never credits a manual merge.
+local observation time after PR identity checks. Equivalent fixed Evidence lines
+in a PR or an exact-head core merge comment keep that first time; presentation
+edits do not create another check. Public text cannot establish validation or
+merge attribution. Regressions include failing check runs and commit statuses on
+the exact merge commit, matching recorded BAD audits, and standard git-revert
+commits found on the saved base branch. The reader preserves BAD/revert findings
+in local core history; revert discovery uses the current observation time even
+for a historical report cutoff. Missing local attribution never credits a manual
+merge. GitHub subprocess reads have a 15-second timeout.
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 

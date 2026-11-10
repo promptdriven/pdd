@@ -9,6 +9,7 @@ import { fileReport, listReportDrafts } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { recordAutopilotMetric } from './autopilot-metrics-source.mjs';
+import { canonicalAutopilotEvidence } from './autopilot-metrics.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -479,16 +480,28 @@ async function suiteState(ctx, job) {
 function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent, job.suite?.agent]) if (part) ctx.jobs.stop(part); }
 
 function recordEvidence(ctx, job, body) {
-  const value = '(?:pass|fail|not-run)(?: \\(\\d+/\\d+\\))?';
-  const fixed = new RegExp(`^Evidence: runtime=${value}; vectors=${value}; formal=${value}; tests=${value}$`);
-  const lines = typeof body === 'string' ? body.split(/\r?\n/).map(line => line.trim()).filter(line => line.startsWith('Evidence:')) : [];
-  if (!lines.length || lines.some(line => !fixed.test(line))) return;
-  const evidence = lines.join('\n');
+  const evidence = canonicalAutopilotEvidence(body);
+  if (!evidence) return;
   const signature = JSON.stringify([job.head, evidence]);
-  if (job.metricEvidence?.includes(signature)) return;
+  const previous = (job.metricEvidence ?? []).map(value => {
+    try { const [head, text] = JSON.parse(value); return JSON.stringify([head, canonicalAutopilotEvidence(text)]); }
+    catch { return null; }
+  });
+  if (previous.includes(signature)) return;
   if (ctx.metric(job, 'evidence', { head: job.head, evidence })) {
     job.metricEvidence = [...(job.metricEvidence ?? []), signature]; ctx.saveMetricJob(job);
   }
+}
+
+async function observeEvidence(ctx, job, pr) {
+  if (job.pendingEvidence?.head === job.head) recordEvidence(ctx, job, job.pendingEvidence.evidence);
+  recordEvidence(ctx, job, pr.body);
+  try {
+    for (const comment of await ctx.gh.all(`repos/${ctx.repo}/issues/${job.pr}/comments?per_page=100`)) {
+      const body = String(comment.body ?? '');
+      if (body.split(/\r?\n/)[0] === `Autopilot merge check passed for head ${job.head}.` && body.includes(`<!-- pdd:autopilot-core:merge:${job.head} -->`)) recordEvidence(ctx, job, body);
+    }
+  } catch { ctx.warn(`Autopilot core comment evidence of #${job.issue} could not be read`); }
 }
 
 async function mergeCheck(ctx, job) {
@@ -512,7 +525,7 @@ async function mergeCheck(ctx, job) {
     return end(ctx, job, cause('job', 'head-moved', `PR #${job.pr} is at head ${short(pr.head?.sha)} of ${pr.head?.ref} into ${pr.base?.ref}, not the job head ${short(job.head)} of ${job.branch} into ${state.baseBranch}`));
   // "Runtime: not run" is allowed and files no report by itself; a Runtime report comes only from a failed job
   // whose cause kind is runtime (END).
-  recordEvidence(ctx, job, pr.body);
+  await observeEvidence(ctx, job, pr);
   job.runtime = normalRuntime(job.runtime);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge.
   const reds = runtimeReds(pr.body, job.runtime, job.promptChanged);
@@ -546,7 +559,8 @@ async function mergeCheck(ctx, job) {
   if (!ctx.owns(claim, job) || !claim.active) { Object.assign(job, { lastError: 'the claim of this machine is not confirmed', lastErrorTool: false }); ctx.saveJob(job); return; }
   if (job.mergeNote !== job.head) {
     const runtimeLine = runtimeVerdicts(pr.body)[0]?.line ?? 'Runtime: no line (no prompt changed)';
-    await ctx.comment(job.pr, [`Autopilot merge check passed for head ${job.head}.`, '',
+    const evidence = (job.metricEvidence ?? []).map(value => { try { const [head, text] = JSON.parse(value); return head === job.head ? canonicalAutopilotEvidence(text) : null; } catch { return null; } }).filter(Boolean).at(-1);
+    await ctx.comment(job.pr, [`Autopilot merge check passed for head ${job.head}.`, '', ...(evidence ? [evidence, ''] : []),
       `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
       '- Full test suite: pass', '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- Base: ${oneLine(base.message)}`, '', `<!-- pdd:autopilot-core:merge:${job.head} -->`].join('\n'));
     job.mergeNote = job.head; ctx.saveJob(job);
@@ -585,9 +599,10 @@ async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
   const pr = read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`);
   if (!pr.merged) { job.lastError = 'the merge is not confirmed'; ctx.saveJob(job); return; }
+  if (pr.head?.sha === job.head && pr.head?.ref === job.branch && pr.base?.ref === ctx.state.baseBranch) await observeEvidence(ctx, job, pr);
   if (job.autopilotMerge?.head === job.head && pr.head?.sha === job.head) {
     const mergedAt = Date.parse(pr.merged_at);
-    ctx.metric(job, 'merged', { head: job.head, at: Number.isFinite(mergedAt) ? mergedAt : job.autopilotMerge.at });
+    ctx.metric(job, 'merged', { head: job.head, ...(/^[a-f0-9]{40}$/i.test(pr.merge_commit_sha ?? '') ? { mergeCommit: pr.merge_commit_sha } : {}), at: Number.isFinite(mergedAt) ? mergedAt : job.autopilotMerge.at });
   }
   const issue = await gh.ok('GET', `repos/${repo}/issues/${job.issue}`);
   if (issue.state === 'open') await gh.ok('PATCH', `repos/${repo}/issues/${job.issue}`, { state: 'closed', state_reason: 'completed' });
@@ -812,10 +827,9 @@ async function advance(ctx, job) {
   const head = String(r?.head ?? '').trim().toLowerCase();
   if (object(r) && r.outcome === 'pr' && prNumber > 0 && /^[0-9a-f]{40}$/.test(head)) {
     Object.assign(job, { phase: 'pr', pr: prNumber, head, runtime: normalRuntime(r.runtime), promptChanged: typeof r.promptChanged === 'boolean' ? r.promptChanged : null,
-      prAt: ctx.now(), deadline: ctx.now() + ctx.timeout });
+      pendingEvidence: { head, evidence: canonicalAutopilotEvidence(r.evidence) }, prAt: ctx.now(), deadline: ctx.now() + ctx.timeout });
     delete job.lastError; delete job.lastErrorTool;
     ctx.saveJob(job); ctx.produced();
-    recordEvidence(ctx, job, r.evidence);
     return mergeCheck(ctx, job);
   }
   if (object(r) && r.outcome === 'failed') {

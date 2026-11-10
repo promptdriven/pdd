@@ -1,11 +1,13 @@
 // Generated from prompts/cli/autopilot-metrics-source.prompt.md.
 import * as nativeFs from 'node:fs';
 import {homedir} from 'node:os';
-import {join} from 'node:path';
+import {join,dirname} from 'node:path';
+import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {nativeGithubCounter} from './github-calls.mjs';
 import {calculateAutopilotMetrics,normalizeAutopilotMetric} from './autopilot-metrics.mjs';
+import {isRecordedAutopilotAudit} from './autopilot-audit.mjs';
 
 const execute = nativeGithubCounter(promisify(execFile),{purpose:'other'});
 const validRepo = repo => typeof repo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repo) && !repo.split('/').some(part=>part === '.' || part === '..');
@@ -28,9 +30,9 @@ function names(fs,path) {
 function json(raw) { try { return JSON.parse(raw); } catch { return null; } }
 
 async function nativeGithub(repo,path,run=execute) {
-  const {stdout}=await run('gh',['api','--paginate','--slurp',`repos/${repo}/${path}?per_page=100`],{maxBuffer:16*1024*1024});
+  const {stdout}=await run('gh',['api','--paginate','--slurp',`repos/${repo}/${path}${path.includes('?') ? '&' : '?'}per_page=100`],{maxBuffer:16*1024*1024,timeout:15000});
   const pages=JSON.parse(stdout);
-  if (path.endsWith('/statuses')) return pages.flat();
+  if (Array.isArray(pages[0])) return pages.flat();
   if (path.endsWith('/check-runs')) return {check_runs:pages.flatMap(page=>page.check_runs ?? [])};
   return pages[0];
 }
@@ -47,15 +49,31 @@ export function recordAutopilotMetric({root,...input},ports={}) {
   fs.chmodSync(file,0o600);
 }
 
+// Read only the audit owner's shared authority, never its mutable public summary.
+function badAudits(fs, root, repo) {
+  const hash=createHash('sha256').update(repo).digest('hex').slice(0,20);
+  if (!stat(fs,root)?.isDirectory() || !stat(fs,join(root,hash))?.isDirectory()) return [];
+  const dir=join(root,hash,'records'), records=[];
+  for (const name of names(fs,dir).filter(name=>/^[a-f0-9]{64}\.json$/.test(name))) {
+    const audit=json(text(fs,join(dir,name)));
+    if (!isRecordedAutopilotAudit(audit) || audit.repository !== repo || !validHead(audit.merge) || audit.result.verdict !== 'BAD') continue;
+    const identity=createHash('sha256').update(JSON.stringify([audit.runId,audit.pr,audit.merge])).digest('hex');
+    if (name === `${identity}.json`) records.push({pr:audit.pr,merge:audit.merge.toLowerCase(),at:audit.completedAt});
+  }
+  return records.sort((a,b)=>a.at-b.at);
+}
+const findingKey=event=>JSON.stringify([event.repo,event.issue,event.pr,event.mergeCommit,event.reason]);
+
 export async function readAutopilotMetrics({timezone,observedAt},ports={}) {
   const fs=ports.fs ?? nativeFs, env=ports.env ?? process.env;
   const root=ports.stateRoot ?? join(env.HOME || (ports.homedir ?? homedir)(),'.local','state','pdd','autopilot');
+  const now=(ports.now ?? Date.now)(), auditRoot=ports.auditRoot ?? join(dirname(root),'autopilot-audits');
   const github=ports.github ?? ((repo,path)=>nativeGithub(repo,path,ports.execFile ?? execute)), events=[], mappings=new Map();
   const add = input => { const event=normalizeAutopilotMetric(input); if (event) events.push(event); };
-  const associate = (repo,issue,pr) => {
+  const associate = (repo,issue,pr,core) => {
     if (!validPr(pr)) return;
-    const key=`${repo}#${pr}`, mapping=mappings.get(key) ?? {repo,pr,issues:new Set()};
-    mapping.issues.add(issue); mappings.set(key,mapping);
+    const key=`${repo}#${pr}`, mapping=mappings.get(key) ?? {repo,pr,issues:new Map()};
+    mapping.issues.set(issue,core); mappings.set(key,mapping);
   };
   for (const name of names(fs,root).filter(name=>/^[a-f0-9]{20}\.json$/.test(name)).sort()) {
     const state=json(text(fs,join(root,name)));
@@ -67,10 +85,10 @@ export async function readAutopilotMetrics({timezone,observedAt},ports={}) {
       if (row?.metric) {
         const event=normalizeAutopilotMetric(row.metric);
         if (event?.repo !== repo) continue;
-        events.push(event); associate(repo,event.issue,event.pr);
+        events.push(event); associate(repo,event.issue,event.pr,core);
       } else if (['merged','ended','released','handed-over','abandoned','stopped'].includes(row?.outcome)) {
         add({repo,issue:row.issue,at:row.at,kind:'worked',...(validPr(row.pr) ? {pr:row.pr} : {})});
-        if (Number.isSafeInteger(row.issue) && row.issue > 0) associate(repo,row.issue,row.pr);
+        if (Number.isSafeInteger(row.issue) && row.issue > 0) associate(repo,row.issue,row.pr,core);
       }
     }
     const dir=join(core,'jobs');
@@ -79,22 +97,63 @@ export async function readAutopilotMetrics({timezone,observedAt},ports={}) {
       if (job?.schema !== 'pdd.core-job.v1' || job.issue !== Number(file.slice(0,-5))) continue;
       add({repo,issue:job.issue,kind:'started',at:job.started});
       for (const at of [job.prAt,job.agent?.started,job.review?.agent?.started,job.suite?.agent?.started]) add({repo,issue:job.issue,kind:'worked',at});
-      associate(repo,job.issue,job.pr);
+      associate(repo,job.issue,job.pr,core);
     }
+  }
+  const findings=new Set(events.filter(event=>event.kind === 'regression').map(findingKey)), bases=new Map(), audits=new Map();
+  const discover=(owner, event)=>{
+    const normalized=normalizeAutopilotMetric(event);
+    if (!normalized || Date.parse(normalized.at) > now || findings.has(findingKey(normalized))) return;
+    findings.add(findingKey(normalized)); events.push(normalized);
+    try { recordAutopilotMetric({root:owner,...normalized},{fs}); }
+    catch { ports.warn?.('Autopilot regression observation could not be saved'); }
+  };
+  const recordedAudits=repo=>{
+    if (!audits.has(repo)) {
+      try { audits.set(repo,badAudits(fs,auditRoot,repo)); } catch { audits.set(repo,[]); }
+    }
+    return audits.get(repo);
+  };
+  for (const merge of events.filter(event=>event.kind === 'merged' && validHead(event.mergeCommit) && validPr(event.pr))) {
+    const owner=mappings.get(`${merge.repo}#${merge.pr}`)?.issues.get(merge.issue);
+    for (const audit of recordedAudits(merge.repo)) if (audit.pr === merge.pr && audit.merge === merge.mergeCommit && audit.at > Date.parse(merge.at))
+      discover(owner,{repo:merge.repo,issue:merge.issue,pr:merge.pr,kind:'regression',mergeCommit:merge.mergeCommit,reason:'bad-audit',at:audit.at});
   }
   for (const {repo,pr,issues} of mappings.values()) {
     let pull;
     try { pull=await github(repo,`pulls/${pr}`); } catch { continue; }
     if (!validHead(pull?.head?.sha)) continue;
-    const each = event => { for (const issue of issues) add({repo,issue,pr,...event}); };
+    const each = event => { for (const issue of issues.keys()) add({repo,issue,pr,...event}); };
     if (!validHead(pull.merge_commit_sha)) continue;
     // Each independent CI read can fail without hiding the other source.
     const sha=pull.merge_commit_sha.toLowerCase();
+    const owned=events.filter(event=>event.repo === repo && event.pr === pr && event.kind === 'merged' && Date.parse(event.at) <= now && (!event.mergeCommit || event.mergeCommit === sha));
+    if (!owned.length) continue;
+    for (const merge of owned) {
+      for (const audit of recordedAudits(repo)) if (audit.pr === pr && audit.merge === sha && audit.at > Date.parse(merge.at))
+        discover(issues.get(merge.issue),{repo,issue:merge.issue,pr,kind:'regression',mergeCommit:sha,reason:'bad-audit',at:audit.at});
+    }
+    if (typeof pull.base?.ref === 'string' && pull.base.ref) {
+      const key=JSON.stringify([repo,pull.base.ref]), base=bases.get(key) ?? {repo,branch:pull.base.ref,merges:[]};
+      for (const merge of owned) base.merges.push({event:merge,sha,root:issues.get(merge.issue)});
+      bases.set(key,base);
+    }
     let checks, statuses;
     try { checks=await github(repo,`commits/${sha}/check-runs`); } catch { /* Not recorded. */ }
     try { statuses=await github(repo,`commits/${sha}/statuses`); } catch { /* Not recorded. */ }
     for (const check of checks?.check_runs ?? []) if (check.head_sha?.toLowerCase() === sha && check.status === 'completed' && ['failure','timed_out','action_required','startup_failure','cancelled','stale'].includes(check.conclusion)) each({kind:'regression',at:check.completed_at,reason:'merge-ci-red'});
     for (const status of Array.isArray(statuses) ? statuses : []) if ((status.sha === undefined || validHead(status.sha) && status.sha.toLowerCase() === sha) && ['failure','error'].includes(status.state)) each({kind:'regression',at:status.created_at,reason:'merge-ci-red'});
+  }
+  for (const {repo,branch,merges} of bases.values()) {
+    const since=new Date(Math.min(...merges.map(({event})=>Date.parse(event.at)))).toISOString();
+    let commits;
+    try { commits=await github(repo,`commits?sha=${encodeURIComponent(branch)}&since=${encodeURIComponent(since)}`); } catch { continue; }
+    for (const commit of Array.isArray(commits) ? commits : []) {
+      if (!validHead(commit?.sha) || typeof commit.commit?.message !== 'string') continue;
+      const targets=[...commit.commit.message.matchAll(/^This reverts commit ([a-f0-9]{40})(?:\.|, reversing)\r?$/gmi)].map(match=>match[1].toLowerCase());
+      for (const {event,sha,root:owner} of merges) if (targets.includes(sha) && commit.sha.toLowerCase() !== sha && now > Date.parse(event.at))
+        discover(owner,{repo,issue:event.issue,pr:event.pr,kind:'regression',mergeCommit:sha,reason:'reverted',at:now});
+    }
   }
   return calculateAutopilotMetrics({events,timezone,observedAt});
 }

@@ -11,34 +11,43 @@ function timestamp(value) {
 }
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
 
-export function parseAutopilotEvidence(text) {
+export function canonicalAutopilotEvidence(text) {
   const lines = typeof text === 'string' ? text.split(/\r?\n/).map(line=>line.trim()).filter(line=>line.startsWith('Evidence:')) : [];
-  if (!lines.length) return emptyEvidence();
+  if (!lines.length) return null;
   let signature, result;
   for (const line of lines) {
     const parts = line.slice('Evidence:'.length).trim().split(/;\s*/);
-    if (parts.length !== fields.length) return emptyEvidence();
+    if (parts.length !== fields.length) return null;
     const facts = [];
     for (const [index,key] of fields.entries()) {
       const match = new RegExp(`^${key}=(pass|fail|not-run)(?: \\((\\d+)/(\\d+)\\))?$`).exec(parts[index]);
-      if (!match) return emptyEvidence();
+      if (!match) return null;
       const [,state,n,m] = match, passed = n === undefined ? null : Number(n), total = m === undefined ? null : Number(m);
-      if (n !== undefined && (!Number.isSafeInteger(passed) || !Number.isSafeInteger(total) || passed > total)) return emptyEvidence();
+      if (n !== undefined && (!Number.isSafeInteger(passed) || !Number.isSafeInteger(total) || passed > total)) return null;
       facts.push({state,passed,total});
     }
     const next = JSON.stringify(facts);
-    if (signature && signature !== next) return emptyEvidence();
+    if (signature && signature !== next) return null;
     signature = next;
-    result = Object.fromEntries(fields.map((key,index)=>[key,facts[index].state === 'pass' && (facts[index].total === null || facts[index].total > 0 && facts[index].passed === facts[index].total)]));
+    result = 'Evidence: '+fields.map((key,index)=>`${key}=${facts[index].state}${facts[index].total === null ? '' : ` (${facts[index].passed}/${facts[index].total})`}`).join('; ');
   }
   return result;
 }
 
+export function parseAutopilotEvidence(text) {
+  const line=canonicalAutopilotEvidence(text);
+  if (!line) return emptyEvidence();
+  return Object.fromEntries(line.slice('Evidence: '.length).split('; ').map((part,index)=>{
+    const [,state,n,m]=/^[a-z]+=(pass|fail|not-run)(?: \((\d+)\/(\d+)\))?$/.exec(part);
+    return [fields[index],state === 'pass' && (n === undefined || Number(m) > 0 && Number(n) === Number(m))];
+  }));
+}
+
 export function normalizeAutopilotMetric(event) {
   if (!object(event) || typeof event.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(event.repo) || event.repo.split('/').some(part=>part === '.' || part === '..') || !Number.isSafeInteger(event.issue) || event.issue <= 0 || !kinds.has(event.kind) || !Number.isFinite(timestamp(event.at)) || !Number.isFinite(new Date(timestamp(event.at)).getTime())) return null;
-  if (event.pr !== undefined && (!Number.isSafeInteger(event.pr) || event.pr <= 0) || event.head !== undefined && !sha(event.head) || event.evidence !== undefined && typeof event.evidence !== 'string' || event.reason !== undefined && typeof event.reason !== 'string') return null;
+  if (event.pr !== undefined && (!Number.isSafeInteger(event.pr) || event.pr <= 0) || event.head !== undefined && !sha(event.head) || event.mergeCommit !== undefined && !sha(event.mergeCommit) || event.evidence !== undefined && typeof event.evidence !== 'string' || event.reason !== undefined && typeof event.reason !== 'string') return null;
   const result = {repo:event.repo.toLowerCase(),issue:event.issue,kind:event.kind,at:new Date(timestamp(event.at)).toISOString()};
-  for (const key of ['pr','head','evidence','reason']) if (event[key] !== undefined) result[key] = key === 'head' ? event[key].toLowerCase() : event[key];
+  for (const key of ['pr','head','mergeCommit','evidence','reason']) if (event[key] !== undefined) result[key] = ['head','mergeCommit'].includes(key) ? event[key].toLowerCase() : event[key];
   if (object(event.validation)) {
     result.validation = {};
     for (const [key,names] of Object.entries({review:['head','verdict','fresh'],tests:['head','state'],ci:['head','state']})) if (object(event.validation[key])) {
@@ -95,7 +104,7 @@ export function calculateAutopilotMetrics({events=[],timezone=Intl.DateTimeForma
       if (event.kind === 'started' || event.kind === 'merged') sets[event.kind].add(id);
       if (event.kind === 'evidence') for (const [key,pass] of Object.entries(parseAutopilotEvidence(event.evidence))) if (pass && key !== 'tests') sets[key].add(id);
       if (event.kind === 'validated' && validated(event)) sets.validated.add(id);
-      if (event.kind === 'regression' && ['reverted','bad-audit','merge-ci-red'].includes(event.reason) && merges.some(merge=>identity(merge) === id && Date.parse(merge.at) < at && (event.pr === undefined || merge.pr === event.pr))) sets.regressions.add(id);
+      if (event.kind === 'regression' && ['reverted','bad-audit','merge-ci-red'].includes(event.reason) && merges.some(merge=>identity(merge) === id && Date.parse(merge.at) < at && (event.pr === undefined || merge.pr === event.pr) && (event.mergeCommit === undefined || merge.mergeCommit === undefined || merge.mergeCommit === event.mergeCommit))) sets.regressions.add(id);
     }
     return sets;
   };
