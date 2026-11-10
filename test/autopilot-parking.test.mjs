@@ -116,7 +116,7 @@ for (const [kind,field] of [['interface-missing','/interface'],['undefined-call-
   });
 
 test('3091 repair 2 person park becomes one stable inferred interpreter wait', async t => {
-  const {f, tick, ports, stateFile} = await setup(t);
+  const {f, tick, ports, stateFile, warnings} = await setup(t);
   fullTicks(f, stateFile, ports);
   ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
   const held = f.record(); held.state = 'waiting';
