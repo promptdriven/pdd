@@ -386,8 +386,8 @@ test('a merge check that keeps failing on GitHub ends at its time limit with a P
   w.gh = async (args, options) => args.some(a => String(a).includes(`/pulls/${pr.number}`)) && !args.includes('PATCH') ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' } : gh(args, options);
   await w.tick();
   assert.match(JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).lastError, /502/);
-  w.advance(31 * MIN); await w.tick();
-  assert.match(endComments(w, 17)[0], /did not finish within 30 minutes.*502/);
+  w.advance(31 * MIN); await w.tick(); await w.tick(); await w.tick();
+  assert.match(endComments(w, 17)[0], /did not finish within 30 minutes.*502/, 'after 3 tries to read the PR, the END goes on');
   assert.equal(listReportDrafts({ root: w.reportRoot })[0].fingerprint, 'pdd.autopilot-core.merge-check-tool.0.1');
 });
 
@@ -497,4 +497,147 @@ test('END with an open PR leaves it open as a draft and comments the cause on th
   const comments = pr.comments.filter(c => c.body.includes('<!-- pdd:autopilot-core:end-pr:'));
   assert.equal(comments.length, 1); assert.match(comments[0].body, /Missing test/);
   assert.ok(w.labels(17).includes('pdd:stuck'), 'a job cause keeps pdd:stuck');
+});
+
+// ---- Review 1 regressions (each failed on 08fcc5517) ----------------------------------------------------
+test('R1 a Runtime FAIL line in a list, in bold or in any case blocks the merge, and so does a result state FAIL', async t => {
+  for (const body of ['Fixes #17\n\n- Runtime: FAIL (2 of 3 Stories fail)', 'Fixes #17\n\n**Runtime:** FAIL', 'Fixes #17\n\n> runtime: **fail** (lint)', 'Fixes #17\n\n* `Runtime: Fail`']) {
+    const w = await coreWorld(t);
+    w.issue(17); await w.tick();
+    w.build(17, { body }); await w.tick();
+    assert.equal(w.github.merges.length, 0, body);
+    assert.match(w.job(17, 'repair').input, /Runtime: FAIL/i, body);
+  }
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick();
+  w.build(17, { body: 'Fixes #17', runtime: { state: 'FAIL', kind: 'runtime', component: 'pdd test', code: 'x', cause: 'y' } }); await w.tick();
+  assert.equal(w.github.merges.length, 0); assert.ok(w.job(17, 'repair'));
+  w.build(17, { role: 'repair', body: 'Fixes #17\n\nRuntime: PASS' }); await w.tick();
+  assert.match(w.job(17, 'review').input, /Runtime FAIL line.*FAIL/i, 'the reviewer prompt says a Runtime FAIL line is a FAIL verdict');
+});
+
+test('R2 takeover race: a stale expired-claim read does not take over a fresh claim, and a lost claim never merges', async t => {
+  const { createDependencyReadPorts } = await import('../src/issue-dependencies-github.mjs');
+  const a = await coreWorld(t, { settings: { runs: 1 } });
+  const b = await a.peer();
+  a.issue(17);
+  a.github.claim(17, { coordinatorId: 'coord-c', machine: 'machine-c' });
+  a.advance(5 * HOUR);
+  const stale = JSON.parse((await createDependencyReadPorts({ cwd: '' }, { execFile: (f, args, o) => a.gh(args, o), now: a.now })
+    .owners.read({ repository: 'acme/widgets', issues: ['https://github.com/acme/widgets/issues/17'] })).json).claims;
+  assert.equal(stale[0].expired, true);
+  await a.tick();
+  assert.ok(a.job(17, 'build'), 'A took over the expired claim');
+  await b.tick({ owners: async () => stale });
+  assert.equal(b.job(17), undefined, 'B sees that the winning label event changed and does not take over');
+  // Force the worst case: B wins a new label era after A started. A must stop at its next heartbeat and never merge.
+  a.github.unlabel(17, 'pdd:working'); b.github.claim(17, { coordinatorId: 'coord-b', machine: 'machine-b' });
+  const { pr } = a.build(17);
+  a.advance(30 * MIN); await a.tick();
+  assert.ok(a.stopped.includes(a.job(17, 'build').id) || !existsSync(join(a.root, 'jobs', '17.json')), 'A stopped its job');
+  assert.equal(existsSync(join(a.root, 'jobs', '17.json')), false);
+  assert.equal(a.github.merges.length, 0);
+  assert.equal(pr.draft, true, 'A leaves its own PR as a draft');
+  assert.ok(!a.labels(17).includes('pdd:stuck'), 'no labels change on the issue the other machine owns');
+});
+
+test('R2b a claim lost after the checks passed is read right before the merge: no merge', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  let lose = false;
+  const result = await w.tick({ heartbeat: async () => ({ state: 'refreshed' }), owners: async numbers => {
+    if (!lose) { lose = true; return [{ issue: 'https://github.com/acme/widgets/issues/17', active: true, coordinatorId: 'coord-a', machine: 'machine-a', commentId: JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).claim.commentId }]; }
+    return [{ issue: 'https://github.com/acme/widgets/issues/17', active: true, coordinatorId: 'coord-b', machine: 'machine-b', commentId: '1', labelEventId: '2' }];
+  } });
+  assert.equal(w.github.merges.length, 0, result.message);
+  assert.equal(pr.state, 'open');
+});
+
+test('R3 a locked or unremovable leftover worktree fails only that issue; intake goes on', async t => {
+  const { mkdirSync } = await import('node:fs');
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.issue(17); w.issue(18); w.issue(19);
+  mkdirSync(join(w.root, 'worktrees'), { recursive: true });
+  const path = join(w.root, 'worktrees', '17');
+  w.git(w.cwd, 'worktree', 'add', '-q', '--detach', path, 'HEAD');
+  w.git(w.cwd, 'worktree', 'lock', '--reason', 'initializing', path);
+  await w.tick();
+  assert.ok(w.job(17, 'build'), 'a locked leftover worktree of ours is removed and #17 starts');
+  const v = await coreWorld(t, { settings: { runs: 2 } });
+  v.issue(17); v.issue(18); v.issue(19);
+  mkdirSync(join(v.root, 'worktrees', '17'), { recursive: true });
+  const nativeFs = await import('node:fs');
+  const fs = { ...nativeFs, rmSync: (p, o) => { if (String(p).endsWith('/worktrees/17')) throw Object.assign(Error('EACCES'), { code: 'EACCES' }); return nativeFs.rmSync(p, o); } };
+  const r = await v.tick({ fs });
+  assert.equal(v.job(17), undefined); assert.ok(v.job(18, 'build') && v.job(19, 'build'), r.message);
+});
+
+test('R4 a failed cleanup never keeps the job file, and END never runs on a merged issue', async t => {
+  const nativeFs = await import('node:fs');
+  const w = await coreWorld(t, { settings: { jobTimeoutMinutes: 30 } });
+  let broken = false;
+  const fs = { ...nativeFs, rmSync: (p, o) => { if (broken && String(p).includes('/worktrees/')) throw Object.assign(Error('EACCES'), { code: 'EACCES' }); return nativeFs.rmSync(p, o); } };
+  const realGit = w.ports().git;
+  const git = async (args, o) => broken && args[0] === 'worktree' && args[1] === 'remove' ? { code: 128, stdout: '', stderr: 'fatal: Permission denied' } : realGit(args, o);
+  w.issue(17); await w.tick({ fs, git });
+  const { pr } = w.build(17); await w.tick({ fs, git });
+  w.review(17, 'PASS'); w.suite(17, 0);
+  broken = true;
+  const merged = await w.tick({ fs, git });
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.equal(nativeFs.existsSync(join(w.root, 'jobs', '17.json')), false, merged.message);
+  w.advance(31 * MIN);
+  const later = await w.tick({ fs, git });
+  assert.match(later.message, /0 merged, 0 ended/);
+  assert.equal(endComments(w, 17).length, 0); assert.ok(!w.labels(17).includes('pdd:stuck'));
+  // A job whose PR merged while it was already ending finishes as merged, with no END comment.
+  const v = await coreWorld(t);
+  v.issue(17); await v.tick(); const second = v.build(17); await v.tick();
+  const job = JSON.parse(readFileSync(join(v.root, 'jobs', '17.json'), 'utf8'));
+  second.pr.state = 'closed'; second.pr.merged = true;
+  nativeFs.writeFileSync(join(v.root, 'jobs', '17.json'), JSON.stringify({ ...job, phase: 'ending', end: { cause: { kind: 'job', code: 'timeout', text: 'x' }, at: v.now() } }));
+  await v.tick();
+  assert.equal(endComments(v, 17).length, 0); assert.equal(v.github.issues.get(17).state, 'closed');
+});
+
+test('R5 should-fix: a cleared tool error, a dead suite, a restart, a partial claim and a stuck END', async t => {
+  // S1: one transient tool error, then pending CI to the deadline, is a job cause with no PDD report.
+  let w = await coreWorld(t, { settings: { report: 'draft', jobTimeoutMinutes: 30 } });
+  w.issue(17); await w.tick();
+  const built = w.build(17, { checks: null }); w.github.setChecks(built.head, null, 'in_progress');
+  let fail = true; const gh = w.gh;
+  w.gh = async (args, o) => fail && args.some(x => String(x).includes(`/pulls/${built.pr.number}`)) ? (fail = false, { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' }) : gh(args, o);
+  await w.tick(); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  w.advance(31 * MIN); await w.tick();
+  assert.match(endComments(w, 17)[0], /Cause: job \/ checks-timeout/); assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0);
+  // S2: a dead suite run starts again and uses no repair.
+  w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  w.review(17, 'PASS'); w.kill(17, 'suite'); await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined);
+  assert.equal(w.started.filter(job => job.role === 'suite').length, 2);
+  // S3: a restart that kills 3 running jobs is not 3 strikes.
+  w = await coreWorld(t, { settings: { runs: 3 } });
+  for (const n of [17, 18, 19, 20]) w.issue(n);
+  await w.tick(); for (const n of [17, 18, 19]) w.kill(n, 'build');
+  const restarted = await w.tick();
+  assert.doesNotMatch(restarted.message, /paused/); assert.ok(w.job(20, 'build'));
+  // S4: a claim that fails after the label add leaves no bare pdd:working.
+  w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  const gh2 = w.gh;
+  w.gh = async (args, o) => args.includes('POST') && args.some(x => /\/issues\/17\/comments$/.test(x)) ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' } : gh2(args, o);
+  await w.tick();
+  assert.equal(w.job(17), undefined); assert.deepEqual(w.labels(17), []);
+  // S5: an END that keeps failing is dropped after 6 tries with one alert.
+  w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.kill(17, 'build');
+  const gh3 = w.gh, alerts = [];
+  w.gh = async (args, o) => args.includes('POST') && args.some(x => /\/issues\/17\/comments$/.test(x)) ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' } : gh3(args, o);
+  for (let i = 0; i < 8; i++) { await w.tick({ alert: async input => alerts.push(input) }); w.advance(30 * MIN); }
+  assert.equal(existsSync(join(w.root, 'jobs', '17.json')), false);
+  assert.equal(alerts.length, 1); assert.equal(alerts[0].issue, 17); assert.match(alerts[0].text, /could not finish/);
+  assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /"outcome":"abandoned"/);
 });

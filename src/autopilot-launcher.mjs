@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a47d10722f87ff1d6898f0305a606dec0fdfcae59213881b9902ba7374d70972).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c203a792259ec66aab37b6060865c7199e51782074490e08a26fa7c325dd442f).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1549,6 +1549,10 @@ async function coreTick(stateFile, state, p, ports) {
     version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
     trusted: row => trusted(row, state, { trust: core.trust }, p),
     agentReady: async () => agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env })).state !== 'limited',
+    // One stuck alert per issue through this machine's alert destination, when an END could not finish.
+    alert: ({ issue, kind, text }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, text: JSON.stringify({ cause: text,
+      tried: 'The Autopilot core engine retried the END of this issue on 6 ticks and then dropped its local job.', need: 'Check the comment and the labels of the issue, and finish the END by hand.' }) },
+      { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine }),
     ...p.corePorts,
   });
   const release = await claimAdmission(state, p);

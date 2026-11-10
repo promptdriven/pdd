@@ -69,12 +69,22 @@ ended or moved to the merge check before free slots are counted.
 3. A person stops a job by closing the issue, removing `pdd:working`, adding
    `pdd:stuck` or assigning someone. Then stop its processes and clean up locally,
    with no GitHub write, and do not take that issue again in this tick.
-4. Heartbeat each own claim through `refreshClaimHeartbeat` of the
+4. For each own claim, read the winning claim with the owners port first. The job
+   still owns the issue only while the winner is this machine's coordinator, machine
+   and claim comment. When another machine holds it live, hand over (below). Else
+   heartbeat it through `refreshClaimHeartbeat` of the
    [GitHub dependency reader](issue-dependencies-github.prompt.md). A claim not
    refreshed for 4 hours gets no heartbeat: expiry is final. At the GitHub reserve
    floor (`budget.state` `reserve`) the tick stops after the heartbeats.
 5. Advance each job, each in its own error boundary. An error saves `lastError` on
-   that job and the tick continues with the next job.
+   that job, and `lastErrorTool` true when it came from a GitHub or Git call, and the
+   tick continues with the next job. A job that waits with no error clears both, and
+   so does a new head.
+
+**Hand-over**: a job that lost its claim to another machine stops its processes,
+changes nothing on the issue (no comment, no label), marks this machine's own open
+PR of that job as draft with one note (one try; a failure only warns) and cleans up
+locally with outcome `handed-over`. It never merges.
 6. Intake fills free slots (see below).
 
 The message counts started, merged and ended jobs and repairs, the busy slots and
@@ -119,22 +129,30 @@ that issue for this tick.
 
 For each ready issue while slots are free, at most 3 claim attempts per tick:
 
-1. Make the job worktree first, so that a local failure touches no issue: fetch
-   `origin/BASE`, then `git worktree add -b pdd/core-N-STAMP worktrees/N origin/BASE`.
-   STAMP is the time in base 36 and a short random part, so a retry of the same
-   issue never meets the kept branch of an earlier job. Each job file has a random
-   `id`; each started process has the id `N-ROLE-STAMP`.
-   A worktree failure stops intake for this tick.
+1. Make the job worktree first, so that a local failure touches no issue. Fetch
+   `origin/BASE` once per tick; a fetch failure is not about one issue, so it stops
+   intake for this tick. A leftover `worktrees/N` is ours: remove it with
+   `git worktree remove -f -f` (this also removes a worktree that Git left locked),
+   then the folder, then `git worktree prune`. If it still exists, or
+   `git worktree add -b pdd/core-N-STAMP worktrees/N origin/BASE` fails, skip only
+   this issue for this tick and go on with the next one. STAMP is the time in base 36
+   and a short random part, so a retry of the same issue never meets the kept branch
+   of an earlier job. Each job file has a random `id`; each started process has the
+   id `N-ROLE-STAMP`.
 2. Claim with the shared label and comment rule: read the issue again and give up
-   when it is closed, stuck or assigned, or when a claim is live; remove an
-   expired, not takeover-limited `pdd:working` first. Add `pdd:working`. The winning
-   label event is the first `pdd:working` label event after the last removal. Post
-   one claim comment with a fenced JSON record
+   when it is closed, stuck or assigned, or when a claim is live. An expired, not
+   takeover-limited `pdd:working` is removed first, but only when a fresh timeline
+   read shows that the winning label event is still the expired claim's event: a
+   newer event is someone's fresh claim. Add `pdd:working`. The winning label event
+   is the first `pdd:working` label event after the last removal. Post one claim
+   comment with a fenced JSON record
    `{repository, coordinatorId, machine, labelEventId, lastSeen: ""}`. The machine
    wins only when its comment is by the winning event's actor and is the earliest
-   such comment that names that event. A loser deletes its own comment, removes
+   such comment that names that event, and a read of the winning claim through the
+   owners port shows no other live owner. A loser deletes its own comment, removes
    its worktree and starts nothing. Two machines with one GitHub login therefore
-   agree on one winner.
+   agree on one winner. A claim that fails partway leaves nothing: this machine's
+   comment is deleted, and the label is removed unless another claim won.
 3. Save the job file, then start the build job (below). A start error ends the job
    with a `pdd` cause `start-failed`.
 
@@ -142,7 +160,8 @@ Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
 Codex usage limit), or while `core.json` holds it: after 3 jobs in a row
 end with no result (`no-result`: the agent crashed, was signed out or reached a
-limit), intake pauses for one hour on this machine. A job that reaches a PR resets
+limit), intake pauses for one hour on this machine. A job whose process is gone with
+no exit record (a restart or a sleep) is not a strike. A job that reaches a PR resets
 the count. Status shows the hold.
 
 ## Jobs
@@ -168,11 +187,15 @@ Jobs run through the [headless job runner](agent-job.prompt.md) with
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
   that did not write the change. It checks the issue fit, prompt-first agreement,
   tests that fail without the fix, no weakened test, an honest Runtime line and no
-  unrelated or unsafe change. It writes no files and makes no GitHub write. Its
+  unrelated or unsafe change. A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
   result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`.
 - **Suite** (in `worktrees/N-suite`): `node bin/pdd.mjs workflow suite --command
   TEST --timeout MIN` through the [shared full-suite queue](test-suite-queue.prompt.md),
-  with MIN = the smaller of 120 and `jobTimeoutMinutes`. Exit 0 is green.
+  with MIN = the smaller of 120 and `jobTimeoutMinutes`. Exit 0 is green; another
+  exit code is a red suite. A run that died (no exit record), an exit 2 or 127, or a
+  log with "Shared test suite queue failed" is a failure of the runner, not a test
+  result: it starts again in the same checkout, at most twice, and then ends the job
+  with a `pdd` cause `suite-broken`. It never uses a repair.
 
 A running build or repair job past its `deadline` (start plus `jobTimeoutMinutes`)
 is stopped and ends with `timeout`. An exited or dead job: a valid `pr` result
@@ -181,21 +204,25 @@ is stopped and ends with `timeout`. An exited or dead job: a valid `pr` result
 
 ## Merge check
 
-Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`); past it, stop the
-checks and end with the last error: a `pdd` cause `merge-check-tool` when the last
-error came from a GitHub or Git call, else a `job` cause `checks-timeout`. Each tick, in order:
+Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in order:
 
-1. Read the PR. Merged by someone: finish as merged. Closed: end `pr-closed`. The PR
-   head SHA, head branch or base differs from the job: end `head-moved`.
+1. Read the PR. Merged: finish as merged, also past the deadline, so END never runs
+   on a merged issue. Past the deadline: stop the checks and end with the last error,
+   a `pdd` cause `merge-check-tool` when the PR read fails or the last saved error
+   came from a GitHub or Git call, else a `job` cause `checks-timeout`. Closed: end
+   `pr-closed`. The PR head SHA, head branch or base differs from the job: end
+   `head-moved`.
 2. A `runtime` result with state `not-run` and kind `runtime` files one report
    (below) and, when the report has a GitHub reference, rewrites the PR body line
    `Runtime: not run (…)` to `Runtime: not run (REF)`. It does not block the merge.
-3. Red findings: a `Runtime: FAIL` PR body line or result; else a failed CI check
+3. Red findings: any Runtime FAIL, in the result (`runtime.state`, any case) or in a
+   PR body line, read after removing list and quote marks, bold and code marks, in
+   any case (`- Runtime: FAIL`, `**Runtime:** FAIL`, `> runtime: fail`); else a failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass); else
    a review FAIL or a failed suite. With no red finding yet, start the review and
    the suite for this head when missing; CI may still be pending. A reviewer that
    twice gives no valid verdict for the head ends `review-missing`; no test command
-   ends `no-test-command`. The tick posts each verdict once as a PR comment with
+   ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
    the head, summary and must-fix list.
 4. Any red finding: stop the other checks. With repairs left, start one repair job,
    count it and give it a new deadline. Without, end `checks-red` with the findings.
@@ -207,7 +234,8 @@ error came from a GitHub or Git call, else a `job` cause `checks-timeout`. Each 
 6. Run `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md). A
    read failure ("could not verify", "unavailable", "retry") waits; another
    refusal ends `base-check`.
-7. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
+7. Read the winning claim again: another live owner means hand-over and no merge; a
+   claim that is not confirmed as this job's waits. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
    `CI: none (…)`, the suite, the review, the PR's Runtime line and the base check,
    with the marker `<!-- pdd:autopilot-core:merge:HEAD -->`. Then
    `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
@@ -222,7 +250,12 @@ crash, claim error, merge-check tool error) and `job` (the agent did not do the
 task, a time limit, red checks). It stops the job's processes and saves phase
 `ending`, then, resumable step by step on later ticks:
 
-1. Read the claim. When another machine holds it live, clean up locally only.
+0. Each tick counts one try. After 6 tries, or 24 hours in phase `ending`, send one
+   `stuck` alert through `ports.alert({issue, kind, text})`, clean up locally with
+   outcome `abandoned` and stop retrying.
+1. When the job has a PR, read it first: a merged PR finishes as merged, never as END.
+   A PR that cannot be read is retried on 2 more ticks, then the END goes on.
+   Read the claim. When another machine holds it live, hand over.
 2. For a `runtime` or `pdd` cause, file or count one report through the
    [report owner](autopilot-reports.prompt.md) with the repository's settings.
 3. A `runtime` or `pdd` cause whose report has a GitHub reference **waits for the
@@ -249,10 +282,10 @@ task, a time limit, red checks). It stops the job's processes and saves phase
 7. Only then clean up locally (below). Record `ended`.
 
 Local cleanup, after END, a merge, a hand-over or a person's stop: stop the job's
-processes; remove every `worktrees/N…` folder of the issue; remove every
+processes; remove every `worktrees/N…` folder of the issue (as in intake); remove every
 `logs/N-…` file except the `.log` files that the END comment and the history name;
-append the history line; remove `jobs/N.json` last, also when an earlier cleanup step
-failed. A merge also deletes the local branch; other outcomes keep it, because the
+append the history line. Each step has its own error boundary and only warns.
+`jobs/N.json` goes last in a `finally`, so a failed step never keeps the job. A merge also deletes the local branch; other outcomes keep it, because the
 agent's commits may exist only there.
 
 ## Status
@@ -269,7 +302,7 @@ of local report drafts.
 `gh(args, {input})` and `git(args, {cwd})` return `{code, stdout, stderr}`; GitHub
 REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
-`trusted(row)`, `agentReady()`, `warn(text)`, and the replaceable `jobs`
+`trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text})`, and the replaceable `jobs`
 (`start`, `read`, `stop`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
 

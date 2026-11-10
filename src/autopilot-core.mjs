@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 60e14fc480f8132f952dcb6c1c45fce9781a9461f7d95d1697f8ef183fdf14e7).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 299adb037b1be950c7191865dd281f5c43fa92c81c866e3ca5e9117dfa82be0c).
 import * as nativeFs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { fileReport, listReportDrafts } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 
-const MIN = 60 * 1000, HOUR = 60 * MIN, CLAIM_EXPIRES = 4 * HOUR, HOLD = HOUR, STRIKES = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN;
+const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, HOLD = HOUR, STRIKES = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
 // The fallback blocked-by record in an END comment: the report and the cause fingerprint.
 const BLOCK_MARKER = /<!-- pdd:core-blocked-by:([\w.-]+\/[\w.-]+)?#(\d+)(?::([a-z0-9.-]+))? -->/;
@@ -28,6 +28,11 @@ function save(fs, file, value) {
   fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(temp, file);
 }
 const cause = (kind, code, text, extra = {}) => ({ kind, component: 'autopilot-core', code, text, ...extra });
+// A "Runtime:" line in any common Markdown form: list or quote marks, bold, code marks, any case.
+const runtimeLines = body => String(body ?? '').split(/\r?\n/).map(line => line.replace(/[*_`]/g, '').replace(/^\s*(?:(?:[-+>]|\d+[.)])\s*)*/, '').trim())
+  .filter(line => /^runtime\s*:/i.test(line));
+const runtimeFail = body => runtimeLines(body).find(line => /^runtime\s*:\s*fail\b/i.test(line));
+const normalRuntime = value => object(value) ? { ...value, state: String(value.state ?? '').toLowerCase(), kind: String(value.kind ?? '').toLowerCase() } : null;
 
 // ---- Settings -------------------------------------------------------------------------------------------
 export function autopilotEngine(config) { return config?.autopilot?.engine === 'core' ? 'core' : 'full'; }
@@ -96,7 +101,19 @@ function context({ state, settings, budget }, ports) {
   ctx.machineState = () => readJson(fs, dirs.machine, { strikes: 0, heldUntil: 0 });
   ctx.readClaim = async n => (await owners([n])).find(claim => claim.issue === issueKey(repo, n)) ?? null;
   ctx.ours = claim => claim?.coordinatorId === state.coordinatorId && claim?.machine === state.machine;
+  // This job still owns the issue only while the winning claim is this machine's claim comment.
+  ctx.owns = (claim, job) => ctx.ours(claim) && String(claim.commentId) === String(job.claim?.commentId);
+  ctx.lost = (claim, job) => Boolean(claim?.active && claim.coordinatorId && !ctx.owns(claim, job));
   return ctx;
+}
+
+// A worktree of ours: remove it even when Git keeps it locked, then prune. True when the folder is gone.
+async function removeTree(ctx, path) {
+  if (!path || !ctx.fs.existsSync(path)) return true;
+  await ctx.git(['worktree', 'remove', '-f', '-f', path]).catch(() => {});
+  if (ctx.fs.existsSync(path)) try { ctx.fs.rmSync(path, { recursive: true, force: true }); } catch (error) { ctx.warn(`Autopilot core could not remove ${path}: ${error.message}`); }
+  await ctx.git(['worktree', 'prune']).catch(() => {});
+  return !ctx.fs.existsSync(path);
 }
 
 // ---- Ready rule -----------------------------------------------------------------------------------------
@@ -146,32 +163,48 @@ function claimRecord(body) {
   }
   return null;
 }
+// The winning label event is the first pdd:working label after the last removal.
+async function labelWinner(ctx, n) {
+  let winner = null;
+  for (const event of await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`)) {
+    if (event.label?.name !== 'pdd:working') continue;
+    if (event.event === 'unlabeled') winner = null; else if (event.event === 'labeled' && !winner) winner = event;
+  }
+  return winner;
+}
 async function claimIssue(ctx, n) {
-  const { gh, repo, state } = ctx, issue = await gh.ok('GET', `repos/${repo}/issues/${n}`);
+  const { gh, repo, state } = ctx, issue = await gh.ok('GET', `repos/${repo}/issues/${n}`), label = encodeURIComponent('pdd:working');
   if (issue.state !== 'open' || labelsOf(issue).includes('pdd:stuck') || issue.assignees?.length) return null;
   if (labelsOf(issue).includes('pdd:working')) {
     const current = await ctx.readClaim(n);
     if (!current?.expired || takeoverLimited(current, state)) return null;
-    await gh.call('DELETE', `repos/${repo}/issues/${n}/labels/${encodeURIComponent('pdd:working')}`);
+    // Take over only the era that was read as expired: a newer label event is someone else's fresh claim.
+    if (String((await labelWinner(ctx, n))?.id) !== String(current.labelEventId)) return null;
+    await gh.call('DELETE', `repos/${repo}/issues/${n}/labels/${label}`);
   }
-  await gh.ok('POST', `repos/${repo}/issues/${n}/labels`, { labels: ['pdd:working'] });
-  // The winning label event is the first pdd:working label after the last removal.
-  let winner = null;
-  for (const event of await gh.all(`repos/${repo}/issues/${n}/timeline?per_page=100`)) {
-    if (event.label?.name !== 'pdd:working') continue;
-    if (event.event === 'unlabeled') winner = null; else if (event.event === 'labeled' && !winner) winner = event;
+  let mine = null, won = false;
+  try {
+    await gh.ok('POST', `repos/${repo}/issues/${n}/labels`, { labels: ['pdd:working'] });
+    const winner = await labelWinner(ctx, n);
+    if (!winner?.actor?.login) throw Error('no winning pdd:working label event');
+    const record = { repository: repo.toLowerCase(), coordinatorId: state.coordinatorId, machine: state.machine, labelEventId: String(winner.id), lastSeen: '' };
+    mine = await gh.ok('POST', `repos/${repo}/issues/${n}/comments`, { body: `Autopilot core claim on ${state.machine}.\n\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\`` });
+    const actor = winner.actor.login.toLowerCase();
+    const rivals = (await gh.all(`repos/${repo}/issues/${n}/comments?per_page=100`))
+      .filter(c => c.user?.login?.toLowerCase() === actor && claimRecord(c.body)?.labelEventId === String(winner.id)).sort((a, b) => Number(a.id) - Number(b.id));
+    if (mine.user?.login?.toLowerCase() !== actor || String(rivals[0]?.id) !== String(mine.id)) { won = 'lost'; return null; }
+    const claim = { commentId: String(mine.id), labelEventId: String(winner.id), lastSeen: ctx.now() };
+    // One more read through the shared winner rule: another live owner means this claim lost.
+    if (ctx.lost(await ctx.readClaim(n), { claim })) { won = 'lost'; return null; }
+    won = true;
+    return claim;
+  } finally {
+    if (won !== true) {
+      // Never leave a partial claim: this machine's comment goes, and the label goes unless another claim won.
+      if (mine?.id) await gh.call('DELETE', `repos/${repo}/issues/comments/${mine.id}`).catch(() => {});
+      if (won !== 'lost') await gh.call('DELETE', `repos/${repo}/issues/${n}/labels/${label}`).catch(() => {});
+    }
   }
-  if (!winner?.actor?.login) return null;
-  const record = { repository: repo.toLowerCase(), coordinatorId: state.coordinatorId, machine: state.machine, labelEventId: String(winner.id), lastSeen: '' };
-  const mine = await gh.ok('POST', `repos/${repo}/issues/${n}/comments`, { body: `Autopilot core claim on ${state.machine}.\n\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\`` });
-  const actor = winner.actor.login.toLowerCase();
-  const rivals = (await gh.all(`repos/${repo}/issues/${n}/comments?per_page=100`))
-    .filter(c => c.user?.login?.toLowerCase() === actor && claimRecord(c.body)?.labelEventId === String(winner.id)).sort((a, b) => Number(a.id) - Number(b.id));
-  if (mine.user?.login?.toLowerCase() !== actor || String(rivals[0]?.id) !== String(mine.id)) {
-    await gh.call('DELETE', `repos/${repo}/issues/comments/${mine.id}`);
-    return null;
-  }
-  return { commentId: String(mine.id), labelEventId: String(winner.id), lastSeen: ctx.now() };
 }
 
 // ---- Job prompts ----------------------------------------------------------------------------------------
@@ -215,7 +248,7 @@ Review PR #${job.pr} (https://github.com/${ctx.repo}/pull/${job.pr}) at head ${j
 
 ${issueText(job)}
 
-Check: (1) the change does what the issue asks; (2) the owning prompt changed first and agrees with the code, because in PDD prompts are the source; (3) tests cover the issue case and fail without the fix, and no test was weakened; (4) the PR body has one honest Runtime line; (5) no unrelated change, secret or unsafe effect.
+Check: (1) the change does what the issue asks; (2) the owning prompt changed first and agrees with the code, because in PDD prompts are the source; (3) tests cover the issue case and fail without the fix, and no test was weakened; (4) the PR body has one honest Runtime line, and a Runtime FAIL line in the PR body means your verdict is FAIL; (5) no unrelated change, secret or unsafe effect.
 Read the change with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD. You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
 Before you exit, write this JSON file: ${result}
 {"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix.
@@ -232,7 +265,7 @@ function startJob(ctx, job, role, cwd, prompt, command = null) {
 }
 async function checkout(ctx, job, name) {
   const path = join(ctx.dirs.worktrees, `${job.issue}-${name}`);
-  if (ctx.fs.existsSync(path)) await ctx.git(['worktree', 'remove', '--force', path]).catch(() => ctx.fs.rmSync(path, { recursive: true, force: true }));
+  if (!await removeTree(ctx, path)) throw Object.assign(Error(`cannot remove the old checkout ${path}`), { code: 'git' });
   await ctx.git(['fetch', '-q', 'origin', job.branch]);
   await ctx.git(['worktree', 'add', '-q', '--detach', path, job.head]);
   return path;
@@ -244,21 +277,28 @@ async function intake(ctx, rows) {
   if (free <= 0) return null;
   if (!['codex', 'claude'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex or Claude agent; run pdd autopilot start from a signed-in Codex or Claude';
   if (held.heldUntil > ctx.now()) return `intake paused until ${new Date(held.heldUntil).toISOString()}: ${STRIKES} jobs in a row ended with no result; check the agent with pdd autopilot doctor`;
-  let agentChecked = false;
+  let checked = false;
   for await (const row of readyRows(ctx, rows)) {
     if (free <= 0 || tries++ >= CLAIM_TRIES) break;
-    if (!agentChecked && !await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
-    agentChecked = true;
+    if (!checked) {
+      if (!await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
+      // A base fetch failure is not about one issue: it stops intake for this tick.
+      try { ctx.fs.mkdirSync(ctx.dirs.worktrees, { recursive: true, mode: 0o700 }); await ctx.git(['fetch', '-q', 'origin', state.baseBranch]); }
+      catch (error) { return `intake stopped: ${error.message}`; }
+      checked = true;
+    }
     const n = row.number, stamp = `${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
+    // A leftover worktree, even a locked one, is ours; if it cannot go, only this issue waits.
     try {
-      ctx.fs.mkdirSync(ctx.dirs.worktrees, { recursive: true, mode: 0o700 });
-      if (ctx.fs.existsSync(worktree)) await ctx.git(['worktree', 'remove', '--force', worktree]);
-      await ctx.git(['fetch', '-q', 'origin', state.baseBranch]);
+      if (!await removeTree(ctx, worktree)) throw Error(`the leftover worktree ${worktree} cannot be removed`);
       await ctx.git(['worktree', 'add', '-q', '-b', branch, worktree, `origin/${state.baseBranch}`]);
-    } catch (error) { ctx.warn(`Autopilot core could not make a worktree for #${n}: ${error.message}`); return `intake stopped: ${error.message}`; }
+    } catch (error) {
+      ctx.warn(`Autopilot core skipped #${n}: ${error.message}`); ctx.skip.add(n);
+      await ctx.git(['branch', '-D', branch]).catch(() => {}); continue;
+    }
     let claim = null;
     try { claim = await claimIssue(ctx, n); } catch (error) { ctx.warn(`Autopilot core claim of #${n} failed: ${error.message}`); }
-    if (!claim) { await ctx.git(['worktree', 'remove', '--force', worktree]).catch(() => {}); await ctx.git(['branch', '-D', branch]).catch(() => {}); continue; }
+    if (!claim) { await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); continue; }
     const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
       branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), deadline: ctx.now() + ctx.timeout };
     ctx.saveJob(job);
@@ -300,40 +340,55 @@ async function reviewState(ctx, job) {
 }
 async function suiteState(ctx, job) {
   if (!ctx.settings.testCommand) return { state: 'missing' };
-  if (!job.suite || job.suite.head !== job.head) {
-    const cwd = await checkout(ctx, job, 'suite');
+  const start = (cwd, restarts = 0) => {
     const command = { command: process.execPath, args: [ctx.pdd, 'workflow', 'suite', '--command', ctx.settings.testCommand, '--timeout', String(Math.min(120, ctx.settings.jobTimeoutMinutes))] };
-    job.suite = { head: job.head, agent: startJob(ctx, job, 'suite', cwd, '', command) }; ctx.saveJob(job); return { state: 'running' };
-  }
+    job.suite = { head: job.head, cwd, restarts, agent: startJob(ctx, job, 'suite', cwd, '', command) }; ctx.saveJob(job); return { state: 'running' };
+  };
+  if (!job.suite || job.suite.head !== job.head) return start(await checkout(ctx, job, 'suite'));
   const seen = ctx.jobs.read(job.suite.agent);
   if (seen.state === 'running') return { state: 'running' };
   if (seen.exit?.code === 0) return { state: 'pass' };
   let tail = '';
   try { tail = redactSecrets(ctx.fs.readFileSync(job.suite.agent.log, 'utf8').split('\n').slice(-15).join('\n')); } catch { /* No log. */ }
+  // A dead run (no exit record, for example after a restart) or a failure of the suite runner itself is not a red
+  // test result: it starts again, at most twice, and then ends the job without spending a repair.
+  if (seen.state === 'dead' || [2, 127].includes(seen.exit?.code) || /Shared test suite queue failed/.test(tail)) {
+    if ((job.suite.restarts ?? 0) < 2) return start(job.suite.cwd ?? await checkout(ctx, job, 'suite'), (job.suite.restarts ?? 0) + 1);
+    return { state: 'broken', text: `the full test suite could not run for head ${short(job.head)} (${seen.state === 'dead' ? 'the run died' : `exit ${seen.exit?.code}`}, 3 tries). Log: ${job.suite.agent.log}` };
+  }
   return { state: 'fail', text: `The full test suite failed for head ${short(job.head)} (exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}). Log: ${job.suite.agent.log}${tail ? `\nLast lines:\n${tail}` : ''}` };
 }
 function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent, job.suite?.agent]) if (part) ctx.jobs.stop(part); }
 
 async function mergeCheck(ctx, job) {
   const { gh, repo, state, settings } = ctx;
+  // A merged PR is a merge, also past the deadline: END never runs on a merged issue.
+  let pr;
+  try { pr = await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`); }
+  catch (error) {
+    if (ctx.now() < job.deadline) throw error;
+    stopChecks(ctx, job);
+    return end(ctx, job, cause('pdd', 'merge-check-tool', `the PR checks did not finish within ${settings.jobTimeoutMinutes} minutes; last error: ${oneLine(error.message)}`));
+  }
+  if (pr.merged) return finishMerge(ctx, job, pr);
   if (ctx.now() >= job.deadline) {
     stopChecks(ctx, job);
     const text = `the PR checks did not finish within ${settings.jobTimeoutMinutes} minutes${job.lastError ? `; last error: ${job.lastError}` : ''}`;
     return end(ctx, job, job.lastErrorTool ? cause('pdd', 'merge-check-tool', text) : cause('job', 'checks-timeout', text));
   }
-  const pr = await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`);
-  if (pr.merged) return finishMerge(ctx, job);
   if (pr.state !== 'open') return end(ctx, job, cause('job', 'pr-closed', `PR #${job.pr} was closed without a merge`));
   if (pr.head?.sha !== job.head || pr.head?.ref !== job.branch || pr.base?.ref !== state.baseBranch)
     return end(ctx, job, cause('job', 'head-moved', `PR #${job.pr} is at head ${short(pr.head?.sha)} of ${pr.head?.ref} into ${pr.base?.ref}, not the job head ${short(job.head)} of ${job.branch} into ${state.baseBranch}`));
+  job.runtime = normalRuntime(job.runtime);
   if (job.runtime?.state === 'not-run' && job.runtime.kind === 'runtime' && !job.runtimeReport) {
     job.runtimeReport = await report(ctx, job, { ...cause('runtime', job.runtime.code, oneLine(job.runtime.cause) || 'Runtime not run'), component: job.runtime.component || 'pdd test', detail: job.runtime.cause }, 'runtime');
     ctx.saveJob(job);
-    const line = /^(\s*Runtime:\s*not run\s*)\(([^)\n]*)\)/mi;
+    const line = /^([^\n]*?Runtime:[*_`\s]*not run[*_`\s]*)\(([^)\n]*)\)/mi;
     if (job.runtimeReport.ref && line.test(pr.body ?? '')) await gh.ok('PATCH', `repos/${repo}/pulls/${job.pr}`, { body: pr.body.replace(line, `$1(${job.runtimeReport.ref})`) });
   }
-  const reds = [], failLine = /^\s*Runtime:\s*FAIL\b.*$/mi.exec(pr.body ?? '');
-  if (failLine || job.runtime?.state === 'fail') reds.push(`The PR body says ${failLine ? failLine[0].trim() : 'Runtime: FAIL'}; make the Runtime check pass.`);
+  // Any FAIL blocks: a Runtime line of the PR body in any Markdown form, or the job result.
+  const reds = [], failLine = runtimeFail(pr.body);
+  if (failLine || job.runtime?.state === 'fail') reds.push(`The PR says ${failLine ? `"${failLine}"` : 'Runtime: FAIL (job result)'}; a Runtime: FAIL blocks the merge, so make the Runtime check pass.`);
   const ci = reds.length ? null : await ciState(ctx, job.head, job);
   if (ci?.state === 'red') reds.push(`CI check ${ci.failed.join(', ')} failed for head ${short(job.head)}.`);
   let review, suite;
@@ -341,6 +396,7 @@ async function mergeCheck(ctx, job) {
     review = await reviewState(ctx, job); suite = await suiteState(ctx, job);
     if (review.state === 'missing') return end(ctx, job, cause('job', 'review-missing', 'the fresh reviewer ended twice without a valid verdict'));
     if (suite.state === 'missing') return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
+    if (suite.state === 'broken') return end(ctx, job, cause('pdd', 'suite-broken', suite.text));
     if (review.state === 'fail') reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`);
     if (suite.state === 'fail') reds.push(suite.text);
   }
@@ -351,26 +407,30 @@ async function mergeCheck(ctx, job) {
     job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
     ctx.saveJob(job); ctx.counts.repairs++; return;
   }
-  if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; ctx.saveJob(job); return; }
+  if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
   const base = await (ctx.ports.checkBase ?? (input => checkAutopilotBase(input, { execFile: ctx.execFile })))({ run: { repo, baseBranch: state.baseBranch, root: state.cwd, pr: [{ number: job.pr }] }, pr: job.pr });
   if (base.exitCode !== 0) {
-    if (/could not verify|unavailable|retry/i.test(base.message)) { job.lastError = oneLine(base.message); ctx.saveJob(job); return; }
+    if (/could not verify|unavailable|retry/i.test(base.message)) { Object.assign(job, { lastError: oneLine(base.message), lastErrorTool: false }); ctx.saveJob(job); return; }
     return end(ctx, job, cause('job', 'base-check', oneLine(base.message)));
   }
+  // Right before the merge, read the claim again: a machine that lost the claim never merges.
+  const claim = await ctx.readClaim(job.issue);
+  if (ctx.lost(claim, job)) return handOver(ctx, job, `machine ${claim.machine} holds the claim now`);
+  if (!ctx.owns(claim, job) || !claim.active) { Object.assign(job, { lastError: 'the claim of this machine is not confirmed', lastErrorTool: false }); ctx.saveJob(job); return; }
   if (job.mergeNote !== job.head) {
-    const runtimeLine = /^\s*Runtime:.*$/mi.exec(pr.body ?? '')?.[0].trim() ?? 'Runtime: no line in the PR body';
+    const runtimeLine = runtimeLines(pr.body)[0] ?? 'Runtime: no line in the PR body';
     await gh.ok('POST', `repos/${repo}/issues/${job.pr}/comments`, { body: [`Autopilot merge check passed for head ${job.head}.`, '',
       `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
       '- Full test suite: pass', '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- Base: ${oneLine(base.message)}`, '', `<!-- pdd:autopilot-core:merge:${job.head} -->`].join('\n') });
     job.mergeNote = job.head; ctx.saveJob(job);
   }
   const merged = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
-  if (merged.code !== 0) { job.lastError = `gh pr merge: ${oneLine(merged.stderr || merged.stdout, 200)}`; ctx.saveJob(job); return; }
+  if (merged.code !== 0) { Object.assign(job, { lastError: `gh pr merge: ${oneLine(merged.stderr || merged.stdout, 200)}`, lastErrorTool: false }); ctx.saveJob(job); return; }
   return finishMerge(ctx, job);
 }
-async function finishMerge(ctx, job) {
+async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
-  if (!(await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`)).merged) { job.lastError = 'the merge is not confirmed'; ctx.saveJob(job); return; }
+  if (!(read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`)).merged) { job.lastError = 'the merge is not confirmed'; ctx.saveJob(job); return; }
   const issue = await gh.ok('GET', `repos/${repo}/issues/${job.issue}`);
   if (issue.state === 'open') await gh.ok('PATCH', `repos/${repo}/issues/${job.issue}`, { state: 'closed', state_reason: 'completed' });
   if (labelsOf(issue).includes('pdd:working')) await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
@@ -384,6 +444,20 @@ async function report(ctx, job, why, step) {
   return fileReport({ cause: why, mode: ctx.settings.report, root: ctx.ports.reportRoot ?? join(ctx.root, 'reports'), machine: ctx.state.machine, step, words: [ctx.repo, owner, name],
     versions: { pdd: ctx.ports.version, node: process.version, platform: process.platform, agent: ctx.state.agent?.kind } }, { gh: ctx.ports.gh, now: ctx.now, warn: ctx.warn, fs: ctx.fs });
 }
+// Another machine holds the claim: stop locally, change nothing on its issue, and leave this machine's own open PR
+// as a draft with a note. One try only; the other machine's work is never touched.
+async function handOver(ctx, job, text) {
+  stopChecks(ctx, job);
+  const r = job.agent ? ctx.jobs.read(job.agent).result : null, pr = job.pr ?? (object(r) && r.outcome === 'pr' && Number.isSafeInteger(r.pr) ? r.pr : null);
+  if (pr) try {
+    const read = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${pr}`);
+    if (read.state === 'open' && !read.merged && read.head?.ref === job.branch) {
+      await ctx.ports.gh(['pr', 'ready', String(pr), '--repo', ctx.repo, '--undo']);
+      await ctx.gh.ok('POST', `repos/${ctx.repo}/issues/${pr}/comments`, { body: `Autopilot on ${ctx.state.machine} stopped its run for issue #${job.issue}: ${text}. This PR stays open as a draft and is not merged.\n\n<!-- pdd:autopilot-core:handover:${job.issue}:${job.id ?? job.started} -->` });
+    }
+  } catch (error) { ctx.warn(`Autopilot core could not mark PR #${pr} as draft: ${error.message}`); }
+  return finishLocal(ctx, job, 'handed-over', text);
+}
 async function end(ctx, job, why) {
   stopChecks(ctx, job);
   Object.assign(job, { phase: 'ending', end: job.end ?? { cause: why, at: ctx.now() } }); ctx.saveJob(job);
@@ -392,8 +466,22 @@ async function end(ctx, job, why) {
 }
 async function continueEnd(ctx, job) {
   const { gh, repo } = ctx, e = job.end, why = e.cause;
-  if (e.handedOver === undefined) { const claim = await ctx.readClaim(job.issue); e.handedOver = Boolean(claim?.active && claim.coordinatorId && !ctx.ours(claim)); ctx.saveJob(job); }
-  if (e.handedOver) return finishLocal(ctx, job, 'handed-over', 'another machine holds the claim now');
+  // An END that cannot finish is dropped after 6 tries or 24 hours, with one alert to a person.
+  e.tries = (e.tries ?? 0) + 1; ctx.saveJob(job);
+  if (e.tries > END_TRIES || ctx.now() - e.at > DAY) {
+    const text = `Autopilot core could not finish the END of issue #${job.issue} after ${e.tries - 1} tries${job.lastError ? ` (last error: ${job.lastError})` : ''}; its cause was: ${why.text}`;
+    try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'stuck', text }); } catch (error) { ctx.warn(`Autopilot core alert for #${job.issue} failed: ${error.message}`); }
+    return finishLocal(ctx, job, 'abandoned', text);
+  }
+  // Never END a merged issue. A PR that cannot be read is retried on 2 more ticks before the END goes on.
+  if (job.pr && !e.prChecked) {
+    let pr = null;
+    try { pr = await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`); } catch (error) { if (e.tries < 3) throw error; ctx.warn(`Autopilot core ends #${job.issue} without a PR read: ${error.message}`); }
+    if (pr?.merged) return finishMerge(ctx, job, pr);
+    e.prChecked = true; ctx.saveJob(job);
+  }
+  if (e.handedOver === undefined) { e.handedOver = ctx.lost(await ctx.readClaim(job.issue), job); ctx.saveJob(job); }
+  if (e.handedOver) return handOver(ctx, job, 'another machine holds the claim now');
   const blocking = ['runtime', 'pdd'].includes(why.kind);
   if (blocking && !e.report) { e.report = await report(ctx, job, why, job.role); ctx.saveJob(job); }
   const marker = `<!-- pdd:autopilot-core:end:${job.issue}:${job.id ?? job.started} -->`, fp = e.report?.fingerprint;
@@ -450,18 +538,25 @@ async function continueEnd(ctx, job) {
 // Local cleanup: the worktrees go only after the GitHub outcome is confirmed. Every per-issue file of this engine
 // goes too, except the job logs that the END comment and history name. The branch stays unless merged.
 async function finishLocal(ctx, job, outcome, text) {
-  stopChecks(ctx, job); ctx.skip.add(job.issue);
-  const mine = name => name === String(job.issue) || name.startsWith(`${job.issue}-`) || name.startsWith(`${job.issue}.`);
-  const list = dir => { try { return ctx.fs.readdirSync(dir).filter(mine); } catch { return []; } };
-  for (const path of [job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))])
-    if (path && ctx.fs.existsSync(path)) await ctx.git(['worktree', 'remove', '--force', path]).catch(() => ctx.fs.rmSync(path, { recursive: true, force: true }));
-  await ctx.git(['worktree', 'prune']).catch(() => {});
-  if (outcome === 'merged') await ctx.git(['branch', '-D', job.branch]).catch(() => {});
-  for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log'))) ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true });
+  // Each step has its own error boundary; the job file goes last in all cases, so a failed step never keeps a job.
+  const step = async (name, action) => { try { await action(); } catch (error) { ctx.warn(`Autopilot core cleanup of #${job.issue} (${name}): ${error.message}`); } };
   try {
-    ctx.fs.mkdirSync(ctx.root, { recursive: true, mode: 0o700 });
-    ctx.fs.appendFileSync(ctx.dirs.history, JSON.stringify({ at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null }) + '\n', { mode: 0o600 });
-  } finally { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
+    ctx.skip.add(job.issue);
+    await step('processes', () => stopChecks(ctx, job));
+    const mine = name => name === String(job.issue) || name.startsWith(`${job.issue}-`) || name.startsWith(`${job.issue}.`);
+    const list = dir => { try { return ctx.fs.readdirSync(dir).filter(mine); } catch { return []; } };
+    for (const path of new Set([job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))]))
+      await step('worktree', async () => { if (!await removeTree(ctx, path)) throw Error(`${path} stays`); });
+    if (outcome === 'merged') await step('branch', () => ctx.git(['branch', '-D', job.branch]));
+    for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log'))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
+    await step('history', () => {
+      ctx.fs.mkdirSync(ctx.root, { recursive: true, mode: 0o700 });
+      ctx.fs.appendFileSync(ctx.dirs.history, JSON.stringify({ at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null }) + '\n', { mode: 0o600 });
+    });
+  } finally {
+    try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
+    catch (error) { nativeFs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); ctx.warn(`Autopilot core job file of #${job.issue}: ${error.message}`); }
+  }
 }
 
 // ---- One job per tick step ------------------------------------------------------------------------------
@@ -481,7 +576,8 @@ async function advance(ctx, job) {
   }
   const r = seen.result;
   if (object(r) && r.outcome === 'pr' && Number.isSafeInteger(r.pr) && /^[0-9a-f]{40}$/.test(r.head ?? '')) {
-    Object.assign(job, { phase: 'pr', pr: r.pr, head: r.head, runtime: object(r.runtime) ? r.runtime : null, prAt: ctx.now(), deadline: ctx.now() + ctx.timeout });
+    Object.assign(job, { phase: 'pr', pr: r.pr, head: r.head, runtime: normalRuntime(r.runtime), prAt: ctx.now(), deadline: ctx.now() + ctx.timeout });
+    delete job.lastError; delete job.lastErrorTool;
     if (job.runtimeReport && job.runtime?.state !== 'not-run') delete job.runtimeReport;
     ctx.saveJob(job); save(ctx.fs, ctx.dirs.machine, { ...ctx.machineState(), strikes: 0 });
     return mergeCheck(ctx, job);
@@ -491,8 +587,10 @@ async function advance(ctx, job) {
     return end(ctx, job, { kind, component: slug(r.component) || (kind === 'runtime' ? 'pdd-test' : 'agent'), code: slug(r.code) || 'failed',
       text: oneLine(r.cause) || 'the agent reported a failure', detail: String(r.detail ?? '').slice(0, 4000) });
   }
+  // Only an agent that exited with no result is a strike (sign-out, limit, crash). A process that is gone with no
+  // exit record (a restart or a sleep) is not.
   const how = seen.exit ? `exited with ${seen.exit.code ?? seen.exit.signal}` : 'process ended';
-  return end(ctx, job, cause('job', 'no-result', `the ${job.role} agent ${how} with no result${r === 'invalid' ? ' (the result file is not valid JSON)' : ''}`, { strike: true }));
+  return end(ctx, job, cause('job', 'no-result', `the ${job.role} agent ${how} with no result${r === 'invalid' ? ' (the result file is not valid JSON)' : ''}`, { strike: seen.state === 'exited' }));
 }
 
 // ---- The tick -------------------------------------------------------------------------------------------
@@ -510,11 +608,16 @@ export async function tickCore(input, ports) {
     const why = job.phase === 'ending' ? null : stopReason(open.get(job.issue));
     if (why) await finishLocal(ctx, job, 'stopped', `stopped by a person: ${why}`).catch(error => ctx.warn(`Autopilot core #${job.issue}: ${error.message}`));
   }
-  // Heartbeats of own live claims. An expired claim gets none: expiry is final.
+  // Heartbeats of own live claims, each after a read of the winning claim. An expired claim gets none: expiry is
+  // final. A claim that another machine won stops this job locally.
   for (const job of readJobs(ctx.fs, ctx.root)) {
     if (job.phase === 'ending' || !job.claim || ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES) continue;
-    try { const beat = await ctx.heartbeat(job); if (beat?.state === 'refreshed') { job.claim.lastSeen = ctx.now(); ctx.saveJob(job); } }
-    catch (error) { ctx.warn(`Autopilot core heartbeat of #${job.issue} deferred: ${error.message}`); }
+    try {
+      const claim = await ctx.readClaim(job.issue);
+      if (ctx.lost(claim, job)) { await handOver(ctx, job, `machine ${claim.machine} holds the claim now`); continue; }
+      const beat = await ctx.heartbeat(job);
+      if (beat?.state === 'refreshed') { job.claim.lastSeen = ctx.now(); ctx.saveJob(job); }
+    } catch (error) { ctx.warn(`Autopilot core heartbeat of #${job.issue} deferred: ${error.message}`); }
   }
   if (input.budget?.state === 'reserve') return { exitCode: 0, message: 'Autopilot core: GitHub budget is at the reserve floor; only heartbeats ran.' };
   for (const job of readJobs(ctx.fs, ctx.root)) {
