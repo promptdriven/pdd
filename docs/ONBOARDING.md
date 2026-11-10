@@ -15,13 +15,21 @@ rules and the [RUNBOOK](../RUNBOOK.md) for file formats and checks.
 | --- | --- |
 | Prompts | State each module's behavior and public contract. |
 | Stories and test cases | State what a user can do and the results they must get. |
-| PDD skills | Tell your coding agent how to plan, write, check and review work. |
-| The `pdd` command | Sets up a project, sends prompt checks to the interpreter and manages workflow runs. |
+| PDD skills | Instructions that tell your coding agent how to plan, write, check and review a kind of work. |
+| The `pdd` command | Sets up a project, sends prompt checks to the interpreter and launches and manages issue workflow runs. |
 | The PDD interpreter | Uses AI to act as the prompt program. It fakes declared outside resources. |
 | Your coding agent | Writes the prompts, Stories, test cases and implementation. It runs the implementation's checks. |
 
 Prompt tests check the prompt program. Native tests check the code. A pass in
 one does not establish a pass in the other.
+
+A skill is instructions for the agent, not a terminal command. For example,
+`pdd-feature` gives the agent its method for new behavior, and `pdd-bug` gives
+it the method for a defect. The workflow name is shorter: `feature` uses the
+`pdd-feature` skill, and `bug` uses the `pdd-bug` skill. You can ask an agent
+to use either skill in a normal chat, or start a managed GitHub issue run from
+the terminal. The run launches agent chats that follow the same skill while
+`pdd` manages the worktree, gates, PRs and status.
 
 ## Install PDD and its skills
 
@@ -88,18 +96,23 @@ The next steps describe feature and bug work. For a small change, use
 direct chat, the agent opens a PR when you ask. Use `pdd-product` for product
 planning. Use `pdd-prompting` to author or review prompts.
 
-The agent prepares the owning prompt, a Story and its test file. A usual file
-set is:
+The agent prepares the owning prompt, a Story and its test file. A file set can
+use this language-qualified naming convention:
 
 ```text
-prompts/NAME.prompt.md
+prompts/orders_JavaScript.prompt.md
 user_stories/my-story.md
 tests/my-story.json
 ```
 
-`NAME` and `my-story` are placeholders. Read the actual files. Check the
-expected results against what you asked for. Correct the intended behavior before
-the agent implements it.
+`orders_JavaScript.prompt.md` is an example of
+`prompts/NAME_LANGUAGE.prompt.md`: the name before the underscore identifies
+the module, and the language suffix can tell people which language it targets.
+The language suffix is a naming convention, not a requirement. PDD requires
+the `.prompt.md` extension; existing prompt names can omit a language suffix,
+such as `prompts/cli/command-catalog.prompt.md`. `my-story` is a placeholder.
+Read the actual files. Check the expected results against what you asked for.
+Correct the intended behavior before the agent implements it.
 
 Inspect the selected files and run the checks:
 
@@ -134,20 +147,41 @@ Then ask for the code. The agent implements the approved behavior and runs the
 same cases against the code's public interface. It also runs the project's native
 checks. Review the actual results and any remaining failures.
 
-## Run a GitHub issue through PDD
+## Use a skill in chat or run a GitHub issue
 
-For a workflow run, install [Herdr](https://herdr.dev) and start from an issue
-in your project:
+You can use a skill in a normal chat or ask `pdd` to manage an issue run. For a
+normal chat, open Codex or Claude Code in your project and type the request in
+the agent chat. For example:
+
+```text
+Use pdd-feature to add a shipping estimate to the order summary.
+Use pdd-bug to fix the wrong total shown for a discounted order.
+```
+
+You can also invoke the skills as `$pdd-feature` in Codex or `/pdd-feature` in
+Claude Code, and likewise `$pdd-bug` or `/pdd-bug`. In a normal chat, the agent
+works in the current checkout. The skill does not create a workflow worktree
+or open a PR on its own; ask the agent if you want it to open a PR.
+
+For a managed workflow run, install [Herdr](https://herdr.dev). From a terminal
+in your project, run the command for the issue:
 
 ```sh
 pdd workflow run feature 42
+pdd workflow run bug 43
+```
+
+Here `feature` maps to `pdd-feature`, and `bug` maps to `pdd-bug`. Replace the
+numbers with GitHub issue numbers. The command creates a branch and worktree,
+then opens agent chats in Herdr. The agent follows the mapped skill. PDD manages
+the run and its PR steps; a direct chat does not start this managed issue run.
+Workflow agents run with full access as your user. To inspect a run, use these
+terminal commands:
+
+```sh
 pdd workflow status 42
 pdd workflow view 42
 ```
-
-Replace `feature` with `bug` or `small-change` when appropriate. Replace `42`
-with your issue number. PDD creates a branch and worktree and opens the agent
-chats in Herdr. Workflow agents run with full access as your user.
 
 For a normal feature or bug run, read the Story card. Approve the behavior and
 choose whether to stop after PR 1 or continue to code. With a full prompt check
@@ -157,7 +191,9 @@ needs another decision. Strict mode retains its approval steps. Autopilot has
 its own delegated route. A small change uses one PR.
 
 The [workflow guide](workflows.md#how-a-run-works) owns the exact steps and
-approval rules. A first manual change does not require Autopilot.
+approval rules. `pdd-small-change` fits a contained change, `pdd-product` plans
+a whole product, and `pdd-prompting` helps author or review prompts. A first
+manual change does not require Autopilot.
 
 ## Contribute to PDD itself
 
