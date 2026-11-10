@@ -1,5 +1,5 @@
 import { bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 69c0e34364433ed3d3a009e237f1ea9819ea8f498d244b26d0db3d59270dd16e).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: a60a0624bcc20c56fe5c2396e1a6f65f30a2c7d4d31d84313b249298e654573a).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 

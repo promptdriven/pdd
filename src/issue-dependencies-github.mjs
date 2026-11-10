@@ -2,7 +2,7 @@ import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: cb05528b4059984acaf7bd703b1577ab3a17a9dbadd34799a8dc4b7eac3cd250).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 7731cf8d90d1a79eed1451bc211fcba434b14b62603c4d2a72d78eb6b376beb0).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
