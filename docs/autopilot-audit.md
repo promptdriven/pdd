@@ -36,7 +36,7 @@ Return only a JSON object with these fields:
 `summary`: short nonblank explanation;
 `evidence`: nonblank Markdown with the seven numbered answers and process lesson;
 `revert`: Boolean recommendation;
-`memberVerdicts`: optional array of `{ issue, verdict, summary, evidence }` for a group PR that closes multiple issues (`Closes #A, Closes #B ...`). Check each closed member issue independently for its own reproduce result and test; if some members are OK and another member is BAD without needing a revert, set `revert: false` so only the BAD member issues are reopened.
+`memberVerdicts`: for each new PR with saved `closingIssues`, one row per exact closing issue, with no missing, duplicate or extra issue: `{ issue, verdict, reproduce: { confirmed, summary }, test: { passed, summary }, summary, evidence }`. Issue is a positive integer; verdict is OK, CONCERN or BAD; confirmed and passed are Booleans; all summaries and evidence are nonblank. The audit compares saved closing issues with the current merged PR body before launch. Legacy PR records without `closingIssues` remain readable with their old optional member results. Check each member issue independently; if a member is BAD without needing a revert, set `revert: false` so only BAD member issues are reopened.
 
 OK requires the original problem solved, scope and tests sound, and real gates.
 CONCERN means an acceptable change with a named process weakness. Use CONCERN

@@ -8,9 +8,9 @@ import { launchProfile, selectLaunchProfile, validLaunchProfile } from './workfl
 import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
-import { sortClosingReferences } from './issue-sort.mjs';
-import { splitSortGroupMember } from './issue-sort-github.mjs';
-import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim } from './issue-dependencies-github.mjs';
+import { confirmGroupAfterReproduce, hasMemberClosingEvidence, sortClosingReferences } from './issue-sort.mjs';
+import { claimSortGroup, readSortGroups, releaseSortGroup, splitSortGroupMember } from './issue-sort-github.mjs';
+import { claimCoordinatorIssue, readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseCoordinatorIssueClaim } from './issue-dependencies-github.mjs';
 // Generated from prompts/cli/workflow-runner.prompt.md (sha256: 001780e28b308e1f0df35107424c6b39ca7b01706db3fb4b43497b84f1d69191).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
@@ -662,15 +662,123 @@ function installedCandidateIdentity(packageRoot, skillDir) {
 const exactKeys = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+function issueIdentity(value) {
+  return typeof value === 'string' && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*$/.test(value)
+    ? value.replace(/^https:\/\/github\.com\/([^/]+\/[^/]+)\//, (_match, repo) => `https://github.com/${repo.toLowerCase()}/`).toLowerCase() : '';
+}
 function validSavedAutomaticOrigin(run) {
   const origin = run.automaticOrigin;
-  return exactKeys(origin, ['repository', 'coordinatorId', 'machine', 'claim'])
-    && ['repository', 'coordinatorId', 'machine'].every(key => nonempty(origin[key]))
-    && exactKeys(origin.claim, ['commentId', 'labelEventId'])
-    && ['commentId', 'labelEventId'].every(key => nonempty(origin.claim[key]))
-    && nonempty(run.repo) && origin.repository.toLowerCase() === run.repo.toLowerCase()
-    && nonempty(run.issue?.url);
+  if (!(exactKeys(origin, ['repository', 'coordinatorId', 'machine', 'claim'])
+    || exactKeys(origin, ['repository', 'coordinatorId', 'machine', 'claim', 'group', 'groupClaims']))
+    || !['repository', 'coordinatorId', 'machine'].every(key => nonempty(origin[key]))
+    || !exactKeys(origin.claim, ['commentId', 'labelEventId'])
+    || ['commentId', 'labelEventId'].some(key => !/^[1-9][0-9]*$/.test(String(origin.claim[key] ?? '')))
+    || !nonempty(run.repo) || origin.repository.toLowerCase() !== run.repo.toLowerCase()
+    || !issueIdentity(run.issue?.url)) return false;
+  if (!Object.hasOwn(origin, 'group') && !Object.hasOwn(origin, 'groupClaims')) return true;
+  const group = origin.group, claims = origin.groupClaims, leader = issueIdentity(run.issue.url);
+  if (!(exactKeys(group, ['umbrella', 'members']) || exactKeys(group, ['umbrella', 'members', 'owningModule']) || exactKeys(group, ['umbrella', 'members', 'signal']) || exactKeys(group, ['umbrella', 'members', 'owningModule', 'signal']))
+    || group.owningModule !== undefined && (typeof group.owningModule !== 'string' || !group.owningModule.trim())
+    || group.signal !== undefined && (typeof group.signal !== 'string' || !group.signal.trim()) || issueIdentity(group.umbrella) !== leader
+    || !Array.isArray(group.members) || group.members.length < 1 || group.members.length > 5
+    || group.members.some(key => !issueIdentity(key) || !key.toLowerCase().includes(`/issues/`)
+      || !key.toLowerCase().startsWith(`https://github.com/${origin.repository.toLowerCase()}/issues/`))
+    || new Set(group.members.map(issueIdentity)).size !== group.members.length
+    || !group.members.some(key => issueIdentity(key) === leader)
+    || !Array.isArray(claims) || claims.length !== group.members.length) return false;
+  const byIssue = new Map();
+  for (const claim of claims) {
+    if (!exactKeys(claim, ['issue', 'commentId', 'labelEventId', 'coordinatorId', 'machine'])
+      || !issueIdentity(claim.issue) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
+      || !/^[1-9][0-9]*$/.test(String(claim.labelEventId ?? ''))
+      || claim.coordinatorId !== origin.coordinatorId || claim.machine !== origin.machine
+      || byIssue.has(issueIdentity(claim.issue))) return false;
+    byIssue.set(issueIdentity(claim.issue), claim);
+  }
+  if (group.members.some(key => !byIssue.has(issueIdentity(key)))) return false;
+  const leaderClaim = byIssue.get(leader);
+  return leaderClaim?.commentId === origin.claim.commentId && leaderClaim?.labelEventId === origin.claim.labelEventId;
 }
+function savedAutomaticClaims(run) {
+  const origin = run.automaticOrigin;
+  if (Array.isArray(origin?.groupClaims)) return origin.groupClaims.map(claim => ({ ...claim }));
+  return [{ issue: run.issue.url, commentId: origin.claim.commentId, labelEventId: origin.claim.labelEventId,
+    coordinatorId: origin.coordinatorId, machine: origin.machine }];
+}
+
+async function finishGroupRelease(run, ports) {
+  const pending = run.groupRelease, original = structuredClone(run.automaticOrigin);
+  if (!exactKeys(pending, ['umbrella', 'members', 'claims', 'released', 'reason', 'holdLeader'])
+    || !Array.isArray(pending.members) || !pending.members.length || !Array.isArray(pending.claims)
+    || !Array.isArray(pending.released) || typeof pending.reason !== 'string' || typeof pending.holdLeader !== 'boolean'
+    || !validSavedAutomaticOrigin(run) || !run.automaticOrigin.group || pending.umbrella !== run.automaticOrigin.group.umbrella) return false;
+  const targets = pending.members.map(issueIdentity);
+  if (targets.some((key, index) => !key || key === issueIdentity(pending.umbrella) || targets.indexOf(key) !== index)
+    || pending.claims.length !== targets.length || pending.claims.some(claim => !targets.includes(issueIdentity(claim?.issue)))) return false;
+  for (const target of targets) {
+    let latest = readRun(run.runDir);
+    if (!latest || !sameFact(latest.groupRelease?.claims, pending.claims)) return false;
+    if (latest.groupRelease.released.some(issue => issueIdentity(issue) === target)) continue;
+    const saved = pending.claims.find(claim => issueIdentity(claim.issue) === target);
+    const release = await (ports.releaseCoordinatorIssueClaim ?? releaseCoordinatorIssueClaim)({cwd: latest.sourceRoot,
+      repository: latest.repo, claim: saved, coordinatorId: saved.coordinatorId, machine: saved.machine}, ports);
+    if (release?.state !== 'released') return false;
+    commitRun(latest, ports, fresh => {
+      if (ended(fresh) && !sameFact(fresh.automaticOrigin, latest.automaticOrigin)
+        || !sameFact(fresh.groupRelease?.claims, pending.claims)) throw Object.assign(Error('Group claim custody changed'), {code: 'workflow_progress_refused'});
+      fresh.groupRelease.released = [...new Set([...(fresh.groupRelease.released ?? []), saved.issue])];
+      fresh.automaticOrigin.groupClaims = fresh.automaticOrigin.groupClaims.filter(claim => issueIdentity(claim.issue) !== target);
+      fresh.automaticOrigin.group.members = fresh.automaticOrigin.group.members.filter(issue => issueIdentity(issue) !== target);
+    });
+  }
+  for (const member of pending.members) {
+    const split = await splitSortGroupMember({cwd: run.sourceRoot || run.root, repository: run.repo,
+      umbrella: pending.umbrella, member, reason: pending.reason, coordinatorId: original.coordinatorId, machine: original.machine}, ports);
+    if (split?.ok !== true) return false;
+  }
+  if (pending.holdLeader) {
+    const split = await splitSortGroupMember({cwd: run.sourceRoot || run.root, repository: run.repo,
+      umbrella: pending.umbrella, member: original.group.umbrella, reason: pending.reason, coordinatorId: original.coordinatorId, machine: original.machine}, ports);
+    if (split?.ok !== true) return false;
+  }
+  const latest = readRun(run.runDir);
+  if (!latest || !sameFact(latest.groupRelease?.claims, pending.claims)) return false;
+  commitRun(latest, ports, fresh => {
+    if (!sameFact(fresh.groupRelease?.claims, pending.claims)) throw Object.assign(Error('Group claim custody changed'), {code: 'workflow_progress_refused'});
+    delete fresh.groupRelease;
+    if (pending.holdLeader) fresh.groupHold = {at: ports.now(), reason: pending.reason};
+  });
+  return true;
+}
+
+async function releaseSavedGroupClaims(run, ports, claims = run.automaticOrigin?.groupClaims ?? []) {
+  if (!Array.isArray(claims)) return false;
+  for (const claim of claims) {
+    const result = await (ports.releaseCoordinatorIssueClaim ?? releaseCoordinatorIssueClaim)({cwd: run.sourceRoot,
+      repository: run.repo, claim, coordinatorId: claim.coordinatorId, machine: claim.machine}, ports);
+    if (result?.state !== 'released') return false;
+  }
+  return true;
+}
+
+async function splitRunGroupMembers(run, members, reason, holdLeader, ports) {
+  const origin = run.automaticOrigin, leader = issueIdentity(run.issue.url);
+  const targets = [...new Set(members.map(issueIdentity))];
+  if (!validSavedAutomaticOrigin(run) || !origin.group || targets.some(key => !key || key === leader)) return false;
+  if (!targets.length) {
+    if (holdLeader) commitRun(run, ports, latest => { latest.groupHold = {at: ports.now(), reason}; });
+    return true;
+  }
+  const claims = targets.map(key => origin.groupClaims.find(claim => issueIdentity(claim.issue) === key)).filter(Boolean);
+  if (claims.length !== targets.length) return false;
+  commitRun(run, ports, latest => {
+    if (!sameFact(latest.automaticOrigin, origin) || latest.groupRelease) throw Object.assign(Error('Group claim custody changed'), {code: 'workflow_progress_refused'});
+    latest.groupRelease = {umbrella: origin.group.umbrella, members: targets, claims, released: [], reason, holdLeader};
+  });
+  const staged = readRun(run.runDir);
+  return Boolean(staged && await finishGroupRelease(staged, ports));
+}
+
 function explicitlyStopped(run, ports) {
   if (!Object.hasOwn(run, 'automaticOrigin')) return false;
   try {
@@ -682,28 +790,34 @@ function explicitlyStopped(run, ports) {
 }
 async function continuationOwnership(run, cwd, ports, custody = null) {
   if (!Object.hasOwn(run, 'automaticOrigin')) return null;
+  if (run.groupRelease && !await finishGroupRelease(run, ports)) return 'Automatic continuation refused: group claim release is incomplete. Retry cleanup before continuing.';
+  run = run.groupRelease ? readRun(run.runDir) ?? run : run;
   const origin = run.automaticOrigin;
   const reason = 'Automatic continuation refused: current claim ownership is unavailable or changed. Restore the admitted claim and retry.';
   if (!validSavedAutomaticOrigin(run)) return reason;
   try {
-    const { json } = await createDependencyReadPorts({ cwd: run.sourceRoot }, ports).owners.read({ repository: run.repo, issues: [run.issue.url] });
+    const expected = savedAutomaticClaims(run);
+    const { json } = await createDependencyReadPorts({ cwd: run.sourceRoot }, ports).owners.read({ repository: run.repo, issues: expected.map(claim => claim.issue) });
     const observation = JSON.parse(json);
     if (!observation || typeof observation !== 'object' || !Array.isArray(observation.claims)
       || !nonempty(observation.localOwner)
       || observation.claims.some(claim => !claim || typeof claim !== 'object' || Array.isArray(claim)
         || !nonempty(claim.issue) || typeof claim.active !== 'boolean')) return reason;
-    const claims = observation.claims.filter(claim => claim?.issue === run.issue.url && claim?.active === true);
-    if (claims.length !== 1) { if (custody && claims.length === 0) custody.unowned = true; return reason; }
-    const claim = claims[0];
-    if (!['owner', 'coordinatorId', 'machine', 'commentId', 'labelEventId'].every(key => nonempty(claim[key]))) return reason;
-    if (custody) {
-      custody.transferred = claim.owner === claim.coordinatorId && claim.machine !== origin.machine;
-      custody.superseded = claim.owner === claim.coordinatorId && (claim.commentId !== origin.claim.commentId || claim.labelEventId !== origin.claim.labelEventId);
+    for (const expectedClaim of expected) {
+      const claims = observation.claims.filter(claim => issueIdentity(claim?.issue) === issueIdentity(expectedClaim.issue) && claim?.active === true);
+      if (claims.length !== 1) {
+        if (custody && issueIdentity(expectedClaim.issue) === issueIdentity(run.issue.url) && claims.length === 0) custody.unowned = true;
+        return reason;
+      }
+      const claim = claims[0];
+      if (!['owner', 'coordinatorId', 'machine', 'commentId', 'labelEventId'].every(key => nonempty(claim[key]))) return reason;
+      if (issueIdentity(expectedClaim.issue) === issueIdentity(run.issue.url) && custody) {
+        custody.transferred = claim.owner === claim.coordinatorId && claim.machine !== origin.machine;
+        custody.superseded = claim.owner === claim.coordinatorId && (claim.commentId !== expectedClaim.commentId || claim.labelEventId !== expectedClaim.labelEventId);
+      }
+      if (observation.localOwner !== origin.coordinatorId || claim.owner !== origin.coordinatorId || claim.coordinatorId !== origin.coordinatorId
+        || claim.machine !== origin.machine || claim.commentId !== expectedClaim.commentId || claim.labelEventId !== expectedClaim.labelEventId) return reason;
     }
-    if (observation.localOwner !== origin.coordinatorId
-      || claim.owner !== origin.coordinatorId || claim.coordinatorId !== origin.coordinatorId
-      || claim.machine !== origin.machine || claim.commentId !== origin.claim.commentId
-      || claim.labelEventId !== origin.claim.labelEventId) return reason;
     return null;
   } catch { return reason; }
 }
@@ -806,7 +920,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   try { cliVersion=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8')).version || 'unknown'; } catch {}
   try { skillVersion=/^  pdd-skills:\s*(\S+)/m.exec(readFileSync(join(workflow.dir,'SKILL.md'),'utf8'))?.[1] ?? 'unknown'; } catch {}
   const metricsOrigin={origin:actualOrigin, ...(actualOrigin === 'autopilot' ? {decisionId} : {}), requiredOutcome:['code','prompt-only'].includes(outcome) ? outcome : 'unknown',cliVersion,skillVersion,candidateVersion:installedCandidateIdentity(packageRoot,workflow.dir)};
-  let automaticOrigin;
+  let automaticOrigin, automaticGroup = null;
   if (automatic) {
     try {
       // Intake is a separate owner. A missing binding is never a manual start.
@@ -823,6 +937,17 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
       const decision = await check({ cwd: context.toplevel, repository: binding.repository, issue: binding.issue.url, coordinator }, readPorts);
       if (!decision?.allowed) return fail(`Automatic start deferred: ${decision?.reason ?? 'unknown'}.`);
       if (existing && !ended(existing)) return fail('Automatic start deferred: issue has an active run.');
+      const savedGroups = await readSortGroups({ cwd: context.toplevel, repository: binding.repository }, readPorts);
+      const issueKey = issueIdentity(binding.issue.url);
+      const legacyUmbrella = savedGroups.find(group => !group.merged && issueIdentity(group.umbrella) === issueKey
+        && !group.members.some(key => issueIdentity(key) === issueKey));
+      if (legacyUmbrella) return fail('Automatic start deferred: a legacy group umbrella cannot start a new run. Keep any live run bound to this issue; let normal admission reform the group with a member leader.');
+      const memberGroup = savedGroups.find(group => !group.merged && group.members.some(key => issueIdentity(key) === issueKey));
+      if (memberGroup && issueIdentity(memberGroup.umbrella) !== issueKey)
+        return fail('Automatic start deferred: this group member waits for its saved leader.');
+      if (memberGroup && (!memberGroup.members.includes(memberGroup.umbrella) || memberGroup.members.length < 2 || memberGroup.members.length > 5))
+        return fail('Automatic start deferred: saved group leader identity needs repair.');
+      automaticGroup = memberGroup ?? null;
       automaticOrigin = { repository: binding.repository, coordinatorId: coordinator.coordinatorId, machine: coordinator.machine, claim: { ...coordinator.claim } };
     } catch { return fail('Automatic start is unavailable: native admission binding is incomplete.'); }
   }
@@ -895,10 +1020,42 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
     try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
     catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
   }
+  let groupClaimResult = null;
+  const groupPorts = {
+    claimIssue: args => claimCoordinatorIssue({ ...args, cwd: context.toplevel, repository: binding.repository }, p),
+    releaseClaim: args => releaseCoordinatorIssueClaim({ ...args, cwd: context.toplevel, repository: binding.repository }, p),
+  };
+  if (automaticGroup) {
+    const currentGroups = await readSortGroups({ cwd: context.toplevel, repository: binding.repository }, p);
+    const current = currentGroups.find(group => !group.merged && issueIdentity(group.umbrella) === issueIdentity(binding.issue.url));
+    if (!current || JSON.stringify(current.members.map(issueIdentity)) !== JSON.stringify(automaticGroup.members.map(issueIdentity)))
+      return fail('Automatic start deferred: the saved group changed before its claims were taken.');
+    groupClaimResult = await claimSortGroup({ cwd: context.toplevel, repository: binding.repository, group: current,
+      coordinatorId: automaticOrigin.coordinatorId, machine: automaticOrigin.machine }, groupPorts);
+    if (!groupClaimResult.ok) return fail(`Automatic start deferred: group claim failed (${groupClaimResult.reason ?? 'claim-unavailable'}).`);
+    const leaderClaim = groupClaimResult.claims.find(claim => issueIdentity(claim.issue) === issueIdentity(binding.issue.url));
+    if (!leaderClaim || leaderClaim.commentId !== automaticOrigin.claim.commentId || leaderClaim.labelEventId !== automaticOrigin.claim.labelEventId) {
+      const rollbackClaims = groupClaimResult.claims.filter(claim => groupClaimResult.createdIssues.includes(claim.issue));
+      const rollback = await releaseSortGroup({ cwd: context.toplevel, repository: binding.repository, claims: rollbackClaims,
+        coordinatorId: automaticOrigin.coordinatorId, machine: automaticOrigin.machine }, groupPorts);
+      return fail(`Automatic start deferred: leader claim changed before group start.${rollback.ok ? '' : ' Newly created member claims could not all be released.'}`);
+    }
+    automaticOrigin = { ...automaticOrigin, group: { umbrella: current.umbrella, members: [...current.members], ...(current.owningModule ? { owningModule: current.owningModule } : {}), ...(current.signal ? { signal: current.signal } : {}) },
+      groupClaims: groupClaimResult.claims.map(({ issue, commentId, labelEventId, coordinatorId, machine }) => ({ issue, commentId, labelEventId, coordinatorId, machine })) };
+  }
+  const rollbackNewGroupClaims = async () => groupClaimResult
+    ? releaseSortGroup({ cwd: context.toplevel, repository: binding.repository,
+      claims: groupClaimResult.claims.filter(claim => groupClaimResult.createdIssues.includes(claim.issue)),
+      coordinatorId: automaticOrigin.coordinatorId, machine: automaticOrigin.machine }, groupPorts)
+    : { ok: true, released: [], failed: [] };
   p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
-  if (allocated.state !== 'ready' || !allocated.assignment) {if(frozenFolder)rmSync(frozenFolder,{recursive:true,force:true});return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);}
+  if (allocated.state !== 'ready' || !allocated.assignment) {
+    if (frozenFolder) rmSync(frozenFolder,{recursive:true,force:true});
+    const rollback = await rollbackNewGroupClaims();
+    return fail(`pdd could not make the worktree for #${number}: ${allocated.message}${rollback.ok ? '' : ' Newly created member claims could not all be released.'}`);
+  }
   const a = allocated.assignment;
   let adoptedAnchor;
   if(adoption) {
@@ -907,7 +1064,8 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
       adoptedAnchor=pinReplayVectors(a.worktreePath,adoption.paths);
       if(actual.outcome!=='adopted' || JSON.stringify(actual)!==JSON.stringify(adoption) || adoptedAnchor.outcome) {
         const released=await releaseIssueClaim({cwd:context.toplevel,runId,issueNumber:number},p.commandPorts);
-        return {exitCode:2,message:`The allocated worktree differs from the approved corpus. No active run or chat was saved. Retained worktree: ${a.worktreePath}; branch: ${a.branch}. ${released.state==='released' ? 'The new issue claim was released; the retained files and branch are available for inspection.' : `The new issue claim ${runId} could not be released: ${released.message}. Inspect it before retrying.`} Start an ordinary approval workflow for changed requirements.`};
+        const groupReleased=await rollbackNewGroupClaims();
+        return {exitCode:2,message:`The allocated worktree differs from the approved corpus. No active run or chat was saved. Retained worktree: ${a.worktreePath}; branch: ${a.branch}. ${released.state==='released' ? 'The new issue claim was released; the retained files and branch are available for inspection.' : `The new issue claim ${runId} could not be released: ${released.message}. Inspect it before retrying.`}${groupReleased.ok ? '' : ' Newly created group member claims could not all be released.'} Start an ordinary approval workflow for changed requirements.`};
       }
     } finally {rmSync(frozenFolder,{recursive:true,force:true});}
   }
@@ -1815,6 +1973,7 @@ function prTitle(issueTitle, suffix) {
 }
 
 const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
+const closingIssueNumbers = reference => [...new Set([...String(reference ?? '').matchAll(/\bCloses\s+#([1-9][0-9]*)\b/gi)].map(match => Number(match[1])))];
 // Updates use the same publication owner's identity checks as initial creation.
 // Local source supplies an expected intent, never authority for the saved head.
 async function readPublishedPr1(run, pr, p) {
@@ -1933,6 +2092,11 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
       run.testInventory.saved = true;
     } catch { lines.push('warning: The full test inventory report was not saved to test-inventory.json in the run folder.'); }
   }
+  if (codePr && run.testInventory) {
+    const inventory = structuredClone(run.testInventory);
+    commitRun(run, p, latest => { latest.testInventory = inventory; });
+    run = readRun(run.runDir) ?? run;
+  }
   const opted = area.replay_evidence === REPLAY_POLICY;
   let prepared = await publicationEvidence(run, area, p);
   if (opted) {run.replayEvidence=await currentReplayEvidence(run,p,true);
@@ -1940,38 +2104,59 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     commitRun(run,p,latest=>{applyPublication(latest);if(last&&latest.done[last])latest.done[last].replayEvidence=evidence;});
   }
 
-  // #3053: current shared-cause members travel with the leader's PR pair.
-  if (run.automaticOrigin) {
+  // Group claims and per-member evidence travel with this automatic run.
+  if (run.automaticOrigin?.group) {
+    let memberEvidence = run.memberEvidence ?? null;
+    if (!memberEvidence) {
+      for (const candidate of [join(run.runDir, 'member-evidence.json'), join(run.root, 'member-evidence.json')]) {
+        if (existsSync(candidate)) {
+          try { memberEvidence = JSON.parse(readFileSync(candidate, 'utf8')); break; } catch { memberEvidence = null; }
+        }
+      }
+    }
+    const group = run.automaticOrigin.group, leaderUrl = run.issue.url, leader = issueIdentity(leaderUrl);
+    if (codePr) {
+      const confirmation = confirmGroupAfterReproduce({group, reproduceResults: memberEvidence ?? {}});
+      const leaderReady = confirmation.members.some(issue => issueIdentity(issue) === leader)
+        && hasMemberClosingEvidence(memberEvidence, leaderUrl, group);
+      if (!leaderReady) {
+        const peers = group.members.filter(member => issueIdentity(member) !== leader);
+        const split = await splitRunGroupMembers(run, peers, 'leader-reproduction-unconfirmed', true, p);
+        if (!split) return fail('Group publication is held because the leader lacks matching reproduction or passing test evidence. Member claims remain held until safe release completes.');
+        return fail('Group publication is held because the leader lacks matching reproduction or passing test evidence. The leader run and claim stay with the original issue.');
+      }
+      const confirmed = new Set(confirmation.members.map(issueIdentity));
+      const failedPeers = group.members.filter(member => issueIdentity(member) !== leader && !confirmed.has(issueIdentity(member)));
+      if (failedPeers.length) {
+        const split = await splitRunGroupMembers(run, failedPeers, 'member-reproduction-or-verification-failed', false, p);
+        if (!split) return fail('Group publication is held because failed member claims could not be safely released.');
+        run = readRun(run.runDir) ?? run;
+      }
+      if (run.groupHold) commitRun(run, p, latest => { delete latest.groupHold; });
+      memberEvidence = run.memberEvidence ?? memberEvidence;
+    }
+    let snapshot;
+    try { ({ snapshot } = await (p.readDependencySnapshot ?? readDependencySnapshot)({ cwd: run.sourceRoot || run.root, repository: run.repo }, p)); }
+    catch { return fail('Group publication is held because current member sorts are unavailable.'); }
+    const references = sortClosingReferences({ snapshot, issue: leaderUrl, code: codePr, graph: projectIssueGraph({ snapshot }), memberEvidence });
+    const closingRefs = references.filter(ref => /^Closes\s+#\d+$/i.test(ref));
+    const otherRefs = references.filter(ref => !/^Closes\s+#\d+$/i.test(ref));
+    if (closingRefs.length > 0 && /^Closes\s+#\d+$/i.test(prepared.issueReference)) {
+      const closeLine = [prepared.issueReference, ...closingRefs].join(', ');
+      prepared = { ...prepared, issueReference: [closeLine, ...otherRefs].join('\n') };
+    } else {
+      prepared = { ...prepared, issueReference: [prepared.issueReference, ...references].join('\n') };
+    }
+    const leaderReference = new RegExp(`^Closes\\s+#${run.number}(?:,\\s*Closes\\s+#\\d+)*$`, 'i');
+    if (codePr && !leaderReference.test(prepared.issueReference.split('\n')[0])) return fail('Group publication is held because the leader has no closing issue reference.');
+  } else if (run.automaticOrigin) {
     try {
-      let memberEvidence = run.memberEvidence ?? null;
-      if (!memberEvidence) {
-        for (const candidate of [join(run.runDir, 'member-evidence.json'), join(run.root, 'member-evidence.json')]) {
-          if (existsSync(candidate)) {
-            try { memberEvidence = JSON.parse(readFileSync(candidate, 'utf8')); break; } catch { /* ignore invalid JSON */ }
-          }
-        }
-      }
-      const leaderUrl = `https://github.com/${run.repo.toLowerCase()}/issues/${run.number}`;
-      if (memberEvidence && typeof memberEvidence === 'object') {
-        const entries = Array.isArray(memberEvidence) ? memberEvidence : Object.entries(memberEvidence).map(([issue, val]) => ({ issue, ...(val && typeof val === 'object' ? val : {}) }));
-        for (const entry of entries) {
-          if (entry && (entry.splitOut === true || entry.failed === true || entry.reproduced === false || entry.confirmed === false)) {
-            await splitSortGroupMember({ cwd: run.sourceRoot || run.root, repository: run.repo, umbrella: leaderUrl, member: entry.issue, reason: entry.reason || 'member-failed-or-diverged', coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine }, p).catch(() => {});
-          }
-        }
-      }
       const { snapshot } = await (p.readDependencySnapshot ?? readDependencySnapshot)({ cwd: run.sourceRoot || run.root, repository: run.repo }, p);
-      const references = sortClosingReferences({ snapshot, issue: leaderUrl, code: label !== 'PR 1', graph: projectIssueGraph({ snapshot }), memberEvidence });
-      const closingRefs = references.filter(r => /^Closes\s+#\d+$/i.test(r));
-      const otherRefs = references.filter(r => !/^Closes\s+#\d+$/i.test(r));
-      if (closingRefs.length > 0 && /^Closes\s+#\d+$/i.test(prepared.issueReference)) {
-        const closeLine = [prepared.issueReference, ...closingRefs].join(', ');
-        prepared = { ...prepared, issueReference: [closeLine, ...otherRefs].join('\n') };
-      } else {
-        prepared = { ...prepared, issueReference: [prepared.issueReference, ...references].join('\n') };
-      }
-    } catch { /* Unproved members get no closing promise. */ }
+      const references = sortClosingReferences({ snapshot, issue: run.issue.url, code: codePr, graph: projectIssueGraph({ snapshot }), memberEvidence: run.memberEvidence ?? null });
+      prepared = { ...prepared, issueReference: [prepared.issueReference, ...references].join('\n') };
+    } catch { /* No observed group supplies extra references. */ }
   }
+  const closingIssues = closingIssueNumbers(prepared.issueReference);
   const bodyBase = run.prBase ?? run.baseBranch;
   const bodyDrafts = label === 'PR 1' ? await draftPrompts(run, p, run.branch, bodyBase) : [];
   const bodyTests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
@@ -2055,10 +2240,11 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
         }
       }
       rememberPublication(existing,observed);
+      existing.closingIssues = closingIssues;
       if (finalFacts && commitSha(existing.publishedHeadSha)) existing.readable = savedReadable(finalFacts, existing.publishedHeadSha);
     }
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
-    const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
+    const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths','closingIssues'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
     lines.push(`Pushed the new commits to ${label}.`);
@@ -2103,7 +2289,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
-  const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
+  const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base, closingIssues };
   rememberPublication(published,outcome.pr);
   if (commitSha(published.publishedHeadSha)) published.readable = savedReadable(readable.facts, published.publishedHeadSha);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
@@ -4159,20 +4345,25 @@ function currentParkingOwner(run, p, {allowOlder = false} = {}) {
 // Called under the run lock. A remote recovery is retryable if the local save failed.
 async function recoverParkingOwner(run, owner, p) {
   if (run.automaticOrigin.coordinatorId === owner.coordinatorId) return true;
-  const origin = structuredClone(run.automaticOrigin);
-  const recovery = await (p.recoverCoordinatorClaim ?? recoverCoordinatorClaim)({cwd: run.sourceRoot,
-    repository: run.repo, claim: {...origin.claim, issue: run.issue.url, coordinatorId: origin.coordinatorId, machine: origin.machine},
-    coordinatorId: owner.coordinatorId, machine: owner.machine, at: new Date(p.now()).toISOString()}, p);
-  if (recovery.state !== 'recovered') {
-    await chatContinuationOwnership(run, p, {releaseUnowned:true});
-    return false;
+  const origin = structuredClone(run.automaticOrigin), claims = savedAutomaticClaims(run), recovered = [];
+  for (const claim of claims) {
+    const result = await (p.recoverCoordinatorClaim ?? recoverCoordinatorClaim)({cwd: run.sourceRoot,
+      repository: run.repo, claim: {...claim, coordinatorId: origin.coordinatorId, machine: origin.machine},
+      coordinatorId: owner.coordinatorId, machine: owner.machine, at: new Date(p.now()).toISOString()}, p);
+    if (result?.state !== 'recovered') {
+      await chatContinuationOwnership(run, p, {releaseUnowned:true});
+      return false;
+    }
+    recovered.push(result);
   }
+  const leader = recovered.find((_result, index) => issueIdentity(claims[index].issue) === issueIdentity(run.issue.url));
   commitMaintenance(run, p, latest => {
     if (!sameFact(latest.automaticOrigin, origin) || ended(latest) || currentParkingOwner(latest, p, {allowOlder:true})?.coordinatorId !== owner.coordinatorId)
       throw Object.assign(Error('Coordinator custody changed'), {code:'workflow_progress_refused'});
-    latest.automaticOrigin = {...latest.automaticOrigin, coordinatorId: owner.coordinatorId};
+    latest.automaticOrigin = {...latest.automaticOrigin, coordinatorId: owner.coordinatorId,
+      ...(Array.isArray(latest.automaticOrigin.groupClaims) ? {groupClaims: latest.automaticOrigin.groupClaims.map(claim => ({...claim, coordinatorId: owner.coordinatorId, machine: owner.machine}))} : {})};
   });
-  return recovery;
+  return leader ?? true;
 }
 
 export const recoverAutomaticRunOwner = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
@@ -4247,6 +4438,8 @@ async function cancelRunCommand({ ref, cwd }, ports) {
   const run = found.run;
   p.say('Closing the chat tabs in Herdr…');
   const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
+  if (run.automaticOrigin?.group && kept.length === 0 && !await releaseSavedGroupClaims(run, p))
+    return fail('Cancellation is held because one or more saved group claims could not be safely released. Retry after checking the current owner.');
   // No chat of a cancelled run may still read a login file.
   removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
   const cancelled={state:'cancelled',at:p.now()};
@@ -5439,6 +5632,8 @@ async function yieldAutomaticCapacityCommand({ ref, cwd }, ports) {
   if (['completed', 'cancelled'].includes(run.state)) {
     const released = await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts);
     if (released.state !== 'released') return fail(`Capacity handoff could not release the issue allocation: ${released.message}`);
+    if (run.automaticOrigin?.group && !await releaseSavedGroupClaims(run, p))
+      return fail('Capacity handoff could not safely release every saved group claim. Retry after checking current ownership.');
   }
   const request = p.requestAutopilotCompletion ?? (await import('./autopilot-launcher.mjs')).requestAutopilotCompletion;
   p.releaseRunLock?.();

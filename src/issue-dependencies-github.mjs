@@ -1090,6 +1090,128 @@ async function winningClaim(repository, key, github, authority, now = NaN, safet
 
 // The owning coordinator sets one top-level tick member (a time) of its own winning
 // claim comment. It edits nothing else and no other comment.
+async function provisionalClaimLabelRelease({ cwd = '', repository, issue, labelEventId, coordinatorId, machine }, ports) {
+  const i = info(issue), live = createDependencyReadPorts({ cwd }, ports);
+  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !labelEventId || !coordinatorId || !machine) return { state: 'skipped' };
+  const fresh = { ...live, githubCache: null, dependencyReads: undefined };
+  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, fresh), s = service(cwd, fresh);
+  const current = await winningClaim(repository, i.key, github, live.authority, (ports.now ?? Date.now)(), true);
+  if (current?.owner || current?.coordinatorId || current?.machine || String(current?.labelEventId ?? '') !== String(labelEventId)) return { state: 'skipped' };
+  const events = await allPages(github, repository, 'timeline', i.issue, 'claims', true);
+  const latest = events.filter(event => event?.event === 'labeled' && (event.label?.name === 'pdd:working' || event.label === 'pdd:working')).at(-1);
+  if (String(latest?.id ?? '') !== String(labelEventId)) return { state: 'skipped' };
+  const raw = parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', safety: true })).json);
+  if (!(raw.labels ?? []).some(label => (typeof label === 'string' ? label : label?.name) === 'pdd:working')) return { state: 'released' };
+  await s.api(`repos/${repository}/issues/${i.issue}/labels/pdd%3Aworking`, 'DELETE', undefined, 'claims', repository);
+  const after = parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', safety: true })).json);
+  return (after.labels ?? []).some(label => (typeof label === 'string' ? label : label?.name) === 'pdd:working')
+    ? { state: 'skipped' } : { state: 'released' };
+}
+
+// Create one member of a group claim with the same label-event and comment identity
+// that the dependency owner reader uses. Existing same-coordinator claims are reused.
+export async function claimCoordinatorIssue({ cwd = '', repository, issue, coordinatorId, machine, group }, ports = {}) {
+  const i = info(issue);
+  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !coordinatorId || !machine) return { ok: false, reason: 'claim-identity-invalid' };
+  const live = createDependencyReadPorts({ cwd }, ports);
+  const fresh = { ...live, githubCache: null, dependencyReads: undefined };
+  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, fresh);
+  let labelEventId = '', commentId = '', labelAdded = false;
+  const key = i.key, issueNum = i.issue;
+  const readOwners = async () => {
+    const source = createDependencyReadPorts({ cwd }, { ...ports, github, githubCache: null, dependencyReads: undefined });
+    const result = await source.owners.read({ repository, issues: [key] });
+    return typeof result.json === 'string' ? parse(result.json) : result.json;
+  };
+  try {
+    const [raw, observation] = await Promise.all([
+      github.issue({ repository, issue: issueNum, purpose: 'claims', safety: true }).then(result => parse(result.json)),
+      readOwners(),
+    ]);
+    if (raw?.error || raw.state !== 'open' || !Array.isArray(raw.assignees) || raw.assignees.length) return { ok: false, reason: 'member-not-unowned' };
+    const labels = (raw.labels ?? []).map(label => typeof label === 'string' ? label : label?.name);
+    if (labels.some(label => ['pdd:stuck', 'pdd:code-pending'].includes(label))) return { ok: false, reason: 'member-held' };
+    if (observation?.localOwner !== coordinatorId || !Array.isArray(observation.claims) || !Array.isArray(observation.runs) || observation.runsKnown !== true) return { ok: false, reason: 'claim-owner-unavailable' };
+    if (observation.runs.some(run => info(run.issue)?.key === key && run.occupied !== false)) return { ok: false, reason: 'member-run-exists' };
+    const existing = observation.claims.filter(row => row?.issue === key);
+    if (existing.length) {
+      const expectedGroup = group && { umbrella: info(group.umbrella)?.key, members: group.members.map(member => info(member)?.key) };
+      const savedGroup = existing[0]?.group;
+      const groupMatches = !expectedGroup || key === expectedGroup.umbrella && !savedGroup
+        || object(savedGroup) && info(savedGroup.umbrella)?.key === expectedGroup.umbrella
+          && Array.isArray(savedGroup.members) && JSON.stringify(savedGroup.members.map(member => info(member)?.key).sort()) === JSON.stringify(expectedGroup.members.slice().sort());
+      if (existing.length === 1 && existing[0].active === true && existing[0].owner === coordinatorId
+        && existing[0].coordinatorId === coordinatorId && existing[0].machine === machine && groupMatches
+        && /^[1-9][0-9]*$/.test(String(existing[0].commentId ?? '')) && /^[1-9][0-9]*$/.test(String(existing[0].labelEventId ?? ''))
+        && labels.includes('pdd:working')) {
+        return { ok: true, created: false, claim: { issue: key, commentId: String(existing[0].commentId), labelEventId: String(existing[0].labelEventId),
+          coordinatorId, machine, active: true, owner: coordinatorId } };
+      }
+      return { ok: false, reason: 'member-claim-exists' };
+    }
+    if (labels.includes('pdd:working')) return { ok: false, reason: 'member-label-unverified' };
+    const updated = await github.sortUpdate({ repository, issue: issueNum, label: 'pdd:working' });
+    if (updated?.ok !== true) throw Error('claim-label-write-failed');
+    labelAdded = true;
+    const events = await allPages(github, repository, 'timeline', issueNum, 'claims', true);
+    const latest = events.filter(event => event?.event === 'labeled' && (event.label?.name === 'pdd:working' || event.label === 'pdd:working')).at(-1);
+    if (!/^[1-9][0-9]*$/.test(String(latest?.id ?? ''))) throw Error('claim-label-event-unavailable');
+    labelEventId = String(latest.id);
+    const payload = { repository: repository.toLowerCase(), coordinatorId, machine, labelEventId, lastSeen: '',
+      ...(group ? { group: { umbrella: group.umbrella, members: group.members } } : {}) };
+    const body = `Autopilot claim.\n\n\x60\x60\x60json\n${JSON.stringify(payload)}\n\x60\x60\x60`;
+    const appended = parse((await github.appendComment({ repository, issue: issueNum, body })).json);
+    commentId = String(appended?.id ?? '');
+    if (!/^[1-9][0-9]*$/.test(commentId)) throw Error('claim-comment-identity-unavailable');
+    const saved = await readOwners();
+    const claims = saved?.claims?.filter(row => row?.issue === key && row.active === true) ?? [];
+    if (saved.localOwner !== coordinatorId || claims.length !== 1 || claims[0].owner !== coordinatorId
+      || claims[0].coordinatorId !== coordinatorId || claims[0].machine !== machine
+      || String(claims[0].commentId) !== commentId || String(claims[0].labelEventId) !== labelEventId) throw Error('claim-readback-unresolved');
+    return { ok: true, created: true, claim: { issue: key, commentId, labelEventId, coordinatorId, machine, active: true, owner: coordinatorId } };
+  } catch (error) {
+    if (labelAdded && labelEventId) {
+      const observed = await readOwners().catch(() => null);
+      const current = observed?.claims?.filter(row => row?.issue === key && row.active === true && row.owner === coordinatorId
+        && row.coordinatorId === coordinatorId && row.machine === machine && String(row.labelEventId) === labelEventId) ?? [];
+      if (observed?.localOwner === coordinatorId && current.length === 1 && /^[1-9][0-9]*$/.test(String(current[0].commentId ?? ''))) {
+        return { ok: true, created: true, claim: { issue: key, commentId: String(current[0].commentId), labelEventId,
+          coordinatorId, machine, active: true, owner: coordinatorId } };
+      }
+      if (commentId) {
+        await releaseCoordinatorIssueClaim({ cwd, repository, claim: { issue: key, commentId, labelEventId, coordinatorId, machine }, coordinatorId, machine }, ports).catch(() => {});
+      } else {
+        await provisionalClaimLabelRelease({ cwd, repository, issue: key, labelEventId, coordinatorId, machine }, ports).catch(() => {});
+      }
+    }
+    return { ok: false, reason: error.message || 'claim-failed' };
+  }
+}
+
+// Release only the exact current group-member claim. A missing label is an
+// idempotent success; a different winning claim is never removed.
+export async function releaseCoordinatorIssueClaim({ cwd = '', repository, claim, coordinatorId, machine }, ports = {}) {
+  const i = info(claim?.issue);
+  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository)
+    || claim.coordinatorId !== coordinatorId || claim.machine !== machine
+    || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? '')) || !/^[1-9][0-9]*$/.test(String(claim.labelEventId ?? ''))) return { state: 'skipped' };
+  const live = createDependencyReadPorts({ cwd }, ports), fresh = { ...live, githubCache: null, dependencyReads: undefined };
+  const github = ports.github?.[LIVE_GITHUB] ?? ports.github ?? rawGithub(cwd, fresh), s = service(cwd, fresh);
+  const winner = await winningClaim(repository, i.key, github, live.authority, (ports.now ?? Date.now)(), true);
+  if (!winner) return { state: 'released' };
+  if (winner.owner !== coordinatorId || winner.coordinatorId !== coordinatorId || winner.machine !== machine
+    || String(winner.commentId) !== String(claim.commentId) || String(winner.labelEventId) !== String(claim.labelEventId)) return { state: 'skipped' };
+  const saved = (await s.api(`repos/${repository}/issues/comments/${claim.commentId}`, 'GET', undefined, 'claims', repository, true)).value;
+  const record = claimRecord(saved?.body);
+  if (String(saved?.id) !== String(claim.commentId) || !record || !sameRepo(record.value.repository, repository)
+    || record.value.coordinatorId !== coordinatorId || record.value.machine !== machine
+    || String(record.value.labelEventId) !== String(claim.labelEventId)) return { state: 'skipped' };
+  await s.api(`repos/${repository}/issues/${i.issue}/labels/pdd%3Aworking`, 'DELETE', undefined, 'claims', repository);
+  const raw = parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', safety: true })).json);
+  if ((raw.labels ?? []).some(label => (typeof label === 'string' ? label : label?.name) === 'pdd:working')) return { state: 'skipped' };
+  return { state: 'released' };
+}
+
 async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorId, machine, at }, ports) {
   const i = info(claim?.issue), s = service(cwd, ports);
   if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))

@@ -345,6 +345,8 @@ The pure model shows that hold as a reason and does not block on it. A takeover
 removes and adds `pdd:working`, so a new era starts and the old record no longer
 matches. Never edit or delete an old claim comment.
 
+`claimCoordinatorIssue({cwd,repository,issue,coordinatorId,machine,group?},ports)` returns `{ok,created,claim}` or `{ok:false,reason}`. It uses fresh issue and owner reads, requires an open unassigned issue with no hold label, active claim or occupied local run, and writes the working label, exact label-event identity and claim comment before readback. Reuse only one exact active claim of this coordinator and machine; a peer claim must also carry the requested group identity. If a partial write is uncertain, remove only the exact claim or provisional label event created by this call. An unresolved effect stays held. `releaseCoordinatorIssueClaim({cwd,repository,claim,coordinatorId,machine},ports)` returns `{state:released|skipped}`. It removes `pdd:working` only after fresh reads prove that the supplied comment and label event still form this exact winning claim. A different, missing or unknown winning identity is never removed.
+
 `refreshClaimHeartbeat({cwd,repository,claim,coordinatorId,machine,at},ports)`
 acts only on an active claim of that coordinator and machine. It rereads the
 comment by `commentId`, requires the same record identity and labelEventId, sets

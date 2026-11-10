@@ -96,10 +96,16 @@ For a change request delivered to an automatic run, preserve the exact submitted
 ### Automatic continuation at a later area
 
 After successful automatic admission, before the first area chat, save the verified
-identity in the run's optional `automaticOrigin` field. Its value is an object with
-exactly `repository`, `coordinatorId`, `machine`, and `claim`; each of the first
-three is a nonempty string, and `claim` is an object with exactly the nonempty
-string fields `commentId` and `labelEventId`. Preserve the admitted values. A run
+identity in the run's optional `automaticOrigin` field. A legacy value has exactly
+`repository`, `coordinatorId`, `machine`, and `claim`; each of the first three is a
+nonempty string, and `claim` has exactly nonempty `commentId` and `labelEventId`
+strings. A grouped run adds `group: {umbrella,members,owningModule?,signal?}` and
+`groupClaims`, one `{issue,commentId,labelEventId,coordinatorId,machine}` row per
+member. The real leader must be a member, and its saved tuple must equal `claim`.
+Start the leader only. Claim every exact group member through the dependency claim
+owner before allocating a worktree, then save all member identities with the run.
+If allocation fails, release only claims created by that start. Preserve any reused
+admitted claim. A run
 without this field is manual or legacy; a present field of any other shape or type,
 including null or empty values, is malformed and cannot be treated as absent.
 Normal runner updates preserve this caller-owned field.
@@ -110,7 +116,15 @@ Before `approveRun` advances such a run into a later area or requests its chat,
 read current shared ownership from the admitted canonical `run.sourceRoot`, even when the caller is in its linked worker worktree; local coordinator state belongs to that source checkout. Preserve the current remote claim check. Read it for the run repository and issue using
 `createDependencyReadPorts({cwd: run.sourceRoot}, ports).owners.read({repository, issues:[issue]})`.
 The reader's JSON observation is scoped to that request; claims have no repository
-field. Compare the saved repository to the run repository case-insensitively. Require
+field. For a grouped run, validate exactly one active winning claim for every saved
+`groupClaims` issue, with each comment and label-event identity matching the saved
+tuple, coordinator and machine. A missing or changed peer claim refuses continuation
+just like a changed leader claim. A staged `groupRelease` journal safely releases
+peer claims before splitting them and resumes after interruption; never change the
+leader issue identity. If the leader lacks matching reproduce or passing test
+evidence, hold publication for this run, release and split peers only through that
+journal, and keep the leader as its own unresolved run. Re-admit remaining members
+through ordinary grouping only after their old claims are safely released. Compare the saved repository to the run repository case-insensitively. Require
 exactly one active claim for the requested issue, with nonempty string `owner`,
 `coordinatorId`, `machine`, `commentId`, and `labelEventId`; require `localOwner`,
 claim `owner`, and claim `coordinatorId` to equal the saved coordinatorId, and the
@@ -275,7 +289,7 @@ With `runtime: true` (`pdd workflow park --interpreter --reason TEXT`) the run w
 
 ## Explicit automatic capacity handoff
 
-Module function `yieldAutomaticCapacity({ref, cwd}, ports)` lets a coordinator hand off a saved automatic run after its current turn has completed or its chat has positively ended. Resolve the saved run and require its current automatic ownership using the continuation rule above, except for a completed run: validate its saved automatic origin and repository association locally, then use the worktree owner to release only its matching issue allocation without requiring or restoring the removed GitHub claim. For a waiting, paused, stuck, question, completed or cancelled run, use the area chat owner's native session and lifecycle evidence: confirmed absence together with ended or failed evidence, or a registered current worker whose native status is `done` and whose observed session is exact, frees the worker. A registered completed turn does not establish process exit or end the chat. Unknown, working, starting and manual runs do not request a wake. For waiting work retain its issue allocation and all progress for continuation. For completed or cancelled work release its issue allocation with the worktree owner; if release is unavailable, retain custody and do not wake. Once these effects finish and outside run ownership, request the existing Autopilot completion tick using the source checkout and current environment. Return the ordinary command reply: success with a message identifying reconciliation or inactive Autopilot for those completion states; failure with a message identifying busy or unknown for those states. Reconciliation does not claim work started, and busy or unknown does not promise a later wake. The command is a capacity handoff, not a claim that a PR merge stopped a process. It does not approve, advance or cancel work. The coordinator invokes it after the current turn has completed or the chat has positively ended; ordinary done and status do not invoke it.
+Module function `yieldAutomaticCapacity({ref, cwd}, ports)` lets a coordinator hand off a saved automatic run after its current turn has completed or its chat has positively ended. Resolve the saved run and require its current automatic ownership using the continuation rule above, except for a completed run: validate its saved automatic origin and repository association locally, then use the worktree owner to release only its matching issue allocation without requiring or restoring the removed GitHub claim. For a waiting, paused, stuck, question, completed or cancelled run, use the area chat owner's native session and lifecycle evidence: confirmed absence together with ended or failed evidence, or a registered current worker whose native status is `done` and whose observed session is exact, frees the worker. A registered completed turn does not establish process exit or end the chat. Unknown, working, starting and manual runs do not request a wake. For waiting work retain its issue allocation and all progress for continuation. For completed or cancelled work release its issue allocation with the worktree owner; if release is unavailable, retain custody and do not wake. Before cancellation or terminal capacity handoff, release every saved group-member claim by its exact tuple; a partial or unknown release blocks the handoff and can be retried. Parked-run release uses the saved leader claim and then the same saved group claims. Never recover peer claims from current intake state or guess them from labels. Once these effects finish and outside run ownership, request the existing Autopilot completion tick using the source checkout and current environment. Return the ordinary command reply: success with a message identifying reconciliation or inactive Autopilot for those completion states; failure with a message identifying busy or unknown for those states. Reconciliation does not claim work started, and busy or unknown does not promise a later wake. The command is a capacity handoff, not a claim that a PR merge stopped a process. It does not approve, advance or cancel work. The coordinator invokes it after the current turn has completed or the chat has positively ended; ordinary done and status do not invoke it.
 
 ## Base selection
 
@@ -1592,7 +1606,7 @@ and screen already saved for that same pane/terminal; it only confirms absence.
 
 Parking has no all-chats saved-session precheck. Delegate per-chat evidence and legacy workspace adoption to workflow-chat; keep partial cleanup and its named reasons durable and retry it. Only confirmed absence of all chat panes and the owned shell frees the parking reservation. Status, tick, tidy and sweep persist positively found chat session IDs, including older finished chats, through the existing guarded observation/checkpoint paths. Live UUIDs must satisfy workflow-chat's live-identity and naming proof before they become resume custody; unproved observations may use only its independent bounded native evidence. Tidy and idle sweep return reasonCounts (reason to count); tidy prints those counts. Session observations and cleanup checkpoints are maintenance, not worker progress: when a legacy run has no progressAt, retain its prior updatedAt (then startedAt, then 0) as progressAt before the maintenance write. Finished cleanup must not restart idle grace before the idle sweep.
 
-Export recoverAutomaticRunOwner({ref,cwd,coordinatorId,machine},ports), with the existing guarded command envelope plus recovery `recovered` or `skipped` and the optional recovered claim. It performs only the owner-recovery/handover route below, without waking a worker. When admission sweeps a run with an older coordinator ID, read the current enabled coordinator for the same repository, source folder and machine. Under the run lock, revalidate the origin and use live stable GitHub claim ownership and the existing claim recovery path before changing local coordinator custody. Unknown claim evidence retains the run with claim-unavailable for retry. Proven transfer to another machine, a superseding claim era, or a complete observation with no active claim uses the normal handed-over cleanup and local allocation release path. This older-owner cleanup uses zero grace but retains busy agents and uncertain panes; unknown or incomplete claim evidence never authorizes release. Never adopt a manual run, another folder or another machine. Do not leave a skipped older owner permanently outside reconciliation.
+Export recoverAutomaticRunOwner({ref,cwd,coordinatorId,machine},ports), with the existing guarded command envelope plus recovery `recovered` or `skipped` and the optional recovered claim. It performs only the owner-recovery/handover route below, without waking a worker. When admission sweeps a run with an older coordinator ID, read the current enabled coordinator for the same repository, source folder and machine. Under the run lock, revalidate the origin and use live stable GitHub claim ownership and the existing claim recovery path before changing local coordinator custody. Recover every exact saved group claim, using each member's own comment and label-event identity. Save the new coordinator on the leader and all member tuples only after every recovery is confirmed. Unknown claim evidence retains the run with claim-unavailable for retry. Proven transfer to another machine, a superseding claim era, or a complete observation with no active claim uses the normal handed-over cleanup and local allocation release path. This older-owner cleanup uses zero grace but retains busy agents and uncertain panes; unknown or incomplete claim evidence never authorizes release. Never adopt a manual run, another folder or another machine. Do not leave a skipped older owner permanently outside reconciliation.
 
 ## Dependencies
 

@@ -1,7 +1,7 @@
 // Generated from prompts/cli/issue-sort.prompt.md (sha256: 01b35872eb8bf099b9f89fce12ebb45df09d8a2972e7f9e58dd4ab8d1848f61e).
 import { resolveMixed } from './issue-mixed.mjs';
 import { resolveArea, owningModule, canonicalModule, isRuntimeOwned } from './autopilot-areas.mjs';
-const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/.test(x);
+const issueURL = x => typeof x === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/i.test(x);
 const text = x => typeof x === 'string';
 const list = x => Array.isArray(x) && x.every(text);
 const exact = (x, keys) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).sort().join() === keys.split(',').sort().join();
@@ -13,7 +13,7 @@ const MAX_GROUP_SIZE = 5;
 function validReproduce(rep) {
   if (rep === undefined) return true;
   if (!rep || typeof rep !== 'object' || Array.isArray(rep) || typeof rep.confirmed !== 'boolean') return false;
-  const allowed = ['confirmed', 'owningModule', 'symbol', 'component', 'errorCode', 'route', 'summary'];
+  const allowed = ['confirmed', 'owningModule', 'symbol', 'component', 'errorCode', 'route', 'duplicateOf', 'summary'];
   return Object.keys(rep).every(k => allowed.includes(k))
     && allowed.filter(k => k !== 'confirmed').every(k => rep[k] === undefined || text(rep[k]));
 }
@@ -41,7 +41,7 @@ function normalizeIssueRef(ref, repository = '') {
   if (typeof ref !== 'string' || !ref.trim()) return '';
   const trimmed = ref.trim();
   if (/^#?[1-9]\d*$/.test(trimmed) && repository) return `https://github.com/${repository.toLowerCase()}/issues/${trimmed.replace(/^#/, '')}`;
-  if (issueURL(trimmed)) return trimmed.replace(/^https:\/\/github\.com\/[^/]+\/[^/]+/i, m => m.toLowerCase());
+  if (issueURL(trimmed)) return trimmed.toLowerCase();
   return '';
 }
 
@@ -57,7 +57,6 @@ export function groupSignalsForRecord(record, repository = '') {
     ['component', rep?.component ?? record.component],
     ['errorCode', rep?.errorCode ?? record.errorCode],
     ['route', rep?.route ?? record.route],
-    ['unify', record.unify],
   ];
   if (mod) {
     for (const [kind, raw] of structured) {
@@ -68,8 +67,7 @@ export function groupSignalsForRecord(record, repository = '') {
       }
     }
   }
-  const slugCause = typeof record.rootCause === 'string' && /^[a-z\d]+(?:-[a-z\d]+)*$/i.test(record.rootCause.trim()) ? record.rootCause.trim() : '';
-  const label = slugCause || (mod && primarySignal ? `${mod}:${primarySignal.split(':').slice(1).join(':')}` : dup ? `duplicate:${dup.split('/').pop()}` : '');
+  const label = mod && primarySignal ? `${mod}:${primarySignal.split(':').slice(1).join(':')}` : dup ? `duplicate:${dup}` : '';
   return { owningModule: mod, signals, primarySignal, duplicateOf: dup, label };
 }
 
@@ -190,8 +188,9 @@ export function sortPlan({ snapshot }) {
       if (excluded(key) || old.splitOut?.includes(key)) continue;
       const route = routes.find(x => x.issue === key);
       if (!route || route.record?.reproduce?.confirmed === false) continue;
-      const info = route.record ? groupSignalsForRecord(route.record, snapshot.repository) : { owningModule: old.owningModule ?? '', signals: old.rootCause ? [`saved#${old.rootCause}`] : [], primarySignal: old.signal ?? '', duplicateOf: '', label: old.rootCause ?? '' };
-      const matchesOld = !route.record || info.label === old.rootCause || route.record.rootCause === old.rootCause || (old.owningModule && info.owningModule === old.owningModule && (!old.signal || info.signals.includes(`${old.owningModule}#${old.signal.toLowerCase()}`)));
+      const info = route.record ? groupSignalsForRecord(route.record, snapshot.repository) : { owningModule: old.owningModule ?? '', signals: old.signal ? [`${old.owningModule ? `${old.owningModule}#` : ''}${old.signal.toLowerCase()}`] : [], primarySignal: old.signal ?? '', duplicateOf: '', label: old.rootCause ?? '' };
+      const matchesOld = !route.record || (old.owningModule && info.owningModule === old.owningModule && (!old.signal || info.signals.includes(`${old.owningModule}#${old.signal.toLowerCase()}`)))
+        || (old.signal?.startsWith('duplicate:') && (info.duplicateOf && info.signals.includes(`dup:${info.duplicateOf}`) || key === normalizeIssueRef(old.signal.slice('duplicate:'.length), snapshot.repository)));
       const retainedWork = (key === old.umbrella || leaderOwned) && route.reason === 'owned' && matchesOld;
       if ((!route.record || retainedWork) && !candidateMap.has(key)) {
         candidateMap.set(key, { route, info, oldGroup: old });
@@ -244,21 +243,26 @@ export function sortPlan({ snapshot }) {
       const keys = members.map(x => x.issue);
       const area = [...new Set(members.map(x => x.area).filter(Boolean))].sort().join(',');
       const firstInfo = chunk.find(x => x.info.owningModule || x.info.primarySignal || x.info.label)?.info ?? chunk[0].info;
-      const old = saved.find(x => !x.merged && !handledOld.has(x) && (x.members.some(m => keys.includes(m)) || (firstInfo.label && x.rootCause === firstInfo.label)));
+      const old = saved.find(x => !x.merged && !handledOld.has(x) && x.members.some(m => keys.includes(m)));
       if (old) handledOld.add(old);
       const rootCause = old?.rootCause || firstInfo.label || (firstInfo.owningModule && firstInfo.primarySignal ? `${firstInfo.owningModule}:${firstInfo.primarySignal.split(':').slice(1).join(':')}` : `group-${keys[0].split('/').pop()}`);
-      const dedicatedSavedUmbrella = old?.umbrella && !old.members.includes(old.umbrella) ? old.umbrella : '';
+      const commonSignals = chunk.map(x => x.info.signals).reduce((common, signals) => common.filter(signal => signals.includes(signal)), chunk[0].info.signals.slice());
+      const commonSignal = commonSignals.sort()[0] ?? '';
+      const commonModule = chunk.every(x => x.info.owningModule && x.info.owningModule === firstInfo.owningModule) ? firstInfo.owningModule : '';
+      const groupSignal = commonSignal.startsWith('dup:') ? `duplicate:${commonSignal.slice(4)}` : commonSignal.includes('#') ? commonSignal.slice(commonSignal.indexOf('#') + 1) : '';
+      const legacyLeaderLive = Boolean(old?.umbrella && !old.members.includes(old.umbrella)
+        && routes.find(x => x.issue === old.umbrella)?.reason === 'owned');
+      const dedicatedSavedUmbrella = legacyLeaderLive ? old.umbrella : '';
       const occupiedLeader = old?.umbrella && keys.includes(old.umbrella) && routes.find(x => x.issue === old.umbrella)?.reason === 'owned' ? old.umbrella : '';
-      const closedLeader = old?.umbrella && snapshot.issues.find(x => x.key === old.umbrella)?.state !== 'open' ? old.umbrella : '';
-      const umbrella = dedicatedSavedUmbrella || occupiedLeader || closedLeader || keys[0];
+      const umbrella = dedicatedSavedUmbrella || occupiedLeader || keys[0];
       const groupObj = {
         area,
         rootCause,
         umbrella,
         members: keys,
         notified: old?.notified ?? old?.members ?? keys,
-        ...(firstInfo.owningModule ? { owningModule: firstInfo.owningModule } : {}),
-        ...(firstInfo.primarySignal ? { signal: firstInfo.primarySignal } : {}),
+        ...(commonModule ? { owningModule: commonModule } : {}),
+        ...(groupSignal ? { signal: groupSignal } : {}),
         ...(old?.splitOut?.length ? { splitOut: old.splitOut } : {}),
         ...(old?.reproduced ? { reproduced: true } : {}),
       };
@@ -268,11 +272,19 @@ export function sortPlan({ snapshot }) {
       if (umbrellaRoute) Object.assign(umbrellaRoute, { umbrella, members: keys });
     }
   }
-  for (const old of saved.filter(x => !x.merged && !handledOld.has(x) && x.umbrella && !x.members.includes(x.umbrella) && x.members.length === 0)) {
-    groups.push({ area: old.area ?? 'default', rootCause: old.rootCause, umbrella: old.umbrella, members: [], notified: old.notified ?? [] });
+  for (const old of saved.filter(x => !x.merged && !handledOld.has(x) && x.umbrella && !x.members.includes(x.umbrella))) {
     const umbrellaRoute = routes.find(x => x.issue === old.umbrella);
-    if (umbrellaRoute) Object.assign(umbrellaRoute, { umbrella: old.umbrella, members: [] });
+    // Keep a live pre-contract leader bound to its existing members.
+    if (umbrellaRoute?.reason === 'owned') {
+      groups.push({ ...old });
+      Object.assign(umbrellaRoute, { umbrella: old.umbrella, members: old.members });
+      for (const key of old.members) {
+        const memberRoute = routes.find(x => x.issue === key);
+        if (memberRoute) Object.assign(memberRoute, { umbrella: old.umbrella, members: old.members });
+      }
+    }
   }
+  for (const route of routes) if (route.action === 'work' && umbrellaKeys.has(route.issue) && !groups.some(g => g.umbrella === route.issue)) { route.action = 'hold'; route.reason = 'legacy-group-umbrella'; }
   for (const route of routes) if (route.action === 'work' && synthetic(snapshot.issues.find(x => x.key === route.issue)) && !groups.some(g => g.umbrella === route.issue)) { route.action = 'hold'; route.reason = 'orphan-group-umbrella'; }
   // Keep the merge boundary until all previous heads have been superseded.
   for (const group of saved.filter(x => x.merged)) groups.push(group);
@@ -283,59 +295,74 @@ export function confirmGroupAfterReproduce({ group, reproduceResults = {} }) {
   if (!group || !Array.isArray(group.members)) {
     return { confirmed: false, umbrella: '', members: [], splitOut: [], reasons: {}, group: null };
   }
+  const repository = String(group.members[0] ?? '').match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\//i)?.[1] ?? '';
+  const issueKey = value => normalizeIssueRef(value, repository).toLowerCase();
   const byIssue = new Map();
   if (Array.isArray(reproduceResults)) {
     for (const entry of reproduceResults) {
-      if (entry && typeof entry.issue === 'string') byIssue.set(entry.issue, entry);
+      const key = issueKey(entry?.issue);
+      if (key) byIssue.set(key, entry);
     }
   } else if (reproduceResults && typeof reproduceResults === 'object') {
-    for (const [k, v] of Object.entries(reproduceResults)) byIssue.set(k, v);
+    for (const [key, value] of Object.entries(reproduceResults)) {
+      const normalized = issueKey(key);
+      if (normalized) byIssue.set(normalized, value);
+    }
   }
-  const lookup = key => byIssue.get(key) ?? byIssue.get(`#${key.split('/').pop()}`) ?? byIssue.get(key.split('/').pop()) ?? null;
-  const leaderKey = group.members.includes(group.umbrella) ? group.umbrella : group.members[0];
-  const leaderRep = leaderKey ? lookup(leaderKey) : null;
+  const lookup = key => byIssue.get(issueKey(key)) ?? null;
+  const leaderKey = group.members.some(key => issueKey(key) === issueKey(group.umbrella)) ? group.umbrella : group.members[0];
+  const leaderRep = lookup(leaderKey)?.reproduce;
   const refModule = canonicalModule(leaderRep?.owningModule || group.owningModule || '');
-  const refSignals = new Set();
-  if (group.signal) refSignals.add(group.signal.toLowerCase());
-  for (const kind of ['symbol', 'component', 'errorCode', 'route']) {
-    if (typeof leaderRep?.[kind] === 'string' && leaderRep[kind].trim()) {
-      refSignals.add(`${kind}:${leaderRep[kind].trim().toLowerCase()}`);
+  const expectedSignal = typeof group.signal === 'string' ? group.signal.trim().toLowerCase() : '';
+  const groupMembers = new Set(group.members.map(issueKey));
+  const signalMatches = (member, reproduce) => {
+    if (!expectedSignal) return false;
+    if (expectedSignal.startsWith('duplicate:')) {
+      const target = issueKey(expectedSignal.slice('duplicate:'.length));
+      const duplicateOf = issueKey(reproduce?.duplicateOf);
+      return Boolean(target && (issueKey(member) === target
+        || duplicateOf === target && groupMembers.has(target)));
     }
-  }
-  const confirmedMembers = [];
-  const splitOut = [];
-  const reasons = {};
+    const at = expectedSignal.indexOf(':');
+    if (at < 1) return false;
+    const kind = expectedSignal.slice(0, at), expected = expectedSignal.slice(at + 1).trim();
+    return ['symbol', 'component', 'errorCode', 'route'].includes(kind)
+      && typeof reproduce?.[kind] === 'string' && reproduce[kind].trim().toLowerCase() === expected;
+  };
+  const confirmedMembers = [], splitOut = [], reasons = {};
   for (const member of group.members) {
-    const rep = lookup(member);
-    if (!rep) {
-      confirmedMembers.push(member);
+    const entry = lookup(member), rep = entry?.reproduce, tested = entry?.test;
+    if (!entry || !rep || typeof rep !== 'object' || rep.confirmed !== true
+      || entry.failed === true || entry.splitOut === true) {
+      splitOut.push(member);
+      reasons[member] = rep?.reason || rep?.summary || 'reproduce-not-confirmed';
       continue;
     }
-    if (rep.confirmed === false || rep.reproduced === false || rep.failed === true) {
+    if (typeof rep.summary !== 'string' || !rep.summary.trim()
+      || !tested || typeof tested !== 'object' || tested.passed !== true
+      || typeof tested.name !== 'string' || !tested.name.trim()
+      || typeof tested.summary !== 'string' || !tested.summary.trim()) {
       splitOut.push(member);
-      reasons[member] = rep.reason || rep.summary || 'reproduce-not-confirmed';
+      reasons[member] = 'member-test-evidence-incomplete';
       continue;
     }
-    const memberMod = rep.owningModule ? canonicalModule(rep.owningModule) : refModule;
-    if (rep.owningModule && (!memberMod || (refModule && memberMod !== refModule))) {
+    const memberMod = canonicalModule(rep.owningModule || '');
+    const duplicate = expectedSignal.startsWith('duplicate:');
+    if (!memberMod || (!duplicate && (!refModule || memberMod !== refModule))
+      || (!duplicate && group.owningModule && memberMod !== canonicalModule(group.owningModule))) {
       splitOut.push(member);
-      reasons[member] = `different-owning-module:${rep.owningModule}`;
+      reasons[member] = 'different-or-missing-owning-module';
       continue;
     }
-    const memberSignals = [];
-    for (const kind of ['symbol', 'component', 'errorCode', 'route']) {
-      if (typeof rep[kind] === 'string' && rep[kind].trim()) {
-        memberSignals.push(`${kind}:${rep[kind].trim().toLowerCase()}`);
-      }
-    }
-    if (memberSignals.length > 0 && refSignals.size > 0 && !memberSignals.some(s => refSignals.has(s))) {
+    if (!signalMatches(member, rep)) {
       splitOut.push(member);
-      reasons[member] = `different-signal:${memberSignals[0]}`;
+      reasons[member] = 'different-or-missing-group-signal';
       continue;
     }
     confirmedMembers.push(member);
   }
-  const nextUmbrella = confirmedMembers.includes(group.umbrella) ? group.umbrella : (confirmedMembers[0] ?? '');
+  const nextUmbrella = confirmedMembers.some(key => issueKey(key) === issueKey(group.umbrella))
+    ? group.umbrella : (confirmedMembers[0] ?? '');
   const mergedSplitOut = [...new Set([...(group.splitOut ?? []), ...splitOut])];
   return {
     confirmed: confirmedMembers.length >= 2,
@@ -453,28 +480,55 @@ export function projectSortGraph(snapshot, graph) {
   return graph;
 }
 
-function findMemberEvidence(memberEvidence, issueKey) {
-  if (!memberEvidence) return null;
-  const num = String(issueKey).split('/').pop();
+function findMemberEvidence(memberEvidence, issueKeyValue) {
+  const repository = String(issueKeyValue ?? '').match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\//i)?.[1] ?? '';
+  const canonical = value => normalizeIssueRef(value, repository).toLowerCase();
+  const target = canonical(issueKeyValue);
+  if (!target || !memberEvidence) return null;
   if (Array.isArray(memberEvidence)) {
-    return memberEvidence.find(e => e && (e.issue === issueKey || e.issue === `#${num}` || String(e.issue) === num)) ?? null;
+    return memberEvidence.find(entry => entry && canonical(entry.issue) === target) ?? null;
   }
   if (typeof memberEvidence === 'object') {
-    return memberEvidence[issueKey] ?? memberEvidence[`#${num}`] ?? memberEvidence[num] ?? null;
+    for (const [key, value] of Object.entries(memberEvidence)) {
+      if (canonical(key) === target && value && typeof value === 'object'
+        && (value.issue === undefined || canonical(value.issue) === target)) return value;
+    }
   }
   return null;
 }
 
-export function hasMemberClosingEvidence(memberEvidence, issueKey) {
-  const entry = findMemberEvidence(memberEvidence, issueKey);
+export function hasMemberClosingEvidence(memberEvidence, issueKeyValue, group = null) {
+  const entry = findMemberEvidence(memberEvidence, issueKeyValue);
   if (!entry || typeof entry !== 'object') return false;
-  if (entry.failed === true || entry.splitOut === true || entry.reproduced === false || entry.confirmed === false || entry.verdict === 'FAIL' || entry.verdict === 'BAD') return false;
-  const hasReproduce = (typeof entry.reproduce === 'string' && entry.reproduce.trim().length > 0)
-    || entry.reproduced === true
-    || (entry.reproduce && typeof entry.reproduce === 'object' && entry.reproduce.confirmed === true);
-  const hasTest = (typeof entry.test === 'string' && entry.test.trim().length > 0)
-    || (Array.isArray(entry.tests) && entry.tests.some(t => typeof t === 'string' && t.trim().length > 0));
-  return hasReproduce && hasTest;
+  const reproduce = entry.reproduce, tested = entry.test;
+  const kinds = ['symbol', 'component', 'errorCode', 'route'];
+  const target = normalizeIssueRef(issueKeyValue).toLowerCase();
+  if (entry.failed === true || entry.splitOut === true || !reproduce || typeof reproduce !== 'object'
+    || reproduce.confirmed !== true || typeof reproduce.owningModule !== 'string' || !reproduce.owningModule.trim()
+    || typeof reproduce.summary !== 'string' || !reproduce.summary.trim()
+    || !tested || typeof tested !== 'object' || tested.passed !== true
+    || typeof tested.name !== 'string' || !tested.name.trim()
+    || typeof tested.summary !== 'string' || !tested.summary.trim()) return false;
+  if (!group) return kinds.some(kind => typeof reproduce[kind] === 'string' && reproduce[kind].trim())
+    || typeof reproduce.duplicateOf === 'string' && reproduce.duplicateOf.trim();
+  const repository = String(group.members?.[0] ?? '').match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\//i)?.[1] ?? '';
+  const canonical = value => normalizeIssueRef(value, repository).toLowerCase();
+  if (!group.members?.some(member => canonical(member) === target)) return false;
+  const module = canonicalModule(reproduce.owningModule);
+  if (!module) return false;
+  const signal = String(group.signal ?? '').trim().toLowerCase();
+  if (signal.startsWith('duplicate:')) {
+    const duplicateTarget = canonical(signal.slice('duplicate:'.length));
+    const duplicateOf = canonical(reproduce.duplicateOf);
+    return Boolean(duplicateTarget && (target === duplicateTarget
+      || duplicateOf === duplicateTarget && group.members.some(member => canonical(member) === duplicateTarget)));
+  }
+  if (signal.startsWith('duplicate:')) return true;
+  if (group.owningModule && module !== canonicalModule(group.owningModule)) return false;
+  const at = signal.indexOf(':');
+  if (at < 1) return false;
+  const kind = signal.slice(0, at), expected = signal.slice(at + 1).trim();
+  return kinds.includes(kind) && typeof reproduce[kind] === 'string' && reproduce[kind].trim().toLowerCase() === expected;
 }
 
 export function sortClosingReferences({ snapshot, issue, code = false, graph, memberEvidence = null }) {
@@ -486,9 +540,8 @@ export function sortClosingReferences({ snapshot, issue, code = false, graph, me
   if (!code || !memberEvidence) return members.map(key => `Refs ${key}`);
   const refs = [];
   for (const key of members) {
-    if (hasMemberClosingEvidence(memberEvidence, key)) {
-      refs.push(`Closes #${key.split('/').pop()}`);
-    }
+    if (hasMemberClosingEvidence(memberEvidence, key, group)) refs.push(`Closes #${key.split('/').pop()}`);
+    else refs.push(`Refs ${key}`);
   }
   return refs;
 }

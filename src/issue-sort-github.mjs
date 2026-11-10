@@ -320,118 +320,78 @@ export async function claimSortGroup({ cwd = '', repository, group, umbrella: ta
     const groups = await readSortGroups({ cwd, repository }, ports).catch(() => []);
     group = groups.find(g => !g.merged && (g.umbrella === targetUmbrella || g.members.includes(targetUmbrella))) ?? null;
   }
-  if (!group || !Array.isArray(group.members) || !group.members.length) return { ok: false, umbrella: '', members: [], claims: [] };
-  const umbrella = group.umbrella || group.members[0];
+  if (!group || !Array.isArray(group.members) || group.members.length < 2 || !group.members.includes(group.umbrella)
+    || !ports.claimIssue || !ports.releaseClaim) return { ok: false, umbrella: '', members: [], claims: [], reason: 'group-claim-unavailable' };
+  const umbrella = group.umbrella;
   const ordered = [umbrella, ...group.members.filter(m => m !== umbrella)];
-  const claims = [];
+  const claims = [], created = [];
   try {
     for (const key of ordered) {
-      const issueNum = Number(String(key).split('/').pop());
-      if (ports.github?.issue) {
-        const raw = parse((await ports.github.issue({ repository, issue: issueNum })).json);
-        if (Array.isArray(raw?.assignees) && raw.assignees.length > 0) throw Error('member-assigned');
-      } else if (ports.execFile) {
-        const raw = parse((await ports.execFile('gh', ['api', `repos/${repository}/issues/${issueNum}`], { cwd })).stdout);
-        if (Array.isArray(raw?.assignees) && raw.assignees.length > 0) throw Error('member-assigned');
-      }
-      if (ports.claimIssue) {
-        const claimed = await ports.claimIssue({ cwd, repository, issue: issueNum, key, group: { umbrella, members: group.members }, coordinatorId, machine });
-        if (!claimed || claimed.ok === false) throw Error('claim-failed');
-        claims.push({ issue: key, commentId: String(claimed.commentId ?? ''), labelEventId: String(claimed.labelEventId ?? '') });
-        continue;
-      }
-      let labelEventId = String(Date.now() + issueNum);
-      if (ports.github?.sortUpdate) {
-        const updated = await ports.github.sortUpdate({ repository, issue: issueNum, label: 'pdd:working' });
-        if (updated?.ok !== true) throw Error('claim-failed');
-        if (updated.labelEventId) labelEventId = String(updated.labelEventId);
-      } else if (ports.execFile) {
-        await ports.execFile('gh', ['issue', 'edit', String(issueNum), '--add-label', 'pdd:working'], { cwd });
-        const events = parse((await ports.execFile('gh', ['api', `repos/${repository}/issues/${issueNum}/timeline`], { cwd })).stdout);
-        const labeled = (Array.isArray(events) ? events : []).filter(e => e?.event === 'labeled' && (e?.label?.name === 'pdd:working' || e?.label === 'pdd:working')).at(-1);
-        if (labeled?.id !== undefined) labelEventId = String(labeled.id);
-      }
-      let commentId = '';
-      const payload = { repository: repository.toLowerCase(), coordinatorId, machine, labelEventId, lastSeen: '', group: { umbrella, members: group.members } };
-      const commentBody = `Autopilot claim.\n\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``;
-      if (ports.github?.appendComment) {
-        const res = parse((await ports.github.appendComment({ repository, issue: issueNum, body: commentBody })).json);
-        commentId = String(res?.id ?? '');
-      } else if (ports.execFile) {
-        const res = parse((await ports.execFile('gh', ['api', `repos/${repository}/issues/${issueNum}/comments`, '--method', 'POST', '--input', '-'], { cwd, input: JSON.stringify({ body: commentBody }) })).stdout);
-        commentId = String(res?.id ?? '');
-      }
-      claims.push({ issue: key, commentId, labelEventId, coordinatorId, machine, active: true, owner: coordinatorId });
+      const result = await ports.claimIssue({ cwd, repository, issue: key, group: { umbrella, members: group.members }, coordinatorId, machine });
+      const claim = result?.claim;
+      if (result?.ok !== true || !claim || claim.issue !== key || claim.coordinatorId !== coordinatorId || claim.machine !== machine
+        || claim.owner !== coordinatorId || claim.active !== true || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
+        || !/^[1-9][0-9]*$/.test(String(claim.labelEventId ?? ''))) throw Error(result?.reason || 'claim-failed');
+      claims.push({ issue: key, commentId: String(claim.commentId), labelEventId: String(claim.labelEventId), coordinatorId, machine, active: true, owner: coordinatorId });
+      if (result.created === true) created.push(claims.at(-1));
     }
-    return { ok: true, umbrella, members: ordered, claims };
+    return { ok: true, umbrella, members: ordered, claims, createdIssues: created.map(claim => claim.issue) };
   } catch (error) {
-    await releaseSortGroup({ cwd, repository, group: { umbrella, members: claims.map(c => c.issue) }, claims, coordinatorId, machine }, ports);
-    return { ok: false, umbrella, members: [], claims: [], reason: error.message || 'claim-failed' };
+    const rollback = [];
+    for (const claim of created.reverse()) {
+      try {
+        const result = await ports.releaseClaim({ cwd, repository, claim, coordinatorId, machine });
+        if (result?.state !== 'released') rollback.push({ issue: claim.issue, reason: 'claim-release-unconfirmed' });
+      } catch { rollback.push({ issue: claim.issue, reason: 'claim-release-unavailable' }); }
+    }
+    return { ok: false, umbrella, members: [], claims: [], rollback, reason: error.message || 'claim-failed' };
   }
 }
 
-export async function releaseSortGroup({ cwd = '', repository, group, umbrella: targetUmbrella, claims = [], coordinatorId = 'coordinator', machine = 'local' }, ports = {}) {
-  if (!group && targetUmbrella && (cwd || ports.sortGroups)) {
-    const groups = await readSortGroups({ cwd, repository }, ports).catch(() => []);
-    group = groups.find(g => g.umbrella === targetUmbrella || g.members.includes(targetUmbrella)) ?? { umbrella: targetUmbrella, members: [targetUmbrella] };
-  }
-  const members = [...new Set([group?.umbrella, ...(group?.members ?? []), ...claims.map(c => c.issue)].filter(Boolean))];
-  const released = [];
-  for (const key of members) {
-    const issueNum = Number(String(key).split('/').pop());
-    const claim = claims.find(c => c.issue === key || Number(String(c.issue).split('/').pop()) === issueNum) ?? null;
-    if (ports.releaseClaim) {
-      await ports.releaseClaim({
-        cwd,
-        repository,
-        issue: issueNum,
-        key,
-        coordinatorId: claim?.coordinatorId ?? coordinatorId,
-        machine: claim?.machine ?? machine,
-        commentId: claim?.commentId ?? '',
-        labelEventId: claim?.labelEventId ?? '',
-      });
-      released.push(key);
+export async function releaseSortGroup({ cwd = '', repository, claims = [], coordinatorId = 'coordinator', machine = 'local' }, ports = {}) {
+  if (!Array.isArray(claims) || !ports.releaseClaim) return { ok: false, released: [], failed: [] };
+  const released = [], failed = [];
+  for (const claim of claims) {
+    if (!claim || typeof claim.issue !== 'string' || claim.coordinatorId !== coordinatorId || claim.machine !== machine
+      || claim.owner !== coordinatorId || claim.active !== true || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
+      || !/^[1-9][0-9]*$/.test(String(claim.labelEventId ?? ''))) {
+      failed.push({ issue: claim?.issue ?? '', reason: 'claim-identity-invalid' });
       continue;
     }
-    if (ports.github?.releaseSortClaim) {
-      await ports.github.releaseSortClaim({ repository, issue: issueNum, key, claim });
-      released.push(key);
-      continue;
-    }
-    if (ports.github?.removeLabel) {
-      await ports.github.removeLabel({ repository, issue: issueNum, label: 'pdd:working' });
-    } else if (ports.execFile) {
-      await ports.execFile('gh', ['issue', 'edit', String(issueNum), '--remove-label', 'pdd:working'], { cwd });
-    }
-    released.push(key);
+    try {
+      const result = await ports.releaseClaim({ cwd, repository, claim, coordinatorId, machine });
+      if (result?.state === 'released') released.push(claim.issue);
+      else failed.push({ issue: claim.issue, reason: 'claim-release-unconfirmed' });
+    } catch { failed.push({ issue: claim.issue, reason: 'claim-release-unavailable' }); }
   }
-  return { ok: true, released };
+  return { ok: failed.length === 0, released, failed };
 }
 
-export async function splitSortGroupMember({ cwd = '', repository, umbrella, member, reason = 'member-diverged', coordinatorId = 'coordinator', machine = 'local' }, ports = {}) {
+export async function splitSortGroupMember({ cwd = '', repository, umbrella, member, reason = 'member-diverged', coordinatorId = 'coordinator', machine = 'local', claim = null }, ports = {}) {
   const store = groupStore({ cwd, repository }, ports);
   const { groups = [] } = await store.read({ cwd, repository });
+  const targetKey = typeof member === 'string' && member.startsWith('https://github.com/') ? member : '';
   const targetNum = String(member ?? '').replace(/^#/, '').split('/').pop();
   const idx = groups.findIndex(g => !g.merged && (g.umbrella === umbrella || g.members.some(m => m === member || m.split('/').pop() === targetNum)));
-  if (idx < 0) return { ok: false, umbrella: '', members: [], splitOut: [], standalone: null };
+  if (idx < 0) return { ok: true, umbrella: '', members: [], splitOut: [targetKey || member], standalone: null, alreadySplit: true };
   const current = groups[idx];
-  const split = splitGroupMember({ group: current, member, reason });
-  if (split.group) {
-    groups[idx] = split.group;
-  } else {
-    groups[idx] = { ...current, umbrella: split.umbrella, members: split.members, splitOut: split.splitOut };
+  const existingMember = current.members.find(m => m === member || m.split('/').pop() === targetNum);
+  if (!existingMember) return { ok: current.splitOut?.some(m => m === member || m.split('/').pop() === targetNum) === true,
+    umbrella: current.umbrella, members: current.members, splitOut: current.splitOut ?? [], standalone: null, alreadySplit: true };
+  const split = splitGroupMember({ group: current, member: existingMember, reason });
+  if (claim) {
+    const enriched = { ...claim, coordinatorId, machine, active: true, owner: coordinatorId };
+    const released = await releaseSortGroup({ cwd, repository, claims: [enriched], coordinatorId, machine }, ports);
+    if (!released.ok) return { ok: false, ...split, release: released };
   }
+  groups[idx] = split.group ?? { ...current, umbrella: split.umbrella, members: split.members, splitOut: split.splitOut };
   await store.save({ cwd, repository, groups });
-  if (split.splitMember) {
-    await releaseSortGroup({ cwd, repository, group: { umbrella: split.splitMember, members: [split.splitMember] }, coordinatorId, machine }, ports);
-    const issueNum = Number(split.splitMember.split('/').pop());
-    const splitBody = `Split from group ${current.umbrella}: ${reason}.\n\n<!-- pdd-issue-route:v1 -->\n<!-- split-${hash(`${current.umbrella}:${split.splitMember}:${reason}`)} -->`;
-    if (ports.github?.appendComment) {
-      await ports.github.appendComment({ repository, issue: issueNum, body: splitBody });
-    } else if (ports.execFile) {
-      await ports.execFile('gh', ['issue', 'comment', String(issueNum), '--body-file', '-'], { cwd, input: splitBody });
-    }
+  const issueNum = Number(split.splitMember.split('/').pop());
+  const splitBody = `Split from group ${current.umbrella}: ${reason}.\n\n<!-- pdd-issue-route:v1 -->\n<!-- split-${hash(`${current.umbrella}:${split.splitMember}:${reason}`)} -->`;
+  const comments = ports.github?.page ? parse((await ports.github.page({ repository, issue: issueNum, kind: 'comments', cursor: '' })).json) : null;
+  if (!(comments?.items ?? []).some(row => row.body?.includes(`<!-- split-${hash(`${current.umbrella}:${split.splitMember}:${reason}`)} -->`))) {
+    if (ports.github?.appendComment) await ports.github.appendComment({ repository, issue: issueNum, body: splitBody });
+    else if (ports.execFile) await ports.execFile('gh', ['issue', 'comment', String(issueNum), '--body-file', '-'], { cwd, input: splitBody });
   }
   return { ok: true, ...split };
 }

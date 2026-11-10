@@ -42,7 +42,7 @@ async function world(t) {
         if(w.writeFailure) throw Error('synthetic uncertain write');
         return {code:0,stdout:JSON.stringify({html_url:'https://github.com/example/project/issues/99'})};
       }
-      if(/\/pulls\//.test(path))return {code:0,stdout:JSON.stringify({number:Number(path.split('/').at(-1)),merged:w.merged,merge_commit_sha:merge,base:{ref:w.targetBase??'main',repo:{full_name:w.repo??run.repo}}})};
+      if(/\/pulls\//.test(path))return {code:0,stdout:JSON.stringify({number:Number(path.split('/').at(-1)),merged:w.merged,merge_commit_sha:merge,body:w.pullBody??'',base:{ref:w.targetBase??'main',repo:{full_name:w.repo??run.repo}}})};
       if(/\/commits\//.test(path))return {code:0,stdout:JSON.stringify({sha:merge,parents:[{sha:parent}]})};
     }
     if(file==='gh' && args[0]==='pr' && args[1]==='create' && w.uncertain==='revert-pr')throw Error('unconfirmed PR');
@@ -555,11 +555,39 @@ for(const custody of ['local','shared']) for(const [damage,corrupt] of Object.en
   });
 }
 
-test('group audit BAD without revert reopens only BAD members from memberVerdicts',async t=>{
+test('group audit holds when live closing references differ from saved members',async t=>{
   const w=await world(t);
+  w.run.pr[0]={number:23,state:'merged',stage:'change',closingIssues:[17,18]};
+  writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  w.pullBody='Closes #17, Closes #19';
+  const out=await w.check();
+  assert.equal(out.code,1);assert.match(out.text,/closing references differ/i);
+  assert.equal(w.launches.length,0);assert.ok(w.calls.length>0);
+  assert.deepEqual(reopens(w),[]);assert.deepEqual(comments(w),[]);
+});
+
+test('group audit holds incomplete per-member results before follow-up effects',async t=>{
+  const w=await world(t);
+  w.run.pr[0]={number:23,state:'merged',stage:'change',closingIssues:[17,18]};
+  writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  w.pullBody='Closes #17, Closes #18';
+  w.answer={...result('BAD'),revert:false,memberVerdicts:[{issue:17,verdict:'OK',summary:'Only one member was checked.'}]};
+  const out=await w.check();
+  assert.equal(out.code,1);assert.match(out.text,/verdict is invalid/i);
+  assert.equal(w.launches.length,1);assert.equal(w.calls.filter(c=>c.args?.includes('POST')).length,0);
+  assert.deepEqual(reopens(w),[]);
+});
+
+test('group audit BAD without revert reopens only BAD members from complete memberVerdicts',async t=>{
+  const w=await world(t);
+  w.run.pr[0]={number:23,state:'merged',stage:'change',closingIssues:[17,18]};
+  writeFileSync(join(w.run.runDir,'status.json'),JSON.stringify(w.run));
+  w.pullBody='Closes #17, Closes #18';
+  const verdict=(issue,verdict)=>({issue,verdict,reproduce:{confirmed:true,summary:`Issue #${issue} reproduced on the parent.`},
+    test:{passed:true,summary:`Issue #${issue} focused test passed on the merge.`},summary:`Issue #${issue} result.`,evidence:`Pinned parent and merge checks for #${issue}.`});
   w.answer={...result('BAD'),revert:false,memberVerdicts:[
-    {issue:17,verdict:'OK',summary:'Leader #17 reproduced and fixed.'},
-    {issue:18,verdict:'BAD',summary:'Member #18 still fails on edge case.'},
+    verdict(17,'OK'),
+    verdict(18,'BAD'),
   ]};
   const out=await w.check();
   assert.equal(out.code,0,out.text);

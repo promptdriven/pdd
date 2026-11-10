@@ -103,7 +103,14 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
       assert.ok(observations[0].stderr.includes('FACTORY_VALUE'));
       assert.equal(observations[1].code,0,'audit must confirm the value fix on the merge');
       const session=randomUUID();w.auditCalls.push({session,args:a,observations});
-      return {code:0,stdout:JSON.stringify({type:'thread.started',thread_id:session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({verdict:w.auditVerdict??'OK',kind:'',summary:w.auditSummary??'Value correction reproduced.',evidence:observations.map(r=>`${r.revision}: exit ${r.code}\n${r.stdout}${r.stderr}`).join('\n'),revert:w.auditRevert??(w.auditVerdict==='BAD')})}})+'\n',stderr:''};
+      const memberVerdicts=Array.isArray(input.closingIssues)?input.closingIssues.map(issue=>({issue,verdict:'OK',
+        reproduce:{confirmed:true,summary:`Issue #${issue} failed on the parent and passed on the merge.`},
+        test:{passed:true,summary:`Focused issue #${issue} case passed.`},
+        summary:`Issue #${issue} behavior is fixed.`,evidence:`Reproduced issue #${issue} on the pinned revisions.`})):undefined;
+      const answer={verdict:w.auditVerdict??'OK',kind:'',summary:w.auditSummary??'Value correction reproduced.',
+        evidence:observations.map(r=>`${r.revision}: exit ${r.code}\n${r.stdout}${r.stderr}`).join('\n'),revert:w.auditRevert??(w.auditVerdict==='BAD'),
+        ...(memberVerdicts?{memberVerdicts}:{})};
+      return {code:0,stdout:JSON.stringify({type:'thread.started',thread_id:session})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(answer)}})+'\n',stderr:''};
     }
     if(file==='gh') {
       const other=shared && (o.cwd?.startsWith(shared.base) || a.some(arg=>String(arg).includes(shared.repository)));

@@ -129,6 +129,24 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   return f;
 }
 
+test('automatic start defers a saved legacy umbrella without changing its live claim', async t => {
+  const f = await fixture(t), claim = { issue: issueUrl, active: true, owner: 'coord-old', coordinatorId: 'coord-old', machine: 'vm-old', commentId: '81', labelEventId: '82' };
+  const group = { area: 'cli', rootCause: 'old synthetic umbrella', umbrella: issueUrl,
+    members: ['https://github.com/example/project/issues/18', 'https://github.com/example/project/issues/19'] };
+  f.ports.sortGroups = { read: async () => ({ groups: [group] }) };
+  f.ports.owners = { read: async () => ({ json: JSON.stringify({ localOwner: 'coord-old', claims: [claim], runs: [{ issue: issueUrl, runId: 'old-run', occupied: true }], runsKnown: true }) }) };
+  f.ports.checkDependencyStart = async () => ({ allowed: true, reason: 'synthetic focused start control' });
+  const coordinator = { repository: 'example/project', coordinatorId: 'coord-old', machine: 'vm-old', activation: 'activation-1', claim: { commentId: '81', labelEventId: '82' } };
+  const result = await startRun({ name: 'small-change', issue: '17', agent: 'claude', cwd: f.source, packageRoot,
+    coordinator, origin: 'autopilot' }, f.ports);
+  assert.notEqual(result.exitCode, 0);
+  assert.match(result.message, /legacy group umbrella cannot start a new run/i);
+  assert.equal(f.prs.length, 0);assert.equal(f.pushes.length, 0);
+  assert.deepEqual((await f.ports.sortGroups.read()).groups, [group]);
+  assert.deepEqual(JSON.parse((await f.ports.owners.read()).json).claims, [claim]);
+  assert.equal(existsSync(join(f.git(f.source, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd/runs/17/status.json')), false);
+});
+
 // The runner in each supported Git layout, and its refusal before any record: test/workflow-git-layouts.test.mjs.
 
 test('small-change: run exits at once, done reaches the gate, changes go to the same chat, approve opens a new chat, done verify opens the PR', async t => {

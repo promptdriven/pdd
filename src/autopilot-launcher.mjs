@@ -466,17 +466,6 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
           const released = await (p.releaseParkedClaim ?? releaseParkedClaim)({cwd: state.cwd, repository: state.repo, claim,
             coordinatorId: state.coordinatorId, machine: state.machine, runId: fresh.runId, branch: fresh.branch},
             {...worker, execFile: async (file, args, options) => p.execute(file, args, {...options, purpose: 'claims'})});
-          if (released?.ok !== false) {
-            const groupMembers = fresh.automaticOrigin?.group?.members ?? (state.githubIntake?.groups ?? []).find(g => !g.merged && (issueKey(g.umbrella) ?? g.umbrella) === (issueKey(fresh.issue.url) ?? fresh.issue.url))?.members ?? [];
-            for (const memberUrl of groupMembers.filter(m => (issueKey(m) ?? m) !== (issueKey(fresh.issue.url) ?? fresh.issue.url))) {
-              const memberClaim = (fresh.automaticOrigin?.groupClaims ?? state.githubIntake?.claims ?? []).find(c => (issueKey(c.issue) ?? c.issue) === (issueKey(memberUrl) ?? memberUrl) && c.coordinatorId === state.coordinatorId && c.machine === state.machine);
-              if (memberClaim) {
-                await (p.releaseParkedClaim ?? releaseParkedClaim)({cwd: state.cwd, repository: state.repo, claim: {...memberClaim, issue: memberUrl, coordinatorId: state.coordinatorId, machine: state.machine},
-                  coordinatorId: state.coordinatorId, machine: state.machine, runId: fresh.runId, branch: fresh.branch},
-                  {...worker, execFile: async (file, args, options) => p.execute(file, args, {...options, purpose: 'claims'})}).catch(() => {});
-              }
-            }
-          }
           return released;
         },
       });
@@ -2119,12 +2108,32 @@ async function verifiedCustody(state, path, p, runs) {
   const records = await (p.listRuns ?? listRuns)({cwd:state.cwd},p);
   const affected = records.filter(run => !['cancelled','completed'].includes(run.state) && run.automaticOrigin?.coordinatorId === projection.coordinatorId && run.repo?.toLowerCase() === state.repo.toLowerCase());
   if (affected.length) {
-    const issues=affected.map(run=>run.issue?.url ?? `https://github.com/${run.repo}/issues/${run.number}`);
+    const expectedByRun = affected.map(run => {
+      const origin=run.automaticOrigin, leader=run.issue?.url ?? `https://github.com/${run.repo}/issues/${run.number}`;
+      if (origin.repository?.toLowerCase() !== state.repo.toLowerCase() || origin.machine !== projection.machine
+        || origin.coordinatorId !== projection.coordinatorId) throw Error('Original coordinator claim cannot be verified.');
+      const expected = Array.isArray(origin.groupClaims) ? origin.groupClaims : [{issue:leader, ...origin.claim,
+        coordinatorId:origin.coordinatorId, machine:origin.machine}];
+      if (origin.group && (!Array.isArray(origin.group.members) || !origin.group.members.some(member => issueKey(member) === issueKey(leader))
+        || expected.length !== origin.group.members.length)) throw Error('Original coordinator group claims cannot be verified.');
+      if (!Array.isArray(expected) || expected.some(claim => !issueKey(claim?.issue)
+        || typeof claim.commentId !== 'string' || !claim.commentId.trim()
+        || typeof claim.labelEventId !== 'string' || !claim.labelEventId.trim()
+        || claim.coordinatorId !== projection.coordinatorId || claim.machine !== projection.machine)) throw Error('Original coordinator group claims cannot be verified.');
+      return {run, leader, expected};
+    });
+    const issues=expectedByRun.flatMap(row => row.expected.map(claim => claim.issue));
     const result=await createDependencyReadPorts({cwd:state.cwd},p).owners.read({repository:state.repo,issues});
     const observation=typeof result.json === 'string' ? JSON.parse(result.json) : result.json;
-    for (const [index,run] of affected.entries()) {
-      const origin=run.automaticOrigin, claims=observation?.claims?.filter(claim=>claim.issue===issues[index] && claim.active===true) ?? [];
-      if (origin.repository?.toLowerCase() !== state.repo.toLowerCase() || origin.machine !== projection.machine || claims.length !== 1 || !['commentId','labelEventId'].every(key => typeof origin.claim?.[key] === 'string' && origin.claim[key].trim() && typeof claims[0][key] === 'string' && claims[0][key].trim()) || claims[0].owner !== projection.coordinatorId || claims[0].coordinatorId !== projection.coordinatorId || claims[0].machine !== projection.machine || claims[0].commentId !== origin.claim.commentId || claims[0].labelEventId !== origin.claim.labelEventId) throw Error('Original coordinator claim cannot be verified.');
+    for (const {leader,expected} of expectedByRun) {
+      for (const saved of expected) {
+        const claims=observation?.claims?.filter(claim=>issueKey(claim?.issue)===issueKey(saved.issue) && claim.active===true) ?? [];
+        if (claims.length !== 1 || !['owner','commentId','labelEventId'].every(key => typeof claims[0]?.[key] === 'string' && claims[0][key].trim())
+          || claims[0].owner !== projection.coordinatorId || claims[0].coordinatorId !== projection.coordinatorId
+          || claims[0].machine !== projection.machine || claims[0].commentId !== saved.commentId
+          || claims[0].labelEventId !== saved.labelEventId) throw Error('Original coordinator claim cannot be verified.');
+      }
+      if (!expected.some(saved => issueKey(saved.issue) === issueKey(leader))) throw Error('Original coordinator leader claim cannot be verified.');
     }
   }
   const intent=state.reconciliationIntent ?? state.deliveryIntent;

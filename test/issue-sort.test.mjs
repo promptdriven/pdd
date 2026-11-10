@@ -440,27 +440,43 @@ test('confirmGroupAfterReproduce and splitGroupMember split out a member that fa
     umbrella: key(1),
     members: [key(1), key(2), key(3)],
   };
+  group.members.push(key(4));
+  const result = (owningModule, symbol, passed = true) => ({
+    reproduce: { confirmed: true, owningModule, symbol, summary: `Reproduced in ${symbol}` },
+    test: { passed, name: 'test/issue-sort.test.mjs', summary: `Checked ${symbol} behavior` },
+  });
   const afterRepro = confirmGroupAfterReproduce({
     group,
     reproduceResults: {
-      [key(1)]: { confirmed: true, owningModule: 'src/issue-sort.mjs', symbol: 'sortPlan', summary: 'Reproduced in sortPlan' },
-      [key(2)]: { confirmed: true, owningModule: 'prompts/cli/issue-sort.prompt.md', symbol: 'sortPlan', summary: 'Same symbol in sortPlan' },
-      [key(3)]: { confirmed: true, owningModule: 'src/workflow-runner.mjs', symbol: 'stepDone', summary: 'Turned out to be in workflow-runner' },
+      [key(1)]: result('src/issue-sort.mjs', 'sortPlan'),
+      [key(2)]: result('src/issue-sort.mjs', 'sortPlan'),
+      [key(3)]: result('src/workflow-runner.mjs', 'stepDone'),
+      [key(4)]: result('src/issue-sort.mjs', 'sortPlan', false),
     },
   });
   assert.equal(afterRepro.confirmed, true);
   assert.equal(afterRepro.umbrella, key(1));
   assert.deepEqual(afterRepro.members, [key(1), key(2)]);
-  assert.deepEqual(afterRepro.splitOut, [key(3)]);
-  assert.equal(afterRepro.standaloneRuns.length, 1);
-  assert.equal(afterRepro.standaloneRuns[0].issue, key(3));
+  assert.deepEqual(afterRepro.splitOut, [key(3), key(4)]);
+  assert.equal(afterRepro.standaloneRuns.length, 2);
+  assert.deepEqual(afterRepro.standaloneRuns.map(row => row.issue), [key(3), key(4)]);
 
   const splitAgain = splitGroupMember({ group: afterRepro.group, member: key(2), reason: 'verify-failed' });
   assert.equal(splitAgain.umbrella, key(1));
   assert.deepEqual(splitAgain.members, [key(1)]);
-  assert.deepEqual(splitAgain.splitOut, [key(3), key(2)]);
+  assert.deepEqual(splitAgain.splitOut, [key(3), key(4), key(2)]);
   assert.equal(splitAgain.group, null);
   assert.equal(splitAgain.standalone?.issue, key(2));
+});
+
+test('rootCause text and legacy unify values do not form groups', async () => {
+  const w = fixture([1, 2, 3, 4]);
+  w.save(w.record(1, { rootCause: 'same readable cause', component: '' }));
+  w.save(w.record(2, { rootCause: 'same readable cause', component: '' }));
+  w.save(w.record(3, { rootCause: 'first separate cause', component: '', unify: 'legacy-cluster' }));
+  w.save(w.record(4, { rootCause: 'second separate cause', component: '', unify: 'legacy-cluster' }));
+  for (const n of [1, 2, 3, 4]) w.review(n);
+  assert.deepEqual(sortPlan({ snapshot: await read(w) }).groups, []);
 });
 
 test('Assigned issues and Runtime-owned issues never join a group', async () => {
@@ -505,11 +521,11 @@ test('per-member reproduce and test evidence are required before Closes #N is em
       code: true,
       graph: g,
       memberEvidence: {
-        [key(2)]: { reproduce: 'Failed before fix on sortPlan', test: 'test/issue-sort.test.mjs:groups form' },
-        [key(3)]: { reproduce: 'Failed before fix on sortPlan', test: '' },
+        [key(2)]: { reproduce: { confirmed: true, owningModule: 'src/issue-sort.mjs', symbol: 'sortPlan', summary: 'Failed before fix on sortPlan' }, test: { passed: true, name: 'test/issue-sort.test.mjs', summary: 'Group routes pass' } },
+        [key(3)]: { reproduce: { confirmed: true, owningModule: 'src/issue-sort.mjs', symbol: 'sortPlan', summary: 'Failed before fix on sortPlan' }, test: { passed: false, name: 'test/issue-sort.test.mjs', summary: 'No passing member test was recorded' } },
       },
     }),
-    ['Closes #2'],
+    ['Closes #2', `Refs ${key(3)}`],
   );
   assert.deepEqual(
     sortClosingReferences({
@@ -518,8 +534,8 @@ test('per-member reproduce and test evidence are required before Closes #N is em
       code: true,
       graph: g,
       memberEvidence: {
-        '#2': { reproduce: 'Failed before fix on #2', test: 'test/issue-sort.test.mjs:case-2' },
-        '#3': { reproduce: 'Failed before fix on #3', test: 'test/issue-sort.test.mjs:case-3' },
+        '#2': { reproduce: { confirmed: true, owningModule: 'src/issue-sort.mjs', symbol: 'sortPlan', summary: 'Failed before fix on #2' }, test: { passed: true, name: 'test/issue-sort.test.mjs', summary: 'Case 2 passed' } },
+        '#3': { reproduce: { confirmed: true, owningModule: 'src/issue-sort.mjs', symbol: 'sortPlan', summary: 'Failed before fix on #3' }, test: { passed: true, name: 'test/issue-sort.test.mjs', summary: 'Case 3 passed' } },
       },
     }),
     ['Closes #2', 'Closes #3'],

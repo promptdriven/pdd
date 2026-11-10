@@ -22,6 +22,31 @@ export function fixture(numbers = [1], options = {}) {
     settings: { read: async () => ({ mode: options.mode ?? 'auto' }) },
     authority: { read: async ({ author }) => ({ authority: author === 'outsider' ? 'outsider' : 'trusted' }) },
     owners: { read: async () => reply({ claims, runs: [], runsKnown: true, localOwner: 'coordinator' }) },
+    claimIssue: async ({ issue, coordinatorId, machine, group }) => {
+      const raw = issues.find(item => item.html_url === issue), active = claims.filter(row => row.issue === issue && row.active === true);
+      if (!raw || raw.state !== 'open' || raw.assignees.length || options.claimFailure === issue) return { ok: false, reason: 'claim-failed' };
+      if (active.length) {
+        const row = active[0];
+        if (active.length === 1 && row.owner === coordinatorId && row.coordinatorId === coordinatorId && row.machine === machine
+          && row.commentId && row.labelEventId && raw.labels.includes('pdd:working')) return { ok: true, created: false,
+          claim: { issue, commentId: row.commentId, labelEventId: row.labelEventId, coordinatorId, machine, active: true, owner: coordinatorId } };
+        return { ok: false, reason: 'claim-exists' };
+      }
+      if (raw.labels.includes('pdd:working')) return { ok: false, reason: 'claim-label-unverified' };
+      const commentId = String(next++), labelEventId = String(next++), savedGroup = group ? structuredClone(group) : undefined;
+      raw.labels.push('pdd:working');
+      claims.push({ issue, active: true, owner: coordinatorId, coordinatorId, machine, commentId, labelEventId, ...(savedGroup ? { group: savedGroup } : {}) });
+      return { ok: true, created: true, claim: { issue, commentId, labelEventId, coordinatorId, machine, active: true, owner: coordinatorId } };
+    },
+    releaseClaim: async ({ claim, coordinatorId, machine }) => {
+      const row = claims.find(item => item.issue === claim.issue && item.commentId === claim.commentId && item.labelEventId === claim.labelEventId
+        && item.coordinatorId === coordinatorId && item.machine === machine && item.owner === coordinatorId && item.active === true);
+      if (!row) return { state: 'skipped' };
+      row.active = false;
+      const raw = issues.find(item => item.html_url === claim.issue);
+      if (raw) raw.labels = raw.labels.filter(label => label !== 'pdd:working');
+      return { state: 'released' };
+    },
     context: { read: async ({ inputs = [] }) => reply({ inputs: inputs.flatMap(x => files.has(x.key) ? [{ key: x.key, revision: files.get(x.key) }] : []), conditions: [], execution: [] }) },
     evidence: { read: async () => reply({ source: [], requirements: [] }) },
     clock: { now: async () => ({ iso: new Date(now).toISOString() }) },

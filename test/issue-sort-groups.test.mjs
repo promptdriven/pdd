@@ -32,6 +32,28 @@ test('saved sorts form a pair, then a third issue joins the leader without a syn
   assert.equal(graph.groups[0].umbrella, group.umbrella);
 });
 
+test('a live legacy nonmember umbrella keeps its issue identity, then reforms when idle', async () => {
+  const w = fixture([1, 2, 99]); seed(w, [1, 2, 99]);
+  const legacy = { area: 'cli', rootCause: 'legacy synthetic umbrella', umbrella: key(99), members: [key(1), key(2)],
+    owningModule: 'src/cli.mjs', signal: 'symbol:parseArgs' };
+  await w.ports.sortGroups.save({ groups: [legacy] });
+  w.issues.find(issue => issue.number === 99).labels = ['pdd:working'];
+  const oldClaim = { issue: key(99), active: true, owner: 'coordinator', coordinatorId: 'coordinator', machine: 'old-vm', commentId: '81', labelEventId: '82' };
+  w.claims.push(oldClaim);
+
+  const livePlan = sortPlan({ snapshot: await read(w) });
+  assert.deepEqual(livePlan.groups.map(group => [group.umbrella, group.members]), [[key(99), [key(1), key(2)]]]);
+  assert.equal(livePlan.routes.find(route => route.issue === key(99)).action, 'hold');
+  assert.deepEqual(w.claims, [oldClaim], 'a live legacy claim stays with its original issue');
+
+  w.issues.find(issue => issue.number === 99).labels = [];
+  w.claims.length = 0;
+  const idlePlan = sortPlan({ snapshot: await read(w) });
+  assert.deepEqual(idlePlan.groups.map(group => [group.umbrella, group.members]), [[key(1), [key(1), key(2)]]]);
+  assert.equal(idlePlan.routes.find(route => route.issue === key(99)).action, 'hold');
+  assert.equal(idlePlan.routes.find(route => route.issue === key(99)).reason, 'legacy-group-umbrella');
+});
+
 test('two issues in different locally owned areas sharing an owningModule use the first member as leader', async () => {
   const w = fixture([1,2], { context: { areas: [
     { name: 'cli', owner: 'autopilot', match: { paths: ['src/**'] } },
@@ -48,12 +70,12 @@ test('a changed cause leaves the old group and joins the matching saved group', 
   const w = fixture([1,2,3,4,5]); seed(w, [1,2,3]);
   for (const n of [4,5]) { w.save(w.record(n, { rootCause: 'other-cause' })); w.review(n); }
   await tick(w);
-  const original = (await groups(w)).find(g => g.rootCause === 'shared-context').umbrella;
+  const original = (await groups(w)).find(g => g.members.includes(key(1)) && g.members.includes(key(2))).umbrella;
   replace(w, 3, { rootCause: 'other-cause' }); await tick(w);
-  const saved = await groups(w);
-  assert.deepEqual(saved.find(g => g.rootCause === 'shared-context').members, [key(1),key(2)]);
-  assert.equal(saved.find(g => g.rootCause === 'shared-context').umbrella, original);
-  assert.deepEqual(saved.find(g => g.rootCause === 'other-cause').members, [key(3),key(4),key(5)]);
+  const saved = await groups(w), first = saved.find(g => g.members.includes(key(1))), second = saved.find(g => g.members.includes(key(3)));
+  assert.deepEqual(first.members, [key(1),key(2)]);
+  assert.equal(first.umbrella, original);
+  assert.deepEqual(second.members, [key(3),key(4),key(5)]);
 });
 
 for (const hold of ['claim','open-pr','person']) test(`${hold} work is deferred and compared again after it finishes`, async () => {
@@ -83,6 +105,17 @@ test('an idle new member joins a running group leader with one note', async () =
   assert.equal(after.umbrella, before.umbrella); assert.equal(after.members.length, 4);
   const notes = w.comments.get(umbrella.number).filter(x => x.body.includes('pdd-issue-route:v1'));
   assert.equal(notes.length, 1); assert.ok(notes[0].body.includes(key(4)));
+});
+
+test('failed group rollback leaves an unverified member label untouched', async () => {
+  const w = fixture([1, 2, 3]); seed(w, [1, 2, 3]); await tick(w);
+  const [group] = await groups(w);
+  w.issues.find(issue => issue.number === 2).labels.push('pdd:working');
+  const claimed = await claimSortGroup({ repository, group, coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
+  assert.equal(claimed.ok, false);
+  assert.ok(!w.issues.find(issue => issue.number === 1).labels.includes('pdd:working'));
+  assert.ok(w.issues.find(issue => issue.number === 2).labels.includes('pdd:working'));
+  assert.ok(!w.issues.find(issue => issue.number === 3).labels.includes('pdd:working'));
 });
 
 test('group claims are taken and released together, and roll back if a member is assigned', async () => {
@@ -178,8 +211,8 @@ test('group PRs emit Refs without memberEvidence and Closes #N only when per-mem
       code: true,
       graph,
       memberEvidence: {
-        [key(2)]: { reproduce: 'Reproduced on #2', test: 'test/cli.test.mjs:2' },
-        [key(3)]: { reproduce: 'Reproduced on #3', test: 'test/cli.test.mjs:3' },
+        [key(2)]: { reproduce: { confirmed: true, owningModule: 'src/cli.mjs', component: 'shared-context', summary: 'Reproduced on #2' }, test: { passed: true, name: 'test/cli.test.mjs', summary: 'Case 2 passed' } },
+        [key(3)]: { reproduce: { confirmed: true, owningModule: 'src/cli.mjs', component: 'shared-context', summary: 'Reproduced on #3' }, test: { passed: true, name: 'test/cli.test.mjs', summary: 'Case 3 passed' } },
       },
     }),
     ['Closes #2', 'Closes #3'],
@@ -239,10 +272,10 @@ test('native group state survives a fresh read from a real Git checkout', async 
 test('splitSortGroupMember splits a failing member to its own run while the others continue', async () => {
   const w = fixture([1,2,3]); seed(w, [1,2,3]); await tick(w);
   const [group] = await groups(w);
-  await claimSortGroup({ repository, group, coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
+  const claimed = await claimSortGroup({ repository, group, coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
   for (const n of [1, 2, 3]) assert.ok(w.issues.find(x => x.number === n).labels.includes('pdd:working'));
 
-  const split = await splitSortGroupMember({ repository, umbrella: key(1), member: key(3), reason: 'different-module-after-reproduce', coordinatorId: 'coord-1', machine: 'vm-1' }, w.ports);
+  const split = await splitSortGroupMember({ repository, umbrella: key(1), member: key(3), reason: 'different-module-after-reproduce', coordinatorId: 'coord-1', machine: 'vm-1', claim: claimed.claims.find(row => row.issue === key(3)) }, w.ports);
   assert.equal(split.ok, true);
   assert.deepEqual(split.members, [key(1), key(2)]);
   assert.deepEqual(split.splitOut, [key(3)]);
