@@ -351,21 +351,20 @@ test('an interpreter outage: one interpreter alert per repository and machine, o
   f.health = { state: 'unavailable', detail: 'HTTP 503' }; f.time += 6 * minute;
   f.issues = [issue(30)];
   await f.tick();
-  assert.equal(alerts().length, 1, 'one alert for both waiting issues');
-  assert.match(alerts()[0], /PDD Autopilot alert: interpreter /); assert.match(alerts()[0], /issues\/12/); assert.match(alerts()[0], /health check failed \(HTTP 503\)/);
+  assert.equal(alerts().length, 0, 'first paused observation stays quiet');
   const packet = f.packet();
   assert.equal(packet.runtime.state, 'unavailable'); assert.match(packet.runtime.note, /Keep other work moving/);
   assert.deepEqual(packet.issues.map(item => item.number), [30], 'a new issue may still start');
   assert.deepEqual(packet.timeRules ?? [], [], 'no wake while the interpreter is down');
-  const record = JSON.parse(readFileSync(join(f.ports.stateRoot, 'alerts', readdirSync(join(f.ports.stateRoot, 'alerts'))[0]), 'utf8'));
+  const record = JSON.parse(readFileSync(join(f.ports.stateRoot, 'alerts', readdirSync(join(f.ports.stateRoot, 'alerts')).find(n => /^[a-f0-9]{20}\.json$/.test(n))), 'utf8'));
   assert.deepEqual(Object.values(record.incidents).map(item => [item.kind, item.issues]), [['interpreter', [12, 15]]]);
   for (let i = 0; i < 2; i++) { f.time += 30 * minute; await f.tick(); }
-  assert.equal(alerts().length, 1, 'the open outage sends nothing more');
+  assert.equal(alerts().length, 1, 'persistent outage sends one grouped alert');
+  assert.match(alerts()[0], /needs you: interpreter/); assert.match(alerts()[0], /HTTP 503/);
   // interpreter answers again: only one test wake, for the oldest run whose check can be resent (#12 has an unknown outcome).
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute;
   await f.tick();
-  assert.equal(alerts().length, 2, 'one grouped person decision; no recovery before proof');
-  assert.match(alerts()[1], /workflow resend 12 --said/);
+  assert.equal(alerts().length, 1, 'issue budget defers the new person ask');
   assert.deepEqual(kinds(f), [['runtime-ready', 15]]); assert.match(f.rules()[0].reason, /is the test/);
   const probeText = f.rules()[0].reason;
   assert.ok(probeText.indexOf(`pdd test --read ${BATCH}`) < probeText.indexOf(`pdd test --retry ${BATCH}`), 'the read comes before any resend');
@@ -373,13 +372,13 @@ test('an interpreter outage: one interpreter alert per repository and machine, o
   // The wake is delivered and the check of #15 still runs at the next tick: no proof, so nothing else wakes.
   f.waits = f.waits.filter(w => w.number !== 15);
   const prompts = f.prompts.length; f.time += 30 * minute; await f.tick();
-  assert.equal(alerts().length, 2, JSON.stringify(alerts())); assert.deepEqual(f.prompts.length > prompts ? kinds(f) : [], [], 'no wake without a new verdict');
+  assert.equal(alerts().length, 1, JSON.stringify(alerts())); assert.deepEqual(f.prompts.length > prompts ? kinds(f) : [], [], 'no wake without a new verdict');
   // Its new pdd test result has a verdict: The interpreter is back for all.
   f.probe = 'verdict'; f.time += 30 * minute; await f.tick();
-  assert.equal(alerts().length, 3); assert.match(alerts()[2], /PDD Autopilot recovered: interpreter/);
+  assert.equal(alerts().length, 1, 'confirmed proof closes recovery quietly within the issue budget');
   assert.deepEqual(f.prompts.length > prompts ? kinds(f) : [], [], 'lost check stays parked for its person decision');
   f.waits = []; f.time += 30 * minute; await f.tick();
-  assert.equal(alerts().length, 3, 'one recovery and one lost-verdict decision only');
+  assert.equal(alerts().length, 1, 'no duplicate notifications');
 });
 
 test('a test wake that is never delivered holds no other run: 60 minutes later the next run is the test, then one recovery', async t => {
@@ -387,7 +386,7 @@ test('a test wake that is never delivered holds no other run: 60 minutes later t
   await f.start(); f.prompts.length = 0;
   f.waits = [wait(12, f.time), wait(15, f.time + minute), wait(18, f.time + 2 * minute)];
   f.health = { state: 'unavailable', detail: 'HTTP 503' }; f.time += 3 * minute; await f.tick();
-  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent.length, 0);
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute;
   // 48 hours of ticks. The wake of #12 never reaches its chat, so its wait stays as it was. #15 gets its wake and its
   // check reaches a verdict. #18 waits again at the same step after its wake: a failure of its own issue.
@@ -407,15 +406,15 @@ test('a test wake that is never delivered holds no other run: 60 minutes later t
   // The test moves to #15 60 minutes after the undelivered wake; then each other run gets its wake or the stuck rule.
   // The wake record of #12 is kept for 24 hours from its wait, so its wait is offered once more a day later.
   assert.deepEqual(log, [['runtime-ready', 12, 33], ['runtime-ready', 15, 93], ['runtime-ready', 12, 123], ['runtime-ready', 18, 123], ['runtime-stuck', 18, 153], ['runtime-ready', 12, 1443]]);
-  assert.equal(f.sent.length, 2, 'one interpreter alert and one recovery in 48 hours');
-  assert.match(f.sent[0], /PDD Autopilot alert: interpreter /); assert.match(f.sent[1], /PDD Autopilot recovered: interpreter/); assert.match(f.sent[1], /reached a verdict again/);
+  assert.equal(f.sent.length, 1, 'one persistent incident; recovery was within its issue budget');
+  assert.match(f.sent[0], /needs you: interpreter/);
 });
 
 test('a test run that waits again or ends on the stuck path is no proof: one test per run per outage, then the stuck rule', async t => {
   const f = await launcher(t);
   await f.start(); f.prompts.length = 0;
   f.waits = [wait(12, f.time), wait(15, f.time + minute)]; f.health = { state: 'unavailable', detail: 'no answer' }; f.time += 2 * minute;
-  await f.tick(); assert.equal(f.sent.length, 1);
+  await f.tick(); assert.equal(f.sent.length, 0);
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
   // #12 resends and waits again at the same step while the interpreter is healthy: its test failed and its one resend is used.
@@ -423,10 +422,11 @@ test('a test run that waits again or ends on the stuck path is no proof: one tes
   assert.deepEqual(kinds(f), [['runtime-ready', 15], ['runtime-stuck', 12]]); assert.equal(f.sent.length, 1);
   // #15 ends on the stuck path: no proof. No waiting run is left to test, so the outage closes with its one recovery.
   f.waits = [wait(12, f.waits[1].at)]; f.probe = 'failed'; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: interpreter/); assert.match(f.sent[1], /no waiting run is left to test/); assert.doesNotMatch(f.sent[1], /interpreter is back/i);
+  assert.equal(f.sent.length, 1, 'recovery remains quiet within issue budget');
+  assert.equal(JSON.parse(readFileSync(f.stateFile(), 'utf8')).runtime?.outage, undefined);
   const log = await hours(f, 12);
   assert.deepEqual(log.filter(([kind]) => kind === 'runtime-ready'), [], 'each run had one test wake only');
-  assert.equal(f.sent.length, 2, 'no repeated alert or recovery');
+  assert.equal(f.sent.length, 1, 'no repeated alert or recovery');
 });
 
 test('two issues that fail on their own while the interpreter is healthy are no outage: one retry each, then the stuck rule', async t => {
@@ -449,11 +449,11 @@ test('a recovery keeps a used retry: a run found stuck before the outage gets no
   const afterStuck = f.prompts.length;
   // Before the coordinator parks #12, the interpreter goes down and #15 waits too.
   f.waits.push(wait(15, f.time + minute)); f.health = { state: 'unavailable', detail: 'HTTP 502' }; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent.length, 0);
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 15]], '#15 is the test, not #12');
   f.waits = f.waits.filter(w => w.number !== 15); f.probe = 'verdict'; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: interpreter/);
+  assert.equal(f.sent.length, 1, 'recovery is quiet within 24 hours');
   assert.ok(!f.prompts.slice(afterStuck).some(text => /pdd workflow changes 12 and this text/.test(text)), '#12 is never woken again');
 });
 
@@ -464,7 +464,7 @@ test('a first victim whose retry fails while the interpreter is down keeps its t
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
   // The retry fails because the interpreter went down: the wait begins in the outage.
   f.waits = [wait(12, f.time + 5 * minute)]; f.health = { state: 'unavailable', detail: 'no answer' }; f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent.length, 0);
   f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]); assert.match(f.rules()[0].reason, /is the test/);
 });
@@ -483,8 +483,8 @@ test('an unclear health answer is a sign-in or setup problem: one interpreter-ac
     f.time += 30 * minute;
   }
   assert.equal(f.sent.length, 1, 'one alert for the repository and machine in 48 hours');
-  assert.match(f.sent[0], /PDD Autopilot alert: interpreter-access/); assert.match(f.sent[0], /HTTP 401/); assert.match(f.sent[0], /gh auth status/);
-  const record = JSON.parse(readFileSync(join(f.ports.stateRoot, 'alerts', readdirSync(join(f.ports.stateRoot, 'alerts'))[0]), 'utf8'));
+  assert.match(f.sent[0], /PDD Autopilot needs you: interpreter-access/); assert.match(f.sent[0], /HTTP 401/); assert.match(f.sent[0], /Run pdd autopilot doctor/);
+  const record = JSON.parse(readFileSync(join(f.ports.stateRoot, 'alerts', readdirSync(join(f.ports.stateRoot, 'alerts')).find(n => /^[a-f0-9]{20}\.json$/.test(n))), 'utf8'));
   assert.deepEqual(Object.values(record.incidents).map(item => [item.kind, item.issues]), [['interpreter-access', [12, 15]]], 'one incident for the repository and machine');
   assert.equal(packets[0].runtime.state, 'access'); assert.match(packets[0].runtime.note, /a person must fix/);
   assert.deepEqual(log.filter(([kind]) => kind === 'runtime-ready'), [], 'nothing is resent');
@@ -514,9 +514,9 @@ test('real path: a parked run record, the real health check over HTTP, a test wa
   const folder = join(f.cwd, 'pdd', 'runs', String(record.number)); mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, 'status.json'), JSON.stringify(record));
   f.time = record.runtimeWait.at + 5 * minute; await f.tick();
-  assert.deepEqual(seen, ['GET /v1/capacity bearer']); assert.equal(f.sent.length, 1); assert.match(f.sent[0], /alert: interpreter .*\n.*\n.*issues\/17/);
+  assert.deepEqual(seen, ['GET /v1/capacity bearer']); assert.equal(f.sent.length, 0, 'first paused tick is quiet');
   answer = 200; f.time += 30 * minute; await f.tick();
-  assert.deepEqual(kinds(f), [['runtime-ready', 17]]); assert.equal(f.sent.length, 1, 'no recovery before proof');
+  assert.deepEqual(kinds(f), [['runtime-ready', 17]]); assert.equal(f.sent.length, 1, 'second paused observation sends, recovery awaits proof');
   const offeredAt = f.time;
   // The wake is delivered and the check runs again: the run no longer waits, then its new result is saved with a verdict.
   delete record.runtimeWait; record.state = 'running'; writeFileSync(join(folder, 'status.json'), JSON.stringify(record));
@@ -525,7 +525,8 @@ test('real path: a parked run record, the real health check over HTTP, a test wa
   batch.rows = batch.rows.map(row => ({ ...row, state: 'passed', sent_at: offeredAt + 2 * minute, ended_at: offeredAt + 9 * minute }));
   writeFileSync(batchFile, JSON.stringify(batch));
   f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: interpreter/); assert.match(f.sent[1], /reached a verdict again/);
+  assert.equal(f.sent.length, 1, 'recovery is quiet within 24 hours');
+  assert.equal(JSON.parse(readFileSync(f.stateFile(), 'utf8')).runtime?.outage, undefined);
   assert.ok(seen.length >= 4 && seen.every(line => line === 'GET /v1/capacity bearer'), 'only the free health read');
 });
 
@@ -556,7 +557,7 @@ test('real pdd test: a posted check that did not run is sent again by the Story 
     runtimeWait: { at: f.time, reason: 'pdd could not reach the PDD interpreter', batch, cause: savedCheckCause(batch, { env }) } };
   writeFileSync(join(folder, 'status.json'), JSON.stringify(record));
   f.health = { state: 'unavailable', detail: 'not reached' }; f.time += 5 * minute; await f.tick();
-  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent.length, 0, 'first paused tick is quiet');
   down = false; f.health = { state: 'healthy', detail: 'HTTP 200' }; f.time += 30 * minute; await f.tick();
   assert.deepEqual(kinds(f), [['runtime-ready', 12]]);
   const text = f.rules()[0].reason;
@@ -572,7 +573,8 @@ test('real pdd test: a posted check that did not run is sent again by the Story 
   const again = await pddTest(['place-order'], { '--max-calls': '18' });
   assert.equal(again.sent, 1, 'the Story check sends the check once'); assert.equal(again.exitCode, 0, again.out + again.err);
   f.time += 30 * minute; await f.tick();
-  assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered: interpreter/); assert.match(f.sent[1], /reached a verdict again/);
+  assert.equal(f.sent.length, 1, 'recovery is quiet within 24 hours');
+  assert.equal(JSON.parse(readFileSync(f.stateFile(), 'utf8')).runtime?.outage, undefined);
 });
 
 test('the interpreter alert kind is one incident per repository and machine', async t => {
@@ -580,13 +582,16 @@ test('the interpreter alert kind is one incident per repository and machine', as
   const env = { HOME: dir, XDG_CONFIG_HOME: join(dir, 'config') }, sent = [];
   mkdirSync(join(dir, 'config', 'pdd'), { recursive: true });
   writeFileSync(join(dir, 'config', 'pdd', 'autopilot-alerts.json'), JSON.stringify({ v: 1, service: 'slack', url: 'https://hooks.slack.com/services/T/B/x' }));
-  const ports = { stateRoot: join(dir, 'state'), hostname: () => 'host-a', repository: async () => ({ nameWithOwner: 'owner/repo' }), http: async ({ body }) => { sent.push(body.text); return { status: 200, text: 'ok' }; } };
+  let time = T0;
+  const ports = { now:()=>time, stateRoot: join(dir, 'state'), hostname: () => 'host-a', repository: async () => ({ nameWithOwner: 'owner/repo' }), http: async ({ body }) => { sent.push(body.text); return { status: 200, text: 'ok' }; } };
   const call = (issue, kind, fields) => runAutopilotAlerts({ action: 'alert', cwd: dir, env, issue, kind, text: JSON.stringify(fields) }, ports);
-  const fields = { cause: 'The interpreter down', tried: 'retries', need: 'nothing now' };
+  const fields = {code:'interpreter-health',cause:'Interpreter down',tried:'Health HTTP 503',need:'Run pdd autopilot doctor?',ifNoAnswer:'Interpreter work waits.',paused:true};
   assert.equal((await call('12', 'interpreter', fields)).exitCode, 0);
-  assert.match((await call('15', 'interpreter', fields)).message, /Added #15 to the open interpreter alert/);
+  assert.equal(sent.length,0);time += 15 * minute;
+  assert.match((await call('15', 'interpreter', fields)).message, /confirmed it/);
   assert.equal(sent.length, 1);
-  assert.match((await call('15', 'recovered', { cause: 'The interpreter is back', kind: 'interpreter' })).message, /Recovery sent/);
+  time += 24 * 60 * minute;
+  assert.match((await call('15', 'recovered', { cause:'Interpreter back',kind:'interpreter',code:'interpreter-health' })).message, /Recovery recorded/);
   assert.equal(sent.length, 2); assert.match(sent[1], /recovered: interpreter/); assert.match(sent[1], /issues\/12, https:\/\/github.com\/owner\/repo\/issues\/15/);
 });
 
@@ -634,8 +639,10 @@ test('3097: health recovery asks once for all lost batches and their earlier cos
   const decisions=()=>f.sent.filter(text=>text.includes('workflow resend'));
   assert.equal(decisions().length,1,'one grouped person decision after service recovery');
   assert.match(decisions()[0],/workflow resend 12 15 --said/);
-  assert.match(decisions()[0],/20261027-170500-abcd/); assert.match(decisions()[0],/20261027-170600-efgh/);
-  assert.match(decisions()[0],/AI calls: 3/); assert.match(decisions()[0],/unknown.*at least 2/);
+  const localCause=JSON.parse(readFileSync(join(f.ports.stateRoot,'alerts',readdirSync(join(f.ports.stateRoot,'alerts')).find(n=>/^[a-f0-9]{20}\.json$/.test(n))),'utf8')).incidents['cause:lost-verdict'].fields.cause;
+  assert.match(localCause,/20261027-170500-abcd/);assert.match(localCause,/20261027-170600-efgh/);
+  assert.match(localCause,/AI calls: 3/);assert.match(localCause,/unknown.*at least 2/);
+  assert.doesNotMatch(decisions()[0],/AI calls|20261027/);
   assert.equal(f.rules().filter(rule=>rule.kind==='runtime-ready').length,0);
   f.time+=minute; await f.tick(); f.time+=minute; await f.tick();
   assert.equal(decisions().length,1,'durable group identity prevents repeated questions');
@@ -643,7 +650,7 @@ test('3097: health recovery asks once for all lost batches and their earlier cos
   const state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
   assert.ok(state.runtime.lostDecision,'identity survives on disk');
   f.waits[1].batch='20261027-170700-ijkl'; f.time+=minute; await f.tick();
-  assert.equal(decisions().length,2,'a replacement lost batch needs another decision');
+  assert.equal(decisions().length,1,'replacement lost batch stays held within the issue message budget');
 });
 
 test('3097: native saved replacement evidence wakes a verdict without another send; a second lost receipt stays held',async t=>{
@@ -664,7 +671,9 @@ test('3097: native saved replacement evidence wakes a verdict without another se
   receipt(BATCH,'unknown',4);save();f.time+=minute;await f.tick();
   const firstDecision=f.sent.find(text=>text.includes('workflow resend'));
   assert.ok(firstDecision,'native lost receipt needs a person decision');
-  assert.match(firstDecision,/AI calls: 4/);
+  assert.doesNotMatch(firstDecision,/AI calls/);
+  const local=()=>JSON.parse(readFileSync(join(f.ports.stateRoot,'alerts',readdirSync(join(f.ports.stateRoot,'alerts')).find(n=>/^[a-f0-9]{20}\.json$/.test(n))),'utf8'));
+  assert.match(local().incidents['cause:lost-verdict'].fields.cause,/AI calls: 4/);
   const replacement='20261027-180000-efgh';receipt(replacement,'passed',2);
   record.checkResends=[{oldBatch:BATCH,newBatch:replacement,state:'verdict'}];save();
   f.time+=minute;await f.tick();
@@ -677,7 +686,7 @@ test('3097: native saved replacement evidence wakes a verdict without another se
   f.time+=minute;await f.tick();
   assert.equal((f.prompts.length>promptsBeforeLost?f.rules():[]).filter(rule=>rule.kind==='runtime-ready').length,0);
   const decisions=f.sent.filter(text=>text.includes('workflow resend'));
-  assert.equal(decisions.length,2);assert.match(decisions[1],new RegExp(lost));
+  assert.equal(decisions.length,1,'same issue budget prevents another post');assert.match(local().incidents['cause:lost-verdict'].fields.cause,new RegExp(lost));
 });
 
 
@@ -691,7 +700,8 @@ for(const legacy of [false,true]) test(`3097 repair 1: all-lost waits attach an 
     writeFileSync(f.stateFile(),JSON.stringify(state));
   }
   f.time+=minute;await f.tick();
-  assert.equal(f.sent.length,1,'a lost-verdict-only wait still needs an interpreter-access alert');
+  assert.equal(f.sent.length,0,'first interpreter-access observation stays quiet');
+  f.time+=15*minute;await f.tick();assert.equal(f.sent.length,1,'persistent all-lost access incident sends');
   assert.match(f.sent[0],/interpreter-access/);assert.match(f.sent[0],/HTTP 401/);
   let state=JSON.parse(readFileSync(f.stateFile(),'utf8'));
   assert.equal(state.runtime.access.first,12);assert.deepEqual(state.runtime.access.issues,[12]);
@@ -702,7 +712,7 @@ for(const legacy of [false,true]) test(`3097 repair 1: all-lost waits attach an 
   assert.deepEqual(kinds(f),[],'lost verdicts stay parked without retry or stuck wakes');
   assert.equal(state.runtime.lostDecision,undefined,'access failure must not ask for a resend decision');
   f.health={state:'healthy',detail:'HTTP 200'};f.time+=minute;await f.tick();
-  assert.equal(f.sent.filter(text=>text.includes('workflow resend')).length,1);
-  assert.equal(f.sent.filter(text=>text.includes('recovered: interpreter-access')).length,1);
+  assert.equal(f.sent.filter(text=>text.includes('workflow resend')).length,0,'person ask remains held within the issue budget');
+  assert.equal(f.sent.filter(text=>text.includes('recovered: interpreter-access')).length,0,'quiet recovery shares the issue budget');
   assert.deepEqual(kinds(f),[],'health recovery cannot wake a lost verdict automatically');
 });

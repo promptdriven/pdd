@@ -730,15 +730,17 @@ async function healthAlerts(state, p, stateRoot) {
     catch { return false; }
   };
   for (const kind of ['resource', 'usage-limit']) {
+    const code = kind === 'resource' ? 'machine-resource' : 'codex-usage';
     const healthy = kind === 'resource' ? health.resource?.healthy === true : ['healthy', 'not-applicable'].includes(health.usage?.state);
     if (healthy) {
-      if (health.incidents[kind] && await alert(health.incidents[kind], 'recovered', { kind, cause: kind === 'resource' ? 'Memory and disk are available again' : 'The Codex limit read permits work again' })) delete health.incidents[kind];
+      if (health.incidents[kind] && await alert(health.incidents[kind], 'recovered', { kind, code, cause: kind === 'resource' ? 'Memory and disk are available again' : 'The Codex limit read permits work again' })) delete health.incidents[kind];
     } else if (issues.length) {
       health.incidents[kind] ??= issues[0];
       const cause = kind === 'resource' ? (health.resource?.causes ?? ['Machine resources cannot be read']).join('; ')
-        : `Codex usage ${health.usage?.state === 'limited' ? 'limit reached' : 'cannot be read'}${health.usage?.resetAt == null ? '' : `; resets ${new Date(health.usage.resetAt).toISOString()}`}`;
-      for (const number of issues) await alert(number, kind, { cause, tried: 'Paused new admissions; kept claims, progress and heartbeats',
-        need: kind === 'resource' ? 'Free disk space or memory; the tick checks again' : 'Wait for the ordinary usage window; the tick reads the limit again' });
+        : `Codex usage ${health.usage?.state === 'limited' ? 'limit reached' : 'cannot be read'}${health.usage?.usedPercent == null ? '' : ` (${health.usage.usedPercent}%)`}${health.usage?.resetAt == null ? '' : `; resets ${new Date(health.usage.resetAt).toISOString()}`}`;
+      await alert(health.incidents[kind], kind, { code, cause, tried: `Read: ${cause}`,
+        need: 'Run pdd autopilot doctor?', ifNoAnswer: 'Admissions wait; claims and heartbeats continue.',
+        paused: health.paused, tick: health.at, issues });
     }
   }
 }
@@ -755,9 +757,6 @@ async function readRuntimeProbe(state, p, probe) {
   return ['running', 'waiting', 'paused'].includes(run.state) ? 'pending' : 'failed';
 }
 const RUNTIME_KEEP = 24 * 60 * 60 * 1000, RUNTIME_ACCESS_LIMIT = 4 * 60 * 60 * 1000, RUNTIME_PROBE_LIMIT = 60 * 60 * 1000;
-const RUNTIME_TRIED = 'pdd retried each call up to 3 times. The runs wait for the interpreter and keep their claims, branches and progress; other work goes on.';
-const RUNTIME_NEED = 'No action now. Autopilot checks the interpreter at each tick without AI. When it answers again, Autopilot wakes the oldest waiting run as a test and wakes the others after its check reaches a verdict. Look at the PDD interpreter if this lasts.';
-const ACCESS_TRIED = 'Autopilot checks the interpreter at each tick without AI. The runs wait for the interpreter, keep their claims, branches and progress, and resend nothing; other work goes on.';
 function runtimeWake(wait, kind) {
   const read = `pdd test --read${wait.batch ? ` ${wait.batch}` : ''}`;
   const why = kind === 'retry' ? 'The interpreter answers its health check and no outage is open, so this is a problem of this issue only: this wake is its one retry. If the same step waits for the interpreter again, it follows the stuck rule.'
@@ -827,19 +826,20 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
       const details = lostWaits.map(w=>`#${w.number}: ${w.batch ?? 'batch unknown'}; AI calls: ${w.cost?.calls ?? `unknown (at least ${w.cost?.knownCalls ?? 0})`}`).join('; ');
       try {
         const result = await send({issue:String(lostWaits[0].number),kind:'decision',update:true,text:JSON.stringify({
+          code:'lost-verdict', issues:lostWaits.map(w=>w.number),
           cause:`The interpreter answers again. Lost check verdicts: ${details}.`,
           tried:'The saved receipts are retained. No lost check was resent.',
-          need:`One person decision for all listed runs: pdd workflow resend ${lostWaits.map(w=>w.number).join(' ')} --said - with the person's words. Each decision permits one resend; another no-verdict stops immediately.`})});
-        if (result?.exitCode === 0) lostDecision = identity;
+          need:`Run pdd workflow resend ${lostWaits.map(w=>w.number).join(' ')} --said -?`,
+          ifNoAnswer:'These runs wait for a resend decision; other work continues.'})});
+        if (result?.exitCode === 0 && /^(Alert|Update) sent for .*; (the webhook|the Discord bot readback) confirmed it\.$/.test(result.message ?? '')) lostDecision = identity;
       } catch { /* A failed alert can be retried. It grants no send authority. */ }
     }
   }
   // The first call opens the one incident of this repository and machine; later calls join it or resend a failed alert.
   const incident = async (record, kind, fields) => {
-    for (const number of [record.first, ...allWaits.map(w => w.number).filter(n => n !== record.first && !record.issues.includes(n))]) {
-      const sent = await alert(number, kind, fields);
-      if (sent && !record.issues.includes(number)) record.issues.push(number);
-    }
+    const issues = [...new Set([record.first, ...record.issues, ...allWaits.map(w => w.number)])];
+    const recorded = await alert(record.first, kind, {...fields, issues, paused:true, tick:now});
+    if (recorded) record.issues = issues;
   };
   // A wake (retry, test or recovery) is used when the same step waits again after it, unless that wait began while
   // the interpreter was down: then the outage, not the issue, explains it.
@@ -851,19 +851,23 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
     access ??= { since: now, issues: [] };
     access.first ??= allWaits[0]?.number ?? outage?.first;
     Object.assign(access, { detail: health.detail, fix: health.fix });
-    if (access.first) await incident(access, 'interpreter-access', { cause: `The free interpreter health check cannot be read (${health.detail}). This is a sign-in or setup problem on this machine, not an interpreter outage.`, tried: ACCESS_TRIED, need: `${health.fix} After 4 hours other waiting runs follow the stuck rule; lost-verdict runs stay parked for a person decision.` });
+    if (access.first) await incident(access, 'interpreter-access', { code:'interpreter-access', cause: `The free interpreter health check cannot be read (${health.detail}). Fix: ${health.fix}`,
+      tried:`Interpreter health check: ${health.detail}; no checks resent.`, need:'Run pdd autopilot doctor?',
+      ifNoAnswer:'Interpreter work waits; other work continues.' });
     for (const w of waits) if (now - Math.max(w.at, access.since) >= RUNTIME_ACCESS_LIMIT)
       stuck.push([w, `Run #${w.number} has waited 4 hours for the interpreter, and the free health check still cannot be read (${health.detail}).`]);
   } else if (access && health.state === 'healthy') {
     // A down answer does not show that the sign-in works again; only a healthy answer ends the access problem.
-    if (access.first) await alert(access.first, 'recovered', { cause: `The free interpreter health check answers again (${health.detail}).`, kind: 'interpreter-access' });
+    if (access.first) await alert(access.first, 'recovered', { cause: `The free interpreter health check answers again (${health.detail}).`, kind: 'interpreter-access', code:'interpreter-access' });
     access = null;
   }
   if (pattern.testMode && !outage && allWaits.length) outage = {since: now, first: allWaits[0].number, issues: [], probed: [], detail: 'Three consecutive checks gave no verdict.'};
   // Only a failed health check opens an outage. Waits of several issues while the interpreter is healthy are not one.
   if (health.state === 'unavailable' && !outage && allWaits.length)
     outage = { since: now, first: allWaits[0].number, issues: [], probed: [], detail: `The free interpreter health check failed (${health.detail}).` };
-  if (outage) await incident(outage, 'interpreter', { cause: outage.detail, tried: RUNTIME_TRIED, need: RUNTIME_NEED });
+  if (outage) await incident(outage, 'interpreter', {code:'interpreter-health', cause:outage.detail,
+    tried:`Interpreter health check: ${health.detail}; waits retained.`, need:'Run pdd autopilot doctor?',
+    ifNoAnswer:'Interpreter work waits; other work continues.'});
   // A wait first seen while the interpreter is down began in the outage; a wait already found used while healthy stays used.
   if (outage && health.state === 'unavailable') outage.down = { ...outage.down, ...Object.fromEntries(waits.filter(w => retried[w.number]?.again !== w.at).map(w => [w.number, w.at])) };
   if (health.state === 'healthy') {
@@ -897,7 +901,7 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
     if (recovered) {
       const count = wake.length;
       const woken = `Autopilot wakes ${count} waiting run${count === 1 ? '' : 's'}, oldest first`;
-      await alert(outage.first, 'recovered', { kind: 'interpreter', cause: recovered === 'verdict'
+      await alert(outage.first, 'recovered', { kind: 'interpreter', code:'interpreter-health', cause: recovered === 'verdict'
         ? `The interpreter is back: the free health check passed and a test check reached a verdict again. ${woken}.`
         : `The free health check passes again, and no waiting run is left to test. ${woken}; a run that failed its test follows the stuck rule.` });
       outage = null;

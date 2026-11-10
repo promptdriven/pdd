@@ -231,7 +231,7 @@ function clearAsk(need) {
   if (typeof need !== 'string' || !need.trim() || /[\r\n]/.test(need)) return false;
   const text = need.trim();
   if (/\bfyi\b|nothing to do|no human intervention|informational|no\s+(?:further\s+)?action|no\s+(?:(?:operator|human|person)\s+)?action|no\s+(?:action|operator|human)\s+(?:is\s+)?needed|no named blocker|identify the blocker/i.test(text)) return false;
-  if (/(?:\b(?:and|then|also)\s+|[;,:—–]\s*|\s+-\s+)(?:(?:please|you)\s+)*(?:approve|choose|grant|provide|supply|sign|release|review|restore|renew|increase|allow|run|merge|resend|retry|pay|spend|pdd|gh|git)\b/i.test(text)) return false;
+  if (/(?:\b(?:and|then|also)\s+|[&;,:—–]\s*|\s+-\s+)(?:(?:please|you)\s+)*(?:approve|choose|grant|provide|supply|sign|release|review|restore|renew|increase|allow|run|merge|resend|retry|pay|spend|pdd|gh|git)\b/i.test(text)) return false;
   if (/[.!]\s+\S/.test(text)) return false;
   const questions = (text.match(/\?/g) ?? []).length;
   return questions === 1 ? text.endsWith('?') && /\p{L}{2}/u.test(text) : questions === 0 &&

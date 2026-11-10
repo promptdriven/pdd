@@ -22,6 +22,8 @@ test('native lost-verdict group reaches real HTTP once with one resend ask and a
 
 for(const suppression of ['unconfigured','issue-budget','failed','unconfirmed'])test(`native lost-verdict ${suppression} is not marked delivered and remains owned on later ticks`,async t=>{
   const f=await launcher(t);await f.start();f.waits=[lost(12,f.time)];
+  // Isolate handoff retries from the independent daily digest, which has its own issue budget.
+  f.ports.sendDigest=async()=>({exitCode:0});
   if(suppression==='unconfigured')rmSync(join(f.home,'.config','pdd','autopilot-alerts.json'));
   if(suppression==='issue-budget')await runAutopilotAlerts({action:'alert',cwd:f.cwd,env:f.env,issue:'12',kind:'access',text:JSON.stringify({code:'other-ask',cause:'Permission missing',tried:'Read permission',need:'Grant write access?',ifNoAnswer:'This run waits.'})},{...f.ports.alertPorts,stateRoot:f.ports.stateRoot,repository:async()=>({nameWithOwner:'owner/repo'}),now:()=>f.time});
   const http=f.ports.alertPorts.http;

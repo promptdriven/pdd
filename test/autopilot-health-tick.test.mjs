@@ -15,7 +15,7 @@ test('usage stops admission and deduplicates one machine incident across issues 
   const f = await launcher(t); await f.start(); f.prompts.length = 0;
   f.issues = [issue(12), issue(13)]; const reset = f.time + 60_000;
   f.ports.codexLimits = async () => limited(reset);
-  for (let i = 0; i < 3; i++) { await f.tick(); f.time += 60_000; }
+  for (let i = 0; i < 3; i++) { await f.tick(); f.time += 15 * 60_000; }
   assert.equal(f.prompts.length, 0, 'quota must withhold coordinator work');
   assert.equal(state(f).health?.paused, true);
   assert.equal(f.sent.length, 1);
@@ -24,9 +24,9 @@ test('usage stops admission and deduplicates one machine incident across issues 
   const before = state(f); assert.equal(before.health.usage.state, 'limited', 'elapsed reset does not prove recovery');
   assert.equal(before.enabled, true);
   f.ports.codexLimits = async () => healthy(); await f.tick();
-  assert.equal(state(f).health.paused, false); assert.equal(f.sent.length, 2); assert.match(f.sent[1], /recovered/);
+  assert.equal(state(f).health.paused, false); assert.equal(f.sent.length, 1, 'recovery closes quietly within the issue budget');
   assert.equal(f.prompts.length, 1); assert.deepEqual(f.packet().issues.map(row => row.number), [12, 13]);
-  await f.tick(); assert.equal(f.sent.length, 2);
+  await f.tick(); assert.equal(f.sent.length, 1);
 });
 
 test('machine hold keeps claim heartbeats and progress reads, blocks retries and recovers without fresh work', async t => {
@@ -40,25 +40,25 @@ test('machine hold keeps claim heartbeats and progress reads, blocks retries and
   f.environmentWaits = [{ number: 12, at: f.time - 60_000, nextAt: f.time, attempts: 0, area: 0, step: 'verify', reason: 'native suite stall' }];
   await f.tick(); await f.tick();
   assert.equal(beats, 2); assert.equal(progress, 2); assert.equal(reads, 2); assert.equal(f.prompts.length, 0);
-  assert.equal(f.sent.length, 1); assert.match(f.sent[0], /resource/);
+  assert.equal(f.sent.length, 0, 'same-time observations do not meet debounce');
   f.environmentWaits = []; f.ports.machineHealth = async () => ({ healthy: true, causes: [], resources: null });
   await f.tick(); assert.equal(f.prompts.length, 1, 'recovery must wake without a new issue');
   assert.equal(f.packet().health.paused, false); assert.equal(state(f).health.recoveryPending, null);
-  assert.equal(beats, 3); assert.equal(f.sent.length, 2);
+  assert.equal(beats, 3); assert.equal(f.sent.length, 0);
 });
 
 test('unknown usage holds the incident until a positive read and recovery waits for idle delivery', async t => {
   const f = await launcher(t); await f.start(); f.prompts.length = 0; f.issues = [issue(12)];
   f.ports.codexLimits = async () => limited(f.time - 1); await f.tick();
   f.ports.codexLimits = async () => unknown(); await f.tick();
-  assert.equal(f.sent.length, 1); assert.equal(f.prompts.length, 0);
+  assert.equal(f.sent.length, 0); assert.equal(f.prompts.length, 0);
   const herdr = f.ports.herdr;
   f.ports.herdr = async args => { const reply = await herdr(args); if (reply?.result?.agent) reply.result.agent.agent_status = 'working'; return reply; };
   f.ports.armCoordinatorIdle = () => {};
   f.ports.codexLimits = async () => healthy(); await f.tick();
-  assert.equal(f.sent.length, 2); assert.equal(f.prompts.length, 0); assert.equal(state(f).health.recoveryPending, f.time);
+  assert.equal(f.sent.length, 0); assert.equal(f.prompts.length, 0); assert.equal(state(f).health.recoveryPending, f.time);
   f.ports.herdr = herdr; await f.tick();
-  assert.equal(f.prompts.length, 1); assert.equal(state(f).health.recoveryPending, null); assert.equal(f.sent.length, 2);
+  assert.equal(f.prompts.length, 1); assert.equal(state(f).health.recoveryPending, null); assert.equal(f.sent.length, 0);
 });
 
 test('status reads saved health only and selected profile wins over ambient profile', async t => {
@@ -87,12 +87,14 @@ test('partial recovery closes only its own incident and does not wake until all 
   const f = await launcher(t); await f.start(); f.prompts.length = 0; f.issues = [issue(12)];
   f.ports.codexLimits = async () => limited(null);
   f.ports.machineHealth = async () => ({ healthy: false, causes: ['memory'], resources: null });
-  await f.tick(); assert.equal(f.sent.length, 2);
+  await f.tick(); assert.equal(f.sent.length, 0);
+  f.time += 15 * 60_000; await f.tick();
+  assert.equal(f.sent.length, 1, 'shared issue budget permits one machine message');
   f.ports.codexLimits = async () => healthy(); await f.tick();
-  assert.equal(f.sent.length, 3); assert.equal(f.prompts.length, 0); assert.equal(state(f).health.paused, true);
+  assert.equal(f.sent.length, 1); assert.equal(f.prompts.length, 0); assert.equal(state(f).health.paused, true);
   assert.deepEqual(Object.keys(state(f).health.incidents), ['resource']);
   f.ports.machineHealth = async () => ({ healthy: true, causes: [], resources: null }); await f.tick();
-  assert.equal(f.sent.length, 4); assert.equal(f.prompts.length, 1);
+  assert.equal(f.sent.length, 1); assert.equal(f.prompts.length, 1);
 });
 
 test('malformed saved health does not break read-only status', async t => {
@@ -107,10 +109,11 @@ test('malformed saved health does not break read-only status', async t => {
 
 test('health alert during a GitHub wait uses saved repository and webhook without a gh read', async t => {
   const f = await launcher(t); await f.start(); f.prompts.length = 0;
-  save(f, { retryAt: f.time + 60_000, cachedIssues: [issue(12)] });
+  save(f, { retryAt: f.time + 60 * 60_000, cachedIssues: [issue(12)] });
   const run = f.ports.run; let gh = 0;
   f.ports.run = async (command, ...args) => { if (command === 'gh') { gh++; throw Error('GitHub must wait'); } return run(command, ...args); };
   f.ports.codexLimits = async () => limited(f.time + 30_000);
-  await f.tick(); assert.equal(gh, 0); assert.equal(f.sent.length, 1);
+  await f.tick(); assert.equal(gh, 0); assert.equal(f.sent.length, 0);
+  f.time += 15 * 60_000; await f.tick(); assert.equal(gh, 0); assert.equal(f.sent.length, 1);
   assert.equal(state(f).health.paused, true); assert.equal(f.prompts.length, 0);
 });
