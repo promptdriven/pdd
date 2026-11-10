@@ -1413,8 +1413,8 @@ Each tick, without AI calls:
 When a job ends, the issue gets one comment with the cause and the log path and
 loses `pdd:working`. Nothing else waits on it. A job with no result (the agent
 crashed, was signed out or hit a usage limit, or the machine restarted) only
-releases the issue the first time: no comment and no `pdd:stuck`; a 2nd no-result
-in a row on the same issue ends it as below. When the agent failed the task, the
+releases the issue the first time in 24 hours: no comment and no `pdd:stuck`; a 2nd
+no-result on the same issue in 24 hours ends it as below. When the agent failed the task, the
 issue gets `pdd:stuck`; to retry, remove `pdd:stuck`. When a Runtime or PDD
 problem ended it and a report was filed, the issue is blocked by that report (a
 GitHub issue dependency, or a hidden marker in the comment when the report is in
@@ -1423,11 +1423,14 @@ problem comes back after its report closed, the issue gets `pdd:stuck`. An open 
 of an ended job stays open as a draft, with the cause in a PR comment. A PR whose
 head has no CI check 10 minutes after it was opened merges on the full suite and
 the fresh review alone; its merge comment says `CI: none`. To stop a running job, close the issue, assign it or add
-`pdd:stuck`. After three agent jobs in a row end with no result, intake is held
-on this machine and one alert goes out. Each tick then runs a cheap readiness
-check of the agent (Codex: its read-only usage limits; Claude: one short
-`claude -p` call); intake goes on when it passes. `pdd autopilot status` shows the
-jobs, the busy slots, a hold and the last results from local files.
+`pdd:stuck`. After three jobs in a row end with no result, a breaker pauses new
+jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs for
+1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that
+already run go on. After the pause, one trial job starts: a result closes the
+breaker, and no result pauses new jobs again for twice as long (2, 4, then 8 hours
+at most), with a new alert. `pdd autopilot status` shows the jobs, the busy slots,
+the breaker and the time it lets a job start again, and the last results from
+local files.
 
 A Runtime problem (no verdict, lint or binding refusal, interpreter error) or a PDD
 problem (CLI error, crash, claim or merge-check tool error) also gets one report

@@ -598,12 +598,13 @@ test('R5 should-fix: a cleared tool error, a dead suite, a restart, a partial cl
   w.review(17, 'PASS'); w.kill(17, 'suite'); await w.tick();
   assert.equal(w.job(17, 'repair'), undefined);
   assert.equal(w.started.filter(job => job.role === 'suite').length, 2);
-  // S3: a restart that kills 3 running jobs is not 3 strikes.
+  // S3 (now the breaker rule): 3 no-result ends in a row, also from a restart, open the breaker; no new job starts.
   w = await coreWorld(t, { settings: { runs: 3 } });
   for (const n of [17, 18, 19, 20]) w.issue(n);
   await w.tick(); for (const n of [17, 18, 19]) w.kill(n, 'build');
   const restarted = await w.tick();
-  assert.doesNotMatch(restarted.message, /paused/); assert.ok(w.job(20, 'build'));
+  assert.match(restarted.message, /paused/); assert.equal(w.job(20), undefined);
+  assert.deepEqual([17, 18, 19].map(n => w.labels(n)), [[], [], []], 'the three issues are only released');
   // S4: a claim that fails after the label add leaves no bare pdd:working.
   w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17);
@@ -812,44 +813,89 @@ test('R14 a machine engine and label saved by start win over pdd.json; status na
 });
 
 // ---- Review 3 regressions (each failed on f35571720) ----------------------------------------------------
-test('R15 a machine-level agent failure releases issues without marks, holds intake after 3 strikes, alerts once, and resumes on a passing probe', async t => {
+test('R15 the machine breaker: 3 no-result ends open it for 1 h with one alert; half-open allows one job; a result closes it', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } });
   for (let n = 1; n <= 20; n++) w.issue(n);
-  const alerts = [];
-  let ready = false;
-  const extra = { alert: async input => alerts.push(input), agentProbe: async () => ready };
-  for (let i = 0; i < 16; i++) {                       // 8 hours of 30-minute ticks; every job exits with no result
-    await w.tick(extra);
-    for (const job of w.started) if (w.alive.has(job.pid)) w.finish(job.issue, job.role, { code: 1 });
-    w.advance(30 * MIN);
-  }
-  const held = await w.tick(extra);
-  const touched = [...w.github.issues.values()].filter(issue => issue.labels.length || issue.comments.some(c => !c.body.includes('"labelEventId"')));
-  assert.equal([...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:stuck')).length, 0, 'no healthy issue gets pdd:stuck');
-  assert.equal([...w.github.issues.keys()].filter(n => endComments(w, n).length).length, 0, 'no END comment');
-  assert.ok(touched.length <= 1, `issues left with labels or comments: ${touched.map(i => i.number)}`);
-  assert.ok(w.started.length <= 4, `only the jobs before the hold started: ${w.started.length}`);
-  assert.match(held.message, /intake held/i);
-  assert.equal(alerts.length, 1, 'one alert when the hold starts');
-  ready = true;
+  const alerts = [], extra = { alert: async input => alerts.push(input) };
+  const failAll = () => { for (const job of w.started) if (w.alive.has(job.pid)) w.finish(job.issue, job.role, { code: 1 }); };
+  await w.tick(extra); failAll();                       // #1, #2 start and fail
+  await w.tick(extra); failAll();                       // both released (2 in a row); #3, #4 start and fail
+  const opened = await w.tick(extra);                   // #3 released: 3 in a row, the breaker opens
+  assert.match(opened.message, /paused/);
+  assert.equal(w.started.length, 4);
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].text, /Autopilot paused new jobs for 1 h: the agent ended \d+ jobs with no result\. Check sign-in and limits\./);
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Breaker open until \S+ \(1 h\)/);
+  w.advance(30 * MIN); await w.tick(extra);
+  assert.equal(w.started.length, 4, 'no new job while open');
+  w.advance(31 * MIN); await w.tick(extra);
+  assert.equal(w.started.length, 5, 'half-open: exactly one new job');
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Breaker half-open/);
   await w.tick(extra);
-  assert.ok(w.started.length > 3, 'intake resumes when the readiness probe passes');
+  assert.equal(w.started.length, 5, 'no second job while the test job runs');
+  failAll(); await w.tick(extra);                       // the test job ends with no result: open again for 2 h
+  assert.equal(alerts.length, 2); assert.match(alerts[1].text, /paused new jobs for 2 h/);
+  w.advance(121 * MIN); await w.tick(extra);
+  assert.equal(w.started.length, 6, 'half-open again after 2 h');
+  const trial = w.started.at(-1);
+  w.build(trial.issue); await w.tick(extra);            // the test job produces a result: closed, H back to 1
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Breaker closed/);
+  assert.equal(w.started.filter(job => job.role === 'build').length, 7, 'the free slot fills again at once');
+  const machine = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
+  assert.deepEqual([machine.breaker.state, machine.breaker.hours, machine.streak], ['closed', 1, 0]);
+  assert.equal([...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:stuck')).length, 1, 'only the first test job issue (its 2nd no-result in 24 h) is stuck');
 });
 
-test('R15b the 2nd no-result in a row on one issue ends it normally; a result resets the counts', async t => {
+test('R15b the per-issue count is the history of the last 24 hours, and a result in between does not reset it', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17);
   await w.tick(); w.finish(17, 'build', { code: 1 }); await w.tick();
-  assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), [], 'the first no-result only releases the claim');
+  assert.equal(endComments(w, 17).length, 0); assert.deepEqual(w.labels(17), [], 'the first no-result only releases the issue');
   assert.equal(w.comments(17).filter(c => c.includes('"labelEventId"')).length, 0, 'the claim comment is removed');
   await w.tick();
-  assert.equal(w.started.filter(job => job.issue === 17).length, 2, 'the released issue is ready again on the next tick');
-  w.finish(17, 'build', { code: 1 }); await w.tick();
-  assert.equal(endComments(w, 17).length, 1); assert.ok(w.labels(17).includes('pdd:stuck'), 'the 2nd no-result in a row is a normal END');
-  const machine = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
-  assert.equal(machine.strikes, 2);
-  w.issue(18); await w.tick(); w.build(18); await w.tick();
-  assert.equal(JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8')).strikes, 0, 'a job with a result resets the strikes');
+  w.build(17); await w.tick();                           // a PR result in between
+  w.review(17, 'FAIL', ['fix']); w.suite(17, 0); await w.tick();
+  w.finish(17, 'repair', { code: 1 }); await w.tick();   // a repair with no result: the 2nd no-result in 24 h
+  assert.equal(endComments(w, 17).length, 1); assert.ok(w.labels(17).includes('pdd:stuck'));
+  // A no-result more than 24 hours ago does not count.
+  const v = await coreWorld(t, { settings: { runs: 1 } });
+  v.issue(17);
+  await v.tick(); v.kill(17, 'build'); await v.tick();
+  v.advance(25 * 60 * MIN);
+  await v.tick(); v.finish(17, 'build', { code: 1 }); await v.tick();
+  assert.equal(endComments(v, 17).length, 0); assert.deepEqual(v.labels(17), []);
+});
+
+test('Q1 regression: with every job failing for 16 hours, the breaker bounds the damage', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  for (let n = 1; n <= 20; n++) w.issue(n);
+  const alerts = [];
+  for (let i = 0; i < 32; i++) {
+    await w.tick({ alert: async input => alerts.push(input) });
+    for (const job of w.started) if (w.alive.has(job.pid)) w.finish(job.issue, job.role, { code: 1 });
+    w.advance(30 * MIN);
+  }
+  const stuck = [...w.github.issues.values()].filter(issue => issue.labels.includes('pdd:stuck'));
+  assert.ok(w.started.length <= 8, `jobs started: ${w.started.length}`);
+  assert.ok(stuck.length <= 4, `issues stuck: ${stuck.length}`);
+  assert.ok(alerts.length >= 3 && alerts.length <= 5, `alerts: ${alerts.length}`);
+  assert.match(alerts.at(-1).text, /paused new jobs for 8 h/);
+});
+
+test('Q2 regression: a repair that always ends with no result ends the issue after at most 2 builds', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  for (let cycle = 0; cycle < 4; cycle++) {
+    await w.tick();
+    if (!w.job(17, 'build') || !w.alive.has(w.job(17, 'build').pid)) continue;
+    w.build(17); await w.tick();
+    w.review(17, 'FAIL', ['fix the bug']); w.suite(17, 0); await w.tick();
+    w.finish(17, 'repair', { code: 1 }); await w.tick();
+    w.advance(30 * MIN);
+  }
+  const builds = w.started.filter(j => j.issue === 17 && j.role === 'build').length;
+  assert.ok(builds <= 2, `builds: ${builds}`);
+  assert.equal(endComments(w, 17).length, 1); assert.ok(w.labels(17).includes('pdd:stuck'));
 });
 
 test('R16 a PR number written as a string is read as a number; a non-number is no result', async t => {

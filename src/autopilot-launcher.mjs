@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: a6966327429129cba5a5bedeb10bceeeba6816a0ebe1ad6c500ad24da62e056e).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 3b18bc15914dc37bc6f354407142e98fc614cf0f156f02f2d8f642c042bf29b2).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -43,7 +43,6 @@ import { costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { autopilotEngine, readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
-import { jobEnvironment } from './agent-job.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 const STUCK_AFTER = 60 * 60 * 1000;
@@ -1554,17 +1553,9 @@ async function coreTick(stateFile, state, p, ports) {
     version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
     trusted: row => trusted(row, state, { trust: core.trust }, p),
     agentReady: async () => agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env })).state !== 'limited',
-    // While intake is held: Codex uses its read-only limits; Claude gets one short `claude -p` call (60 s).
-    agentProbe: async () => {
-      if (agent.kind !== 'claude') return agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env })).state !== 'limited';
-      try {
-        const reply = await p.execute(agent.command ?? 'claude', ['-p', '--output-format', 'json', 'Reply with the word OK.'], { cwd: state.cwd, env: jobEnvironment(p.env), timeoutMs: 60000, input: '' });
-        return reply.code === 0 && JSON.parse(reply.stdout).is_error !== true;
-      } catch { return false; }
-    },
-    // One stuck alert per issue through this machine's alert destination, when an END could not finish.
-    alert: ({ issue, kind, text }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, text: JSON.stringify({ cause: text,
-      tried: 'The Autopilot core engine retried the END of this issue on 6 ticks and then dropped its local job.', need: 'Check the comment and the labels of the issue, and finish the END by hand.' }) },
+    // One alert through this machine's alert destination; the core gives each alert its own cause, tried and need.
+    alert: ({ issue, kind, text, tried, need, update }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, ...(update ? { update: true } : {}),
+      text: JSON.stringify({ cause: text, tried: tried ?? 'The Autopilot core engine could not go on with this issue.', need: need ?? 'Check the issue and this machine.' }) },
       { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine }),
     ...p.corePorts,
   });

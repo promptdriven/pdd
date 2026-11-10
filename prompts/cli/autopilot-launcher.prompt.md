@@ -1370,10 +1370,8 @@ stays `full`. The full engine below is unchanged; this section only adds a branc
   launcher's counted `gh` and `git` process port, its issue list (`queryIssues` with
   the saved ETag pages), its trust rule for authors (`trusted`, with the core trust
   list), the read-only Codex limits as `agentReady` (only `limited` holds intake),
-  the package version, an `agentProbe` port for a held intake (Codex: the same
-  read-only limits; Claude: one `claude -p --output-format json` call that must answer
-  within 60 seconds with no error), an `alert` port that sends one alert of the given kind for the issue
-through this machine's alert destination (cause, tried, need), `ROOT` = the state file path without `.json` plus `-core`,
+  the package version, an `alert` port that sends one alert of the given kind for the issue
+through this machine's alert destination with the core's cause, tried and need (and `--update` when the core asks), `ROOT` = the state file path without `.json` plus `-core`,
   and the machine report folder `core-reports` beside the state files. Tests may
   replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
   only while still enabled, save the issue-list cache, base fields, `nextTick` and

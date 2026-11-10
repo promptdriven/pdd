@@ -172,21 +172,30 @@ Claude, when `ports.agentReady()` is false at the first ready issue (for example
 Codex usage limit), or while `core.json` holds it.
 
 **No result is a machine fault first.** An agent that exited with no result, a start
-failure, a dead process (a restart or a sleep), a job with no agent record and a job
-that cannot advance past its deadline all end as `no-result`. The first `no-result`
-on an issue only releases it: delete this machine's claim comment, remove
-`pdd:working`, leave the issue with no comment and no `pdd:stuck`, mark this job's
-own open PR as draft with a note, record `released` in the history, and skip the
-issue for the rest of the tick. `core.json` counts `no-result` ends per issue; the
-2nd in a row on the same issue is a normal END (comment and `pdd:stuck`), so one
-issue that always breaks the agent cannot loop. Agent failures (exited with no
-result, start failures; not a restart, a missing record or a stalled advance) are
-machine strikes. After 3 strikes in a row, intake is held on this machine (`held`
-with its start time) and one `usage-limit` alert goes out through `ports.alert`.
-While held, each tick runs `ports.agentProbe()` (else `agentReady`) once; intake goes
-on when it passes. Only a job that produced a result (a PR or a reported failure)
-resets the strikes and the issue's count, and clears a hold; the probe and the passing
-of time do not reset the strikes. Status shows the hold.
+failure (also one that the spawn reports later), a dead process (a restart or a
+sleep), a job with no agent record and a job that cannot advance past its deadline
+all end as `no-result`.
+
+- Per issue: count the `no-result` ends of the issue in `history.jsonl` (lines with
+  `noResult: true`) of the last 24 hours. A result in between (a PR, a review, a
+  repair) does not reset this count. The first `no-result` in 24 hours only releases
+  the issue: delete this machine's claim comment, remove `pdd:working`, leave the issue
+  with no comment and no `pdd:stuck`, mark this job's own open PR as draft with a note,
+  record `released` in the history, and skip the issue for the rest of the tick. The
+  2nd in 24 hours is a normal END (comment and `pdd:stuck`). This covers repair jobs
+  too, so a repair that always gives no result ends after 2 builds.
+- Machine breaker, saved in `core.json` as `breaker {state, hours, until, trial}` and
+  `streak`, so it survives restarts. Each `no-result` end adds 1 to `streak`; a job that
+  produced a result (a PR or a reported failure) sets it to 0 and closes the breaker
+  with `hours` 1. Closed: 3 `no-result` ends in a row open it for 1 hour. Open: start
+  no new job until `until`; jobs that already run go on. When the pause has passed:
+  half-open, and exactly one new job starts (its job id is `trial`); while it runs, no
+  other new job starts, and a vanished trial (for example a person stop) lets the next
+  tick start another. A trial that ends with no result opens the breaker again with
+  `hours` doubled (1, 2, 4, then 8 at most). Each opening sends one `usage-limit` alert
+  through `ports.alert` with `update` and the text "Autopilot paused new jobs for H h:
+  the agent ended N jobs with no result. Check sign-in and limits." (the machine and
+  the end time follow). There is no readiness probe.
 
 ## Jobs
 
@@ -300,7 +309,7 @@ task, a time limit, red checks). It stops the job's processes and saves phase
 `ending`, then, resumable step by step on later ticks:
 
 0. Each tick counts one try. After 6 tries, or 24 hours in phase `ending`, send one
-   `stuck` alert through `ports.alert({issue, kind, text})`, clean up locally with
+   `stuck` alert through `ports.alert` (its own tried and need: finish the END by hand), clean up locally with
    outcome `abandoned` and stop retrying.
 1. When the job has a PR, read it first: a merged PR finishes as merged, never as END.
    A PR that cannot be read is retried on 2 more ticks, then the END goes on.
@@ -368,7 +377,7 @@ or `(pdd.json)`.
 `gh(args, {input})` and `git(args, {cwd})` return `{code, stdout, stderr}`; GitHub
 REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
-`trusted(row)`, `agentReady()`, `agentProbe()`, `warn(text)`, `alert({issue, kind, text})`, and the replaceable `jobs`
+`trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`, and the replaceable `jobs`
 (`start`, `read`, `stop`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
 

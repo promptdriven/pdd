@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 9a23bac14ae485d988e29081de59401e2394019ef4e935c6f4df86e4044bc318).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 5c28a83c1ab979e548c7292fbe176d4d9e97c1e465c343bfe6429bdb747c707a).
 import * as nativeFs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { fileReport, listReportDrafts } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 
-const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
+const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
 // The fallback blocked-by record in an END comment: the report and the cause fingerprint.
 const BLOCK_MARKER = /<!-- pdd:core-blocked-by:([\w.-]+\/[\w.-]+)?#(\d+)(?::([a-z0-9.-]+))? -->/;
@@ -129,10 +129,11 @@ function context({ state, settings, budget }, ports) {
     timeout: settings.jobTimeoutMinutes * MIN, pdd: join(state.packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs'), skip: new Set(), warn: ports.warn ?? (() => {}) };
   ctx.saveJob = job => save(fs, join(dirs.jobs, `${job.issue}.json`), job);
   ctx.comment = (number, body) => gh.ok('POST', `repos/${repo}/issues/${number}/comments`, { body: safeBody(body) });
-  ctx.machineState = () => ({ strikes: 0, held: null, issues: {}, ...readJson(fs, dirs.machine, {}) });
+  ctx.machineState = () => { const m = readJson(fs, dirs.machine, {}); return { streak: 0, ...m, breaker: { state: 'closed', hours: 1, ...m.breaker } }; };
   ctx.saveMachine = value => save(fs, dirs.machine, value);
-  // A job that produced a result (a PR or a reported failure) proves the agent works: the counts start again.
-  ctx.produced = issue => { const m = ctx.machineState(); delete m.issues[issue]; ctx.saveMachine({ ...m, strikes: 0, held: null }); };
+  // A job that produced a result (a PR or a reported failure) proves the agent works: the streak ends and the
+  // breaker closes (its pause goes back to 1 hour). The per-issue count is not reset: it is read from the history.
+  ctx.produced = () => { const m = ctx.machineState(); ctx.saveMachine({ ...m, streak: 0, breaker: { state: 'closed', hours: 1 } }); };
   ctx.readClaim = async n => (await owners([n])).find(claim => claim.issue === issueKey(repo, n)) ?? null;
   ctx.ours = claim => claim?.coordinatorId === state.coordinatorId && claim?.machine === state.machine;
   // This job still owns the issue only while the winning claim is this machine's claim comment.
@@ -319,18 +320,20 @@ async function checkout(ctx, job, name) {
   return path;
 }
 async function intake(ctx, rows) {
-  const { state, settings } = ctx, held = ctx.machineState();
-  const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length;
+  const { state, settings } = ctx, jobs = readJobs(ctx.fs, ctx.root);
+  const busy = jobs.filter(holdsSlot).length;
   let free = settings.runs - busy, tries = 0;
   if (free <= 0) return null;
   if (!['codex', 'claude'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex or Claude agent; run pdd autopilot start from a signed-in Codex or Claude';
-  // After 3 strikes in a row the agent is not working on this machine: intake waits until a cheap readiness probe
-  // passes, once per tick. The probe never resets the strike count; only a job with a result does.
-  if (held.held) {
-    let passed = false;
-    try { passed = await (ctx.ports.agentProbe ?? ctx.ports.agentReady ?? (async () => true))(); } catch (error) { ctx.warn(`Autopilot core agent probe failed: ${error.message}`); }
-    if (!passed) return `intake held since ${new Date(held.held.since).toISOString()}: ${STRIKES} jobs in a row ended with no result and the agent readiness probe did not pass; check the agent with pdd autopilot doctor`;
-    ctx.saveMachine({ ...ctx.machineState(), held: null });
+  // The machine breaker. Open: no new job until the pause ends. Half-open: exactly one new job, the trial.
+  const m = ctx.machineState(), b = m.breaker;
+  if (b.state === 'open') {
+    if (ctx.now() < b.until) return `new jobs paused until ${new Date(b.until).toISOString()}: the breaker is open for ${b.hours} h because the agent ended jobs with no result`;
+    Object.assign(b, { state: 'half-open', trial: null }); ctx.saveMachine(m);
+  }
+  if (b.state === 'half-open') {
+    if (b.trial && jobs.some(job => job.id === b.trial)) return 'the breaker is half-open: one trial job runs, no other new job starts';
+    free = Math.min(free, 1);
   }
   let checked = false;
   for await (const row of readyRows(ctx, rows)) {
@@ -357,9 +360,10 @@ async function intake(ctx, rows) {
     const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
       branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), deadline: ctx.now() + ctx.timeout };
     ctx.saveJob(job);
+    if (b.state === 'half-open') { const now = ctx.machineState(); now.breaker.trial = job.id; ctx.saveMachine(now); }
     try { job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result)); ctx.saveJob(job); ctx.counts.started++; free--; }
     catch (error) {
-      await end(ctx, job, cause('job', 'no-result', `the agent could not start: ${oneLine(error.message)}`, { strike: true }))
+      await end(ctx, job, cause('job', 'no-result', `the agent could not start: ${oneLine(error.message)}`))
         .catch(failure => ctx.warn(`Autopilot core END of #${n} waits: ${failure.message}`));
     }
   }
@@ -547,19 +551,23 @@ async function draftOwnPr(ctx, job, text) {
 }
 async function end(ctx, job, why) {
   if (!job.end && why.code === 'no-result') {
-    // No result is a machine fault first (a sign-out, a usage limit, a broken agent CLI, a restart): release the
-    // claim with no comment and no pdd:stuck. The 2nd no-result in a row on the same issue ends it normally, so one
-    // issue that always breaks the agent cannot loop. Only an agent failure (not a restart) is a machine strike.
-    const m = ctx.machineState(), count = (m.issues[job.issue] ?? 0) + 1;
-    why = { ...why, release: count < 2 };
-    m.issues[job.issue] = count < 2 ? count : 0;
-    if (why.strike) {
-      m.strikes = (m.strikes ?? 0) + 1;
-      if (m.strikes >= STRIKES && !m.held) {
-        m.held = { since: ctx.now() };
-        const text = `Autopilot core holds intake on ${ctx.state.machine}: ${m.strikes} agent jobs in a row ended with no result (the last on issue #${job.issue}: ${why.text}). A readiness probe runs on each tick; intake goes on when it passes.`;
-        try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'usage-limit', text }); } catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
-      }
+    // No result is a machine fault first (a sign-out, a usage limit, a broken agent CLI, a restart). Per issue: the
+    // first no-result in 24 hours only releases the claim (no comment, no pdd:stuck); the 2nd in 24 hours, whatever
+    // came between, is a normal END, so one issue cannot loop through builds or repairs.
+    const recent = readHistory(ctx.fs, ctx.root, Infinity).filter(row => row.issue === job.issue && row.noResult && ctx.now() - row.at < DAY).length;
+    why = { ...why, release: recent < 1 };
+    // Machine breaker: 3 no-result ends in a row open it; the trial of a half-open breaker that ends with no
+    // result opens it again with the pause doubled (1, 2, 4, then 8 hours at most).
+    const m = ctx.machineState(), b = m.breaker;
+    m.streak = (m.streak ?? 0) + 1;
+    const reopen = b.state === 'half-open' && b.trial === job.id;
+    if (reopen || b.state === 'closed' && m.streak >= STRIKES) {
+      b.hours = reopen ? Math.min(MAX_PAUSE_HOURS, (b.hours ?? 1) * 2) : 1;
+      Object.assign(b, { state: 'open', until: ctx.now() + b.hours * HOUR, trial: null });
+      const text = `Autopilot paused new jobs for ${b.hours} h: the agent ended ${reopen ? 'the trial job' : `${m.streak} jobs`} with no result. Check sign-in and limits.`;
+      try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'usage-limit', update: true, text: `${text} (machine ${ctx.state.machine}, until ${new Date(b.until).toISOString()})`,
+        tried: `No new job starts until ${new Date(b.until).toISOString()}; then one trial job runs. Jobs that already run go on.`, need: 'Check the agent sign-in and usage limits on this machine, for example with pdd autopilot doctor.' }); }
+      catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
     }
     ctx.saveMachine(m);
   }
@@ -573,7 +581,8 @@ async function continueEnd(ctx, job) {
   e.tries = (e.tries ?? 0) + 1; ctx.saveJob(job);
   if (e.tries > END_TRIES || ctx.now() - e.at > DAY) {
     const text = `Autopilot core could not finish the END of issue #${job.issue} after ${e.tries - 1} tries${job.lastError ? ` (last error: ${job.lastError})` : ''}; its cause was: ${why.text}`;
-    try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'stuck', text }); } catch (error) { ctx.warn(`Autopilot core alert for #${job.issue} failed: ${error.message}`); }
+    try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'stuck', text, tried: 'The Autopilot core engine retried the END of this issue on 6 ticks and then dropped its local job.', need: 'Check the comment and the labels of the issue, and finish the END by hand.' }); }
+    catch (error) { ctx.warn(`Autopilot core alert for #${job.issue} failed: ${error.message}`); }
     return finishLocal(ctx, job, 'abandoned', text);
   }
   // Never END a merged issue. A PR that cannot be read is retried on 2 more ticks before the END goes on.
@@ -665,7 +674,8 @@ async function finishLocal(ctx, job, outcome, text) {
     for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log'))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
     await step('history', () => {
       ctx.fs.mkdirSync(ctx.root, { recursive: true, mode: 0o700 });
-      ctx.fs.appendFileSync(ctx.dirs.history, JSON.stringify({ at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null }) + '\n', { mode: 0o600 });
+      ctx.fs.appendFileSync(ctx.dirs.history, JSON.stringify({ at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null,
+        ...(job.end?.cause?.code === 'no-result' && ['released', 'ended'].includes(outcome) ? { noResult: true } : {}) }) + '\n', { mode: 0o600 });
     });
   } finally {
     try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
@@ -698,19 +708,17 @@ async function advance(ctx, job) {
     Object.assign(job, { phase: 'pr', pr: prNumber, head, runtime: normalRuntime(r.runtime), promptChanged: typeof r.promptChanged === 'boolean' ? r.promptChanged : null,
       prAt: ctx.now(), deadline: ctx.now() + ctx.timeout });
     delete job.lastError; delete job.lastErrorTool;
-    ctx.saveJob(job); ctx.produced(job.issue);
+    ctx.saveJob(job); ctx.produced();
     return mergeCheck(ctx, job);
   }
   if (object(r) && r.outcome === 'failed') {
-    ctx.produced(job.issue);
+    ctx.produced();
     const kind = ['runtime', 'pdd', 'job'].includes(r.kind) ? r.kind : 'job';
     return end(ctx, job, { kind, component: slug(r.component) || (kind === 'runtime' ? 'pdd-test' : 'agent'), code: slug(r.code) || 'failed',
       text: oneLine(r.cause) || 'the agent reported a failure', detail: String(r.detail ?? '').slice(0, 4000) });
   }
-  // Only an agent that exited with no result is a strike (sign-out, limit, crash). A process that is gone with no
-  // exit record (a restart or a sleep) is not.
   const how = seen.exit ? `exited with ${seen.exit.code ?? seen.exit.signal}` : 'process ended';
-  return end(ctx, job, cause('job', 'no-result', `the ${job.role} agent ${how} with no result${r === 'invalid' ? ' (the result file is not valid JSON)' : ''}`, { strike: seen.state === 'exited' }));
+  return end(ctx, job, cause('job', 'no-result', `the ${job.role} agent ${how} with no result${r === 'invalid' ? ' (the result file is not valid JSON)' : ''}`));
 }
 
 // ---- The tick -------------------------------------------------------------------------------------------
@@ -768,12 +776,14 @@ export async function tickCore(input, ports) {
 
 // ---- Status (local files only) --------------------------------------------------------------------------
 export function coreStatus({ state, settings, sources = {} }, ports) {
-  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), held = readJson(fs, folders(ports.root).machine, {});
+  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), machine = readJson(fs, folders(ports.root).machine, {}), b = machine.breaker ?? { state: 'closed' };
   const busy = jobs.filter(holdsSlot).length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
   const from = sources.engine === 'machine' ? 'this machine: pdd autopilot start --engine core' : 'pdd.json autopilot.engine';
   const lines = [`Autopilot engine core (${from}), mode ${settings.mode}: ${state.repo ?? 'repository unknown'} in ${state.cwd} · base ${state.baseBranch ?? 'unknown'} · agent ${state.agent?.kind ?? 'none'}`,
     `Jobs: ${busy} of ${settings.runs} slots busy; job time limit ${settings.jobTimeoutMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${settings.label ? `; only issues with ${settings.label}${sources.label === 'machine' ? ' (this machine)' : sources.label === 'pdd.json' ? ' (pdd.json)' : ''}` : ''}`];
-  if (held.held) lines.push(`Intake held since ${new Date(held.held.since).toISOString()}: ${held.strikes ?? STRIKES} agent jobs in a row ended with no result; a readiness probe runs on each tick.`);
+  lines.push(b.state === 'open' && b.until > now ? `Breaker open until ${new Date(b.until).toISOString()} (${b.hours} h): new jobs are paused because the agent ended jobs with no result; then one trial job runs.`
+    : b.state === 'open' || b.state === 'half-open' ? `Breaker half-open: one trial job${b.trial ? ' runs' : ' starts on the next tick'}; a result closes the breaker, no result pauses new jobs for ${Math.min(MAX_PAUSE_HOURS, (b.hours ?? 1) * 2)} h.`
+    : `Breaker closed: ${machine.streak ?? 0} no-result end(s) in a row (it opens at ${STRIKES}).`);
   for (const job of jobs) {
     if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}, suite ${job.suite ? 'started' : '-'}, repairs ${job.repairs}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
