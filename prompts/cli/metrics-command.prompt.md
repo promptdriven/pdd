@@ -10,6 +10,13 @@ The native gh runner records each `gh` call in the GitHub call ledger of the rep
 
 ## Dependencies
 
+- [Autopilot observations](autopilot-metrics-source.prompt.md) and
+  [scorecard](autopilot-metrics.prompt.md): required collection and rendering.
+  Every report adds `autopilot` with that report schema; terminal output appends
+  its table. Use `ports.autopilot({timezone,observedAt})` when supplied, otherwise
+  the native reader. Reuse `--timezone` when supplied; Autopilot alone defaults
+  to the machine's zone, preserving the existing report's UTC default. Cutoffs
+  apply to both reports. Export/import/record remain unchanged.
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
 [Metrics calculator](metrics-model.prompt.md): required for calculation in authoring, generation and native testing. [Metrics ledger](metrics-store.prompt.md): required for record import/export in authoring, generation and native testing.

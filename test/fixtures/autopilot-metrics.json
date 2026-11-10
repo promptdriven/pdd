@@ -1,0 +1,18 @@
+{
+  "observedAt": "2026-11-11T10:00:00Z",
+  "events": [
+    {"repo":"owner/alpha","issue":1,"kind":"started","at":"2026-11-09T09:00:00Z"},
+    {"repo":"owner/alpha","issue":1,"kind":"evidence","at":"2026-11-09T11:00:00Z","evidence":"Evidence: runtime=pass (3/3); vectors=pass (2/2); formal=not-run; tests=pass (4/4)"},
+    {"repo":"owner/alpha","issue":1,"kind":"merged","pr":10,"at":"2026-11-09T12:00:00Z"},
+    {"repo":"OWNER/alpha","issue":1,"kind":"worked","at":"2026-11-10T10:00:00Z"},
+    {"repo":"owner/alpha","issue":1,"kind":"evidence","at":"2026-11-10T11:00:00Z","evidence":"Evidence: runtime=pass (3/3); vectors=fail (1/2); formal=not-run; tests=pass"},
+    {"repo":"owner/alpha","issue":1,"kind":"evidence","at":"2026-11-10T11:00:00Z","evidence":"Evidence: runtime=pass (3/3); vectors=fail (1/2); formal=not-run; tests=pass"},
+    {"repo":"owner/alpha","issue":2,"kind":"started","at":"2026-11-10T09:00:00Z"},
+    {"repo":"owner/beta","issue":2,"kind":"started","at":"2026-11-10T09:00:00Z"},
+    {"repo":"owner/beta","issue":2,"kind":"evidence","at":"2026-11-10T12:00:00Z","evidence":"Evidence: runtime=pass; vectors=pass; formal=pass; tests=pass"},
+    {"repo":"owner/beta","issue":2,"kind":"validated","at":"2026-11-10T12:30:00Z","head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","validation":{"review":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","verdict":"PASS","fresh":true},"tests":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"pass"},"ci":{"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"pass"}}},
+    {"repo":"owner/beta","issue":2,"kind":"merged","pr":20,"at":"2026-11-10T13:00:00Z"},
+    {"repo":"owner/alpha","issue":1,"kind":"regression","pr":10,"reason":"bad-audit","at":"2026-11-10T14:00:00Z"},
+    {"repo":"owner/alpha","issue":3,"kind":"started","at":"2026-11-11T09:00:00Z"}
+  ]
+}
