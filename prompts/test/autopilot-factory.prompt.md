@@ -40,8 +40,7 @@ repairs the named declaration, a fresh check must reach a verdict.
    resend decision permits exactly one new attempt, then completion.
 4. A stuck run parks, keeps progress and wakes when its named blocker clears.
 5. A full pane budget and full check slots defer work without losing it; release
-   admits it. An undispatched dead interpreter holder is reclaimed. A dead dispatched holder keeps an unknown outcome; queue recovery never
-   sends its old request again.
+   admits it.
 6. Another machine takes the claim: the old machine cannot continue or publish.
 7. PR 1 changes after code begins (#2897): code retains its approved boundary,
    returns through the supported prompt route and integrates the current source.
@@ -80,7 +79,7 @@ entry runs the complete factory in less than 15 minutes, returns nonzero on any
 failure and removes its own temporary data. The `claim-transfer-open` scenario
 must pass: after claim transfer, the old coordinator cannot open its current chat.
 Keep this assertion enabled and return nonzero on failure. Select private HOME,
-XDG_CONFIG_HOME, PDD_STATE_DIR, suite and interpreter queues. No external network,
+XDG_CONFIG_HOME, PDD_STATE_DIR and suite queues. No external network,
 real gh, agent, system timer or live Herdr process may run. Never touch another
 process or its state. Use the repository fakes as the starting point. Keep
 execution reports outside source.

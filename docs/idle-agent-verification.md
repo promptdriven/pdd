@@ -20,9 +20,9 @@ They also restore and attach sessions held at approval gates, open questions and
 paused interpreter waits without reserving or sending a continue notice. Controlled
 holds during native resume or journal custody prevent notice creation. Holds at final submission
 prevent sending and keep the journal request pending.
-Interpreter and suite queue observations also hold continue notices while waiting,
-running or unavailable. The queue cases check the initial decision, journal custody
-and final submission. Pending and confirmed PDD close marks remain holds.
+Full-suite queue observations also hold continue notices while waiting, running or
+unavailable. The queue cases check the initial decision, journal custody and final
+submission. Pending and confirmed PDD close marks remain holds.
 Machine health, account limits and check capacity use the repository fakes.
 Idle-alert cases inject the independent digest sender and keep real incident custody.
 They check first observation,
