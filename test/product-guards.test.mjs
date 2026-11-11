@@ -47,3 +47,14 @@ test('bounded tap-budget oracle covers 1024 caller/child/render combinations',()
   else assert.throws(()=>productTapCallBound(f.map,f.ports),e=>e.code==='invalid-product-map');
  }
 });
+
+test('budget oracle detects a missing destination draw without a load failure',async()=>{
+ const location=new URL('../src/product-composition.mjs',import.meta.url);
+ const source=readFileSync(location,'utf8');
+ const changed=source.replace('bound+=Math.max(0,...destinations', 'bound+=0*Math.max(0,...destinations');
+ assert.notEqual(changed,source);
+ const absolute=changed.replace(/from '(\.\/[^']+)'/g,(_all,path)=>`from '${new URL(path,location).href}'`);
+ const mutant=await import('data:text/javascript;base64,'+Buffer.from(absolute).toString('base64'));
+ const f=boundFixture(39);
+ assert.throws(()=>assert.equal(mutant.productTapCallBound(f.map,f.ports),40),{code:'ERR_ASSERTION'});
+});
