@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 4f832288d8993d036c63aaff1af3615644d5edf36f3e67c16b3a9bdca3ba797c).
+// Generated from prompts/cli/product.prompt.md (sha256: c9377d3b12b1d5326271b3342c0b6f5a7d24917e93d0dec51fc75bc2aee35195).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -222,6 +222,10 @@ async function documents({ cwd }, p) {
   catch { invalid('product/map.md: cannot read the product map.'); }
   try { plan = await p.readFile(join(cwd, 'product/plan.md')); }
   catch (error) { if (error.code !== 'ENOENT') invalid('product/plan.md: cannot read the plan.'); }
+  return parseProductDocuments({ mapText: map, planText: plan });
+}
+export function parseProductDocuments({mapText, planText = ''}) {
+  const map = String(mapText), plan = String(planText);
   const name = /^#\s+(.+?)(?::\s*map)?\s*$/m.exec(map)?.[1], size = /^Size:\s*(small|medium|large)\b/im.exec(map)?.[1].toLowerCase();
   if (!name || !size) invalid('product/map.md: name or Size is missing.');
   const mapRows = section => rows(map, section, 'product/map.md'), planRows = section => rows(plan, section, 'product/plan.md');
@@ -241,6 +245,29 @@ async function documents({ cwd }, p) {
     for (const need of run.needs) if (need !== 'plan PR' && !runs.some(other => other.run === need)) invalid(`product/plan.md: unknown need ${need}.`);
   }
   return { product: { name, size, parts, stories, journeys, runs, questions: mapRows('Questions').filter(row => !row.Answer || row.Answer === '-').map(row => row.Id) }, boundaries: planRows('Boundaries') };
+}
+export function parseProductWorldWriters({worldText}) {
+  // Fences and unrelated tables cannot acquire world-write authority.
+  const tables = []; let fence = null, table = [];
+  const flush = () => { if (table.length) tables.push(table); table = []; };
+  for (const line of String(worldText).split(/\r?\n/)) {
+    const mark = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (mark) { flush(); if (!fence) fence = mark[1]; else if (mark[1][0] === fence[0] && mark[1].length >= fence.length) fence = null; continue; }
+    if (fence) continue;
+    if (/^\s*\|/.test(line)) table.push(tableCells(line)); else flush();
+  }
+  flush();
+  const matches = tables.filter(rows => rows[0].includes('Key') && rows[0].includes('Writer'));
+  if (matches.length > 1) invalid('contracts/world.md: ambiguous writer tables.');
+  if (!matches.length) return [];
+  const [heading, ...data] = matches[0], writers = new Map(), result = [];
+  for (const row of data.filter(row => !row.every(cell => /^:?-+:?$/.test(cell)))) {
+    const key = row[heading.indexOf('Key')], writer = row[heading.indexOf('Writer')];
+    if (!key || !writer) invalid('contracts/world.md: declaration has an empty Key or Writer.');
+    if (writers.has(key) && writers.get(key) !== writer) throw Object.assign(Error(`${key} has two writers.`), {code:'world-writer-conflict'});
+    writers.set(key,writer); result.push({key,writer});
+  }
+  return result;
 }
 export async function readProduct(input, given = {}) { return (await documents(input, portsFor(given))).product; }
 const parse = text => { try { return JSON.parse(text); } catch { invalid('GitHub returned unreadable JSON.'); } };

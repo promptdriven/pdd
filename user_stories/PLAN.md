@@ -161,6 +161,26 @@ Proposed policy: missing/unknown selected compatibility stops new paid dispatch;
 1. [Follow a bounded authoring handoff](authoring-orchestration.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
 2. [Compare authoring guidance on one frozen task](authoring-orchestration-measurement.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-measurement-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
 
+
+# Whole-product Simulator (#808) — draft for person review
+
+Build order; no implementation or check pass is claimed by these source drafts.
+
+1. [Try my product together](product-compose-try.md) — restore the core composer, qualified navigation and separate part state. Cases: test/runtime/product-compose-try.json.
+2. [Try my server with my screens](product-server-without-screen.md) — keep headless server work/data. Cases: test/runtime/product-server-without-screen.json.
+3. [Start my journey with the right data](product-journey-seed.md) — shared, part and journey seeds; exact current journey progress. Cases: test/runtime/product-journey-seed.json.
+4. [Choose the journeys I check](product-choose-journeys.md) — current `pdd test --journeys`, correct ID selection. Cases: test/runtime/product-choose-journeys.json.
+5. [Find the missing screen setting](product-map-field-diagnostics.md) — actionable missing/malformed map diagnostics. Cases: test/product-composition/product-map-field-diagnostics-cases.json.
+6. [Start a product without hidden setup problems](product-composition-guards.md) — optional shared files, correct writer-table parsing, actual call limits, safe source capture. Cases: test/product-composition/product-composition-guards-cases.json.
+7. [Keep my whole product when I return](product-recover-simulation.md) — current CLI/owner-tool reuse and recovery without duplicate requests. Cases: test/product-composition/product-recover-simulation-cases.json.
+8. [See which product part handled a step](product-area-visibility.md) — paired Runtime metadata/UI change; no inference from ambiguous filenames. Cases: test/product-composition/product-area-visibility-cases.json.
+
+Restore the authored coffee example and its J1 journey as integration acceptance after these contracts are approved. Any addition of shared schema records to its plan-owned contracts needs review as a contract proposal; do not silently edit those contracts. Existing authored expected values remain unchanged. New guard/recovery/area cases above are explicit proposed requirements for person approval.
+
+Keep current PDD main APIs, exact JSON behavior, workspace boundaries, uncapped default local scheduling and uncertain-accounting protections. Use the existing upload path; never create a second archive implementation. Completion includes the composed coffee Screen journey and recorded area labels, not only pure module tests. Arbitrary physical phone/relay/machine wiring is outside the available fixture and must not be claimed. Hosted verification of new server presentation code requires deployment or an explicitly scoped local verification; a local fixture is not production acceptance.
+
+Paired Runtime source branch: `feature/808-product-step-labels`. Its proposed API adds source-bound product_parts and advertises product-parts-v1; legacy/non-product sessions preserve their current behavior. PDD product setup requests an upgrade before upload when that service capability is absent. This means the newly composed full feature cannot be claimed accepted on the current hosted service until the paired service/UI changes are deployed through a separately authorized release.
+
 ## Open a simulation naturally (#812)
 
 1. [Open my program the way I use it](simulate-program-kind.md) — [native cases](../test/simulate-kind.test.mjs), replay and bounded selection cases, plus the Story-gate case in [workflow runner](../test/workflow-runner.test.mjs).

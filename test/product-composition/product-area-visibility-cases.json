@@ -1,0 +1,35 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/product-area-visibility.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "While my product runs, each step with a declared owner shows its part name, including background server work."
+    },
+    {
+      "id": "AC2",
+      "text": "After a reload or a completed tap, the same recorded steps keep their part names and existing call counts."
+    },
+    {
+      "id": "AC3",
+      "text": "A step with no declared owner does not get an invented part name, and reading or showing a label makes no AI call."
+    }
+  ],
+  "cases": [
+    {
+      "id": "background-owner",
+      "given": "Admitted product ownership phone/server/barista; a tap has steps from each area.",
+      "required_observation": "Live and settled activity show the matching area for every declared step; server remains visible without a screen."
+    },
+    {
+      "id": "reload-owner",
+      "given": "Same completed records after reload, with known and unknown call usage.",
+      "required_observation": "Owner labels survive; known/unknown call accounting remains exact."
+    },
+    {
+      "id": "unowned-step",
+      "given": "A recorded prompt has no admitted product owner.",
+      "required_observation": "No inferred area, no misleading owner label, zero provider calls from display/reads."
+    }
+  ]
+}

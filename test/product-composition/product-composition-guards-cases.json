@@ -1,0 +1,44 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/product-composition-guards.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A small product can start without shared world or shared seed files, using its part data or an empty world."
+    },
+    {
+      "id": "AC2",
+      "text": "An unrelated Notes table does not change who may write orders."
+    },
+    {
+      "id": "AC3",
+      "text": "If a tap could need more than 40 AI calls, PDD refuses before upload; a tap needing exactly 40 remains eligible."
+    },
+    {
+      "id": "AC4",
+      "text": "Malformed, unsafe or ambiguous source settings give an explanation and leave my files unchanged."
+    }
+  ],
+  "cases": [
+    {
+      "id": "small-no-shared-files",
+      "given": "One phone map; no contracts/world.md and no contracts/seed-world.json; first no part seed, then phone seed {orders:[]}.",
+      "required_observation": "Compose without changing authored files; worlds are {} and {orders:[]} respectively."
+    },
+    {
+      "id": "world-notes-table",
+      "given": "A writer table assigns orders to server; a separate Notes table has Key and Note columns.",
+      "required_observation": "Only the writer table supplies ownership; no empty-Writer error."
+    },
+    {
+      "id": "call-boundary",
+      "given": "Admitted handler, after chain and rendering with total bounds 40 and 41.",
+      "required_observation": "40 remains eligible; 41 refuses before upload and provider dispatch. Count internal model calls and rendering."
+    },
+    {
+      "id": "unsafe-and-ambiguous",
+      "given": "Unsafe path, malformed map, two writer tables, conflicting part seed ownership in separate cases.",
+      "required_observation": "Finite actionable refusal; zero writes and no upload."
+    }
+  ]
+}
