@@ -224,19 +224,21 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.suite = (issue, code = 0) => w.finish(issue, 'suite', { code });
   // The engine's replay and formal run (T04): each file runs alone and prints its TAP summary and then its marker line
   // with the run's nonce. w.replayFiles lists [kind, index] from the command; w.tapFile writes one file's part.
-  w.replayFiles = job => [...(job.args.at(-3) ?? '').matchAll(/# pdd-autopilot-([0-9a-f]+): (vectors|formal) (\d+) exit/g)].map(m => ({ nonce: m[1], kind: m[2], index: Number(m[3]) }));
+  w.replayFiles = job => [...(job.args.at(-3) ?? '').matchAll(/# pdd-autopilot-([0-9a-f]+): ([a-z-]+) (\d+) exit/g)].map(m => ({ nonce: m[1], kind: m[2], index: Number(m[3]) }));
   w.tapFile = (job, kind, index, { tests = 1, fail = 0, failed = [], skipped = 0, code } = {}) => {
     const nonce = w.replayFiles(job)[0]?.nonce ?? 'none';
     return [...failed.map((f, i) => `not ok ${i + 1} - ${f.name}\n  ---\n  location: '${job.cwd}/${f.file}:1:1'\n  ...`),
       `1..${tests}`, `# tests ${tests}`, `# pass ${tests - fail - skipped}`, `# fail ${fail}`, `# skipped ${skipped}`, `# pdd-autopilot-${nonce}: ${kind} ${index} exit ${code ?? (fail ? 1 : 0)}`, ''].join('\n');
   };
   // The whole run: `tests`, `fail` and `failed` go to the first file of the kind (other files pass 1 test each, so the
-  // kind's total is `tests`); `formal` gives the formal part; `code` sets the first file's exit.
-  w.vectorsRun = (issue, { formal, ...vectors } = {}) => {
+  // kind's total is `tests`); `formal` gives the formal part; `code` sets the first file's exit. `linked` (replay files
+  // that import a changed module) and `control` (each control kind) pass 1 test per file unless given.
+  w.vectorsRun = (issue, { formal, linked, control, ...vectors } = {}) => {
     const job = w.job(issue, 'vectors'), files = w.replayFiles(job), parts = [], used = [];
     const hasVectors = files.some(f => f.kind === 'vectors'), formalPart = formal ?? (hasVectors ? { tests: 1 } : vectors);
-    for (const kind of ['vectors', 'formal']) {
-      const mine = files.filter(f => f.kind === kind), whole = kind === 'vectors' ? vectors : formalPart;
+    for (const kind of ['vectors', 'formal', 'linked', 'control-vectors', 'control-formal']) {
+      const mine = files.filter(f => f.kind === kind);
+      const whole = kind === 'vectors' ? vectors : kind === 'formal' ? formalPart : kind === 'linked' ? linked ?? { tests: mine.length } : control?.[kind] ?? { tests: mine.length };
       if (!mine.length) continue;
       used.push(whole);
       const total = whole.tests ?? 3, rest = mine.length - 1;

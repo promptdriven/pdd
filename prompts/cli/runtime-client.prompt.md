@@ -1261,7 +1261,18 @@ pass/current, `result` equal to "✓" for pass and "no verdict" otherwise, and
 Unix epoch milliseconds `at`. With `withTests: true` each row also has `tests`: the
 sorted repository-relative test paths of that Story that its batch selected (for a
 pass, every one of them was sent), so a caller can bind a pass to the exact tests that
-it checked; without it the rows are exactly as above. This read-only capability never resolves runtime
+it checked; `sent` (false for a row whose tests were never sent, for example refused
+before execution or interrupted; such a row is listed too, with `pass` false); `failed`,
+the number of failed checks in the answers of its tests (a failed check counts also
+when the answer has no verdict) and `failedSteps`, their step ids (at most 10);
+`refusals`, the refusal codes of its batch rows and answers; `states`, the batch row
+states (for example `refused`, `not_run`, `unknown`); `codes`, the row reason codes
+(for example `interrupted`, `server-busy`, `graph-provider-failure`); and `advice`, the
+fix texts that pdd saved for it (at most 3, each at most 800 characters): each batch
+warning that starts with `Warning: TEST ` for one of its tests and names one of its
+refusal codes, and each refusal `fix`. Two more options read other folders: `anyRoot: true` reads batches of any
+root (each compared with `comparisonRoot`), and `limit: N` reads only the newest N batch
+folders. Without these options the rows are exactly as above. This read-only capability never resolves runtime
 configuration, signs in, calls a service, creates a directory, writes saved state
 or dispatches work. Use the injected `env` for the existing state-directory
 selection. The optional raw ports are `readFile(path)` returning UTF-8 text,

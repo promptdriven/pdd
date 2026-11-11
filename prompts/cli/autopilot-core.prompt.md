@@ -693,7 +693,37 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    returns `{stories, storyFiles, tests, footprint(story, row)}` (`tests` rows `{path,
    files, stories}`; story rows may have `tests`; `footprint` gives the upload `{files}`
    of the row's tests, or `{error}`); a test port may give a `footprints` map instead
-   (then a row with no `tests` covers its Story's tests). **Prompt gate**
+   (then a row with no `tests` covers its Story's tests). Rows that were never sent
+   (`sent: false`) never count as a pass and never decide a scope of this cover.
+   **Every Runtime line is checked against the saved rows (#3227 fix 1):** the read above
+   runs for each PR with a Runtime line, also when every line says "not run" (the line
+   form rules above still apply only with a PASS claim or Story lines). Each changed
+   Story that the cover above does not check (it has no PASS line, or the one line is
+   not a PASS) is checked against its deciding rows at this source: for each of its
+   tests, the latest current row that names it, also a row that was never sent.
+   (a) A row with failed checks, or with a failed verdict, is red, also when the batch
+   has no verdict: "The latest saved pdd test check of S at head H has N failed checks
+   (steps: …). A failed check is a FAIL, also when the batch has no verdict: fix the
+   cause (the code, the prompt or the test) and run pdd test again at this head."
+   (b) A refusal that pdd can fix is red once per Story and refusal code in the job, and
+   only while a repair is left: pdd saved a fix text for it (`advice`: a pdd warning that
+   names the test and the code, for example `scenario-integer-out-of-range` with the
+   exact Number spelling, or the refusal's own `fix`). "The saved pdd test check of S at
+   head H was refused before execution (CODE). pdd printed the fix: ADVICE Apply the fix
+   that pdd prints and run pdd test again at this head."
+   (c) Runtime coverage must not go down. When a changed Story has no deciding row, a
+   refused row, or a row that did not pass for another reason than the service, the
+   engine reads the saved checks again for a clean checkout of the merge base
+   (`git merge-base origin/BASE HEAD`, `worktrees/N-fork`), with `anyRoot` (the
+   batches of every folder of this machine; only the source decides) and `limit` 200
+   (the newest batches). A Story that passes there by the scope rule above is red:
+   "Runtime coverage went down: S had a passing pdd test check at the merge base B, but
+   at head H it has REASON. A PR must not lose a Runtime pass: make the check of S pass
+   again at this head." A row with no verdict, no failed check and no refusal (an AI
+   provider failure, maintenance, a busy or interrupted check) is never red here: the
+   engine sends such a check again (B5). A merge base read error is not red: the engine
+   warns, and the record keeps the error. The port gets `{root, tree, head, base:
+   true}` for the merge base read. **Prompt gate**
    (once per head, saved as `approvals {head, strict, problems}`): after a fetch of the
    base and the branch, each changed prompt of `git diff --name-status --find-renames
    origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
@@ -775,8 +805,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    (`node --test-reporter=tap -- 'ABSOLUTE-FILE' 2>&1`; no glob reads the path, so
    brackets, braces such as `{a,b}`, stars, a leading `-` and such characters in the
    checkout path all work, checked on Node 22.23.2), then the marker line `# pdd-autopilot-
-   NONCE: KIND I exit CODE` (NONCE a random hex per run, KIND `vectors` or `formal`, I the
-   file's index in its kind). All files of the run go through one awk filter, so the
+   NONCE: KIND I exit CODE` (NONCE a random hex per run, KIND `vectors`, `formal`,
+   `linked`, `control-vectors` or `control-formal` (below), I the file's index in its
+   kind). All files of the run go through one awk filter, so the
    bound is for the whole log: after 4 MB of output it passes the marker lines, TAP
    result and location lines cut to 300 characters for 1 MB more, and once `# pdd-
    autopilot: output cut after 4194304 bytes`; it prints no other line, and keeps only
@@ -822,7 +853,63 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    20, then "and N more") and `- Formal tests (…)`, `- Not run by Autopilot
    (REASON): FILES` for other runners, or `- Replay and formal tests (Autopilot's run):
    none changed`.
-4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
+   **Replay files that import a changed module, and the control (#3227 fix 2):** the run
+   also has each `*.vectors.test.*` file of the head that imports a changed code module
+   by a relative path (a `from`, `import(` or `require(` string that resolves to the
+   changed file; the candidates come from `git grep -z -l -F` of the module's file name;
+   at most 100; a file that is already in the set is not repeated). Their KIND is
+   `linked`. A failure is red like the others ("Autopilot ran the replay tests that
+   import a changed module (FILES) at head H: …"), a file with no result is only shown,
+   and no Evidence claim counts them (the agent's `vectors=` counts the changed files and
+   the files that read a changed scenario). The note has `- Replay tests that import a
+   changed module (Autopilot's run at H): …`. A code file is a changed file with a code
+   extension (`.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.jsx`, `.tsx`, `.py`) that is
+   not in a `test`, `tests`, `__tests__`, `spec` or `fixtures` folder and not named
+   `*.test.*` or `*.spec.*`. When the PR changes code files and the run has `vectors` or
+   `formal` files, the same command runs those files a second time, as the control: in a
+   second clean checkout of the head (`worktrees/N-control`) in which each changed code
+   file has its content at the merge base (`git merge-base origin/BASE HEAD`; a file that
+   the merge base does not have is removed). The control KINDS are `control-vectors` and
+   `control-formal`, with their own markers; a lost control file is a runner failure
+   like any other. A base merge makes a new head, so the control runs again against the
+   new merge base. The note has `- Control (the same tests on the merge-base code of
+   CODE, merge base B): F of N failed (the tests show the change)`, or `… all N passed
+   (the tests do not show the change)`, `… no file failed, but N of M gave no result`, or
+   `… not run (REASON)`. A control failure is
+   never red. When every control file passed, the Evidence line has a positive claim of
+   the kind (`vectors=pass`, `formal=proved` or `bounded`), and a Path line uses path a,
+   c or e (a behavior change; with path b the contract stays, so a pass on the base is
+   expected), the engine asks once per job, and only while a repair is left: "Autopilot
+   ran the replay and formal tests of this change (FILES) on the merge-base code of the
+   changed code files (CODE, merge base B): all N pass there too, so they do not show
+   the change. Add a test that fails on the merge-base code and passes at this head.
+   When the base already has the fix (for example after a base merge), keep the base's
+   code, keep only what the base does not have, and say so in the PR body." The record
+   keeps the linked and control results.
+   **The evidence record (#3227 fix 3):** each merge check writes one engine record per
+   head, `logs/N-evidence-HEAD.json` (`pdd.core-evidence.v1`, written only when it
+   changes): the PR's Runtime lines and claims, the T01 result with the saved rows that
+   it read (Story, pass, current, time, tests, failed checks, refusal codes, sent; at
+   most 50) and the merge base read (commit, passing Stories, error), the replay and formal run with
+   each file's result, the full suite (state, exit, log name, failed tests), CI and review
+   states, the PR's Evidence claim and the honest Evidence (above). The agent's lines are
+   claims that the engine checks; the record is the engine's own. The reviewer's brief
+   names the record's path and a short summary. The merge and would-merge note take
+   their engine lines from it and name it, and the PR body gets one engine block between
+   `<!-- pdd:autopilot-core:evidence:start -->` and `<!-- pdd:autopilot-core:evidence:end -->`
+   (replaced in place, before the follow-ups section; its lines never read as a
+   Runtime, Path or Evidence line). The record stays after END: the local cleanup keeps
+   `*-evidence-*.json` like the logs, because worktrees and job files go.
+4. Any red finding: stop the other checks, but first keep the partial results (#3227 fix
+   4): while the engine's replay run (T04) still runs, the merge check waits for it (it
+   takes minutes; at most 30 minutes after the first red, `redAt`), so its reds join the
+   same round; and a full suite that is still running gives the failed tests that its
+   log already shows (`failingTests` of a bounded log tail) as one more red line: "The
+   full test suite (still running at head H) already shows failed tests: TEST (FILE), …".
+   A red suite's line names its failed tests the same way. `failingTests(text, limit=20)`
+   is exported: `[{name, file}]` from TAP `not ok N - NAME` lines at any depth (with the
+   `location:` line that follows) and spec-reporter `✖ NAME` lines, each name once. The
+   **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
    (3 lines of tolerance) with a similar cause (2 shared words and a quarter of the words,
@@ -1072,7 +1159,8 @@ with the native defaults named above.
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
 - [Runtime client](runtime-client.prompt.md): required for `savedStoryEvidence` (the
-  saved checks of T01, with `comparisonRoot`).
+  saved checks of T01, with `comparisonRoot` and `withTests`; the merge base read also
+  with `anyRoot` and `limit`).
 - [Runtime preflight](runtime-preflight.prompt.md): required for `findTests` (Stories and
   their tests, `excludeFixtureProjects`), `captureSource` (Story footprints), `gitFiles`,
   `readPrompt`, `promptRefusal` and `interfaceBlocks`.
