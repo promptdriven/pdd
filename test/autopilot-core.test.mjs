@@ -1748,12 +1748,12 @@ test('I1 in auto mode the job records the operator approval for each changed pro
   w.state.startedAt = '2026-11-10T11:00:00.000Z';
   w.issue(17); await w.tick();
   const input = w.job(17, 'build').input;
-  assert.ok(input.includes(`printf '%s' '${WORDS}' | pdd approve PROMPT --said -`), 'the exact operator words');
+  assert.ok(input.includes(`printf '%s' '${WORDS}' | "$PDD_CLI" approve PROMPT --said -`), 'the exact operator words');
   assert.match(input, /commit the result in the PR/);
   const v = await coreWorld(t, { settings: { runs: 1, mode: 'observe' } });
   v.state.startedAt = '2026-11-10T11:00:00.000Z';
   v.issue(17); await v.tick();
-  assert.ok(v.job(17, 'build').input.includes(`printf '%s' '${WORDS.replace('in auto mode', 'in observe mode')}' | pdd approve PROMPT --said -`), 'the real mode in the words');
+  assert.ok(v.job(17, 'build').input.includes(`printf '%s' '${WORDS.replace('in auto mode', 'in observe mode')}' | "$PDD_CLI" approve PROMPT --said -`), 'the real mode in the words');
 });
 
 test('I2 a changed prompt with a draft interface is red: one repair with the approval command, then it merges; with no repairs left it ends', async t => {
@@ -2086,7 +2086,7 @@ test('N1b a strict repository: the job does not approve, and a changed prompt be
   w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
   w.issue(17); await w.tick();
   const input = w.job(17, 'build').input;
-  assert.doesNotMatch(input, /\| pdd approve PROMPT --said -/); assert.match(input, /needs a person's approval for prompt changes \(strict_approvals\)/);
+  assert.doesNotMatch(input, /approve PROMPT --said -/); assert.match(input, /needs a person's approval for prompt changes \(strict_approvals\)/);
   writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.'));
   const { pr } = w.build(17); await w.tick();
   const question = w.comments(17).find(body => body.includes('<!-- pdd:autopilot-core:question:17:'));
@@ -3255,7 +3255,7 @@ test('X7 (T05) observe mode records the operator approval of a changed approved 
   w.issue(17); await w.tick();
   const words = `Operator action: pdd autopilot start --engine core in observe mode for acme/widgets on ${claimOf(w, 17).machine} at 2026-11-11T09:00:00.000Z`;
   assert.ok(w.job(17, 'build').input.includes(`9. Approval: in observe mode the operator's start is the approval of your prompt changes.`));
-  assert.ok(w.job(17, 'build').input.includes(`printf '%s' '${words}' | pdd approve PROMPT --said -`), 'the real mode in the words');
+  assert.ok(w.job(17, 'build').input.includes(`printf '%s' '${words}' | "$PDD_CLI" approve PROMPT --said -`), 'the real mode in the words');
   writeIn(w.job(17, 'build').cwd, path, approvedText(changed));
   const { pr } = w.build(17); await w.tick();
   const repair = w.job(17, 'repair');

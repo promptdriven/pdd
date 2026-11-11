@@ -181,6 +181,31 @@ test('the hung-command watch stops only the silent command; the agent goes on an
   assert.ok(hangs[0].minutes >= 0 && Number.isFinite(hangs[0].at));
 });
 
+// Lead, Nov 11: a pdd test that waits for Runtime capacity or a maintenance window is silent with almost no CPU, like a
+// hang. The watch never stops it, also when the agent's shell runs it as "$PDD_CLI" test.
+const WAITING_AGENT = `
+const { spawn } = require('child_process'), fs = require('fs');
+process.stdout.write('agent started\\n');
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: '"$PDD_CLI" test format-bytes' } }) + '\\n');
+  const command = spawn('/bin/sh', ['-c', 'exec "$0" "$1" test format-bytes', process.execPath, process.env.PDD_FAKE], { stdio: ['ignore', 'pipe', 'pipe'] });
+  fs.writeFileSync(process.env.COMMAND_PID, String(command.pid));
+  command.on('exit', (code, signal) => { process.stdout.write('pdd test ended: ' + signal + '\\n'); process.exit(0); });
+}, 600);`;
+test('the hung-command watch never stops a pdd test that waits for Runtime (lead, Nov 11)', async t => {
+  const dir = folder(t), commandPid = join(dir, 'command.pid'), fake = join(dir, 'bin', 'pdd.mjs');
+  mkdirSync(join(dir, 'bin'), { recursive: true }); writeFileSync(fake, 'setInterval(() => {}, 1e6); // waits for Runtime capacity\n');
+  const job = startAgentJob({ id: '32-build-1', dir, cwd: dir, command: process.execPath, args: ['-e', WAITING_AGENT], input: '',
+    env: { PATH: process.env.PATH, COMMAND_PID: commandPid, PDD_FAKE: fake }, hung: { after: 1200, every: 150, cpu: 0.5 } });
+  const command = Number(await until(() => existsSync(commandPid) && readFileSync(commandPid, 'utf8')));
+  t.after(() => { try { process.kill(command, 'SIGKILL'); } catch {} try { stopAgentJob(job); } catch {} });
+  await new Promise(r => setTimeout(r, 4000));                      // more than 3 times the silent time
+  assert.ok(alive(command), 'the waiting pdd test still runs');
+  assert.doesNotMatch(readFileSync(job.log, 'utf8'), /stopped a hung command/); assert.deepEqual(agentJobHangs(job), []);
+  process.kill(command, 'SIGTERM');
+  await until(() => readAgentJob(job).state === 'exited', 15000);
+});
+
 test('the hung-command watch leaves a busy command, a job without hung and a plain command alone (STOPS-0129)', async t => {
   const dir = folder(t), mark = join(dir, 'busy.done');
   // A command with CPU growth runs past the silent time and ends by itself.

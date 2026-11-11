@@ -98,6 +98,12 @@ record is simply dead. There is no "uncertain custody" state.
   - A command is **hung** when the log has not changed for `after` ms and the CPU time of
     the command and its descendants grew by less than `cpu` seconds in that time
     (growth of `cpu` seconds or more starts its time again; so does a log change).
+  - A **pdd test or pdd lint** is never hung (lead, Nov 11): a command whose process tree
+    has a process that runs `pdd test` or `pdd lint` (by a `pdd` or `pdd.mjs` path, or
+    as `"$PDD_CLI" test`) is never stopped by the watch. While it waits for Runtime
+    capacity or a maintenance window it writes nothing to this log and makes almost no
+    CPU, like a hang; its own time limits end it, and the core's quiet rule still sees a
+    job that stays silent.
   - For a hung command the wrapper sends SIGTERM to the command and each of its
     descendants, and SIGKILL 2 s later to those that are left. It appends one line to the
     log, `agent-job: stopped a hung command after M min with no output and almost no

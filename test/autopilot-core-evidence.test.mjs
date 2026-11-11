@@ -1140,7 +1140,7 @@ const ADVICE = "Warning: tests/package-repository.json scenario-integer-out-of-r
 test('E61 (#3227 fix 1, case 6) a refusal that pdd can fix is red once, with the fix that pdd printed, and only while a repair is left', async t => {
   const row = { story: STORY, pass: false, current: true, at: 1000, sent: false, result: 'not sent', tests: ['tests/package-repository.json'], refusals: ['scenario-integer-out-of-range'], states: ['refused'], advice: [ADVICE] };
   const { w, pr, head } = await t01World(t, async () => ({ stories: [row], storyFiles: STORIES, footprints: { [STORY]: [PROMPT] } }), { body: notRun('Runtime: not run (refused before execution with zero AI calls)') });
-  assert.match(w.job(17, 'repair')?.input ?? '', /The saved pdd test check of user_stories\/package-repository\.md at head [0-9a-f]{7} was refused before execution \(scenario-integer-out-of-range\)\. pdd printed the fix: Warning: .*write its exact Number spelling 4\.2501298345826807e\+24; the interpreter accepts it\. Apply the fix that pdd prints and run pdd test again at this head\./);
+  assert.match(w.job(17, 'repair')?.input ?? '', /The saved pdd test check of user_stories\/package-repository\.md at head [0-9a-f]{7} was refused before execution \(scenario-integer-out-of-range\)\. pdd printed the fix: Warning: .*write its exact Number spelling 4\.2501298345826807e\+24; the interpreter accepts it\. Apply the fix that pdd prints and run "\$PDD_CLI" test again at this head\./);
   // The merge base had no pass of the Story, so the refusal alone is red only once: the repair keeps it, and the PR goes on.
   assert.equal(w.build(17, { role: 'repair', write: false }).head, head);
   await w.tick(); await finishChecks(w); await w.tick();

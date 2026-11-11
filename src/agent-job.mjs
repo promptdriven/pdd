@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: f825325b98247fcb7edfd3cf7e106c701ab787d7bb46c638b6cf3d68f4d0dbed).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 979fe98e60d0d73b0837fbe7ee4f9e7283a3c509abf6a07cca07e513e5e2d068).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -118,6 +118,7 @@ function lastLogLine(file) {
     return buffer.toString('utf8').split(/\r?\n/).map(line => line.trim()).filter(Boolean).at(-1)?.slice(0, 300) ?? '';
   } catch { return ''; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* Closed. */ } }
 }
+const PDD_WAIT = /(?:^|[\s/'"])pdd(?:\.mjs)?['"]?\s+(?:test|lint)(?=\s|$)|PDD_CLI['"}]*\s+(?:test|lint)(?=\s|$)/;
 function watchHung(spec, agentPid, out) {
   const { after, every, cpu: cpuLimit } = spec.hung, SAME = 3000, FRESH = 10_000;
   let helpers = null;
@@ -142,6 +143,10 @@ function watchHung(spec, agentPid, out) {
       const key = `${row.pid}:${Math.round(row.start / SAME)}`;
       if (stopped.has(key)) continue;
       const sub = [row, ...below(row.pid)], used = sub.reduce((sum, r) => sum + r.cpu, 0);
+      // A pdd test or lint that waits for Runtime capacity or a maintenance window has no output in this log and almost
+      // no CPU, like a hang: it is never stopped here (lead, Nov 11). Its own time limits end it, and the engine's quiet
+      // rule still sees a job that stays silent.
+      if (sub.some(r => PDD_WAIT.test(r.command))) continue;
       let ref = refs.get(row.pid);
       if (!ref || Math.abs(ref.start - row.start) >= SAME) ref = { start: row.start, since: Math.max(log.mtimeMs, row.start), cpu: used };
       if (used - ref.cpu >= cpuLimit) Object.assign(ref, { since: now, cpu: used });

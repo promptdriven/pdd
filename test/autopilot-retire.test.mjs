@@ -277,7 +277,7 @@ test('M10 a full-engine state moves at its first tick without a timer call; the 
   writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', paneId: 'pane-9', workspaceId: 'ws-9',
     agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg'), parking: {}, recipeDelivered: true, timerMinutes: 30 }));
   const timer = [], notices = [], programs = [];
-  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async action => { timer.push(action); return true; }, warn: () => {}, notice: text => notices.push(text),
+  const ports = { stateRoot, now: w.now, machineGuard: w.machineGuard, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async action => { timer.push(action); return true; }, warn: () => {}, notice: text => notices.push(text),
     herdr: async args => { programs.push(`herdr ${args.join(' ')}`); throw Object.assign(Error('gone'), { code: 'agent_not_found' }); },
     run: async (command, args, options = {}) => {
       programs.push(command);
@@ -314,7 +314,7 @@ test('M11 start: --engine full is refused with one line; a start with no opt-in 
   const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   const timer = [], writes = () => w.github.writes?.length ?? 0, before = writes();
-  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async action => { timer.push(action); return true; }, warn: () => {},
+  const ports = { stateRoot, now: w.now, machineGuard: w.machineGuard, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async action => { timer.push(action); return true; }, warn: () => {},
     doctorPorts: { run: async () => ({ code: 0, stdout: '', stderr: '' }) },
     run: async (command, args, options = {}) => {
       if (command === 'gh') return w.gh(args, options);
@@ -370,7 +370,7 @@ test('M12 launchd: start writes StartInterval 600 and only start calls launchctl
     const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
   };
   const agent = async () => ({ id: 'codex', kind: 'codex', command: 'codex' });
-  const ports = { stateRoot, now: w.now, env: { HOME: home, PATH: process.env.PATH }, platform: 'darwin', uid: 501, warn: () => {}, notice: () => {}, run, selectAgent: agent,
+  const ports = { stateRoot, now: w.now, machineGuard: w.machineGuard, env: { HOME: home, PATH: process.env.PATH }, platform: 'darwin', uid: 501, warn: () => {}, notice: () => {}, run, selectAgent: agent,
     doctorPorts: { run: async (command, args, options) => command === 'git' ? run(command, args, options) : { code: 0, stdout: '', stderr: '' }, selectAgent: agent },
     herdr: async () => { phase.herdr = true; throw Object.assign(Error('gone'), { code: 'agent_not_found' }); },
     movePorts: { processes: async () => '', releaseSlots: async () => false },
@@ -406,7 +406,7 @@ test('M13 the core tick reads only changed issues between full reads of a two-pa
   writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core',
     label: 'pdd:autopilot', retiredFull: { done: 1 }, agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
   const lists = [];
-  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
+  const ports = { stateRoot, now: w.now, machineGuard: w.machineGuard, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
     run: async (command, args, options = {}) => {
       if (command === 'gh') { const endpoint = args.find(arg => /^repos\/acme\/widgets\/issues\?/.test(String(arg))); if (endpoint) lists.push(endpoint); return w.gh(args, options); }
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
