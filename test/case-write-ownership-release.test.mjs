@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {fixture,closed,read,get,pendingId} from './helpers/runtime-workspace-fixture.mjs';
-import {acquireCaseWriteOwnership,saveDoorCase,applyPendingCase} from '../src/runtime-client.mjs';
+import {acquireCaseWriteOwnership,saveDoorCase,applyPendingCase} from '../src/runtime/runtime-client.mjs';
 
 const nativeFiles={lstat:fs.lstatSync,read:fs.readFileSync,open:fs.openSync,write:fs.writeFileSync,close:fs.closeSync,sync:fs.fsyncSync,stat:fs.fstatSync,mkdir:fs.mkdirSync,list:fs.readdirSync,rename:fs.renameSync,unlink:fs.unlinkSync,realpath:fs.realpathSync,link:fs.linkSync};
 const acquire=(f,ports={},signal)=>acquireCaseWriteOwnership({root:f.root,testPath:f.second,handoff:closed(f.second),signal},{env:f.env,...ports});

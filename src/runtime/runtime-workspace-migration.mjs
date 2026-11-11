@@ -1,11 +1,11 @@
-// Generated from prompts/cli/runtime-workspace-migration.prompt.md (sha256: b1a0fb20ff73a720238a3f76bdd84f725f8aa96d3de4697980bac6ffe826fd98).
-// Implements prompts/cli/runtime-workspace-migration.prompt.md.
+// Generated from prompts/cli/runtime/runtime-workspace-migration.prompt.md (sha256: 81702dedf96119cffdab11a1ba923a79b7b3d5966dcfea0d77cb34c38867552a).
+// Implements prompts/cli/runtime/runtime-workspace-migration.prompt.md.
 import {realpathSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {loadRuntimeWorkspace,requireRuntimePath} from './runtime-workspace.mjs';
 import {captureSource,sourceFilePort,gitFiles} from './runtime-preflight.mjs';
 import {runtimeWorkspaceMigrationStore,acquireCaseWriteOwnership,applyPendingCase} from './runtime-client.mjs';
-import {readEvidenceEligibility} from './workflow-runner.mjs';
+import {readEvidenceEligibility} from '../workflow-runner.mjs';
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const safe=path=>typeof path==='string'&&path&&!/[\\\x00-\x1f*?]/.test(path)&&!path.startsWith('/')&&!path.split('/').some(p=>!p||p==='.'||p==='..'||p==='.git');
 export async function migrateRuntimeWorkspace({root,projectionRoot,mappings,write=false,signal},ports={}){

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
+import { runCheck, runTry } from '../src/runtime/runtime-client.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 // Wire shape independently transcribed from the saved staging queue refusal and server/work_queue.py.

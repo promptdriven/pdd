@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-mcp.prompt.md (sha256: 633585cf8b86f56ae25a40bf2b7856d3b6e1f81028c01f3244474f8b609d524a).
+// Generated from prompts/cli/runtime/try-mcp.prompt.md (sha256: 179928c0e6f327db7172534d264e774bda4c1f32fa7c8784261f98a93b54b11c).
 import { createInterface } from 'node:readline';
 import { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff } from './runtime-client.mjs';
 import { createRunJudge } from './agent-judge.mjs';

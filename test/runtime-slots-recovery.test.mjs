@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { acquireRuntimeSlot, listRuntimeJobs, recordRuntimeRequest, releaseRuntimeSlot } from '../src/runtime-slots.mjs';
+import { acquireRuntimeSlot, listRuntimeJobs, recordRuntimeRequest, releaseRuntimeSlot } from '../src/runtime/runtime-slots.mjs';
 import { temp } from './runtime-fake.mjs';
 
 const flush = () => new Promise(done => setImmediate(done));
@@ -111,7 +111,7 @@ for (const equalTimes of [false, true]) test(`native two live waiters recover mu
   const base = Date.now();
   writeFileSync(join(directory, 'holder.json'), JSON.stringify(row('holder', { pid: process.pid, started_at: base, request_ids: [] })));
   const start = (id, startedAt) => {
-    const source = `const m=await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)});let initial=true, suspended=false;
+    const source = `const m=await import(${JSON.stringify(new URL('../src/runtime/runtime-slots.mjs', import.meta.url).href)});let initial=true, suspended=false;
 const wait=()=>new Promise(done=>process.once('message',done));
 const r=await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:1,deadline:Date.now()+120000},{randomUUID:()=>${JSON.stringify(id)},now:()=>initial?${startedAt}:Date.now(),timers:{setInterval:(fn,ms)=>setInterval(()=>{if(!suspended)fn();},ms),clearInterval},sleep:async()=>{initial=false;suspended=true;process.send({type:'waiting'});await wait();suspended=false;}});
 process.send({type:r?'acquired':'timeout',id:r?.id});if(r){await wait();await m.releaseRuntimeSlot(r,{ended:true});}process.send({type:'released'});process.disconnect();`;

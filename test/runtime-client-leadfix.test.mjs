@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
-import { captureSource } from '../src/runtime-preflight.mjs';
-import { listRuntimeJobs } from '../src/runtime-slots.mjs';
+import { runCheck, runTry } from '../src/runtime/runtime-client.mjs';
+import { captureSource } from '../src/runtime/runtime-preflight.mjs';
+import { listRuntimeJobs } from '../src/runtime/runtime-slots.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 const make = (setup, fake, extra = {}) => portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }, extra);

@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
-import { interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
+import { interfaceBlocks, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 
 const read = path => { assert.ok(existsSync(path), 'required fixture or cache metadata exists'); return JSON.parse(readFileSync(path, 'utf8')); };
 const write = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');

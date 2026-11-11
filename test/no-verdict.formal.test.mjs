@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summaryLine } from '../src/runtime-output.mjs';
+import { summaryLine } from '../src/runtime/runtime-output.mjs';
 
 const states = ['passed', 'failed', 'queued', 'running', 'refused', 'not_run', 'unknown'];
 const choices = states.flatMap(state => [false, true].map(busy => ({ state, busy, story: 'one' })));

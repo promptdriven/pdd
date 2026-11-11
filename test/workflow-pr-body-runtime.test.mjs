@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import * as body from '../src/workflow-pr-body.mjs';
-import {interfaceBlocks,interfaceSchemaProblems,checkInput} from '../src/runtime-preflight.mjs';
+import {interfaceBlocks,interfaceSchemaProblems,checkInput} from '../src/runtime/runtime-preflight.mjs';
 import {smallChange} from './helpers/readable-pr-fixtures.mjs';
 const contract=()=>JSON.parse(interfaceBlocks(readFileSync(new URL('../prompts/cli/workflow-pr-body.prompt.md',import.meta.url),'utf8'))[0][1]);
 test('typed field adapter preserves arbitrary note paths and case columns',()=>{

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { captureSource, findTests, proseSha256 } from '../src/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { captureSource, findTests, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
 import { PLACE, harbor, portsFor, root, temp } from './runtime-fake.mjs';
 
 // Replay the frozen approved observations through the real public source boundary.

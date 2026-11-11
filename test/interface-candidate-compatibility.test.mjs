@@ -3,9 +3,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {bindingCoverage} from '../src/runtime-bindings.mjs';
-import {proseSha256,findTests} from '../src/runtime-preflight.mjs';
-import {runCheck} from '../src/runtime-client.mjs';
+import {bindingCoverage} from '../src/runtime/runtime-bindings.mjs';
+import {proseSha256,findTests} from '../src/runtime/runtime-preflight.mjs';
+import {runCheck} from '../src/runtime/runtime-client.mjs';
 import {harbor,portsFor,PLACE} from './runtime-fake.mjs';
 
 function native(repo) {

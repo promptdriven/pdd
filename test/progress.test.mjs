@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
-import { createAgentBridge } from '../src/agent-chat.mjs';
+import { runCheck, runTry } from '../src/runtime/runtime-client.mjs';
+import { createAgentBridge } from '../src/runtime/agent-chat.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { fakeRuntime, harbor, portsFor, sink } from './runtime-fake.mjs';
 

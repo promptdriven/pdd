@@ -7,8 +7,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { captureSource, proseSha256 } from '../src/runtime-preflight.mjs';
-import { renderJson } from '../src/runtime-output.mjs';
+import { captureSource, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { renderJson } from '../src/runtime/runtime-output.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
@@ -1799,7 +1799,7 @@ test('RELEASE11: PR2 refreshes its selected remote base with an explicit trackin
 // Greg #2442: newer verify results must beat the old check without treating UNKNOWN as a failure.
 // #2904: these Story counts come from pdd's own saved pdd test batches that done records, never from typed summaries.
 async function ownBatch(f, run, name, lines) {
-  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { captureSource } = await import('../src/runtime/runtime-preflight.mjs');
   const folder = join(f.ports.env.PDD_STATE_DIR ?? join(f.ports.env.HOME, '.pdd', 'runtime'), 'batches', name), tests = ['tests/value.json'];
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, 'batch.json'), JSON.stringify({ version: 1, batch: name, root: run.root, created_at: new Date(f.clock).toISOString(), intent: 'check',
@@ -1837,7 +1837,7 @@ test('GREG2442-2: changed uncommitted source invalidates pass evidence, byte-ide
 test('GREG2442-3: saved check JSON records only source-verified evidence and preserves all workflow/publication state', async t => {
   const { recordEvidence } = await import('../src/workflow-runner.mjs');
   assert.equal(typeof recordEvidence, 'function');
-  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { captureSource } = await import('../src/runtime/runtime-preflight.mjs');
   const { f, run } = await featureAtTryGate(t);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.equal(f.prs.length, 1); const prBody = f.prs[0].body;
@@ -2659,7 +2659,7 @@ test('Prompt tests lines: the PR 1 top and total read new and old labels alike, 
 
 test('Prompt tests lines: workflow evidence records a saved result with the new or the old label', async t => {
   const { recordEvidence } = await import('../src/workflow-runner.mjs');
-  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { captureSource } = await import('../src/runtime/runtime-preflight.mjs');
   const { cpSync } = await import('node:fs');
   const { f, run } = await featureAtTryGate(t);
   for (const dir of ['prompts', 'tests', 'user_stories']) cpSync(join(packageRoot, 'test/fixtures/harbor', dir), join(run.root, dir), { recursive: true });
@@ -2827,7 +2827,7 @@ test('2904: a cache-only pdd test row with no agent summary shows its cached bui
 // #2904 follow-up: the status Story count reads only pdd's own recorded results; typed lines never count.
 test('2904: status counts Stories from pdd\'s own recorded pdd test results, never from a typed done summary', async t => {
   const { f, run, done } = await featureWithOwnResults(t, { results: false });
-  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { captureSource } = await import('../src/runtime/runtime-preflight.mjs');
   const stateDir = f.ports.env.PDD_STATE_DIR;
   // The agent claims a pass; pdd has no result of its own.
   await done('check', { summary: 'Prompt tests (value): ✓ 8 of 8 criteria · 20/20 checks · 2 AI calls' });
@@ -2887,7 +2887,7 @@ test('2904: product evidence reads pdd\'s own records and receipts, never typed 
 
 test('2921: named progress without step numbers keeps its accounting and cuts trailing agent words', async () => {
   const { runtimeLines } = await import('../src/workflow-runner.mjs');
-  const { projectAnswer, summaryLine } = await import('../src/runtime-output.mjs');
+  const { projectAnswer, summaryLine } = await import('../src/runtime/runtime-output.mjs');
   const view = projectAnswer({ command: 'check', state: 'running', progress: { step: 'pay', calls_settled: 3, calls_open: 1 } });
   const result = 'running · 0 of 2 criteria · 0/0 checks · sent (awaiting-server-verdict) · pay · 3 AI calls so far · 1 not yet settled · 1 sent (awaiting-server-verdict)';
   for (const story of [null, 's']) {
@@ -2900,7 +2900,7 @@ test('2921: named progress without step numbers keeps its accounting and cuts tr
 
 test('2904: every Prompt tests form that summaryLine prints stays whole, and agent words after it are cut off', async () => {
   const { runtimeLines } = await import('../src/workflow-runner.mjs');
-  const { summaryLine } = await import('../src/runtime-output.mjs');
+  const { summaryLine } = await import('../src/runtime/runtime-output.mjs');
   const S = { phase: 'server', request_ids: ['a'] };
   const groups = [
     [{ ...S, state: 'failed', criteria: { passed: 0, total: 1 }, checks: { passed: 0, total: 0 }, rerun: { calls: 2 }, unknown_calls: 1 }],

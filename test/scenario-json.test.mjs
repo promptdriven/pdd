@@ -4,7 +4,7 @@ import test from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { parseScenarioJson, stringifyScenarioJson, exactNumber, exactValue, exactIntegerLeaves, withExactIntegers, jsonSafe, roundedNumberTokens } from '../src/scenario-json.mjs';
+import { parseScenarioJson, stringifyScenarioJson, exactNumber, exactValue, exactIntegerLeaves, withExactIntegers, jsonSafe, roundedNumberTokens } from '../src/runtime/scenario-json.mjs';
 import { formatDuration, formatDurationWithNumberHours } from './fixtures/large-integers/duration.mjs';
 
 const root = resolve(import.meta.dirname, '..');

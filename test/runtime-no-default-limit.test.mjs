@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync, statSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
-import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime-slots.mjs';
+import { runCheck, runTry } from '../src/runtime/runtime-client.mjs';
+import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime/runtime-slots.mjs';
 import { fakeRuntime, harbor, portsFor, root, storyTest } from './runtime-fake.mjs';
 
 const pause = ms => new Promise(done => setTimeout(done, ms));

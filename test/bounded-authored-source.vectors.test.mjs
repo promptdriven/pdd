@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture,read,write,json,get,cases,stream} from './helpers/runtime-workspace-fixture.mjs';
-import {fillHashes,captureSource,proseSha256,readPrompt,gitFiles} from '../src/runtime-preflight.mjs';
-import {runCheck,runDoorCall,readTryOwner,savedStoryEvidence} from '../src/runtime-client.mjs';
+import {fillHashes,captureSource,proseSha256,readPrompt,gitFiles} from '../src/runtime/runtime-preflight.mjs';
+import {runCheck,runDoorCall,readTryOwner,savedStoryEvidence} from '../src/runtime/runtime-client.mjs';
 const actions={
  async 'direct-hash-preservation'(t){const f=fixture(t),original=read(f.root,f.prompt),stale=original.replace('Return the value.','Return the authored value.');write(f.root,f.prompt,stale);write(f.root,'private/excluded.prompt.md',stale);const result=fillHashes({root:f.root});assert.deepEqual(result.filled,[{path:f.prompt}]);assert.equal(read(f.root,f.prompt),stale.replace(/"prose_sha256":"[a-f0-9]+"/,`"prose_sha256":"${proseSha256(stale)}"`));assert.equal(read(f.root,'private/excluded.prompt.md'),stale);const current=read(f.root,f.prompt);assert.equal(fillHashes({root:f.root}).current.length,1);write(f.root,f.prompt,current.replace('"status":"draft"','"status":"approved"'));const approved=read(f.root,f.prompt);assert.equal(fillHashes({root:f.root}).current.length,1);write(f.root,f.prompt,approved.replace('Return the authored value.','Changed after approval.'));const before=read(f.root,f.prompt);assert.equal(fillHashes({root:f.root}).stale.length,1);assert.equal(read(f.root,f.prompt),before);const out=stream();assert.equal(await runCheck({cwd:f.root,options:{'--fill-hash':true}},{env:f.env,stdout:out,stderr:out}),4);},
  'hash-reference-barrier'(t){const f=fixture(t),text=read(f.root,f.prompt).replace('## Dependencies','## Dependencies\n[Rule](../../private/ordinary.md)');write(f.root,f.prompt,text);const result=fillHashes({root:f.root});assert.equal(result.refused.length,1);assert.match(result.refused[0].message,/workspace-path-outside/);assert.equal(read(f.root,f.prompt),text);},

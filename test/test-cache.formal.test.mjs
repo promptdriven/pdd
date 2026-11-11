@@ -10,7 +10,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 // Foreign/tracked evidence never skips; only a confirmed pass clears a failure;
 // a late older attempt never replaces the newer attempt's verdict.
 const root = resolve(process.env.FORMAL_CODE_ROOT || fileURLToPath(new URL('..', import.meta.url)));
-const { runCheck } = await import(pathToFileURL(join(root, 'src/runtime-client.mjs')));
+const { runCheck } = await import(pathToFileURL(join(root, 'src/runtime/runtime-client.mjs')));
 const { harbor, fakeRuntime, portsFor } = await import(pathToFileURL(join(root, 'test/runtime-fake.mjs')));
 function git(repo, ...args) {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: 5ba4171829e9a476548ee823a0a6a8b01d34665a34ed89e95057adfa70bf1ef6).
+// Generated from prompts/cli/runtime/try-http.prompt.md (sha256: f27598c2a97712d77610d13ca043a7c87a5e531be88b826d186b5da4db3eb703).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8f9c9642184f84016b3f7f385173d93b81c22c3fa021d24ecefc0527158f67a9).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: f302263c22385df27656ddd63ca1faa351359bf7aef151afef66b57f6f273e00).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -13,7 +13,7 @@ import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
 import { setupWithWorkflowAgent } from './workflow-setup.mjs';
-import { causeText } from './runtime-output.mjs';
+import { causeText } from './runtime-seam.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -276,7 +276,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'mcp': {
       try {
-        const server = mcpServer ?? await import('./try-mcp.mjs');
+        const server = mcpServer ?? await import('./runtime-seam.mjs');
         return await server.runMcp({ cwd, env }, { stdin, stdout, stderr });
       } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
     }
@@ -310,7 +310,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
         if(context?.toplevel) {
-          const {missingInterfaces,runInterfaceDraft}=await import('./interface-draft.mjs');
+          const {missingInterfaces,runInterfaceDraft}=await import('./runtime-seam.mjs');
           const missing=missingInterfaces(context.toplevel);
           if(missing.length) {
             line(stdout,`${missing.length} prompts have no Runtime interface. Run pdd interface draft --all.`);
@@ -350,17 +350,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } });
     }
     case 'runtime-jobs':
-      try { const slots = runtimeSlots ?? await import('./runtime-slots.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
+      try { const slots = runtimeSlots ?? await import('./runtime-seam.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
       catch (error) { line(stderr, `Local interpreter jobs could not be read.${reason(error)}`); return 5; }
     case 'contracts': case 'contracts-sync':
       try {
-        const commands = contracts ?? await import('./contracts.mjs');
+        const commands = contracts ?? await import('./runtime-seam.mjs');
         return await commands.runContracts({ words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd }, { env, stdout, stderr });
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
       try {
-        const runtime = await import('./runtime-client.mjs');
+        const runtime = await import('./runtime-seam.mjs');
         return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
@@ -375,7 +375,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       return runOwner({ cwd, paths: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
     }
     case 'interface-draft': {
-      const {runInterfaceDraft}=await import('./interface-draft.mjs');
+      const {runInterfaceDraft}=await import('./runtime-seam.mjs');
       return runInterfaceDraft({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json'],contract:plan.options['--contract'],extend:!!plan.options['--extend'],refresh:!!plan.options['--refresh']},{stdout,stderr});
     }
     case 'prompt-approve': {

@@ -4,8 +4,8 @@ import childProcess, { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import * as runtime from '../src/runtime-client.mjs';
-import { captureSource } from '../src/runtime-preflight.mjs';
+import * as runtime from '../src/runtime/runtime-client.mjs';
+import { captureSource } from '../src/runtime/runtime-preflight.mjs';
 import { productStatus, productNext } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, sha } from './runtime-fake.mjs';
 

@@ -4,8 +4,8 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {harbor,storyTest,fakeRuntime,portsFor} from './runtime-fake.mjs';
-import {runCheck} from '../src/runtime-client.mjs';
-import {captureSource} from '../src/runtime-preflight.mjs';
+import {runCheck} from '../src/runtime/runtime-client.mjs';
+import {captureSource} from '../src/runtime/runtime-preflight.mjs';
 import {readRunResults,resultLines} from '../src/workflow-results.mjs';
 const load=(root,path)=>JSON.parse(readFileSync(join(root,path),'utf8'));
 for(const mode of ['test','lint','files']) for(const variant of ['missing','missing-incomplete','wrong'])

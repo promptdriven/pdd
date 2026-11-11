@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { storyCount } from '../src/workflow-runner.mjs';
 import { preparePrEvidence } from '../src/workflow-pr-evidence.mjs';
-import { renderJson } from '../src/runtime-output.mjs';
+import { renderJson } from '../src/runtime/runtime-output.mjs';
 
 test('current head evidence: replay all frozen scenario checks', async () => {
   const scenario = JSON.parse(readFileSync(new URL('./runtime/pr-current-head-evidence.json', import.meta.url)));

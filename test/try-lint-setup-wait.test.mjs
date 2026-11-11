@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runTry } from '../src/runtime-client.mjs';
+import { runTry } from '../src/runtime/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Native execution of the approved case table; no executable Runtime scenario exists (#2548).

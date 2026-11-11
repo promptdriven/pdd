@@ -4,7 +4,7 @@ import childProcess, { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { chmodSync, cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import * as runtime from '../src/runtime-client.mjs';
+import * as runtime from '../src/runtime/runtime-client.mjs';
 import { productStatus, productNext, productStart } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './runtime-fake.mjs';
 

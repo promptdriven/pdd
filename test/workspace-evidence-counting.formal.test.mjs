@@ -3,7 +3,7 @@ import test from 'node:test';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {ownStoryCount,recordEvidence} from '../src/workflow-runner.mjs';
-import {renderJson} from '../src/runtime-output.mjs';
+import {renderJson} from '../src/runtime/runtime-output.mjs';
 import {evidenceFixture} from './helpers/workspace-evidence-fixture.mjs';
 
 // Independent oracle: import-authorized-workspace-evidence, Rules to check,

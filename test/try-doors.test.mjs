@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync, statSync, symlinkSync, readdirSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { runTry } from '../src/runtime-client.mjs';
+import { runTry } from '../src/runtime/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
-import { proseSha256, fillHashes } from '../src/runtime-preflight.mjs';
+import { proseSha256, fillHashes } from '../src/runtime/runtime-preflight.mjs';
 
 function clip(t, stdin = true) {
   return harbor(t, root => {
@@ -63,7 +63,7 @@ test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reus
   assert.doesNotMatch(ready.ports.stdout.text, /budget|charged only/);
   assert.match(ready.ports.stdout.text, /paperclip say 'two words'/);
   assert.ok(!readFileSync(shim, 'utf8').includes(TOKEN));
-  const { runShim } = await import('../src/try-doors.mjs');
+  const { runShim } = await import('../src/runtime/try-doors.mjs');
   const args = ['say', 'two words', '', '$(touch /tmp/DO-NOT-CREATE)', '--help'];
   const io = ready.makePorts({ stdin: Readable.from(['piped\n']) });
   assert.equal(await runShim(ready.descriptor, args, io), 0, io.stderr.text);
@@ -81,7 +81,7 @@ test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reus
 test('doors: save last appends observed case only once in the original test', async t => {
   const setup = clip(t);const originalDoc=JSON.parse(readFileSync(join(setup.repo,'tests/place-order.json'),'utf8'));originalDoc.steps[0].checks.push({criterion_id:'AC1',target:'world',path:'',op:'equals',value:{}});writeFileSync(join(setup.repo,'tests/place-order.json'),JSON.stringify(originalDoc,null,2)+'\n');const ready=await opened(t,setup,{},(entry,f)=>({status:200,json:{...f.job(entry.json.requestId,'call','passed',{program_result:{stdout:'bad\n',stderr:'invalid\n',exit_code:7},report:{input_world:{},world:{}}},1),session_id:entry.url.split('/')[3]}}));
   assert.equal(ready.code, 0, ready.ports.stderr.text);
-  const { runShim } = await import('../src/try-doors.mjs');
+  const { runShim } = await import('../src/runtime/try-doors.mjs');
   assert.equal(await runShim(ready.descriptor, ['bad'], ready.makePorts()), 7);
   const file = join(setup.repo, 'tests/place-order.json'), before = readFileSync(file, 'utf8');
   const save = ready.makePorts({caseHandoff:async({testPath})=>({kind:'closed-editor',testPath})});
@@ -99,7 +99,7 @@ test('doors: save last appends observed case only once in the original test', as
 test('doors: wrapper failures use 125, never call as another login or follow launcher symlinks', async t => {
   const setup = clip(t), ready = await opened(t, setup);
   assert.equal(ready.code, 0, ready.ports.stderr.text);
-  const { runShim } = await import('../src/try-doors.mjs');
+  const { runShim } = await import('../src/runtime/try-doors.mjs');
   const wrong = ready.makePorts({ gh: args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : { status: 0, stdout: 'other 1234' } });
   assert.equal(await runShim(ready.descriptor, ['--help'], wrong), 125);
   assert.match(wrong.stderr.text, /^pdd:.*belong/);
@@ -122,7 +122,7 @@ test('doors: a lost POST reads the accepted ID and never dispatches twice', asyn
     return { destroy: true };
   });
   assert.equal(ready.code, 0, ready.ports.stderr.text);
-  const { runShim } = await import('../src/try-doors.mjs'), io = ready.makePorts();
+  const { runShim } = await import('../src/runtime/try-doors.mjs'), io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['help'], io), 0, io.stderr.text);
   assert.equal(io.stdout.text, 'once\n');
   assert.equal(ready.fake.jsonPosts.length, 1);
@@ -137,7 +137,7 @@ test('doors: budget refusal and unknown outcome leave no stale output eligible f
     return { status: 200, json: { ...f.job(entry.json.requestId, 'call', budget ? 'refused' : 'passed', { program_result: report.result, report, refusals: budget ? [{ code: 'session-call-cap', message: 'This Try has no AI calls left.' }] : [] }), session_id: entry.url.split('/')[3] } };
   });
   assert.equal(ready.code, 0, ready.ports.stderr.text);
-  const { runShim } = await import('../src/try-doors.mjs');
+  const { runShim } = await import('../src/runtime/try-doors.mjs');
   assert.equal(await runShim(ready.descriptor, ['ok'], ready.makePorts()), 0);
   budget = true;
   const io = ready.makePorts();
@@ -154,7 +154,7 @@ test('RELEASE3: undeclared stdin is untouched; --shell gets the PATH', async t =
   const setup = clip(t, false), ready = await opened(t, setup, { '--shell': true });
   // The shell launch is injected below, so this test checks startup without a real interactive shell.
   assert.equal(ready.code, 0, ready.ports.stderr.text);
-  const { runShim } = await import('../src/try-doors.mjs');
+  const { runShim } = await import('../src/runtime/try-doors.mjs');
   const input = Readable.from(['amount one\n', 'amount two\n']);
   const io = ready.makePorts({ stdin: input });
   assert.equal(await runShim(ready.descriptor, [], io), 0, io.stderr.text);
@@ -196,7 +196,7 @@ test('doors: real launcher executes from CommonJS project', async t => {
 test('doors: a changed local prompt cannot reuse the old session or save old output', async t => {
   const setup = clip(t), ready = await opened(t, setup);
   assert.equal(ready.code, 0, ready.ports.stderr.text);
-  const { runShim } = await import('../src/try-doors.mjs');
+  const { runShim } = await import('../src/runtime/try-doors.mjs');
   const file = join(setup.repo, PLACE); writeFileSync(file, readFileSync(file, 'utf8').replace('Print each', 'Show each'));
   const io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['say'], io), 125);
@@ -211,7 +211,7 @@ test('doors: cancellation after accepted dispatch returns unknown promptly witho
     return { status: 202, json: { ...f.job(entry.json.requestId, 'call', 'running'), session_id: entry.url.split('/')[3] } };
   });
   assert.equal(ready.code, 0, ready.ports.stderr.text);
-  const { runShim } = await import('../src/try-doors.mjs'), io = ready.makePorts({ signal: controller.signal });
+  const { runShim } = await import('../src/runtime/try-doors.mjs'), io = ready.makePorts({ signal: controller.signal });
   assert.equal(await runShim(ready.descriptor, ['say'], io), 125);
   assert.match(io.stderr.text, /result is unknown/);
   assert.equal(ready.fake.jsonPosts.length, 1);
@@ -276,7 +276,7 @@ test('RELEASE6: preserve the stable gh symlink and recover a removed saved execu
   const descriptor = JSON.parse(readFileSync(ready.descriptor));
   assert.equal(descriptor.ghPath, stable, 'do not pin the versioned executable behind a package-manager symlink');
   descriptor.ghPath = join(dir, 'removed-gh-v1'); writeFileSync(ready.descriptor, JSON.stringify(descriptor));
-  const {runShim} = await import('../src/try-doors.mjs');
+  const {runShim} = await import('../src/runtime/try-doors.mjs');
   const io = ready.makePorts({gh:undefined,env});
   assert.equal(await runShim(ready.descriptor,['upgraded'],io),0,io.stderr.text);
   assert.deepEqual(ready.fake.jsonPosts.at(-1).json.input, {argv:['upgraded'],stdin:''});
@@ -302,7 +302,7 @@ test('RELEASE6: missing gh target with only a PDD launcher on PATH fails closed 
   const marker=join(dir,'was-executed');
   writeFileSync(join(dir,'gh'),'#!/bin/sh\n# PDD Try launcher v1\nprintf executed > "'+marker+'"\nprintf "'+TOKEN+'\\n"\n',{mode:0o755});
   const descriptor=JSON.parse(readFileSync(ready.descriptor));descriptor.ghPath=join(dir,'removed-gh');writeFileSync(ready.descriptor,JSON.stringify(descriptor));
-  const {runShim}=await import('../src/try-doors.mjs');
+  const {runShim}=await import('../src/runtime/try-doors.mjs');
   const io=ready.makePorts({gh:undefined,env:{...ready.ports.env,PATH:dir}});
   assert.equal(await runShim(ready.descriptor,['safe'],io),125);
   assert.equal(readdirSync(dir).includes('was-executed'),false,'never execute a rejected launcher');
@@ -338,7 +338,7 @@ test('hcli-4: startup and each CLI command show session usage only on stderr', a
   const setup = clip(t), ready = await opened(t, setup);
   assert.equal(ready.code, 0);
   assert.match(ready.ports.stderr.text, /Try AI usage:.*0 used.*40 remaining.*cap 40/);
-  const { runShim } = await import('../src/try-doors.mjs'), io = ready.makePorts();
+  const { runShim } = await import('../src/runtime/try-doors.mjs'), io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['say', 'hello'], io), 0);
   assert.equal(io.stdout.text, 'say\nhello\n');
   assert.match(io.stderr.text, /Try AI usage:.*1 this command.*1 used.*39 remaining.*cap 40/);
@@ -381,7 +381,7 @@ test('hcli-4: unterminated program stderr is preserved and separated from accoun
     const result = { stdout: 'exact stdout', stderr: 'exact stderr', exit_code: 7 };
     return { status: 200, json: { ...f.job(e.json.requestId, 'call', 'passed', { program_result: result, report: { remaining_calls: 38 } }, 2), session_id: e.url.split('/')[3] } };
   });
-  const { runShim } = await import('../src/try-doors.mjs'), io = ready.makePorts();
+  const { runShim } = await import('../src/runtime/try-doors.mjs'), io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['bad'], io), 7); assert.equal(io.stdout.text, 'exact stdout');
   assert.equal(io.stderr.text, 'exact stderr\nTry AI usage: 2 this command · 2 used · 38 remaining (session cap 40).\n');
 });

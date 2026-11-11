@@ -4,9 +4,9 @@ import { request } from 'node:http';
 import { writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { runTry } from '../src/runtime-client.mjs';
+import { runTry } from '../src/runtime/runtime-client.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
-import { openServe } from '../src/try-http.mjs';
+import { openServe } from '../src/runtime/try-http.mjs';
 const raw = (port, path, method = 'GET', body = '', headers = {}) => new Promise((resolve, reject) => {
   const req = request({ hostname: '127.0.0.1', port, path, method, headers }, res => {
     const chunks = []; res.on('data', b => chunks.push(b)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }));

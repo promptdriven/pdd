@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs, runJobs } from '../src/runtime-slots.mjs';
+import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs, runJobs } from '../src/runtime/runtime-slots.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { harbor, fakeRuntime, sink, temp, root } from './runtime-fake.mjs';
 
@@ -206,7 +206,7 @@ test('slots: ten real CLI checks across repositories share a limit of three and 
 
 test('slots: an actual exited producer does not free its posted lease until its job is confirmed ended', async t => {
   const sandbox = temp(t), stateDir = join(sandbox, 'state');
-  const code = `const m = await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)}); const r = await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:1}); await m.recordRuntimeRequest(r,'live-runtime-job'); process.stdout.write(String(process.pid)+'\\n');`;
+  const code = `const m = await import(${JSON.stringify(new URL('../src/runtime/runtime-slots.mjs', import.meta.url).href)}); const r = await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:1}); await m.recordRuntimeRequest(r,'live-runtime-job'); process.stdout.write(String(process.pid)+'\\n');`;
   const produced = await child(['--input-type=module', '-e', code], { cwd: sandbox, env: { FORCE_COLOR: '3' } }); assert.equal(produced.code, 0, produced.stderr);
   const owner = Number(produced.stdout.trim()); assert.ok(owner > 1);
   let now = Date.now();
@@ -221,7 +221,7 @@ test('slots: simultaneous native claimants safely reclaim dead unique claims', {
   const sandbox = temp(t), stateDir = join(sandbox, 'state'), log = join(sandbox, 'events');
   mkdirSync(folder(stateDir), { recursive: true });
   for (let i = 0; i < 3; i++) writeFileSync(join(folder(stateDir), `.claim-dead-${i}.lock`), JSON.stringify({ id: `dead-${i}`, pid: 2147483647, number: 1, choosing: false }));
-  const source = `import {appendFileSync} from 'node:fs'; const m=await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)}); const r=await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:3,deadline:Date.now()+90000}); if(!r)process.exit(2); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'enter',id:r.id})+'\\n'); await new Promise(done=>setTimeout(done,20)); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'exit',id:r.id})+'\\n'); await m.releaseRuntimeSlot(r,{ended:true});`;
+  const source = `import {appendFileSync} from 'node:fs'; const m=await import(${JSON.stringify(new URL('../src/runtime/runtime-slots.mjs', import.meta.url).href)}); const r=await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:3,deadline:Date.now()+90000}); if(!r)process.exit(2); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'enter',id:r.id})+'\\n'); await new Promise(done=>setTimeout(done,20)); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'exit',id:r.id})+'\\n'); await m.releaseRuntimeSlot(r,{ended:true});`;
   const results = await Promise.all(Array.from({ length: 12 }, () => child(['--input-type=module', '-e', source], { cwd: sandbox, env: {}, t })));
   for (const result of results) assert.equal(result.code, 0, result.stderr);
   const active = new Set(), admitted = new Set(); let peak = 0, entered = 0;

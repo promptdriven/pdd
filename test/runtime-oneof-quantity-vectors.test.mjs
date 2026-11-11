@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { checkInput, numberWarnings } from '../src/runtime-preflight.mjs';
+import { checkInput, numberWarnings } from '../src/runtime/runtime-preflight.mjs';
 import { harbor, root } from './runtime-fake.mjs';
 
 // Independent bounded oracle: overlap means starts with a and ends with b.

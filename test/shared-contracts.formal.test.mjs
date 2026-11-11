@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expandSource, catalogRecords, compareCopies, planSync } from '../src/contract-refs.mjs';
-import { captureSource, interfaceBlocks } from '../src/runtime-preflight.mjs';
-import { readContractHistory } from '../src/runtime-client.mjs';
-import { runContracts } from '../src/contracts.mjs';
+import { expandSource, catalogRecords, compareCopies, planSync } from '../src/runtime/contract-refs.mjs';
+import { captureSource, interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
+import { readContractHistory } from '../src/runtime/runtime-client.mjs';
+import { runContracts } from '../src/runtime/contracts.mjs';
 import { harbor, PLACE, sink } from './runtime-fake.mjs';
 
 // Bounded Story oracles, not Runtime replays. The domains below are exhaustive;

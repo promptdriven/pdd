@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,readdirSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {nativeFixture,put,git} from './helpers/native-cli-fixture.mjs';
-import {captureSource} from '../src/runtime-preflight.mjs';
+import {captureSource} from '../src/runtime/runtime-preflight.mjs';
 import {prepareNativeEvidence,readRunResults,resultLines} from '../src/workflow-results.mjs';
 import {readEvidenceEligibility,stepDone,runStatus} from '../src/workflow-runner.mjs';
 

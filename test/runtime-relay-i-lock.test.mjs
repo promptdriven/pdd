@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
 import { harbor, portsFor, fakeRuntime } from './runtime-fake.mjs';
 
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
@@ -50,7 +50,7 @@ async function heldBatch(t) {
 }
 
 function worker(t, r, retry) {
-  const source = `import {runCheck} from ${JSON.stringify(new URL('../src/runtime-client.mjs', import.meta.url).href)};
+  const source = `import {runCheck} from ${JSON.stringify(new URL('../src/runtime/runtime-client.mjs', import.meta.url).href)};
     import {portsFor} from ${JSON.stringify(new URL('./runtime-fake.mjs', import.meta.url).href)};
     const {ports}=portsFor(${JSON.stringify(r.env)});
     const code=await runCheck(${JSON.stringify({ cwd: r.h.repo, words: retry ? [] : [r.batch], options: { '--json': true, [retry ? '--retry' : '--read']: retry ? r.batch : true } })},ports);

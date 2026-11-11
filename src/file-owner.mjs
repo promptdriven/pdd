@@ -1,9 +1,9 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: e2da2bbb20ca838e010e6e7ba8a7a947e6f41bc61fc41e6c0b510ddff03d4d69).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: d8e62e0db6c4c17145e40e2cf962f831067ac8a28095a985d40decf9797061ee).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
-import { gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
+import { gitFiles, interfaceBlocks } from './runtime-seam.mjs';
 
 const HEAD = 4096, PROMPT = 65536, LINE = 1100, WHOLE = 10 * 1024 * 1024;
 const HEADER = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;

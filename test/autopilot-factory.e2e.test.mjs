@@ -3,7 +3,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
-import {interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
+import {interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
 import {existsSync,readdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';

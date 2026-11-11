@@ -6,7 +6,7 @@ import {promisify} from 'node:util';
 import {fixture,packageRoot} from './workflow-runner-fixture.mjs';
 import {approveRun,stepDone} from '../../src/workflow-runner.mjs';
 import {fakeRuntime,portsFor} from '../runtime-fake.mjs';
-import {runCheck} from '../../src/runtime-client.mjs';
+import {runCheck} from '../../src/runtime/runtime-client.mjs';
 
 export const PROMPT='prompts/place_order.prompt.md',TEST='tests/place-order.json',STORY='user_stories/place-order.md';
 export async function preparedCard(t,{through='code'}={}) {

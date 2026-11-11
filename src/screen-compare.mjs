@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: e8d686b54a135b5aeeff0831cf3264b453f78e6ab11856602080ccec2b9c2121).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: 17145766f40f5f138db81230b0a4e47041ad6995dcad3ba18f88dd0f96710bcc).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';

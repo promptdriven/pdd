@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {fixture,closed,read,implementation} from './helpers/runtime-workspace-fixture.mjs';
-import {acquireCaseWriteOwnership} from '../src/runtime-client.mjs';
+import {acquireCaseWriteOwnership} from '../src/runtime/runtime-client.mjs';
 
 async function abandonedOwner(t){
   const f=fixture(t);

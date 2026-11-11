@@ -1,11 +1,11 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: 967e66ffde68a98db912e6d3c4669cc9fd3ed1556bf5f149fe1aa5f23b56a056).
+// Generated from prompts/cli/runtime/try-doors.prompt.md (sha256: 710997475d70167f63e952128f5bb8c897ca8b11ff1af48533bf2105048e19e0).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gitFiles, readPrompt, captureSource } from './runtime-preflight.mjs';
-import {lineReader} from './prompt-approve.mjs';
+import {lineReader} from '../prompt-approve.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall, saveDoorCaseResult, acquireCaseWriteOwnership } from './runtime-client.mjs';
 

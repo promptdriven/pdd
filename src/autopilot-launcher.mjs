@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 0f19dfb8dcd898eed0c130d18ec8b458cf47ea3dfded6c06b9f2701c2ca689c2).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c375c6e0894dbba04866b328a3e36f2a5a99e7a1fe0d2dc2027ef00981fec4d4).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -816,7 +816,7 @@ async function runtimeTick(state, p, completion, timeRules, pendingTimes, stateR
     if (!Object.keys(state.runtime).length) delete state.runtime;
   };
   if (!allWaits.length && !outage && !access) return keep();
-  const health = await (p.runtimeHealth ?? (async input => (await import('./runtime-client.mjs')).checkRuntimeHealth(input)))({ env: p.env });
+  const health = await (p.runtimeHealth ?? (async input => (await import('./runtime-seam.mjs')).checkRuntimeHealth(input)))({ env: p.env });
   const send = p.sendAlert ?? (input => runAutopilotAlerts({ action: 'alert', cwd: state.cwd, env: p.env, ...input },
     { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot, now: p.now }));
   const alert = async (number, kind, fields) => { try { return (await send({ issue: String(number), kind, text: JSON.stringify(fields) }))?.exitCode === 0; } catch { /* The alert record is best effort; work goes on. */ } };

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { captureSource } from '../src/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { captureSource } from '../src/runtime/runtime-preflight.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
 import { harbor, portsFor } from './runtime-fake.mjs';
 
 // Approved before execution: CommonMark §6.1 gives valid HTML tags/autolinks

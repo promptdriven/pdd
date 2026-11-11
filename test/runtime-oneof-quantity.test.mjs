@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkInput, numberWarnings } from '../src/runtime-preflight.mjs';
+import { checkInput, numberWarnings } from '../src/runtime/runtime-preflight.mjs';
 
 // The original three-pattern address domain of issue #2500.
 const address = { oneOf: [

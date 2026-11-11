@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fillHashes } from '../src/runtime-preflight.mjs';
+import { fillHashes } from '../src/runtime/runtime-preflight.mjs';
 
 // Story: user_stories/fill-draft-hash.md, Rules to check. Exhaust the Cartesian
 // product below, each beside a fresh fillable draft and a skipped fixture.

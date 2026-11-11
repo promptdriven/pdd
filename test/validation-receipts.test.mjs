@@ -10,7 +10,7 @@ import {spawn,execFileSync} from 'node:child_process';
 import {runTestSuite,readSuiteProgress,executeSuite} from '../src/test-suite-queue.mjs';
 import {checkMachine,withCheckLifetime} from './helpers/check-machine.mjs';
 import {calculateCheckCapacity} from '../src/test-suite-queue.mjs';
-import {checkRuntimeHealth} from '../src/runtime-client.mjs';
+import {checkRuntimeHealth} from '../src/runtime/runtime-client.mjs';
 import {runAutopilotDoctor} from '../src/autopilot-doctor.mjs';
 import {doctorFixture} from './helpers/doctor-fixture.mjs';
 import {redactSecrets} from '../src/secret-redaction.mjs';

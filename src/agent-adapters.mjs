@@ -1,13 +1,13 @@
-import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: db44fa9caaa62adbd14208ab76143424aaa3961de2cfc181d9ebfe48ab228e96).
+import {loadRuntimeWorkspace} from './runtime-seam.mjs';
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 5f78c862650440f350032e5e27de477438d9e09928bafcc842b26d8fe2aa928f).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, statSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, delimiter, resolve, isAbsolute } from 'node:path';
-import { buildAgentInput } from './agent-packet.mjs';
+import { buildAgentInput } from './runtime-seam.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
-import { checkInput } from './runtime-preflight.mjs';
+import { checkInput } from './runtime-seam.mjs';
 const AGENTS = [['codex','Codex'],['claude','Claude'],['gemini','Gemini']];
 const SECRET = /token|password|secret|api[_-]?key|authorization|cookie|credential/i;
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/lint-call-preflight.prompt.md.
+// Generated from prompts/cli/runtime/lint-call-preflight.prompt.md (sha256: 0d9ea82c1fa4713dcead621642590e65aeca1ffee8e2f99bb3aa23ae284f3a85).
 // The Runtime supplies all costs. Association gates display only, never paid admission.
 export function describeCallPreflight({ test, preflight, context, sourceSha256, requestedCap }) {
   const trusted = preflight && context && context.source_sha256 === sourceSha256

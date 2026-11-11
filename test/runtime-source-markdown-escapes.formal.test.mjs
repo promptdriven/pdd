@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSource } from '../src/runtime-preflight.mjs';
+import { captureSource } from '../src/runtime/runtime-preflight.mjs';
 
 // Root-reviewed oracle from the owner's code-example rule and CommonMark 0.31.2
 // sections 2.4, 3.1, 4.6, 4.8 and 6.1: actual code/comments suppress examples;

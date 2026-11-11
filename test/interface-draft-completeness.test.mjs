@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {runPdd} from '../src/pdd-cli.mjs';
-import {interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
+import {interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
 import {harbor,PLACE,sink} from './runtime-fake.mjs';
 
 const raw=readFileSync(new URL('./fixtures/interface-drafting/percent.prompt.md',import.meta.url),'utf8');

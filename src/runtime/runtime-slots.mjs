@@ -1,10 +1,10 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: d43d62233b3109774b127669b7dc2bb6da6d6477df5a27d14ea51915750f38ce).
+// Generated from prompts/cli/runtime/runtime-slots.prompt.md (sha256: e127b39512bf9cfeed79dc5d02b35e62f3e393714528cbb4aa51375ab540e240).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runtimeOrigin } from './runtime-client.mjs';
-import { NAMES } from './command-catalog.mjs';
+import { NAMES } from '../command-catalog.mjs';
 
 const HEARTBEAT_MS = 5000, EXPIRED_MS = 60_000, LEASE_MS = 1_800_000, PROBE_MS = 15_000;
 const unavailable = error => Object.assign(new Error(`Local interpreter state unavailable: ${String(error?.message ?? error).split('\n')[0]}`), { code: 'local-state-unavailable' });

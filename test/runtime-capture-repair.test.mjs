@@ -5,8 +5,8 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {harbor,storyTest,fakeRuntime,portsFor} from './runtime-fake.mjs';
-import {runCheck} from '../src/runtime-client.mjs';
-import {captureSource,findTests,preflight,proseSha256,interfaceBlocks} from '../src/runtime-preflight.mjs';
+import {runCheck} from '../src/runtime/runtime-client.mjs';
+import {captureSource,findTests,preflight,proseSha256,interfaceBlocks} from '../src/runtime/runtime-preflight.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
 
 const read=(root,path)=>JSON.parse(readFileSync(join(root,path),'utf8'));
@@ -99,7 +99,7 @@ for(const [variant,edit] of Object.entries(variants))test(`capture repair: sole 
 
 const root=fileURLToPath(new URL('..',import.meta.url));
 test('capture repair: changed output prompt keeps a current approved prose hash',()=>{
-  const text=readFileSync(join(root,'prompts/cli/runtime-output.prompt.md'),'utf8');
+  const text=readFileSync(join(root,'prompts/cli/runtime/runtime-output.prompt.md'),'utf8');
   const iface=JSON.parse(interfaceBlocks(text)[0][1]);
   assert.equal(iface.status,'approved');assert.equal(iface.prose_sha256,proseSha256(text));
 });

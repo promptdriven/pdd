@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { interfaceBlocks, interfaceSchemaProblems } from '../src/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { interfaceBlocks, interfaceSchemaProblems } from '../src/runtime/runtime-preflight.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
 import { fakeRuntime, harbor, PLACE, portsFor, sink } from './runtime-fake.mjs';
 
 const closed = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });

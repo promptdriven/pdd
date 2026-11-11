@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fixture } from './helpers/workflow-delivery-fixture.mjs';
 import { approveRun, stepDone } from '../src/workflow-runner.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { PLACE } from './runtime-fake.mjs';
 

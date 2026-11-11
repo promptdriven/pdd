@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { acquireRuntimeSlot, releaseRuntimeSlot } from '../src/runtime-slots.mjs';
+import { acquireRuntimeSlot, releaseRuntimeSlot } from '../src/runtime/runtime-slots.mjs';
 
 // The approved ownership rule protects only this acquisition's original ticket.
 // Reusing its path does not exempt a different owner from ordinary freshness.

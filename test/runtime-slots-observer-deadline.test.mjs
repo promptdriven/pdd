@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { acquireRuntimeSlot, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime-slots.mjs';
+import { acquireRuntimeSlot, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime/runtime-slots.mjs';
 import { fakeRuntime, temp } from './runtime-fake.mjs';
 
 const flush = () => new Promise(done => setImmediate(done));

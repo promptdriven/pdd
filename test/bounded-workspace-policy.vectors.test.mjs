@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,symlinkSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
-import * as workspace from '../src/runtime-workspace.mjs';
+import * as workspace from '../src/runtime/runtime-workspace.mjs';
 import {fixture,json} from './helpers/runtime-workspace-fixture.mjs';
 const scenario=JSON.parse(readFileSync(new URL('./runtime/bounded-workspace-policy.json',import.meta.url),'utf8'));
 const counters={stat:0,read:0};

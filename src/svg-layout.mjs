@@ -1,5 +1,5 @@
-import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: f0725b22b7b6aacbdedc93d1ba5ccbf108e0187b017f4001f81414edf4c63044).
+import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-seam.mjs';
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: 2fefd47b6ea41fa3dc37c4cd5a4d56857f9f8632e1847e2071b7bbda37edda02).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 

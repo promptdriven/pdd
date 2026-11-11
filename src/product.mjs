@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 942eb19cf127c46e1ce5587f7f7a2a399523a690678b671a2a535bd1e1b4b823).
+// Generated from prompts/cli/product.prompt.md (sha256: efafffbe13cb43adcfce4680755f5ab97dea4184c3a05c5a7064f766409bfda7).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -10,8 +10,8 @@ import { listRuns } from './workflow-runs.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
-import { causeText } from './runtime-output.mjs';
-import { createSavedStoryEvidenceReader } from './runtime-client.mjs';
+import { causeText } from './runtime-seam.mjs';
+import { createSavedStoryEvidenceReader } from './runtime-seam.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 
 const ordinary = promisify(execute);

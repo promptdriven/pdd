@@ -4,8 +4,8 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { outcomeFor, outcomeExitCode } from '../src/runtime-outcome.mjs';
-import { projectAnswer } from '../src/runtime-output.mjs';
+import { outcomeFor, outcomeExitCode } from '../src/runtime/runtime-outcome.mjs';
+import { projectAnswer } from '../src/runtime/runtime-output.mjs';
 import { harbor, fakeRuntime, TOKEN, PLACE } from './runtime-fake.mjs';
 import { client, pure, TEST } from './runtime-compatibility/replay.mjs';
 

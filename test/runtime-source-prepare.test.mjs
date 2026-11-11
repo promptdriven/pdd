@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import fs, { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
-import { captureSource, sha256, tarFiles } from '../src/runtime-preflight.mjs';
+import { captureSource, sha256, tarFiles } from '../src/runtime/runtime-preflight.mjs';
 import { fakeRuntime, harbor, PLACE } from './runtime-fake.mjs';
 
 const ORDER = 'tests/place-order.json';

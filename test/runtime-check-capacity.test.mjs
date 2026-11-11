@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync, unlinkSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
-import { listRuntimeJobs } from '../src/runtime-slots.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { listRuntimeJobs } from '../src/runtime/runtime-slots.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { fakeRuntime, harbor, ordinaryCapabilities, portsFor, storyTest } from './runtime-fake.mjs';
 

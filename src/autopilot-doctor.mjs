@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: cd819cd47682d3075043d8aa71e73e1e45c08770843bfdae002c43b63d4f63d8).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 7b1834d001334bd0ae726aec99fa2d5cfbab5c67b3b30d3b82abd6895150fd2d).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -9,7 +9,7 @@ import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
-import {runtimeOrigin, checkRuntimeHealth} from './runtime-client.mjs';
+import {runtimeOrigin, checkRuntimeHealth} from './runtime-seam.mjs';
 import {ensurePaneBudget} from './workflow-chat.mjs';
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;

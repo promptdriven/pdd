@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
+import { interfaceBlocks, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 import { harbor, PLACE, sink } from './runtime-fake.mjs';
 
 const draft = async (setup,args) => {

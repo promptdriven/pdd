@@ -1007,7 +1007,7 @@ for(const change of ['identical','prompt','dependency','deleted']) test(`#2596 s
   writeFileSync(prompt,readFileSync(prompt,'utf8').replace('## Dependencies\n\nNone.', '## Dependencies\n\n- [Prices](prices.md): required runtime context.'));
   writeFileSync(join(f.root,'prompts/prices.md'),'Synthetic selected dependency.\n');
   f.git('add','.');f.git('commit','-qm','selected runtime corpus');
-  const {captureSource}=await import('../src/runtime-preflight.mjs');
+  const {captureSource}=await import('../src/runtime/runtime-preflight.mjs');
   const tests=['tests/place-order.json'];
   const source=captureSource(f.root,{tests,appMap:null});
   f.run.evidence=[{at:10,summary:currentRuntime.replace('(release)', '(place-order)'),source:{kind:'runtime-capture-v1',tests,sha256:source.sha256}}];f.save();

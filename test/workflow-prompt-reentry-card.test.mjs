@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {openRun,approveRun} from '../src/workflow-runner.mjs';
-import {fillHashes} from '../src/runtime-preflight.mjs';
+import {fillHashes} from '../src/runtime/runtime-preflight.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 import {preparedCard,PROMPT,TEST,STORY} from './helpers/workflow-prompt-reentry-card-fixture.mjs';
 

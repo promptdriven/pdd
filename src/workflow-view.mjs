@@ -1,12 +1,12 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: 60430d44805151bd1392ff678c52fffa507500abeaf09835350db93a7cacaf6e).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: ffedba6d3504062f42d44147629e78725142c07ec18b6ce64b9bfa32f6163237).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveRun } from './workflow-runs.mjs';
-import { findTests, interfaceBlocks, isSecretPath, LIMITS, proseSha256 } from './runtime-preflight.mjs';
-import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
+import { findTests, interfaceBlocks, isSecretPath, LIMITS, proseSha256 } from './runtime-seam.mjs';
+import { PROMPT_TESTS_WORDS } from './runtime-seam.mjs';
 import { resultLines } from './workflow-results.mjs';
 
 const execute = promisify(execFile);

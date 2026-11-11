@@ -4,9 +4,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PUBLIC_COMMAND_ROUTES } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { DEFAULT_RUNTIME_URL, runCheck, runtimeOrigin } from '../src/runtime-client.mjs';
-import { summaryLine } from '../src/runtime-output.mjs';
-import { TEST_SCHEMA, interfaceBlocks } from '../src/runtime-preflight.mjs';
+import { DEFAULT_RUNTIME_URL, runCheck, runtimeOrigin } from '../src/runtime/runtime-client.mjs';
+import { summaryLine } from '../src/runtime/runtime-output.mjs';
+import { TEST_SCHEMA, interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
 import { runtimeLines } from '../src/workflow-runner.mjs';
 import { harbor, portsFor, root, sink } from './runtime-fake.mjs';
 
@@ -96,6 +96,7 @@ function tokens(source) {
 }
 const sourceFiles = () => [
   ...readdirSync(join(root, 'src')).filter(name => name.endsWith('.mjs')).map(name => join('src', name)),
+  ...readdirSync(join(root, 'src/runtime')).filter(name => name.endsWith('.mjs')).map(name => join('src/runtime', name)),
   ...readdirSync(join(root, 'bin')).filter(name => name.endsWith('.mjs')).map(name => join('bin', name))];
 
 test('pdd\'s own strings: no string literal in src or bin calls the service "PDD runtime" or "the runtime"', t => {
@@ -123,7 +124,7 @@ const sourceOf = file => readFileSync(join(root, 'src', file), 'utf8');
 test('keep-list: schema ids, host, setting, folder, block label and gate text stay; the Prompt tests line reads old lines', async t => {
   // Schema ids `prompt-runtime.*`: tests are still found by their schema id; the app map id stays where it is read.
   assert.equal(TEST_SCHEMA, 'prompt-runtime.program-scenario.v1');
-  for (const file of ['runtime-client.mjs', 'workflow-view.mjs']) assert.ok(sourceOf(file).includes('\'prompt-runtime.app-map.v1\''), file);
+  for (const file of ['runtime/runtime-client.mjs', 'workflow-view.mjs']) assert.ok(sourceOf(file).includes('\'prompt-runtime.app-map.v1\''), file);
   const setup = harbor(t), files = sink();
   assert.equal(await runPdd(['test', '--files'], { stdout: files, stderr: sink(), cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PATH: '/usr/bin:/bin' } }), 0);
   assert.match(files.text, /tests\/place-order\.json/);
@@ -136,13 +137,13 @@ test('keep-list: schema ids, host, setting, folder, block label and gate text st
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
   assert.equal(runtimeOrigin({ PDD_RUNTIME_URL: 'https://other.example' }), 'https://other.example');
   // The folder ~/.pdd/runtime, in each module that builds it.
-  for (const [file, words] of [['runtime-client.mjs', '\'.pdd\', \'runtime\''], ['runtime-slots.mjs', '\'.pdd\', \'runtime\''],
-    ['agent-project.mjs', '\'.pdd/runtime\''], ['agent-adapters.mjs', '\'.pdd\',\'runtime\'']]) assert.ok(sourceOf(file).includes(words), file);
+  for (const [file, words] of [['runtime/runtime-client.mjs', '\'.pdd\', \'runtime\''], ['runtime/runtime-slots.mjs', '\'.pdd\', \'runtime\''],
+    ['runtime/agent-project.mjs', '\'.pdd/runtime\''], ['agent-adapters.mjs', '\'.pdd\',\'runtime\'']]) assert.ok(sourceOf(file).includes(words), file);
   // The block label: pdd finds a `Runtime interface` block, and its messages name the block.
   const block = label => `# A prompt\n\n<details><summary>${label}</summary>\n\n\`\`\`json\n{"status": "draft"}\n\`\`\`\n</details>\n`;
   assert.equal(interfaceBlocks(block('Runtime interface')).length, 1);
   assert.equal(interfaceBlocks(block('Interpreter interface')).length, 0);
-  for (const file of ['runtime-preflight.mjs', 'prompt-approve.mjs']) assert.ok(tokens(sourceOf(file)).some(token => token.kind === 'string'
+  for (const file of ['runtime/runtime-preflight.mjs', 'prompt-approve.mjs']) assert.ok(tokens(sourceOf(file)).some(token => token.kind === 'string'
     && sourceOf(file).slice(token.start, token.end).includes('Runtime interface')), file);
   // The `Prompt tests (story): ...` line that pdd writes is the line that the PR reader reads; an older `Runtime check` line reads the same way.
   const line = summaryLine([{ story: 'place-order', state: 'passed', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 1 }], 'place-order');

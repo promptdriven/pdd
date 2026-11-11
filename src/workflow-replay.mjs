@@ -1,13 +1,13 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 9f6fe653f29c7e26cd9034ee2f92e22038af0f8b2c0a77436124e7cacfc2ca8a).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: f41fdd6ec4d797a80975a03af9bb0d2020913f8e7b2f644e0eb2e861f41fd7d8).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync, symlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
-import { gitFiles } from './runtime-preflight.mjs';
-import { cleanText } from './runtime-output.mjs';
+import { gitFiles } from './runtime-seam.mjs';
+import { cleanText } from './runtime-seam.mjs';
 import { headerPrompts } from './file-owner.mjs';
-import { exactIntegerLeaves, jsonSafe, parseScenarioJson, stringifyScenarioJson, withExactIntegers } from './scenario-json.mjs';
+import { exactIntegerLeaves, jsonSafe, parseScenarioJson, stringifyScenarioJson, withExactIntegers } from './runtime-seam.mjs';
 export const REPLAY_POLICY = 'pdd.replay-evidence.v1';
 const LIMIT = 2 * 1024 * 1024, MAX = 10000;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -214,7 +214,7 @@ function adoptionView(root, ref, scenarios, source, scenarioReference) {
   } catch(error) {rmSync(temp,{recursive:true,force:true});throw error;}
 }
 function selectedFiles(root, tests) {
-  const script=`import {captureSource} from ${JSON.stringify(new URL('./runtime-preflight.mjs',import.meta.url).href)};try{process.stdout.write(JSON.stringify(captureSource(process.argv[1],{tests:JSON.parse(process.argv[2])}).files));}catch(error){process.stderr.write(String(error.message));process.exitCode=1;}`;
+  const script=`import {captureSource} from ${JSON.stringify(new URL('./runtime-seam.mjs',import.meta.url).href)};try{process.stdout.write(JSON.stringify(captureSource(process.argv[1],{tests:JSON.parse(process.argv[2])}).files));}catch(error){process.stderr.write(String(error.message));process.exitCode=1;}`;
   try {return JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',script,root,JSON.stringify(tests)],{env:gitEnvironment(),maxBuffer:16*1024*1024,stdio:['ignore','pipe','pipe']}).toString());}
   catch(error) {throw Error(`Required context selection failed: ${error.stderr?.toString().trim() || 'local selector failed'}`);}
 }

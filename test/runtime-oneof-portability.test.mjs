@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkInput } from '../src/runtime-preflight.mjs';
+import { checkInput } from '../src/runtime/runtime-preflight.mjs';
 
 // ASCII pattern spelling does not make JS/Python character classes equivalent.
 // Python rejects these first branches, so the CLI cannot prove an overlap.

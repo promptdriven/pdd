@@ -5,8 +5,8 @@ import {readFileSync,writeFileSync,appendFileSync,symlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
-import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
-import {runCheck} from '../src/runtime-client.mjs';
+import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {runCheck} from '../src/runtime/runtime-client.mjs';
 import {harbor,portsFor,fakeRuntime,PLACE} from './runtime-fake.mjs';
 
 const TEST='tests/place-order.json', STORY='user_stories/place-order.md', RUNNER='prompts/runner.prompt.md';

@@ -4,9 +4,9 @@ import fs, { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } f
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { runContracts } from '../src/contracts.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { gitFiles, interfaceBlocks } from '../src/runtime-preflight.mjs';
+import { runContracts } from '../src/runtime/contracts.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { gitFiles, interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 
 const ORDER='tests/place-order.json', STORY='user_stories/place-order.md', OTHER='tests/unknown-item.json', OTHER_STORY='user_stories/unknown-item.md';

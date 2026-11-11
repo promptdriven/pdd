@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { interfaceBlocks, checkInput } from '../src/runtime-preflight.mjs';
+import { interfaceBlocks, checkInput } from '../src/runtime/runtime-preflight.mjs';
 import { prepareSortContext } from '../src/issue-sort-github.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';

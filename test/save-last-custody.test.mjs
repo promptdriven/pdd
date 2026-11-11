@@ -6,9 +6,9 @@ import {createHash} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {spawnSync} from 'node:child_process';
 import {fixture,closed,json,read,get,stream} from './helpers/runtime-workspace-fixture.mjs';
-import {proseSha256} from '../src/runtime-preflight.mjs';
-import {runShim} from '../src/try-doors.mjs';
-import * as client from '../src/runtime-client.mjs';
+import {proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {runShim} from '../src/runtime/try-doors.mjs';
+import * as client from '../src/runtime/runtime-client.mjs';
 
 const hash=text=>createHash('sha256').update(text).digest('hex');
 const receipts=f=>{
@@ -77,7 +77,7 @@ for(const mode of ['timeout','cancel']){
     // Recover by pending identity in fresh processes. The current last command is B.
     const code=`const c=await import(process.argv[1]),f=JSON.parse(process.argv[2]);const lease=await c.acquireCaseWriteOwnership({root:f.root,testPath:f.path,handoff:{kind:'closed-editor',testPath:f.path}},{env:process.env});try{console.log(JSON.stringify(await c.applyPendingCase({root:f.root,pendingId:f.id,writeOwnership:lease},{env:process.env})));}finally{lease.release();}`;
     for(const duplicate of [false,true]){
-      const recovery=spawnSync(process.execPath,['--input-type=module','-e',code,new URL('../src/runtime-client.mjs',import.meta.url).href,JSON.stringify({root:f.root,path:f.second,id:receipt.record.pendingId})],{env:f.env,encoding:'utf8'});
+      const recovery=spawnSync(process.execPath,['--input-type=module','-e',code,new URL('../src/runtime/runtime-client.mjs',import.meta.url).href,JSON.stringify({root:f.root,path:f.second,id:receipt.record.pendingId})],{env:f.env,encoding:'utf8'});
       assert.equal(recovery.status,0,recovery.stderr);const applied=JSON.parse(recovery.stdout);assert.equal(applied.state,'committed');assert.equal(applied.duplicate===true,duplicate);
     }
     const actual=get(f.root,f.second);assert.equal(actual.steps.length,2);assert.deepEqual(actual.steps[0],f.doc.steps[0]);assert.deepEqual(actual.steps[1],f.saved.test.steps[0]);

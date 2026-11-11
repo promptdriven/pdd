@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runCheck, runTry, runDoorCall } from '../src/runtime-client.mjs';
-import { projectAnswer, renderText, exitCodeFor } from '../src/runtime-output.mjs';
+import { runCheck, runTry, runDoorCall } from '../src/runtime/runtime-client.mjs';
+import { projectAnswer, renderText, exitCodeFor } from '../src/runtime/runtime-output.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 const advice = 'Make the step smaller, for example split 30 moves into 3 steps of 10.';

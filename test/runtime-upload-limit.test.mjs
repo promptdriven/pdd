@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
 import { fakeRuntime, harbor, portsFor, storyTest } from './runtime-fake.mjs';
 
 const gate = () => { let release; const promise = new Promise(done => { release = done; }); return { promise, release }; };

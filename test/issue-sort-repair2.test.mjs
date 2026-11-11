@@ -5,7 +5,7 @@ import { routeSortIssues, syncSortGroups, prepareSortContext } from '../src/issu
 import { sortPlan } from '../src/issue-sort.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
 import { readFileSync } from 'node:fs';
-import { interfaceBlocks, checkInput } from '../src/runtime-preflight.mjs';
+import { interfaceBlocks, checkInput } from '../src/runtime/runtime-preflight.mjs';
 import { fixture, repository, key } from './helpers/issue-sort-fixture.mjs';
 const read = async w => (await readDependencySnapshot({ repository }, w.ports)).snapshot;
 const http = (value, status = 200) => ({ code: 0, stdout: `HTTP/2.0 ${status} Reply\r\n\r\n${JSON.stringify(value)}` });

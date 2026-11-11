@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { routeSortIssues, pacedSortWrites } from '../src/issue-sort-github.mjs';
 import { reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
-import { interfaceBlocks, proseSha256, promptRefusal, checkInput } from '../src/runtime-preflight.mjs';
+import { interfaceBlocks, proseSha256, promptRefusal, checkInput } from '../src/runtime/runtime-preflight.mjs';
 import { fixture, complete, repository, key } from './helpers/issue-sort-fixture.mjs';
 const fixed = w => ({ ...w.record(1).status, state: 'fixed', fix: 'https://github.com/example/project/pull/90' });
 const snapshot = async w => (await readDependencySnapshot({ repository }, w.ports)).snapshot;

@@ -1,11 +1,11 @@
-// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: e1d964dd121794050a4572ce181cf7c59a55514dfd731f5433e620af4de2d4f7).
+// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: bf40b136b283201a040e64c75aaffb86c6b3f25d611968170e86b9a05ec1341b).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { captureSource, findTests } from './runtime-preflight.mjs';
-import { parseScenarioJson, stringifyScenarioJson } from './scenario-json.mjs';
+import { captureSource, findTests } from './runtime-seam.mjs';
+import { parseScenarioJson, stringifyScenarioJson } from './runtime-seam.mjs';
 
 const SCENARIO = 'prompt-runtime.program-scenario.v1';
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;

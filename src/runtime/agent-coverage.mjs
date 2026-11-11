@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-coverage.prompt.md (sha256: 0b965a159573795ed2298532748378aff66e76d0dc270441918792658790a0c1).
+// Generated from prompts/cli/runtime/agent-coverage.prompt.md (sha256: fe09be2859a758167dee749671040a6d63369f9473cdece10fa2ca953d9a5b73).
 import {basename} from 'node:path';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 function clip(value,max=160){let text='',bytes=0;for(const c of String(value??'').replace(/[\u0000-\u001f\u007f-\u009f]/g,' ')){const n=Buffer.byteLength(c);if(bytes+n>max)break;text+=c;bytes+=n;}return text;}

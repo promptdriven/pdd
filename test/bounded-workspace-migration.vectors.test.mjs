@@ -5,12 +5,12 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fixture,read,write,json,cases,closed,pendingId} from './helpers/runtime-workspace-fixture.mjs';
-import {migrateRuntimeWorkspace} from '../src/runtime-workspace-migration.mjs';
-import {captureSource} from '../src/runtime-preflight.mjs';
+import {migrateRuntimeWorkspace} from '../src/runtime/runtime-workspace-migration.mjs';
+import {captureSource} from '../src/runtime/runtime-preflight.mjs';
 import {associateEvidenceWorkspace,readEvidenceEligibility} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
-import {runtimeWorkspaceMigrationStore,runTry,saveDoorCase,acquireCaseWriteOwnership,applyPendingCase} from '../src/runtime-client.mjs';
-import {saveLast,runShim} from '../src/try-doors.mjs';
+import {runtimeWorkspaceMigrationStore,runTry,saveDoorCase,acquireCaseWriteOwnership,applyPendingCase} from '../src/runtime/runtime-client.mjs';
+import {saveLast,runShim} from '../src/runtime/try-doors.mjs';
 const hash=text=>createHash('sha256').update(text).digest('hex');
 async function migrationFixture(t){
  const f=fixture(t),old=fixture(t),workflowState=join(f.parent,'workflow-state');

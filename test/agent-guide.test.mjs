@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createTryGuide} from '../src/agent-guide.mjs';
+import {createTryGuide} from '../src/runtime/agent-guide.mjs';
 const entry='prompts/tool.prompt.md#main';
 const schema={type:'object',properties:{argv:{type:'array',items:{type:'string'}}},required:['argv'],additionalProperties:false};
 const scenario={schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/tool.md',initial_world:{kv:{}},criteria:[{id:'AC1',text:'Help prints help.'}],steps:[{step_id:'help',entry_path:'prompts/tool.prompt.md',operation:'main',input:{argv:['--help']},checks:[{criterion_id:'AC1',target:'result',path:'/stdout',op:'equals',value:'help\n'}]}]};

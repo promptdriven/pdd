@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { renderText, summaryLine, exitCodeFor } from '../src/runtime-output.mjs';
+import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { renderText, summaryLine, exitCodeFor } from '../src/runtime/runtime-output.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
 const row = (state, extra = {}) => ({ state, story: 'one', title: 'One', test: 'one.json', refusals: [], ...extra });
 async function run(setup, fake, options = { '--json': true }, words = ['place-order'], suppliedPorts) {

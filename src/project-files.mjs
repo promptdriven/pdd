@@ -1,6 +1,6 @@
-// Generated from prompts/cli/files.prompt.md (sha256: bd863b66a167409b0a76f97b9a78a27e3af4e9e7dd8408c4f276aaaf02419ded).
+// Generated from prompts/cli/files.prompt.md (sha256: 67cd2901fdf57bcbf7e5478b937784c650dee4f24ee336c2be97d7c610a36b7c).
 import { spawnSync } from 'node:child_process';
-import { findTests, preflight, promptRefusal, promptSchemaRefusals, readPrompt } from './runtime-preflight.mjs';
+import { findTests, preflight, promptRefusal, promptSchemaRefusals, readPrompt } from './runtime-seam.mjs';
 
 const sorted = paths => [...new Set(paths)].sort();
 const problemKey = problem => JSON.stringify([problem.path, problem.code, problem.section, problem.message]);
