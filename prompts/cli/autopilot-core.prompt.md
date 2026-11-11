@@ -706,7 +706,7 @@ full before you check the PR body".
   issue (not a PR, not this issue, only by trusted authors, from the tick's issue list)
   that the issue title, the issue body or the PR body names by number (`#N`, `REPO#N` or
   its URL), or whose title or body names a file that the PR changes by its full path, at
-  most 5, each body cut to 2,000 characters; or "(none)". A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
+  most 5, each body cut to 2,000 characters; or "(none)". A Runtime FAIL line in the PR body means a FAIL verdict. **It reads the diff in parts** (battle plans, Nov 11: a tool output over about 10,000 tokens loses its middle; 70 of 146 review diff reads were cut): first `git diff --stat origin/BASE...HEAD`, then one changed file per command (`git diff origin/BASE...HEAD -- FILE`), and a file whose diff is larger than about 30 KB in hunks (for example with `git diff -U3 origin/BASE...HEAD -- FILE | sed -n 'A,Bp'`); never the whole PR's diff in one call. The brief says the limit in these words: "A tool output over about 10,000 tokens loses its middle." The verdict's summary ends with one line `Read: FILE, FILE, …` that names every changed file that it read in full (the engine check that blocks a PASS without it comes in 0.1.30). It writes no files and makes no GitHub write. Its
   result is `{verdict: PASS|FAIL, head, summary, mustFix[], question?, options?,
   recommended?}`. **A decision is a question, not a repair (only with `decisions`
   `ask`):** when a blocking item of a FAIL is a decision item (P1 or P2, then the word

@@ -1475,3 +1475,13 @@ test('E75 (#3177, #3227 fix 5) every agent brief names the short job rules file,
   assert.ok(repair.includes(`Read ${rules} in full before you write the PR body.`), 'repair');
   assert.match(repair, /Run pdd as "\$PDD_CLI"/);
 });
+
+test('E76 (battle plans, Nov 11) the reviewer reads the diff in parts, knows the 10,000-token limit and lists the files it read in full', async t => {
+  const { w } = await t10World(t, {});
+  const review = w.job(17, 'review').input;
+  assert.match(review, /A tool output over about 10,000 tokens loses its middle, so never read the whole PR's diff in one call\./);
+  assert.match(review, /First run git fetch origin main && git diff --stat origin\/main\.\.\.HEAD\. Then read one changed file per command: git diff origin\/main\.\.\.HEAD -- FILE\./);
+  assert.match(review, /Read a file whose diff is larger than about 30 KB in hunks/);
+  assert.match(review, /"summary":"<one paragraph, then one line: Read: FILE, FILE, \.\.\. \(every changed file that you read in full\)>"/);
+  assert.doesNotMatch(review, /Read the change with: git fetch origin main && git diff origin\/main\.\.\.HEAD\./, 'no whole-PR diff in one call');
+});
