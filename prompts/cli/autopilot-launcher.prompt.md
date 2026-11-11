@@ -1376,14 +1376,17 @@ run full):
   the start's off check and status, which names the source `this machine`); it never
   writes `pdd.json` (unlike `pdd autopilot observe`). `start --report file|draft|off`
   saves `state.report` the same way: it replaces the core's `report` in the tick and
-  status (`reports MODE (this machine)`). `start --intake off|shadow` saves
+  status (`reports MODE (this machine)`). `start --decisions ask|decide` saves
+  `state.decisions` the same way: it replaces the core's `decisions` in the tick and
+  status (`decisions MODE (this machine)`); another value returns exit code 2 with
+  `Use --decisions ask or --decisions decide.` `start --intake off|shadow` saves
   `state.intake`; the core tick gets `intake` from it (`intakeMode` of the
   [intake cards](autopilot-intake.prompt.md); off when none is saved), so a later
   start without `--intake` keeps it and pdd.json never sets it. Another `--intake`
   value returns exit code 2 with `Use --intake off or --intake shadow.` A core tick
   whose mode is off, and `pdd autopilot stop`, call `stopCardJobs` of the intake
   cards on the core state folder (with the core's jobs port when one is given). With an
-  effective engine that is not core, `--mode`, `--report` or `--intake` is refused
+  effective engine that is not core, `--mode`, `--report`, `--decisions` or `--intake` is refused
   before any change. A core start whose machine mode
   is `off` saves the state as disabled with mode off, stops the timer and returns exit
   0 with `Autopilot core is off on this machine for REPO: mode off is saved and the
