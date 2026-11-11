@@ -16,24 +16,31 @@
     }
   ],
   "initial_world": {
-    "requests": []
+    "requests": [],
+    "files": {}
   },
   "simulation": {
     "files.read": {
-      "action": "port.write",
-      "world_pointer": "/requests",
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
       "result_template": {
         "content": ""
-      }
+      },
+      "result_value_pointer": "/content"
     },
     "files.stat": {
-      "action": "port.write",
-      "world_pointer": "/requests",
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
       "result_template": {
         "exists": false,
         "is_symlink": false,
         "size": 0
-      }
+      },
+      "result_value_pointer": ""
     }
   },
   "context": [],
