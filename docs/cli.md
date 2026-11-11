@@ -372,6 +372,67 @@ and a branch equal to its tracked upstream. Dirty, unpushed, active, waiting,
 locked and unverifiable worktrees stay. It does not delete branches or run
 records. Cleanup makes no push or fetch. A cleanup failure keeps the worktree.
 
+## Login pool (pdd accounts)
+
+The login pool is the list of Codex logins on this machine, in the order that agent steps use them.
+Each login stays in its own folder (its `CODEX_HOME`). The pool file never holds a token.
+
+- `pdd accounts list [--json] [--no-read]`
+- `pdd accounts add NAME [--provider codex|claude] [--group GROUP] [--local]`
+- `pdd accounts import PATH... [--name NAME] [--provider codex|claude] [--local]`
+- `pdd accounts order [NAME...] [--first NAME | --last NAME | --after NAME NAME | --edit]`
+- `pdd accounts pause NAME`
+- `pdd accounts resume NAME`
+- `pdd accounts set NAME [--stop-week N] [--stop-5h N] [--reset never|ask|auto]`
+- `pdd accounts remove NAME`
+- `pdd accounts home NAME`
+- `pdd accounts log [NAME] [--json]`
+- `pdd accounts share NAME --with USER,...`
+- `pdd accounts unshare NAME --with USER,...`
+- `pdd accounts accept NAME`
+- `pdd accounts leave NAME`
+- `pdd accounts group create GROUP (--with USER,... | --github ORG[/TEAM])`
+- `pdd accounts reset NAME`
+
+Files:
+
+| File | What it holds |
+|---|---|
+| `~/.config/pdd/accounts.json` (or `$XDG_CONFIG_HOME/pdd/accounts.json`) | The pool: names, folders, order, pause, stop lines and the reset setting. Mode 0600. |
+| `~/.local/state/pdd/accounts/log.jsonl` (or under `$XDG_STATE_HOME/pdd/accounts/`) | One line for each change. No token and no email. |
+
+`pdd accounts list` reads the usage of each login with the read-only Codex call
+(`account/rateLimits/read`). It never refreshes a login and never spends a reset
+or credits. A login whose access ends within 10 minutes is not read. `--no-read`
+shows the saved usage and marks an old row `stale`.
+
+```text
+Logins on this machine (local mode, no login server). Usage read 14:58 PST. Read only: no refresh, nothing spent.
+
+#   NAME   KIND         PLAN  WEEK  WEEK RESETS   5H    5H RESETS     ACCESS ENDS   STATE
+1   cx5    login        team  39%   Nov 17 12:49  31%   Nov 11 18:53  Nov 21 14:33  ready
+2   cx6    login        team  16%   Nov 18 11:48  100%  Nov 11 16:48  Nov 21 08:56  limited (5h) until Nov 11 16:48
+3   work3  access copy  pro   100%  Nov 13 15:28  -     -             Nov 21 10:02  limited (week) until Nov 13 15:28
+-   cx2    login        team  37%   Nov 17 12:49  0%    Nov 11 19:42  Nov 15 17:50  paused
+
+Next step uses cx5. Ready: 1 of 4. Next free: cx6 at Nov 11 16:48 PST.
+Resets: never for every login.
+```
+
+`KIND` is `login` for a full login (its Codex renews it on this machine) and
+`access copy` for a copy that is renewed elsewhere. `#` is the place in the
+order; it is `-` for a login that steps cannot use until you act (paused, no
+login, access ended, needs sign-in).
+
+- `import` adds folders that already have a Codex login. It never copies, moves or changes a login file. The name is `--name` or the folder name. It refuses a folder that is a link or has a linked `auth.json` (for example a folder that points to `~/.codex`), a folder without a login, a name in use, and a second folder of the same Codex account.
+- `add` makes `~/.pdd/codex/NAME` (mode 0700) with `cli_auth_credentials_store = "file"` in its `config.toml`, then runs `codex login --device-auth` there. Only a person at a terminal can run it.
+- `order NAME...` puts these logins first. `--first`, `--last` and `--after NAME OTHER` move one login. `--edit` opens the order in `$VISUAL` or `$EDITOR`.
+- `pause` takes a login out of the pick. It keeps its place in the order.
+- `set` changes the stop lines (default 97% for the week and for 5 hours). `--reset` sets whether pdd may use a Codex usage reset on the login: `never` (default), `ask` or `auto`. Only a person at a terminal changes it, after typing `yes`.
+- `remove` forgets a login. It never signs out, because a sign-out ends a shared login for everyone. It keeps a folder that pdd did not make. For a folder that `add` made, it asks y/N before it deletes the folder.
+- `home NAME` prints the folder, for a wrapper that starts Codex with `CODEX_HOME`.
+- `share`, `unshare`, `accept`, `leave` and `group create` need the PDD login server. Without one, they stop with one line.
+
 ## GitHub API budget
 
 Autopilot uses your own `gh` sign-in, so its GitHub calls use your hourly limit

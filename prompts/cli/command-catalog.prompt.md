@@ -391,3 +391,40 @@ Extend the existing simulate route with Boolean --product, text --parts and text
 ## Cap-aware lint (draft)
 
 The lint route accepts optional integer `--max-calls`, minimum 1 and maximum 1000. Its help says this selects a cap for zero-AI structural call preflight; warnings never change the cap or guarantee completion. Existing hidden `test --lint` keeps the same remote semantics; removed commands remain removed. Local lint does not accept a call cap.
+
+## Login pool (pdd accounts)
+
+Catalog one route for each `pdd accounts` form, all with local `accounts`, and
+show each form in help and completion. The [accounts command](accounts-command.prompt.md)
+owns names, option combinations, terminal checks and every effect; the catalog
+checks only the words below. Route id is `accounts.` plus the word after
+`accounts`. `group create` is the route `accounts group` with a first operand
+that is the one choice `create`, so `pdd help accounts group` shows its form.
+
+| Form | Operands | Options |
+|---|---|---|
+| `pdd accounts list [--json] [--no-read]` | none | flags `--json`, `--no-read` |
+| `pdd accounts add NAME [--provider codex\|claude] [--group GROUP] [--local]` | text NAME | value `--provider` (codex, claude), text `--group`, flag `--local` |
+| `pdd accounts import PATH... [--name NAME] [--provider codex\|claude] [--local]` | text PATH, repeated | text `--name`, value `--provider` (codex, claude), flag `--local` |
+| `pdd accounts order [NAME...] [--first NAME \| --last NAME \| --after NAME NAME \| --edit]` | optional text NAME, repeated | text `--first`, text `--last`, text list `--after`, flag `--edit` |
+| `pdd accounts pause NAME`, `pdd accounts resume NAME`, `pdd accounts remove NAME`, `pdd accounts home NAME`, `pdd accounts accept NAME`, `pdd accounts leave NAME`, `pdd accounts reset NAME` | text NAME | none |
+| `pdd accounts set NAME [--stop-week N] [--stop-5h N] [--reset never\|ask\|auto]` | text NAME | integers `--stop-week` and `--stop-5h` (1 to 100), value `--reset` (never, ask, auto) |
+| `pdd accounts log [NAME] [--json]` | optional text NAME | flag `--json` |
+| `pdd accounts share NAME --with USER,...`, `pdd accounts unshare NAME --with USER,...` | text NAME | text `--with` |
+| `pdd accounts group create GROUP (--with USER,... \| --github ORG[/TEAM])` | choice `create`, then text GROUP | text `--with`, text `--github` |
+
+Help descriptions say what each form does for a person: `list` reads usage
+read-only (no refresh, no sign-in, nothing spent) and `--no-read` shows the
+saved usage; `add` makes a login folder and runs the Codex sign-in for a person
+at a terminal; `import` adds existing Codex login folders and never copies,
+moves or changes a login file; `order` shows or sets the order in which agent
+steps use the logins; `pause` takes a login out of the pick and keeps its place;
+`resume` puts it back; `set` shows or changes the stop lines and the reset
+setting, which only a person at a terminal changes after typing yes; `remove`
+forgets a login, never signs out, keeps every folder that pdd did not make and
+asks before it deletes a folder that `add` made; `home` prints a login's folder
+for wrappers that set `CODEX_HOME`; `log` shows the local log of pool changes
+(with a login server, also its log); `share`, `unshare`, `accept`, `leave` and
+`group create` work through the PDD login server; `reset` uses a Codex usage
+reset on a login now, for a person at a terminal only. Preserve every unrelated
+form.

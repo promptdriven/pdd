@@ -442,3 +442,31 @@ test('a bad pool file gives its one line and exit 1, and stays as it was', async
   assert.deepEqual(result, { code: 1, out: '', err: `The pool file ${poolFile} is not valid: it is not valid JSON. pdd did not change it. Fix or move the file, then try again.\n` });
   assert.equal(readFileSync(poolFile, 'utf8'), '{ broken');
 });
+
+test('pdd accounts routes reach the command with the parsed words', async () => {
+  const { runPdd } = await import('../src/pdd-cli.mjs');
+  const seen = [], accounts = { async runAccounts(input) { seen.push({ action: input.action, operands: input.operands, options: input.options }); return 0; } };
+  for (const argv of [['accounts', 'list', '--json', '--no-read'], ['accounts', 'group', 'create', 'friends', '--github', 'promptdriven/team'],
+    ['accounts', 'order', '--after', 'cx5', 'cx2'], ['accounts', 'set', 'work3', '--stop-5h', '90', '--reset', 'ask'], ['accounts', 'import', 'a', 'b']])
+    assert.equal(await runPdd(argv, { stdout: sink(false), stderr: sink(false), accounts }), 0, argv.join(' '));
+  assert.deepEqual(seen, [
+    { action: 'list', operands: [], options: { '--json': true, '--no-read': true } },
+    { action: 'group-create', operands: ['friends'], options: { '--github': 'promptdriven/team' } },
+    { action: 'order', operands: [], options: { '--after': ['cx5', 'cx2'] } },
+    { action: 'set', operands: ['work3'], options: { '--stop-5h': '90', '--reset': 'ask' } },
+    { action: 'import', operands: ['a', 'b'], options: {} },
+  ]);
+  for (const argv of [['accounts', 'set', 'x', '--stop-week', '0'], ['accounts', 'set', 'x', '--reset', 'always'], ['accounts', 'group', 'make', 'g'], ['accounts', 'home']]) {
+    const stderr = sink(false);
+    assert.equal(await runPdd(argv, { stdout: sink(false), stderr, accounts }), 2, argv.join(' '));
+  }
+  assert.equal(seen.length, 5);
+
+  const env = { HOME: freshHome() }, stdout = sink(false);
+  await seed(env, [{ name: 'cx5', home: '/synthetic/cx5' }]);
+  assert.equal(await runPdd(['accounts', 'home', 'cx5'], { env, stdout, stderr: sink(false) }), 0);
+  assert.equal(stdout.text, '/synthetic/cx5\n');
+  const failing = { async runAccounts() { throw new Error('synthetic failure'); } }, stderr = sink(false);
+  assert.equal(await runPdd(['accounts', 'home', 'cx5'], { env, stdout: sink(false), stderr, accounts: failing }), 1);
+  assert.match(stderr.text, /^pdd accounts failed\./);
+});
