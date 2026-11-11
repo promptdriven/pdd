@@ -9,23 +9,23 @@ The seam keeps stable pdd-owned file paths for anything pdd writes into a user's
 
 ## Public contract
 
-Re-export the public bindings of [`src/runtime/index.mjs`](runtime-entry.prompt.md), preserving parameter handling, return values, thrown errors, and port forwarding:
+Re-export the public bindings of [`src/runtime/index.mjs`](runtime-entry.prompt.md), preserving lazy loading, parameter handling, return values, thrown errors, and port forwarding:
 
-- `DEFAULT_RUNTIME_URL`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `runCheck`, `runTry`, `runtimeOrigin`
+- `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `loadRuntimeClient`, `runCheck`, `runTry`
 - `LIMITS`, `captureSource`, `checkInput`, `findTests`, `gitFiles`, `interfaceBlocks`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `sha256`, `sourceFilePort`
 - `PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`, `causeText`, `cleanText`, `storyLines`
 - `outcomeText`, `resultOutcome`
 - `checkPlanResultLines`, `checkPlanResults`
 - `allowsRuntimePath`, `loadRuntimeWorkspace`, `requireRuntimePath`
 - `exactIntegerLeaves`, `jsonSafe`, `parseScenarioJson`, `stringifyScenarioJson`, `withExactIntegers`
-- `contractCoverage`, `coverageView`, `missingInterfaces`, `runAutomaticApproval`, `runInterfaceDraft`
+- `loadInterfaceDraft`, `runAutomaticApproval`, `runInterfaceDraft`
 - `runContracts`
 - `runJobs`
 - `runMcp`
 - `runShim`
 - `buildAgentInput`
 
-The seam holds no mutable state and performs no I/O at load time beyond loading `src/runtime/index.mjs`. Both static imports and dynamic `import('./runtime-seam.mjs')` callers receive the same namespace.
+The seam holds no mutable state and performs no I/O at load time beyond loading the static leaf exports of `src/runtime/index.mjs`; command and check-plan modules load only when invoked. Both static imports and dynamic `import('./runtime-seam.mjs')` callers receive the same namespace.
 
 ## Dependencies
 
@@ -34,6 +34,6 @@ The seam holds no mutable state and performs no I/O at load time beyond loading 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"26203ff5659c5841c111ba1243117613467d98ede084be8286d0272ee78a3fb1","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256":"7efb47284cb672f54e9b0016b6228e51d8657d76c9a5c817a1906c9eb03a48e8","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>

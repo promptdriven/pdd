@@ -241,7 +241,8 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
   }
   const iface = prompt.interface, current = iface.prose_sha256 === hash;
   if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
-  const {contractCoverage,coverageView}=await import('./runtime-seam.mjs');
+  const {loadInterfaceDraft}=await import('./runtime-seam.mjs');
+  const {contractCoverage,coverageView}=await loadInterfaceDraft();
   let coverageLines;
   try {
     const coverage=contractCoverage({root,path,text,iface});

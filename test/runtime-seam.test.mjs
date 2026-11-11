@@ -247,3 +247,84 @@ test('SEAM3: detector catches static, dynamic, re-export, URL and child-process 
   // Comments, .pdd/runtime, test/runtime/ and prompts/cli/runtime-entry.prompt.md are allowed.
   assert.deepEqual(findSeamViolations('src/workflow-view.mjs', "// Moved to src/runtime/runtime-preflight.mjs\nimport { findTests } from './runtime-seam.mjs';\nconst a = '.pdd/runtime';\nconst b = 'test/runtime/foo.json';\nconst c = 'prompts/cli/runtime-entry.prompt.md';\n"), []);
 });
+
+const BASE_HELP_MODULES = [
+  'src/agent-adapters.mjs',
+  'src/agent-config.mjs',
+  'src/agent-packet.mjs',
+  'src/argument-parser.mjs',
+  'src/command-catalog.mjs',
+  'src/completion.mjs',
+  'src/contract-refs.mjs',
+  'src/path-diagnostic.mjs',
+  'src/pdd-cli.mjs',
+  'src/project-setup.mjs',
+  'src/runtime-binding-plan.mjs',
+  'src/runtime-markdown.mjs',
+  'src/runtime-outcome.mjs',
+  'src/runtime-output.mjs',
+  'src/runtime-preflight.mjs',
+  'src/runtime-workspace.mjs',
+  'src/scenario-json.mjs',
+  'src/secret-redaction.mjs',
+  'src/setup-interaction.mjs',
+  'src/skills-install.mjs',
+  'src/workflow-agents.mjs',
+  'src/workflow-areas.mjs',
+  'src/workflow-setup.mjs',
+];
+
+async function loadedSrcModules(args) {
+  const { spawnSync } = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
+  const rootPrefix = pathToFileURL(join(root, 'src/')).href;
+  const loaderSource = `
+    export async function resolve(specifier, context, nextResolve) {
+      const resolved = await nextResolve(specifier, context);
+      if (resolved.url.startsWith(${JSON.stringify(rootPrefix)})) {
+        process.stderr.write('PDD_LOADED:' + resolved.url.slice(${JSON.stringify(rootPrefix)}.length) + '\\n');
+      }
+      return resolved;
+    }
+  `;
+  const registerHook = `import { register } from 'node:module'; register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loaderSource)}`)});`;
+  const registerUrl = `data:text/javascript,${encodeURIComponent(registerHook)}`;
+  const run = spawnSync(process.execPath, ['--import', registerUrl, join(root, 'bin/pdd.mjs'), ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(run.stdout.length > 0);
+  return [...new Set(
+    run.stderr
+      .split('\n')
+      .filter(line => line.startsWith('PDD_LOADED:'))
+      .map(line => `src/${line.slice('PDD_LOADED:'.length)}`)
+  )].sort();
+}
+
+test('SEAM5: pdd --help and pdd owner load the exact base src/ module set without loading runtime-client', async () => {
+  for (const [args, expectedBase] of [
+    [['--help'], BASE_HELP_MODULES],
+    [['owner', 'bin/pdd.mjs'], [...BASE_HELP_MODULES, 'src/file-owner.mjs'].sort()],
+  ]) {
+    const loaded = await loadedSrcModules(args);
+    for (const forbidden of [
+      'src/runtime/runtime-client.mjs',
+      'src/runtime/try-mcp.mjs',
+      'src/runtime/try-doors.mjs',
+      'src/runtime/interface-draft.mjs',
+      'src/runtime/contracts.mjs',
+      'src/runtime/runtime-slots.mjs',
+      'src/runtime/runtime-check-plan.mjs',
+    ]) {
+      assert.ok(!loaded.includes(forbidden), `${forbidden} must not load for pdd ${args.join(' ')}`);
+    }
+    const normalized = loaded
+      .filter(rel => rel !== 'src/runtime-seam.mjs' && rel !== 'src/runtime/index.mjs')
+      .map(rel => rel.startsWith('src/runtime/') ? `src/${rel.slice('src/runtime/'.length)}` : rel)
+      .sort();
+    assert.deepEqual(normalized, expectedBase, `loaded modules mismatch for pdd ${args.join(' ')}`);
+  }
+});

@@ -310,7 +310,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
         if(context?.toplevel) {
-          const {missingInterfaces,runInterfaceDraft}=await import('./runtime-seam.mjs');
+          const {loadInterfaceDraft,runInterfaceDraft}=await import('./runtime-seam.mjs');
+          const {missingInterfaces}=await loadInterfaceDraft();
           const missing=missingInterfaces(context.toplevel);
           if(missing.length) {
             line(stdout,`${missing.length} prompts have no Runtime interface. Run pdd interface draft --all.`);

@@ -9,7 +9,7 @@ import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
-import {runtimeOrigin, checkRuntimeHealth} from './runtime-seam.mjs';
+import {loadRuntimeClient} from './runtime-seam.mjs';
 import {ensurePaneBudget} from './workflow-chat.mjs';
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -193,6 +193,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   }
   add('draft-prompts',!ready(tracked)||drafts.length||unreadable.length?'warn':'pass',`First check may need prompt approval: ${drafts.join(', ')||'none'}${unreadable.length?`; unreadable: ${unreadable.join(', ')}`:''}`,'pdd files --json');
 
+  const {runtimeOrigin, checkRuntimeHealth} = await loadRuntimeClient();
   let health;
   try { runtimeOrigin(env); } catch { health={state:'address'}; }
   try {

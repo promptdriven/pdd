@@ -1,4 +1,5 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: ea66ae160a596d7c4a4f106605d6ae98153db8441358671e3a7d7c05bf38096c).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 8e2d62f77a52737835624a8a2835f81ac44beb544e4a5f22f67616fcbae73c5b).
+import { createRequire } from 'node:module';
 
 export {
   exactIntegerLeaves,
@@ -48,32 +49,78 @@ export {
 
 export { buildAgentInput } from './agent-packet.mjs';
 
-export {
-  checkPlanResultLines,
-  checkPlanResults,
-} from './runtime-check-plan.mjs';
+let checkPlanModule = null;
+function loadCheckPlan() {
+  return (checkPlanModule ??= createRequire(import.meta.url)('./runtime-check-plan.mjs'));
+}
 
-export { runJobs } from './runtime-slots.mjs';
+export function checkPlanResults(plan, rows) {
+  return loadCheckPlan().checkPlanResults(plan, rows);
+}
 
-export { runContracts } from './contracts.mjs';
+export function checkPlanResultLines(result) {
+  return loadCheckPlan().checkPlanResultLines(result);
+}
 
-export {
-  contractCoverage,
-  coverageView,
-  missingInterfaces,
-  runAutomaticApproval,
-  runInterfaceDraft,
-} from './interface-draft.mjs';
+export async function runJobs(input, ports) {
+  const { runJobs: run } = await import('./runtime-slots.mjs');
+  return run(input, ports);
+}
 
-export { runMcp } from './try-mcp.mjs';
+export async function runContracts(input, ports) {
+  const { runContracts: run } = await import('./contracts.mjs');
+  return run(input, ports);
+}
 
-export { runShim } from './try-doors.mjs';
+export async function loadInterfaceDraft() {
+  const { contractCoverage, coverageView, missingInterfaces } = await import('./interface-draft.mjs');
+  return { contractCoverage, coverageView, missingInterfaces };
+}
 
-export {
-  DEFAULT_RUNTIME_URL,
-  checkRuntimeHealth,
-  createSavedStoryEvidenceReader,
-  runCheck,
-  runTry,
-  runtimeOrigin,
-} from './runtime-client.mjs';
+export async function runInterfaceDraft(input, ports) {
+  const { runInterfaceDraft: run } = await import('./interface-draft.mjs');
+  return run(input, ports);
+}
+
+export async function runAutomaticApproval(input, ports) {
+  const { runAutomaticApproval: run } = await import('./interface-draft.mjs');
+  return run(input, ports);
+}
+
+export async function runMcp(input, ports) {
+  const { runMcp: run } = await import('./try-mcp.mjs');
+  return run(input, ports);
+}
+
+export async function runShim(descriptorPath, argv, ports) {
+  const { runShim: run } = await import('./try-doors.mjs');
+  return run(descriptorPath, argv, ports);
+}
+
+export async function loadRuntimeClient() {
+  const { DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin } = await import('./runtime-client.mjs');
+  return { DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin };
+}
+
+export async function checkRuntimeHealth(input, ports) {
+  const { checkRuntimeHealth: check } = await import('./runtime-client.mjs');
+  return check(input, ports);
+}
+
+export function createSavedStoryEvidenceReader(ports = {}) {
+  let readerPromise = null;
+  return async input => {
+    readerPromise ??= import('./runtime-client.mjs').then(m => m.createSavedStoryEvidenceReader(ports));
+    return (await readerPromise)(input);
+  };
+}
+
+export async function runCheck(input, ports) {
+  const { runCheck: run } = await import('./runtime-client.mjs');
+  return run(input, ports);
+}
+
+export async function runTry(input, ports) {
+  const { runTry: run } = await import('./runtime-client.mjs');
+  return run(input, ports);
+}
