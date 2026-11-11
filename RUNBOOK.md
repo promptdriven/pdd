@@ -389,9 +389,10 @@ pdd prints the recovery `--read` command before the first check. If the tool sto
 to keep waiting on the saved batch. Never poll every minute or send the same check again.
 
 **Maintenance.** During announced maintenance pdd prints the end time and the reason (`The interpreter is in
-maintenance until 08:52 UTC (…). pdd waits, then continues.`). Then it waits and sends the check. Let it wait. Do not
-cut the wait short: no Ctrl-C, no `timeout` command and no short `--timeout`. A stopped wait sends nothing and gives
-no verdict. An Autopilot core job that cannot wait follows §15 "Autopilot core jobs".
+maintenance until 08:52 UTC (…). pdd waits, then continues.`). Then it waits and sends the check. In your own session,
+let it wait. Do not cut the wait short: no Ctrl-C, no `timeout` command and no short `--timeout`. A stopped wait sends
+nothing and gives no verdict, and nobody else sends the check again. An Autopilot core job does not wait: it follows
+§15 "Autopilot core jobs".
 
 Before `pdd test` or `pdd simulate`, tell the person in one line what you run and that it can take a few minutes. pdd prints
 a progress line on stderr before each slow step (lint, upload, the queue, the simulation setup). When it fails, it says what
@@ -802,9 +803,10 @@ records. A line that the records do not support is red.
   verdict with no failed step, or a refusal that pdd gives no fix for. A refusal with a fix from pdd is this PR's
   work. For example, a whole number outside the interpreter's range: apply the Number spelling that pdd prints (§3
   "Large whole numbers") and check again.
-- During maintenance, let pdd wait (§11). If the job cannot wait, write
-  `Runtime: not run (maintenance until HH:MM UTC: <pdd's reason>)`. Autopilot then sends the check again by itself.
-  Never send it again yourself.
+- Do not wait for maintenance. When pdd prints that the interpreter is in maintenance (§11), it has sent nothing yet.
+  Stop pdd then, and write `Runtime: not run (maintenance until HH:MM UTC)` with the end time that pdd printed.
+  Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never
+  cut short a check that pdd has already sent.
 - `vectors=` counts the replay files (`*.vectors.test.*`) that the PR changes or that read a changed scenario file.
   Count `node:test` tests (the `# tests` and `# pass` lines), not steps or checks, for example `vectors=pass (36/36)`.
 - After a merge from the base, check that the fix is still needed. Check out the new merge base

@@ -1587,10 +1587,11 @@ has no verdict because another step had no answer. When Runtime cannot check a c
 gives no fix for), the job still ships its PR with native tests and `Runtime: not run
 (reason)`, and Autopilot files or counts one report for that cause. A value that is not
 a safe integer is no such reason: pdd prints its exact Number spelling, and the job
-applies that fix and checks again. During announced maintenance pdd waits, then sends
-the check; the job does not cut that wait short. A job that cannot wait writes
-`Runtime: not run (maintenance until TIME: REASON)`, and Autopilot sends the check again
-by itself. "Changed" means changed against the base (`git diff origin/BASE...HEAD`),
+applies that fix and checks again. During announced maintenance the job does not wait:
+pdd has sent nothing yet, so the job stops it and writes `Runtime: not run (maintenance
+until HH:MM UTC)` with the end time that pdd printed. Autopilot sends the check itself
+when maintenance ends and rewrites the line. A job never cuts short a check that pdd has
+already sent. "Changed" means changed against the base (`git diff origin/BASE...HEAD`),
 never since the previous PR head: a Story that a merge from the base brought in is not
 changed. A job that merges the base into its branch checks that its fix is still
 needed: when the PR's changed tests also pass on the code of the new merge base, the
