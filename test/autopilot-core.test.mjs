@@ -447,8 +447,9 @@ test('an ended job holds no slot after a restart, and END and merge remove its p
   w.issue(19);
   w.build(18); await w.tick(); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
   assert.deepEqual(w.github.merges.length, 1);
-  const merged = name => readdirSync(join(w.root, name)).filter(file => /^18(?:[-.]|$)/.test(file) && !file.endsWith('.log'));
+  const merged = name => readdirSync(join(w.root, name)).filter(file => /^18(?:[-.]|$)/.test(file) && !file.endsWith('.log') && !/-evidence-[0-9a-f]+\.json$/.test(file));
   assert.deepEqual([...merged('jobs'), ...merged('worktrees'), ...merged('logs')], []);
+  assert.ok(readdirSync(join(w.root, 'logs')).some(file => /^18-evidence-[0-9a-f]{40}\.json$/.test(file)), 'the evidence record stays (#3227 fix 3)');
   assert.ok(w.job(19, 'build'), 'the merged slot is free in the same tick');
 });
 
