@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: ceb23228827e78af6ba4a22ec699839e600774ce2d4600a6617ae273f8899282).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 5b75180f378f685b6cab2db41f0b9574b0f2f0f5cca14ebadd96c3542452ded6).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1217,8 +1217,14 @@ async function changedFiles(ctx, job, head = job.agentHead ?? job.head) {
 // rows of savedStoryEvidence (`current` = the batch source is exactly the clean checkout's source, so an uncommitted or
 // untracked file never counts; each row names the tests that its check ran), and the upload of exactly the tests of one
 // check at a time, in its own error boundary (never the footprint of other, unchecked tests of the Story).
-async function savedRuntime({ root, tree }, ctx) {
+// With `base`, only the rows: the saved checks of any folder of this machine (the newest 200 batches) against a clean
+// checkout of the merge base (#3227 fix 1, coverage must not go down).
+async function savedRuntime({ root, tree, base = false }, ctx) {
   const { savedStoryEvidence } = await import('./runtime-client.mjs');
+  if (base) {
+    const saved = await savedStoryEvidence({ root, comparisonRoot: tree, withTests: true, anyRoot: true, limit: 200 }, { env: ctx.ports.env ?? process.env });
+    return { stories: saved.stories ?? [], storyFiles: [], tests: [] };
+  }
   const { findTests, captureSource } = await import('./runtime-preflight.mjs');
   const found = findTests({ root: tree, excludeFixtureProjects: true });
   const saved = await savedStoryEvidence({ root, comparisonRoot: tree, withTests: true }, { env: ctx.ports.env ?? process.env });
@@ -1237,6 +1243,69 @@ const runtimeClaims = (body, job) => [
   (parseEvidence(body) ?? job.evidence)?.runtime?.state === 'pass' && 'the Evidence line says runtime=pass',
   job.runtime?.state === 'pass' && 'the job result says Runtime pass'].filter(Boolean);
 const upperFirst = text => text.replace(/^./, c => c.toUpperCase());
+// The deciding rows of each Story at this source: for each test, the latest current row that ran it (the largest `at`;
+// a tie with a row that did not pass decides). A row that was never sent (`sent: false`) decides only with `unsent`.
+function decidingRows(rows, unsent = false) {
+  const scopes = new Map(), at = row => Number(row.at) || 0;
+  for (const row of rows ?? []) {
+    if (!object(row) || row.current !== true || !named(row.story) || (!unsent && row.sent === false)) continue;
+    const of = scopes.get(row.story) ?? new Map();
+    for (const test of Array.isArray(row.tests) && row.tests.length ? row.tests : ['*']) {
+      const was = of.get(test);
+      if (!was || at(row) > at(was) || at(row) === at(was) && row.pass !== true) of.set(test, row);
+    }
+    scopes.set(row.story, of);
+  }
+  return scopes;
+}
+const strings = value => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+const failedRow = row => Number(row.failed) > 0 || strings(row.states).includes('failed');
+const refusedRow = row => strings(row.refusals).length > 0 || strings(row.states).includes('refused');
+// A row that did not pass only because of the service (no verdict, no failed check, no refusal): the engine sends it again.
+const serviceRow = row => row.pass !== true && !failedRow(row) && !refusedRow(row);
+// #3227 fix 1: each changed Story that the T01 cover does not check is checked against its deciding rows, "not run" too:
+// failed checks are red, a refusal that pdd can fix is red once, and a Story that passed at the merge base must not lose
+// its pass (a service-only row is not red: the engine sends it again).
+async function savedRowReds(ctx, job, head, evidence, stories) {
+  if (!stories.length) return { reds: [], base: null };
+  const scopes = decidingRows(evidence.stories, true), reds = [], lost = [];
+  const once = new Set(Array.isArray(job.refusalReds) ? job.refusalReds : []);
+  for (const story of stories) {
+    const rows = [...new Set(scopes.get(story)?.values() ?? [])];
+    const failed = rows.filter(failedRow);
+    if (failed.length) {
+      const n = failed.reduce((sum, row) => sum + (Number(row.failed) || 0), 0), steps = [...new Set(failed.flatMap(row => strings(row.failedSteps)))].slice(0, 10);
+      reds.push(`The latest saved pdd test check of ${story} at head ${short(head)} has ${n ? `${n} failed check${n === 1 ? '' : 's'}` : 'a failed verdict'}${steps.length ? ` (steps: ${steps.join(', ')})` : ''}. A failed check is a FAIL, also when the batch has no verdict: fix the cause (the code, the prompt or the test) and run pdd test again at this head.`);
+      continue;
+    }
+    const fix = rows.flatMap(row => strings(row.refusals).map(code => [code, strings(row.advice).find(text => text.includes(code)) ?? strings(row.advice)[0]])).find(([code, text]) => text && !once.has(`${story}|${code}`));
+    if (fix && (job.repairs ?? 0) < ctx.settings.repairs) {
+      once.add(`${story}|${fix[0]}`);
+      reds.push(`The saved pdd test check of ${story} at head ${short(head)} was refused before execution (${fix[0]}). pdd printed the fix: ${oneLine(fix[1], 800)} Apply the fix that pdd prints and run pdd test again at this head.`);
+    }
+    if (!rows.length) lost.push([story, 'no saved pdd test check at this source']);
+    else if (!rows.every(row => row.pass === true || serviceRow(row))) {
+      const codes = [...new Set(rows.flatMap(row => strings(row.refusals)))];
+      lost.push([story, rows.some(refusedRow) ? `a check that was refused before execution${codes.length ? ` (${codes.join(', ')})` : ''}` : 'a check that did not pass']);
+    }
+  }
+  job.refusalReds = [...once].slice(-50);
+  if (!lost.length) return { reds, base: null };
+  let base;
+  try {
+    const fork = await ctx.git(['merge-base', `origin/${ctx.state.baseBranch}`, head], job.worktree);
+    const tree = await treeAt(ctx, job, 'fork', fork);
+    const read = await (ctx.ports.runtimeEvidence ?? savedRuntime)({ root: job.worktree, tree, head: fork, base: true }, ctx);
+    const at = decidingRows(read?.stories);
+    base = { commit: fork, passing: [...at].filter(([, of]) => [...of.values()].every(row => row.pass === true)).map(([story]) => story).sort().slice(0, 50) };
+  } catch (error) {
+    ctx.warn(`Autopilot core could not read the saved pdd test checks at the merge base of #${job.issue}: ${error.message}`);
+    return { reds, base: { commit: null, passing: [], error: oneLine(error.message, 300) } };
+  }
+  for (const [story, why] of lost) if (base.passing.includes(story))
+    reds.push(`Runtime coverage went down: ${story} had a passing pdd test check at the merge base ${short(base.commit)}, but at head ${short(head)} it has ${why}. A PR must not lose a Runtime pass: make the check of ${story} pass again at this head.`);
+  return { reds, base };
+}
 // T01: a Runtime pass claim is true only when the saved Runtime checks cover the change at the agent's exact head: each
 // changed Story (its Story file or a test file changed) has a passing latest check of exactly this source that ran each
 // changed test of it, and each changed prompt is in the upload of such a check. Else: "Runtime: not run (REASON)".
@@ -1246,13 +1315,17 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   let rows = [];
   const done = coverage => { job.coverage = { head, sig, rows, ...coverage }; ctx.saveJob(job); return job.coverage; };
   const claim = upperFirst(claims.join(' and ') || "the PR body's Runtime lines");
+  // The T01 cover and the line form rules apply to a positive claim or Story lines; the saved-row reds to every line.
+  const checking = claims.length > 0 || lines.some(l => l.story);
   const changed = await changedFiles(ctx, job, head), prompts = changed.filter(file => file.endsWith('.prompt.md'));
   let evidence;
   try { const tree = await treeAt(ctx, job, 'agent', head); evidence = await (ctx.ports.runtimeEvidence ?? savedRuntime)({ root: job.worktree, tree, head }, ctx); }
   catch (error) {
+    if (!checking) { ctx.warn(`Autopilot core could not read the saved pdd test checks of #${job.issue} at head ${short(head)}: ${error.message}`); return done({ ok: true, error: oneLine(error.message, 300) }); }
     return done({ ok: false, text: `${claim}, but Autopilot could not read the Stories and the saved pdd test checks at head ${short(head)}: ${oneLine(error.message, 300)}. Fix the cause, or write "Runtime: not run (REASON)".` });
   }
-  rows = (evidence.stories ?? []).filter(object).slice(0, 50).map(row => ({ story: row.story, pass: row.pass === true, current: row.current === true, at: row.at ?? null, tests: Array.isArray(row.tests) ? row.tests.slice(0, 10) : null }));
+  rows = (evidence.stories ?? []).filter(object).slice(0, 50).map(row => ({ story: row.story, pass: row.pass === true, current: row.current === true, at: row.at ?? null, tests: Array.isArray(row.tests) ? row.tests.slice(0, 10) : null,
+    sent: row.sent !== false, failed: Number(row.failed) || 0, refusals: strings(row.refusals).slice(0, 5) }));
   const storyFiles = new Set(evidence.storyFiles ?? []);
   const changedTests = (evidence.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
   const changedStories = [...new Set([...changed.filter(file => storyFiles.has(file)), ...changedTests.flatMap(test => test.stories ?? [])])];
@@ -1260,28 +1333,23 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   // counts; a single line with no Story is for a PR with at most one changed Story. Only PASS lines need the cover.
   const storyLines = lines.filter(l => l.story), perStory = storyLines.length > 0, form = '"Runtime: PASS (STORY, N/N checks)", "Runtime: FAIL (STORY, N of M checks failed: STEPS)" or "Runtime: not run (STORY: REASON)"';
   const lineReds = [];
-  if (!perStory && lines.length === 1 && changedStories.length > 1) lineReds.push(`This PR changes ${changedStories.length} Stories (${someFiles(changedStories)}), but the PR body has one Runtime line with no Story. Write one line for each changed Story: ${form}.`);
+  if (checking && !perStory && lines.length === 1 && changedStories.length > 1) lineReds.push(`This PR changes ${changedStories.length} Stories (${someFiles(changedStories)}), but the PR body has one Runtime line with no Story. Write one line for each changed Story: ${form}.`);
   const unlined = perStory ? changedStories.filter(story => !storyLines.some(l => l.story === story)) : [];
   if (unlined.length) lineReds.push(`The PR body has no Runtime line for ${someFiles(unlined)}. Write one line for each changed Story: ${form}.`);
   const foreign = storyLines.filter(l => l.verdict === 'pass' && !changedStories.includes(l.story)).map(l => l.story);
   if (foreign.length) lineReds.push(`A PASS of a Story that this PR does not change never counts: ${someFiles(foreign)}. Remove that line; write one line for each changed Story.`);
   if (lineReds.length) return done({ ok: false, text: lineReds.join(' ') });
-  const stories = perStory ? changedStories.filter(story => storyLines.some(l => l.story === story && l.verdict === 'pass')) : changedStories;
+  const stories = perStory ? changedStories.filter(story => storyLines.some(l => l.story === story && l.verdict === 'pass')) : claims.length ? changedStories : [];
   const notRunStories = perStory ? storyLines.filter(l => l.verdict === 'not-run').map(l => l.story) : [];
-  if (!prompts.length && !stories.length) return done({ ok: true });
+  // #3227 fix 1: the changed Stories that the cover below does not check are checked against their saved rows.
+  const checked = await savedRowReds(ctx, job, head, evidence, changedStories.filter(story => !stories.includes(story)));
+  const finish = cover => done({ ...cover, base: checked.base, ...(checked.reds.length ? { ok: false, text: [...checked.reds, cover.ok ? null : cover.text].filter(Boolean).join(' ') } : {}) });
+  if (!checking || !prompts.length && !stories.length) return finish({ ok: true });
   // Each test of a Story is its own scope: the latest check of exactly this source that ran it decides, and a tie with
   // a check that did not pass fails closed. Independent checks of different tests combine; no check lends its pass to
-  // a test that it did not run. A row with no test list (a test port) is one scope for its whole Story.
-  const scopes = new Map(), at = row => Number(row.at) || 0;
-  for (const row of evidence.stories ?? []) {
-    if (!object(row) || row.current !== true || !named(row.story)) continue;
-    const of = scopes.get(row.story) ?? new Map();
-    for (const test of Array.isArray(row.tests) && row.tests.length ? row.tests : ['*']) {
-      const was = of.get(test);
-      if (!was || at(row) > at(was) || at(row) === at(was) && row.pass !== true) of.set(test, row);
-    }
-    scopes.set(row.story, of);
-  }
+  // a test that it did not run. A row with no test list (a test port) is one scope for its whole Story. A row that was
+  // never sent never decides.
+  const scopes = decidingRows(evidence.stories);
   const passing = [...scopes].filter(([, of]) => [...of.values()].every(row => row.pass === true)).map(([story]) => story);
   const stale = new Set((evidence.stories ?? []).filter(row => row?.pass === true && row.current !== true).map(row => row.story));
   // A changed test needs a passing deciding check of its own.
@@ -1309,13 +1377,13 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
     for (const file of Array.isArray(print?.files) ? print.files : []) reached.add(file);
   }
   const missing = [...new Set([...stories.filter(story => !passing.includes(story)), ...unrun.map(([, test]) => test), ...prompts.filter(prompt => !reached.has(prompt))])];
-  if (!missing.length) return done({ ok: true, stories: [...new Set([...stories, ...covering])] });
+  if (!missing.length) return finish({ ok: true, stories: [...new Set([...stories, ...covering])] });
   const notes = [
     ...missing.filter(file => latest.has(file)).map(file => `the latest check of ${file} at this source did not pass`),
     ...unrun.map(([story, test]) => ranBy(story, { path: test }) ? `the latest check of ${test} at this source did not pass` : `no check of ${story} at this source ran ${test}`),
     ...missing.filter(file => !latest.has(file) && stale.has(file)).map(file => `the saved check of ${file} is for another source: a stale Runtime batch, for example an older commit or files that are not committed`),
     ...(missing.some(file => prompts.includes(file)) ? broken.slice(0, 3).map(([story, why]) => `the source of ${story} could not be read: ${why}`) : [])];
-  return done({ ok: false, missing, text: `${claim}, but the saved pdd test checks at head ${short(head)} do not cover ${missing.join(', ')}${notes.length ? ` (${notes.join('; ')})` : ''}. A PASS of other Stories does not count. Commit every change, run pdd test for the Stories of these changes at this head, or write "Runtime: not run (REASON)" (and runtime=not-run in the Evidence line) when they have no Runtime check (for example a native-only prompt or a Story with no Runtime test).` });
+  return finish({ ok: false, missing, text: `${claim}, but the saved pdd test checks at head ${short(head)} do not cover ${missing.join(', ')}${notes.length ? ` (${notes.join('; ')})` : ''}. A PASS of other Stories does not count. Commit every change, run pdd test for the Stories of these changes at this head, or write "Runtime: not run (REASON)" (and runtime=not-run in the Evidence line) when they have no Runtime check (for example a native-only prompt or a Story with no Runtime test).` });
 }
 // T04: the engine runs the replay (vector) and formal test files that the change touches, at the final head: each
 // changed *.vectors.test.* and *.formal.test.* file, and each vector test file that names any changed scenario file.
@@ -1522,7 +1590,7 @@ const evidencePath = (ctx, job, head = job.head) => join(ctx.dirs.logs, `${job.i
 function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review = null, suite = null } = {}) {
   const v = job.vectors;
   return { schema: 'pdd.core-evidence.v1', issue: job.issue, pr: job.pr ?? null, head: job.head, agentHead: job.agentHead ?? job.head,
-    runtime: { lines: lines.map(l => ({ line: l.line, story: l.story, verdict: l.verdict })), claims, coverage: job.coverage ? { head: job.coverage.head, ok: job.coverage.ok === true, text: job.coverage.text ?? null, stories: job.coverage.stories ?? [], rows: job.coverage.rows ?? [] } : null },
+    runtime: { lines: lines.map(l => ({ line: l.line, story: l.story, verdict: l.verdict })), claims, coverage: job.coverage ? { head: job.coverage.head, ok: job.coverage.ok === true, text: job.coverage.text ?? null, stories: job.coverage.stories ?? [], rows: job.coverage.rows ?? [], base: job.coverage.base ?? null } : null },
     vectors: v ? { head: v.head, state: v.state, reason: v.reason ?? null, cut: v.cut ?? false, skipped: v.skipped ?? [],
       kinds: Object.fromEntries(KINDS.filter(kind => (v.files?.[kind] ?? []).length).map(kind => [kind, v.result?.[kind] ? { state: v.result[kind].state, tests: v.result[kind].tests, pass: v.result[kind].pass, fail: v.result[kind].fail, skipped: v.result[kind].skipped, files: (v.result[kind].files ?? []).map(f => ({ file: f.file, state: f.state, code: f.code, tests: f.tests, pass: f.pass, fail: f.fail, skipped: f.skipped })), failed: v.result[kind].failed ?? [] } : { state: v.state, files: v.files[kind].map(file => ({ file })) }])) } : null,
     suite: suite ? { state: suite.state, head: job.suite?.head ?? null, exit: job.suite?.agent ? ctx.jobs.read(job.suite.agent).exit?.code ?? null : null, log: job.suite?.agent?.log ? basename(job.suite.agent.log) : null } : null,
@@ -1540,7 +1608,7 @@ function saveEvidence(ctx, job, parts) {
 // Evidence line.
 function evidenceSummary(ctx, job) {
   const record = readJson(ctx.fs, evidencePath(ctx, job), null), c = record?.runtime?.coverage;
-  const rows = (c?.rows ?? []).filter(row => row.current).map(row => `${row.story} ${row.pass ? 'pass' : 'no pass'}${row.tests ? ` (${row.tests.length} test${row.tests.length === 1 ? '' : 's'})` : ''}`);
+  const rows = (c?.rows ?? []).filter(row => row.current).map(row => `${row.story} ${row.pass ? 'pass' : row.sent === false ? 'not sent' : 'no pass'}${row.failed ? `, ${row.failed} failed` : ''}${row.refusals?.length ? `, refused (${row.refusals.join(', ')})` : ''}${row.tests ? ` (${row.tests.length} test${row.tests.length === 1 ? '' : 's'})` : ''}`);
   return [`- Saved pdd test checks of this source: ${rows.length ? someFiles(rows) : 'none read'}${c ? `; cover: ${c.ok ? 'yes' : 'no'}` : ''}`,
     ...engineEvidenceLines(job).map(line => line.replace(/\b(runtime|path|evidence)\s*:/gi, '$1 -')),
     `- Record: ${basename(evidencePath(ctx, job))} on this machine`].join('\n');
@@ -1589,7 +1657,7 @@ async function mergeCheck(ctx, job) {
   const reds = runtimeReds(pr.body, job.runtime, prompts.length ? true : job.promptChanged, prompts);
   // T01: every positive Runtime claim must be covered by the saved Runtime checks of the change at the agent's head.
   const claims = runtimeClaims(pr.body, job), lines = runtimeVerdicts(pr.body);
-  if (!reds.length && (claims.length || lines.some(l => l.story))) {
+  if (!reds.length && (claims.length || lines.length)) {
     const coverage = await runtimeCoverage(ctx, job, claims, lines);
     if (!coverage.ok) reds.push(coverage.text);
   }

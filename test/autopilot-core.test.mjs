@@ -3301,8 +3301,11 @@ test('Y8 (T01) "Runtime: PASS" counts only when the saved checks cover the chang
   ({ w, pr } = await setup({ body: 'Runtime: PASS', evidence: async () => ({ stories: [{ story: 'user_stories/package-repository.md', pass: true, current: true }], storyFiles: stories, footprints: { 'user_stories/package-repository.md': ['prompts/package.prompt.md', 'user_stories/package-repository.md'] } }) }));
   assert.equal(w.job(17, 'repair'), undefined); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
-  // 5. "Runtime: not run (reason)" needs no coverage.
-  ({ w, pr } = await setup({ body: 'Runtime: not run (prompts/package.prompt.md is native-only)', evidence: async () => assert.fail('no coverage read for a not-run line') }));
+  // 5. "Runtime: not run (reason)" needs no coverage; its saved rows are read (#3227 fix 1), and with none and no pass at
+  // the merge base it merges.
+  ({ w, pr } = await setup({ body: 'Runtime: not run (prompts/package.prompt.md is native-only)', evidence: async () => ({ stories: [], storyFiles: stories, footprints: {} }) }));
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  assert.deepEqual(w.evidenceReads.map(input => input.base === true), [false, true], 'the head rows, then the merge base rows');
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
 });

@@ -680,7 +680,37 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    returns `{stories, storyFiles, tests, footprint(story, row)}` (`tests` rows `{path,
    files, stories}`; story rows may have `tests`; `footprint` gives the upload `{files}`
    of the row's tests, or `{error}`); a test port may give a `footprints` map instead
-   (then a row with no `tests` covers its Story's tests). **Prompt gate**
+   (then a row with no `tests` covers its Story's tests). Rows that were never sent
+   (`sent: false`) never count as a pass and never decide a scope of this cover.
+   **Every Runtime line is checked against the saved rows (#3227 fix 1):** the read above
+   runs for each PR with a Runtime line, also when every line says "not run" (the line
+   form rules above still apply only with a PASS claim or Story lines). Each changed
+   Story that the cover above does not check (it has no PASS line, or the one line is
+   not a PASS) is checked against its deciding rows at this source: for each of its
+   tests, the latest current row that names it, also a row that was never sent.
+   (a) A row with failed checks, or with a failed verdict, is red, also when the batch
+   has no verdict: "The latest saved pdd test check of S at head H has N failed checks
+   (steps: …). A failed check is a FAIL, also when the batch has no verdict: fix the
+   cause (the code, the prompt or the test) and run pdd test again at this head."
+   (b) A refusal that pdd can fix is red once per Story and refusal code in the job, and
+   only while a repair is left: pdd saved a fix text for it (`advice`: a pdd warning that
+   names the test and the code, for example `scenario-integer-out-of-range` with the
+   exact Number spelling, or the refusal's own `fix`). "The saved pdd test check of S at
+   head H was refused before execution (CODE). pdd printed the fix: ADVICE Apply the fix
+   that pdd prints and run pdd test again at this head."
+   (c) Runtime coverage must not go down. When a changed Story has no deciding row, a
+   refused row, or a row that did not pass for another reason than the service, the
+   engine reads the saved checks again for a clean checkout of the merge base
+   (`git merge-base origin/BASE HEAD`, `worktrees/N-fork`), with `anyRoot` (the
+   batches of every folder of this machine; only the source decides) and `limit` 200
+   (the newest batches). A Story that passes there by the scope rule above is red:
+   "Runtime coverage went down: S had a passing pdd test check at the merge base B, but
+   at head H it has REASON. A PR must not lose a Runtime pass: make the check of S pass
+   again at this head." A row with no verdict, no failed check and no refusal (an AI
+   provider failure, maintenance, a busy or interrupted check) is never red here: the
+   engine sends such a check again (B5). A merge base read error is not red: the engine
+   warns, and the record keeps the error. The port gets `{root, tree, head, base:
+   true}` for the merge base read. **Prompt gate**
    (once per head, saved as `approvals {head, strict, problems}`): after a fetch of the
    base and the branch, each changed prompt of `git diff --name-status --find-renames
    origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
@@ -800,7 +830,8 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    **The evidence record (#3227 fix 3):** each merge check writes one engine record per
    head, `logs/N-evidence-HEAD.json` (`pdd.core-evidence.v1`, written only when it
    changes): the PR's Runtime lines and claims, the T01 result with the saved rows that
-   it read (Story, pass, current, time, tests; at most 50), the replay and formal run with
+   it read (Story, pass, current, time, tests, failed checks, refusal codes, sent; at
+   most 50) and the merge base read (commit, passing Stories, error), the replay and formal run with
    each file's result, the full suite (state, exit, log name, failed tests), CI and review
    states, the PR's Evidence claim and the honest Evidence (above). The agent's lines are
    claims that the engine checks; the record is the engine's own. The reviewer's brief
@@ -1058,7 +1089,8 @@ with the native defaults named above.
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
 - [Runtime client](runtime-client.prompt.md): required for `savedStoryEvidence` (the
-  saved checks of T01, with `comparisonRoot`).
+  saved checks of T01, with `comparisonRoot` and `withTests`; the merge base read also
+  with `anyRoot` and `limit`).
 - [Runtime preflight](runtime-preflight.prompt.md): required for `findTests` (Stories and
   their tests, `excludeFixtureProjects`), `captureSource` (Story footprints), `gitFiles`,
   `readPrompt`, `promptRefusal` and `interfaceBlocks`.
