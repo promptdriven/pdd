@@ -41,7 +41,20 @@ record is simply dead. There is no "uncertain custody" state.
   reads as exited with no result. `token` is the spec path;
   `log`, `exit` and `result` are `dir/ID.log`, `dir/ID.exit.json` and
   `dir/ID.result.json`. `id` must match `[A-Za-z0-9._-]+`.
-- The wrapper starts `command args` in `cwd` with the input file as stdin and the
+- `startAgentJob` also takes `priority` (`{nice, qos, cpus, taskset}` from the
+  [machine guard](machine-guard.prompt.md)) and saves it in the spec. Every job
+  runs at the lowest priority (#3231): before the wrapper starts the child, it sets
+  its own nice value to `priority.nice`, default 19, with `os.setPriority` (a failure
+  is ignored), and children inherit it. `jobCommand(spec, platform)` gives the
+  command and arguments that the wrapper starts: on macOS with `qos` (default
+  `utility`) and an executable `/usr/sbin/taskpolicy`, it is `/usr/sbin/taskpolicy -c
+  utility -d throttle COMMAND ARGS…` (utility QoS and throttled disk I/O; taskpolicy
+  runs the command in the same process, so the CPU watch sees the same tree; not
+  background QoS, which keeps work on the efficiency cores); on Linux with `cpus` and
+  an absolute `taskset`, it is `TASKSET --cpu-list CPUS COMMAND ARGS…` (Node, `nproc`,
+  `cargo`, `pytest -n auto` and Go follow the CPU list, so an agent's own tests use
+  Autopilot's share); else the command itself.
+- The wrapper starts `jobCommand(spec)` in `cwd` with the input file as stdin and the
   log as stdout and stderr (append). When the child ends, it writes
   `{code, signal, at}` to the exit file with a temporary file and a rename. On
   SIGTERM, SIGINT or SIGHUP it stops the whole job: it sends SIGTERM to its own process

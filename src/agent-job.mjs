@@ -1,6 +1,7 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 281bfdfb7e1ac873d904b601ee76ef2f6c7f24d2366b833f3ab024641012dae9).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: cf687a5427f8d6ad86b3b95ff16d8662fb1a214ce1d6d3e8ba2cf00b03a98ef5).
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { setPriority } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,12 +26,12 @@ export function jobEnvironment(env = {}) {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => typeof value === 'string' && !SESSION_KEYS.test(key)));
 }
 
-export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {} }, ports = {}) {
+export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null }, ports = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(String(id))) throw Error('Invalid job id');
   const base = join(resolve(dir), id), now = ports.now ?? Date.now;
   const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input` };
   writeFileSync(job.input, input, { mode: 0o600 });
-  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit }));
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, ...(priority ? { priority } : {}) }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
   // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
   child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } });
@@ -84,9 +85,22 @@ export function stopAgentJob(job, ports = {}) {
   return true;
 }
 
+// The lowest priority for every job (#3231): macOS utility QoS with throttled disk I/O (taskpolicy runs the command in
+// the same process), or a Linux CPU list (taskset) for Autopilot's share; else the command itself. Nice is set by the
+// wrapper for itself, so every child inherits it.
+const TASKPOLICY = '/usr/sbin/taskpolicy';
+const executable = file => { try { accessSync(file, constants.X_OK); return true; } catch { return false; } };
+export function jobCommand(spec, platform = process.platform, ports = {}) {
+  const p = spec?.priority ?? {}, can = ports.executable ?? executable, qos = p.qos === undefined ? 'utility' : p.qos;
+  if (platform === 'darwin' && qos && can(TASKPOLICY)) return { command: TASKPOLICY, args: ['-c', qos, '-d', 'throttle', spec.command, ...(spec.args ?? [])] };
+  if (platform === 'linux' && typeof p.cpus === 'string' && /^[0-9,-]+$/.test(p.cpus) && typeof p.taskset === 'string' && p.taskset.startsWith('/'))
+    return { command: p.taskset, args: ['--cpu-list', p.cpus, spec.command, ...(spec.args ?? [])] };
+  return { command: spec.command, args: spec.args ?? [] };
+}
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
+  try { setPriority(0, Number.isSafeInteger(spec.priority?.nice) ? spec.priority.nice : 19); } catch { /* A lower priority is best effort. */ }
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
   let finished = false, stopping = null, ended = null, child;
   const finish = (code, signal, group = false) => {
@@ -108,7 +122,8 @@ function wrap(specFile) {
     // A kept timer: the wrapper waits the grace time also when its direct child exits at once (sh does).
     setTimeout(() => finish(ended?.code ?? null, ended?.signal ?? signal, true), GRACE_MS);
   });
-  try { child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
+  const run = jobCommand(spec);
+  try { child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
   catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
   child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
   child.on('exit', (code, signal) => { if (stopping) ended = { code, signal }; else finish(code, signal); });

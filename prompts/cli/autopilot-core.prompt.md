@@ -17,7 +17,7 @@ the GitHub budget. A person retries an ended issue by removing `pdd:stuck`.
 `autopilotEngine(config)` returns `core` only when `config.autopilot.engine` is the
 string `core`; any other value, or none, is `full`.
 
-`coreSettings(config, packageJson)` reads the `autopilot` object of a parsed
+`coreSettings(config, packageJson, machine = null)` reads the `autopilot` object of a parsed
 `pdd.json` and returns exactly these fields:
 
 | Field | Source and default |
@@ -25,7 +25,7 @@ string `core`; any other value, or none, is `full`.
 | `engine` | `autopilotEngine(config)` |
 | `mode` | `off`, `observe` or `auto`; anything else is `off` |
 | `trust` | the nonblank strings of `autopilot.trust`, else `[]` |
-| `runs` | positive safe integer, default 2: the slot count |
+| `runs` | the slot count. With `machine` (`{klass, auto, runs}`: the machine class, its automatic slots and this machine's own `--runs`, from the [machine guard](machine-guard.prompt.md)) it is `slotCount({...machine, repoRuns: autopilot.runs}).slots` (#3231: a laptop 1, a server from its real limits, at most 4; `--runs` wins); without it a positive safe integer `autopilot.runs`, default 2 |
 | `label` | trimmed nonblank opt-in label, for example `pdd:autopilot`, else `null` |
 | `quietMinutes` | positive safe integer, default 45: the no-progress period (there is no fixed time limit); the tick uses at least 2 timer ticks (`ports.tickMinutes`, default 10), and a core start refuses a value below that |
 | `ciStuckMinutes` | positive safe integer, default 360: how long CI may stay pending with no change; at least 3 timer ticks |
@@ -36,7 +36,7 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
-`readCoreSettings(cwd, fs)` applies it to `cwd/pdd.json` and `cwd/package.json`;
+`readCoreSettings(cwd, fs, machine = null)` applies it to `cwd/pdd.json` and `cwd/package.json`;
 an unreadable file counts as absent.
 
 ## State
@@ -286,7 +286,11 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
 
 Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
-Codex usage limit), or while a machine pause runs (below).
+Codex usage limit), while a machine pause runs (below), or when the machine has no
+room (#3231): `ports.machine.room` (the [machine guard](machine-guard.prompt.md)'s
+`machineRoom`, read by the launcher each tick) is not ok. The tick message then says
+`intake held: REASON`, for example `intake held: on battery power`. Running work goes
+on; the room check never stops a job and never counts as no progress.
 
 **No result is a machine fault first.** An agent that exited with no result, a start
 failure (also one that the spawn reports later), a dead process (a restart or a
@@ -352,6 +356,20 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    line never swallows the next record.
 
 ## Jobs
+
+Every job starts with `ports.machine.priority(role)` of the machine guard as its
+`priority` (nice 19; macOS utility QoS; on a Linux laptop a CPU list of Autopilot's
+share for agent roles) and that share as `PDD_CHECK_CPUS` in its environment; with no
+`ports.machine` the job runner's defaults apply (nice 19, macOS utility QoS). The
+build, repair and conflict rules say: "When you run tests or builds, pass
+`$PDD_CHECK_CPUS` as the worker count".
+
+**Cleanup (#3231).** Once per tick, after the jobs advance and before intake,
+`sweepFiles` removes each `worktrees/` entry whose issue (`N` or `N-…`) has no job
+file (with the intake removal: unlock, `remove -f -f`, the folder, `prune`), and each
+`logs/` file of no job with a file (by its `N-` prefix) that is older than 14 days,
+then such files oldest first while the folder holds more than 500 MiB. Each step only
+warns. The numbers are the guard's `logDays` and `logBytes`.
 
 Jobs run through the [headless job runner](agent-job.prompt.md) with
 `agentCommand(state.agent)` and `jobEnvironment(env)`, in `logs/`, with id
@@ -940,9 +958,11 @@ agent's commits may exist only there.
 
 ## Status
 
-`coreStatus({state, settings}, {root, reportRoot, now, fs})` returns text from local
+`coreStatus({state, settings, guard}, {root, reportRoot, now, fs})` returns text from local
 files only: the engine line (mode, repository, folder, base, agent), the slot line
-(`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
+(`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the
+guard's machine line when the launcher gives one (`guard`, for example `Machine:
+laptop · 10 cores, Autopilot uses 5 · … · new work: held (on battery power)`), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
 `; Runtime: waits for the interpreter maintenance since HH:MM UTC (until HH:MM UTC); no
@@ -981,7 +1001,8 @@ or `(pdd.json)`, `mode M (this machine)` and `reports R (this machine)`; mode
 REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
 `trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
-`runtimeHealth()` (default `checkRuntimeHealth({env})`) and `unsentChecks({root, since})`
+`machine` (`{room, priority(role)}` of the [machine guard](machine-guard.prompt.md); absent: no
+room check and the job runner's default priority), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `unsentChecks({root, since})`
 (default `unsentStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
 (`start`, `read`, `stop`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
@@ -989,6 +1010,8 @@ with the native defaults named above.
 ## Dependencies
 
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome and stop.
+- [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
+  `GUARD` (the cleanup limits).
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the
   winning-claim read (owners port), `refreshClaimHeartbeat` and `takeoverLimited`.
 - [Automatic base](autopilot-base.prompt.md): required for `checkAutopilotBase`.

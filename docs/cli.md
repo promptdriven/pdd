@@ -1505,7 +1505,7 @@ says to run `pdd autopilot start`.
 
 | Key | Meaning | Default |
 |---|---|---|
-| `runs` | Issues in progress at the same time on this machine | 2 |
+| `runs` | Issues in progress at the same time on this machine. A server takes the lower of this value and its automatic slots; a laptop ignores it. `pdd autopilot start --runs N` on one machine wins over both | automatic: 1 on a laptop; on a server the lowest of 4, its cores ÷ 2 and its free memory ÷ 3 GiB (cgroup limits count) |
 | `label` | Take only issues with this label | none: every ready issue |
 | `quietMinutes` | Minutes with nothing new after which an agent process or the checks of a PR end. There is no fixed time limit: a process runs as long as it makes something new (a new commit, a new file state, a new tool call, a new output line, or CPU use in its child processes; a repeated line, a wait or a poll is not new), and a PR waits while CI, the review or the suite still runs. At least 20 (2 ticks of the core timer) | 45 |
 | `ciStuckMinutes` | Minutes that CI may stay pending with no change before the job ends | 360 |
@@ -1515,6 +1515,28 @@ says to run `pdd autopilot start`.
 | `reports.runtimeOwner` | GitHub login to assign Runtime problem reports filed in `reports.runtimeRepo`. Without it, reports have no assignee | none |
 | `maxRepairs` | Safety cap of repair jobs for one PR (the old key `repairs` still works). Repairs go on while they make progress: see below | 6 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
+
+**The machine guard.** Autopilot never takes over a person's machine. It decides by
+itself from the machine, with no setting per repository:
+
+- A laptop is a Mac, or a Linux machine with a battery or that is not a virtual
+  machine. Every other machine is a server. A laptop runs 1 job at a time.
+- Every Autopilot process runs at the lowest priority: nice 19, on macOS the utility
+  QoS with throttled disk I/O, and in the Linux timer unit `CPUWeight=20` (and
+  `MemoryHigh=50%` on a laptop). On a Linux laptop the agents run on half of the
+  cores. Every job gets `PDD_CHECK_CPUS`, the worker count for its tests and builds.
+- Before new work, each tick checks the room. A laptop needs AC power, 2 GiB and 15%
+  of its memory free with no memory pressure, 10 GiB and 5% of its disk free, and a
+  load that is not above half of its cores. A server needs 10% of its memory and 1 GiB
+  and 5% of its disk free. With no room, no issue is claimed, and the tick and
+  `pdd autopilot status` say why (`intake held: on battery power`). Running work goes
+  on.
+- Each tick removes worktrees that no job uses, job logs older than 14 days, and the
+  oldest logs while the log folder holds more than 500 MiB.
+
+`pdd autopilot status` shows one machine line, for example `Machine: laptop · 10
+cores, Autopilot uses 5 · memory 3.1 of 16 GiB free, pressure normal · disk 210 GiB
+free · load 7.2 · AC power · priority low · 1 slot (automatic) · new work: ok`.
 
 Each tick, without AI calls:
 

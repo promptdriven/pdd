@@ -1400,8 +1400,14 @@ run full):
   list), the read-only Codex limits as `agentReady` (only `limited` holds intake),
   the package version, an `alert` port that sends one alert of the given kind for the issue
 through this machine's alert destination with the core's cause, tried and need (and `--update` when the core asks), `ROOT` = the state file path without `.json` plus `-core`,
-  and the machine report folder `core-reports` beside the state files. Tests may
-  replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
+  and the machine report folder `core-reports` beside the state files. Before the
+  core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
+  (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs})`;
+  tests replace it with `ports.machineGuard`, #3231). The core settings come from
+  `readCoreSettings(cwd, fs, {klass, auto, runs: state.runs})`, so this machine's
+  `start --runs N` reaches the core and a machine without it gets its automatic slots;
+  the core gets the guard as its `machine` port (the room check and each job's
+  priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
   only while still enabled, save the issue-list cache, base fields, `nextTick` and
   `core: {at, message}`.
 - Start: a core start whose `autopilot.quietMinutes` is below 2 times the core timer
@@ -1426,7 +1432,15 @@ through this machine's alert destination with the core's cause, tried and need (
   installed interval; when it differs from the effective engine's, they add `(run pdd
   autopilot start to use M minutes for the ENGINE engine)`.
 - Status (without `--all` or `--json`): a core engine shows the enabled and timer
-  line, `coreStatus` from local files, and the last tick message. No Herdr read.
+  line, `coreStatus` from local files with the same machine guard read (its slots and
+  its machine line: class, cores and Autopilot's share, memory and pressure, disk,
+  load, power, priority, slots and `new work: ok` or `held (REASON)`), and the last
+  tick message. No Herdr read.
+- Timer priority (#3231): both timer files run Autopilot at the lowest priority, from
+  the guard's `timerPriority`: the LaunchAgent has `Nice` 19; the systemd service has
+  `Nice=19` and `CPUWeight=20`, and `MemoryHigh=50%` when this machine is a laptop
+  (`machineClass` of the battery and virtualization reads; `ports.machineClass` in
+  tests).
 - Report: catalog command `report` lists the machine's local report drafts
   (`FINGERPRINT: title; seen N time(s), last TIME`, or `No local Autopilot report
   drafts.`); `report send FINGERPRINT` sends one through `sendReportDraft` of the
@@ -1458,6 +1472,8 @@ through this machine's alert destination with the core's cause, tried and need (
 - [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
 
 - [Autopilot core](autopilot-core.prompt.md) and [Autopilot reports](autopilot-reports.prompt.md): required native generation and verification context for the engine switch, the core tick, core status and the report command.
+
+- [Machine guard](machine-guard.prompt.md): required native generation and verification context for the core slots, the room and priority ports, the status machine line and the timer priority keys.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage, run discovery and guarded custody updates.
 

@@ -373,7 +373,7 @@ test('launcher: engine core ticks without Herdr or a coordinator; status and rep
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const result = await tickAutopilot(stateFile, ports);
   assert.match(result.message, /Autopilot core: 1 started/);
   assert.ok(w.job(17, 'build'));
@@ -849,7 +849,7 @@ test('R14 a machine engine and label saved by start win over pdd.json; status na
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const result = await tickAutopilot(stateFile, ports);
   assert.match(result.message, /Autopilot core: 1 started/, 'the machine engine core wins over pdd.json (full)');
   assert.ok(w.job(18, 'build') && !w.job(17), 'the machine label wins over pdd.json (no label)');
@@ -877,7 +877,7 @@ test('F2 start --mode saves a machine mode for the core engine: it wins over pdd
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const invoke = extra => runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [], ...extra }, ports);
   assert.equal((await invoke({ mode: 'loud' })).exitCode, 2);
   const refused = await invoke({ mode: 'observe' });
@@ -2427,7 +2427,7 @@ test('S1 a machine report mode saved by start --report wins over pdd.json in the
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
   await tickAutopilot(stateFile, ports);
   w.finish(17, 'build', { result: { outcome: 'failed', kind: 'pdd', component: 'pdd test', code: 'crash', cause: 'pdd test crashed' } });
   await tickAutopilot(stateFile, ports);

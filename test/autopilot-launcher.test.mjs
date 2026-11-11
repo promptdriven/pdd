@@ -2575,3 +2575,20 @@ test('0.1.28 the full engine is deprecated: one notice in the tick log that neve
   await f.tick().catch(() => {});
   assert.equal(notices.length, 1, 'a core tick sends no notice');
 });
+
+test('#3231 the timer files run Autopilot at the lowest priority; MemoryHigh only on a laptop', async t => {
+  for (const [platform, klass] of [['darwin', 'laptop'], ['linux', 'laptop'], ['linux', 'server']]) {
+    const f = await fixture(t, {tempPrefix: 'pdd-autopilot-nice-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123; f.ports.machineClass = klass;
+    const env = { HOME: f.home, PATH: '/fixture/bin', XDG_CONFIG_HOME: join(f.home, '.config') };
+    const run = f.ports.run;
+    f.ports.run = async (command, args, opts) => ['systemctl', 'launchctl', 'loginctl'].includes(command) ? { code: 0, stdout: command === 'loginctl' ? 'yes\n' : '', stderr: '' } : run(command, args, opts);
+    assert.equal((await f.invoke('start', { env })).exitCode, 0);
+    const folder = platform === 'linux' ? join(f.home, '.config', 'systemd', 'user') : join(f.home, 'Library', 'LaunchAgents');
+    const text = readFileSync(join(folder, readdirSync(folder).find(x => x.endsWith(platform === 'linux' ? '.service' : '.plist'))), 'utf8');
+    if (platform === 'darwin') assert.match(text, /<key>Nice<\/key><integer>19<\/integer>/);
+    else {
+      assert.match(text, /^Nice=19$/m); assert.match(text, /^CPUWeight=20$/m); assert.match(text, /^KillMode=process$/m);
+      if (klass === 'laptop') assert.match(text, /^MemoryHigh=50%$/m); else assert.doesNotMatch(text, /MemoryHigh/);
+    }
+  }
+});
