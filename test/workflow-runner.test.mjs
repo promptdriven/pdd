@@ -111,9 +111,11 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
       const pr = f.prs.find(item => item.url === args[2]);
       return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body }) };
     }
-    if (args[0] === 'pr' && args[1] === 'edit') {
-      const pr = f.prs.find(item => item.url === args[2]) ?? assert.fail(`no PR ${args[2]}`);
-      pr.body = String(opts.input ?? ''); f.edits.push(pr.number); return { stdout: '' };
+    if (args[0] === 'api' && args.includes('PATCH')) {
+      const endpoint = args.find(arg => /^repos\/example\/project\/pulls\/\d+$/.test(arg));
+      const pr = f.prs.find(item => item.number === Number(endpoint?.split('/').at(-1))) ?? assert.fail(`no PR ${endpoint}`);
+      assert.equal(args[args.indexOf('--input') + 1], '-');
+      pr.body = JSON.parse(opts.input).body; f.edits.push(pr.number); return { stdout: '' };
     }
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
@@ -1287,7 +1289,7 @@ if [ "$1" = pr ] && [ "$2" = list ]; then
   node -e 'const fs=require("fs"),cp=require("child_process"),p=JSON.parse(fs.readFileSync(process.env.GH_PR_BODY_FILE+".identity.json","utf8"));p.body=fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8");p.headRefOid=cp.execFileSync("git",["rev-parse","refs/remotes/origin/"+p.headRefName],{encoding:"utf8"}).trim();process.stdout.write(JSON.stringify([p]));'
   exit 0
 fi
-if [ "$1" = pr ] && [ "$2" = edit ]; then cat > "$GH_CAPTURE"; cp "$GH_CAPTURE" "$GH_PR_BODY_FILE"; exit 0; fi
+if [ "$1" = api ] && [ "$4" = --method ] && [ "$5" = PATCH ]; then node -e 'const fs=require("fs"),body=JSON.parse(fs.readFileSync(0,"utf8")).body;fs.writeFileSync(process.env.GH_CAPTURE,body);fs.writeFileSync(process.env.GH_PR_BODY_FILE,body);'; exit 0; fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
   if [ "$4" = --json ] && [ "$5" = body ]; then
     node -e 'const fs=require("fs"); process.stdout.write(JSON.stringify({body:fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8")}));'
@@ -2216,7 +2218,7 @@ test('2530: failed description downgrade prevents pushing new source with an old
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());const pushes=f.pushes.length;
   writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
-  const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='pr'&&args[1]==='edit'?{stdout:'',stderr:'description permission denied',code:1}:original(file,args,options);
+  const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='api'&&args.includes('PATCH')?{stdout:'',stderr:'description permission denied',code:1}:original(file,args,options);
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,1);assert.match(out.message,/description permission denied/);
   assert.equal(f.pushes.length,pushes);assert.match(pddPart(f.prs[1].body), /^Old-code proof: [^\n]+\nNative tests: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: PASS/,'unchanged remote source still has its valid report');
@@ -2229,7 +2231,7 @@ test('2530: failed final description update leaves a pushed code PR publication-
   writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const original=f.ports.execFile;let edits=0;
-  f.ports.execFile=async(file,args,options)=>{if(file==='gh'&&args[0]==='pr'&&args[1]==='edit'&&++edits===2)return {stdout:'',stderr:'final update rejected',code:1};return original(file,args,options);};
+  f.ports.execFile=async(file,args,options)=>{if(file==='gh'&&args[0]==='api'&&args.includes('PATCH')&&++edits===2)return {stdout:'',stderr:'final update rejected',code:1};return original(file,args,options);};
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,1);assert.match(out.message,/Source was pushed/);assert.match(f.prs[1].body,/Code replay: BLOCKED.*Publication pending/);
 });

@@ -27,7 +27,8 @@ async function publication(t) {
       if(args[0]==='push'&&result.status===0&&state.pr)state.pr.headRefOid=remoteHead();
       return {stdout:result.stdout,stderr:result.stderr,code:result.status};
     }
-    if(file==='gh'&&args[0]==='pr') {
+    const bodyPatch=file==='gh'&&args[0]==='api'&&args.includes('PATCH');
+    if(file==='gh'&&(args[0]==='pr'||bodyPatch)) {
       if(args[1]==='list') {
         if(state.mode==='unavailable')throw Error('Synthetic readback unavailable');
         const pr=structuredClone(state.pr);
@@ -46,10 +47,10 @@ async function publication(t) {
         return {stdout:state.pr.url};
       }
       if(args[1]==='view')return {stdout:JSON.stringify(state.pr)};
-      if(args[1]==='edit') {
+      if(bodyPatch) {
         state.edits++;
         if(state.mode==='edit-failed')return {code:1,stderr:'Synthetic description refusal',stdout:''};
-        state.pr.body=options.input;return {stdout:''};
+        state.pr.body=JSON.parse(options.input).body;return {stdout:''};
       }
     }
     return original(file,args,options);

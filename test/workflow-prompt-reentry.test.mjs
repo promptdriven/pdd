@@ -270,7 +270,7 @@ for(const published of [false,true])for(const boundary of (published?['status','
     const target=boundary==='status'?file==='git' && args[0]==='status'
       :boundary==='staging'?file==='git' && args[0]==='add'
       :boundary==='commit'?file==='git' && args[0]==='commit'
-      :file==='gh' && args[0]==='pr' && args[1]==='edit';
+      :file==='gh' && args[0]==='api' && args.includes('PATCH');
     if(compared && !changed && target) {
       changed=true;writeFileSync(join(run.root,'value.prompt.md'),'# Concurrent prompt correction\n');
       // Simulate another writer staging and committing while publication prepares.

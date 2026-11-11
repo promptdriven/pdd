@@ -68,9 +68,11 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
       const pr = f.prs.find(item => item.url === args[2]);
       return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body }) };
     }
-    if (args[0] === 'pr' && args[1] === 'edit') {
-      const pr = f.prs.find(item => item.url === args[2]) ?? assert.fail(`no PR ${args[2]}`);
-      pr.body = String(opts.input ?? ''); f.edits.push(pr.number); return { stdout: '' };
+    if (args[0] === 'api' && args.includes('PATCH')) {
+      const endpoint = args.find(arg => /^repos\/example\/project\/pulls\/\d+$/.test(arg));
+      const pr = f.prs.find(item => item.number === Number(endpoint?.split('/').at(-1))) ?? assert.fail(`no PR ${endpoint}`);
+      assert.equal(args[args.indexOf('--input') + 1], '-');
+      pr.body = JSON.parse(opts.input).body; f.edits.push(pr.number); return { stdout: '' };
     }
     throw Error(`unexpected gh ${args.join(' ')}`);
   }

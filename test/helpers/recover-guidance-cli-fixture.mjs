@@ -55,14 +55,15 @@ const r=cp.spawnSync('/usr/bin/git',a[0]==='remote'&&a[1]==='get-url'?a:['-c',${
 `, {mode:0o755});
   writeFileSync(join(bin, 'gh'), `#!${process.execPath}
 const fs=require('node:fs'),cp=require('node:child_process'),file=${JSON.stringify(transport)},s=JSON.parse(fs.readFileSync(file)),a=process.argv.slice(2),flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?x:JSON.stringify(x));
+const endpoint=a.find(x=>/^repos\\/example\\/project\\/pulls\\/\\d+$/.test(x)),patch=a[0]==='api'&&a.includes('PATCH')&&endpoint;
 const event={program:'gh',args:a};
-if(a[0]==='pr'&&a[1]==='edit')event.approvalIds=JSON.parse(fs.readFileSync(${JSON.stringify(status)})).decisions.map(d=>d.evidence?.id);
+if(patch)event.approvalIds=JSON.parse(fs.readFileSync(${JSON.stringify(status)})).decisions.map(d=>d.evidence?.id);
 s.events.push(event);
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[0]==='pr'&&a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')));
 else if(a[0]==='pr'&&a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
 else if(a[0]==='pr'&&a[1]==='create'){const p={number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),body:fs.readFileSync(0,'utf8'),title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null,statusCheckRollup:[]};s.prs.push(p);out(p.url);}
-else if(a[0]==='pr'&&a[1]==='edit'){s.prs.find(p=>p.url===a[2]).body=fs.readFileSync(0,'utf8');out('updated');}
+else if(patch){s.prs.find(p=>p.number===Number(endpoint.split('/').at(-1))).body=JSON.parse(fs.readFileSync(0,'utf8')).body;out('updated');}
 else throw Error('Unexpected synthetic gh route '+a.join(' '));
 fs.writeFileSync(file,JSON.stringify(s));
 `, {mode:0o755});
@@ -112,7 +113,7 @@ finally{fs.writeFileSync(file,JSON.stringify(h));}
       return {commits:events.filter(e=>e.program==='git'&&e.args[0]==='commit').length,
         pushes:events.filter(e=>e.program==='git'&&e.args[0]==='push').length,
         branches:git('for-each-ref', '--format=%(refname)', 'refs/heads'),
-        publications:events.filter(e=>e.program==='gh'&&['create','edit'].includes(e.args[1])).length,
+        publications:events.filter(e=>e.program==='gh'&&(e.args[1]==='create'||e.args[0]==='api'&&e.args.includes('PATCH'))).length,
         chatAllocations:f.herdr().calls.filter(a=>['create','open','run'].includes(a[1])).length};
     }
   };
@@ -193,7 +194,7 @@ export function assertContinuationPr1(f, before, after) {
     for (const item of readable.facts.approval.items) {
       assert.ok(remote.body.includes(item.words.trim()), 'published approval evidence');
     }
-    const edit = f.data().events.findLast(event => event.program === 'gh' && event.args[0] === 'pr' && event.args[1] === 'edit' && event.args[2] === publication.url);
+    const edit = f.data().events.findLast(event => event.program === 'gh' && event.args[0] === 'api' && event.args.includes('PATCH') && event.args.includes(`repos/example/project/pulls/${publication.number}`));
     assert.ok(edit, 'PR description refresh');
     assert.ok(edit.approvalIds.includes(decision.evidence.id), 'approval saved before PR edit');
   }

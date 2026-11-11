@@ -44,6 +44,7 @@ function fixture(t, { existing = false, opted = false, prompt = false } = {}) {
 const fs=require('node:fs'),cp=require('node:child_process');
 const file=process.env.PDD_PUBLICATION_GH_STATE,s=JSON.parse(fs.readFileSync(file,'utf8')),a=process.argv.slice(2);
 const flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?x:JSON.stringify(x));
+const endpoint=a.find(x=>/^repos\\/example\\/project\\/pulls\\/\\d+$/.test(x)),patch=a[0]==='api'&&a.includes('PATCH')&&endpoint;
 const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const remote=(ref='topic')=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/'+ref],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
@@ -54,12 +55,12 @@ else if(a[0]==='api'&&/^repos\\/example\\/project\\/pulls\\/\\d+\\/files\\?per_p
  const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages);
 }
 else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
-else if(a[1]==='create'||a[1]==='edit'){
- if(flag('--body-file')!=='-')throw Error('must read body from stdin');
- const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
+else if(a[1]==='create'||patch){
+ if(flag(patch?'--input':'--body-file')!=='-')throw Error('must read body from stdin');
+ const raw=fs.readFileSync(0,'utf8'),body=patch?JSON.parse(raw).body:raw,kind=patch?'edit':'create';s.events.push({kind,body,remote:remote(),head:commit()});
  if(kind==='edit'&&s.failEdit===s.events.filter(e=>e.kind==='edit').length){fs.writeFileSync(file,JSON.stringify(s));process.stderr.write('error: refused edit');process.exit(1)}
  if(kind==='create'){const number=Math.max(22,...s.prs.map(p=>p.number))+1;s.prs.push({number,url:'https://github.com/example/project/pull/'+number,state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
- else{s.prs.find(p=>p.url===a[2]).body=body;out('updated')}
+ else{s.prs.find(p=>p.number===Number(endpoint.split('/').at(-1))).body=body;out('updated')}
  fs.writeFileSync(file,JSON.stringify(s));
 }else throw Error('unexpected gh '+a.join(' '));
 `;
@@ -977,6 +978,8 @@ for (const failure of ['pending','final']) test(`#2596 PR1 approval synchronizat
   prs[0].body=`${currentRuntime}\n\nPart of #17\n\nPR 1 of this run: the prompt, Story and test cases. The code comes in PR 2 only when the person asks for it.\n\nReviewer prose.\n<!-- pdd-workflow:${f.run.runId}:prompt-pr -->\n`;
   f.configure({prs,failEdit:failure==='pending'?1:2});
   const next=f.change(), out=f.invoke('','approveRun'); assert.equal(out.exitCode,1);
+  assert.match(out.message,/could not update the PR 1 description \(error: refused edit\)/);
+  assert.match(out.message,/workflow approve 17/);
   const events=f.data().events;
   assert.doesNotMatch(events[0].body,/^Prompt tests.*✓/m);
   assert.equal(events[0].remote,f.head);
@@ -1234,7 +1237,7 @@ test('CALLS: a status refresh reads each PR once (with its description, head and
   const views = list => list.filter(call => call.startsWith('pr view'));
   assert.deepEqual(views(same), [`pr view ${url(22)} --json state,mergedAt,statusCheckRollup,baseRefName,headRefOid`, `pr view ${url(23)} --json state,mergedAt,statusCheckRollup,baseRefName,headRefOid,body,comments`], same.join('\n'));
   assert.deepEqual(same.filter(call => !call.startsWith('pr view')), [], 'No change: no other GitHub call (no comments read, no second view, no edit).');
-  assert.deepEqual(changed.filter(call => !views(same).includes(call)), [`pr view ${url(23)} --json body,headRefOid`, `pr edit ${url(23)} --body-file -`], changed.join('\n'));
+  assert.deepEqual(changed.filter(call => !views(same).includes(call)), [`pr view ${url(23)} --json body,headRefOid`, 'api --hostname github.com --method PATCH repos/example/project/pulls/23 --input -'], changed.join('\n'));
 });
 
  test('FORMAL-PREFIX: a complete filename does not select an unrelated prefix Story', t => {
@@ -1408,4 +1411,26 @@ for (const options of [{ extraFiles: 45 }, { extraFiles: 45, production: true },
   if (options.extraFiles) { assert.equal(pr.facts.diff.files.length, 40); assert.ok(pr.facts.diff.count > 40); }
   if (coverage) assert.doesNotMatch(pr.visible, /^⛔/);
   else assert.match(pr.visible, /^⛔/);
+});
+
+
+test('2830: status retries a failed PR 2 link on an older PR 1 without saved readable facts', t => {
+  const f = stackedOnPr1(t);
+  const prs = f.data().prs;
+  prs[0].body = `Legacy description\n\n**Next:** waiting for code. Part of #17.\n\n${DETAILS_OPEN}\n\nKeep these evidence bytes.\n\n</details>\n`;
+  const details = detailsOf(prs[0].body).details;
+  f.configure({prs, failEdit: 1});
+  const opened = f.invoke(SUMMARY);
+  assert.equal(opened.exitCode, 0, opened.message);
+  assert.match(opened.message, /could not link PR 2/);
+  assert.match(opened.message, /error: refused edit/);
+  assert.match(opened.message, /workflow status 17/);
+  assert.match(f.data().prs[0].body, /waiting for code/);
+  const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
+  assert.equal(saved.pr[0].readable, undefined);
+  f.configure({failEdit: 0});
+  const retried = f.invoke('', 'runStatus');
+  assert.equal(retried.exitCode, 0, retried.message);
+  assert.match(f.data().prs[0].body, /^\*\*Next:\*\* PR 2 \(the code\): #23\. Part of #17\.$/m);
+  assert.equal(detailsOf(f.data().prs[0].body).details, details);
 });

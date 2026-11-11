@@ -79,6 +79,10 @@ export function factoryGithub(w) {
         const behind=Number(w.git(w.remote,'rev-list','--count',`${head}..${base}`));
         value={behind_by:behind,status:behind?'behind':'identical'};
       }
+      else if(a.includes('PATCH') && /\/pulls\/\d+$/.test(endpoint??'')) {
+        const pr=find(endpoint.split('/').at(-1)); assert.ok(pr);
+        assert.equal(flag(a,'--input'),'-'); pr.body=JSON.parse(o.input).body; value=restPr(pr);
+      }
       else if(/\/pulls\/\d+(?:\?.*)?$/.test(endpoint??''))value=restPr(find(endpoint.match(/pulls\/(\d+)/)[1]));
       else if(/\/pulls\/\d+\/reviews/.test(endpoint??''))value=find(endpoint.match(/pulls\/(\d+)/)[1]).reviews;
       else handled=false;

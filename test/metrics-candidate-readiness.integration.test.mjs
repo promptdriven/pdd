@@ -39,17 +39,18 @@ function fixture(t, { existing = false, opted = false, prompt = false } = {}) {
 const fs=require('node:fs'),cp=require('node:child_process');
 const file=process.env.PDD_PUBLICATION_GH_STATE,s=JSON.parse(fs.readFileSync(file,'utf8')),a=process.argv.slice(2);
 const flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?x:JSON.stringify(x));
+const endpoint=a.find(x=>/^repos\\/example\\/project\\/pulls\\/\\d+$/.test(x)),patch=a[0]==='api'&&a.includes('PATCH')&&endpoint;
 const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const remote=()=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/topic'],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
 if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>!a.includes('--head')||p.headRefName===flag('--head')).map(p=>({...p,headRefOid:remote()||p.headRefOid})));
 else if(a[1]==='view')out(s.prs.find(p=>p.url===a[2])||{body:''});
-else if(a[1]==='create'||a[1]==='edit'){
- if(flag('--body-file')!=='-')throw Error('must read body from stdin');
- const body=fs.readFileSync(0,'utf8'),kind=a[1];s.events.push({kind,body,remote:remote(),head:commit()});
+else if(a[1]==='create'||patch){
+ if(flag(patch?'--input':'--body-file')!=='-')throw Error('must read body from stdin');
+ const raw=fs.readFileSync(0,'utf8'),body=patch?JSON.parse(raw).body:raw,kind=patch?'edit':'create';s.events.push({kind,body,remote:remote(),head:commit()});
  if(kind==='edit'&&s.failEdit===s.events.filter(e=>e.kind==='edit').length){fs.writeFileSync(file,JSON.stringify(s));process.stderr.write('error: refused edit');process.exit(1)}
  if(kind==='create'){s.prs.push({number:23,url:'https://github.com/example/project/pull/23',state:'OPEN',headRefName:flag('--head'),baseRefName:flag('--base'),headRefOid:commit(),body,title:flag('--title'),headRepository:{name:'project'},headRepositoryOwner:{login:'example'},isCrossRepository:false,mergeCommit:null});out(s.prs.at(-1).url)}
- else{s.prs.find(p=>p.url===a[2]).body=body;out('updated')}
+ else{s.prs.find(p=>p.number===Number(endpoint.split('/').at(-1))).body=body;out('updated')}
  fs.writeFileSync(file,JSON.stringify(s));
 }else throw Error('unexpected gh '+a.join(' '));
 `;
