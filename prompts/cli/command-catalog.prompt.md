@@ -272,7 +272,7 @@ In PDD, prompts are the source. Code follows the prompts.
 ## Dependencies`, then one Runtime interface block.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
-4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.
+4. Check: run pdd test --fill-hash && pdd test --files STORY && pdd test STORY in one shell call. Test includes interpreter lint (0 AI calls).
 5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check.
 ```
 
