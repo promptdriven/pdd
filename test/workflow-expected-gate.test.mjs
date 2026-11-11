@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {approveRun, changeRun, cancelRun, openRun, stepDone, acquireRunLock, runStatus} from '../src/workflow-runner.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
-import {acquireOrdinaryRunOwnership} from '../src/workflow-runs.mjs';
+import {acquireOrdinaryRunOwnership, updateRun} from '../src/workflow-runs.mjs';
 
 const snapshot = dir => Object.fromEntries(readdirSync(dir, {recursive:true}).filter(path => statSync(join(dir,path)).isFile()).sort().map(path => [path, readFileSync(join(dir,path)).toString('base64')]));
 
@@ -371,21 +371,71 @@ test('open preserves stale refusal during prompt branch fetch and allows retry',
   const {prepared}=await import('./helpers/workflow-prompt-reentry-fixture.mjs');
   const f=await prepared(t,{realRemote:true,publishCode:false});
   const run=f.record(); f.git(run.root,'add','value.mjs'); f.git(run.root,'commit','-qm','Code');
+  const promptHead=f.git(run.root,'rev-parse',run.pr[0].branch), tree=f.git(run.root,'rev-parse',`${promptHead}^{tree}`);
+  const advance=f.git(run.root,'commit-tree',tree,'-p',promptHead,'-m','Advance remote'); f.git(run.root,'push',f.remote,`${advance}:refs/heads/${run.pr[0].branch}`);
   const branch=f.git(run.root,'branch','--show-current'), before=snapshot(run.runDir), execute=f.ports.execFile;
-  let moved=false, switches=0, statusAfterTransition;
-  const result=await openRun({ref:'17',cwd:f.source,area:'prompt-pr',expectStep:'verify'}, {...f.ports,execFile:async(file,args,options)=>{
-    const out=await execute(file,args,options);
-    if (file==='git' && args[0]==='switch') switches++;
-    if (!moved && file==='git' && args[0]==='fetch') {
-      moved=true; const current=f.record(); current.done.verify={summary:'Done',at:10}; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(current));
-      statusAfterTransition=readFileSync(join(run.runDir,'status.json'));
-    }
-    return out;
-  }});
+  const fetchHead=f.git(run.root,'rev-parse','--path-format=absolute','--git-path','FETCH_HEAD'), ref=join(run.commonDir,'refs/remotes/origin',run.pr[0].branch);
+  const bytes=path=>fs.existsSync(path)?readFileSync(path):null, fetchBefore=bytes(fetchHead), refBefore=bytes(ref);
+  let moved=false, effects=0, statusAfterTransition;
+  const result=await openRun({ref:'17',cwd:f.source,area:'prompt-pr',expectStep:'verify'}, {...f.ports,
+    readPrStatus:async()=>{ moved=true; updateRun(run.runDir,current=>{current.done.verify={summary:'Done',at:10};return current;}); statusAfterTransition=readFileSync(join(run.runDir,'status.json')); return {state:'open'}; },
+    execFile:async(file,args,options)=>{ if(file==='git' && ['fetch','switch'].includes(args[0])) effects++; return execute(file,args,options); }
+  });
   assert.equal(moved,true); assert.equal(result.exitCode,3,result.message); assert.match(result.message,/current step: none/i);
-  assert.equal(switches,0); assert.equal(f.git(run.root,'branch','--show-current'),branch);
+  assert.equal(effects,0); assert.equal(f.git(run.root,'branch','--show-current'),branch);
+  assert.deepEqual(bytes(fetchHead),fetchBefore); assert.deepEqual(bytes(ref),refBefore);
   assert.deepEqual(readFileSync(join(run.runDir,'status.json')),statusAfterTransition);
   const after=snapshot(run.runDir); delete before['status.json']; delete after['status.json']; assert.deepEqual(after,before);
-  const retry=await openRun({ref:'17',cwd:f.source,area:'prompt-pr'},f.ports);
-  assert.equal(retry.exitCode,0,retry.message);
+  const retry=await openRun({ref:'17',cwd:f.source,area:'prompt-pr'},f.ports); assert.equal(retry.exitCode,0,retry.message);
+});
+
+for (const queueOnly of [true, false]) test(`admission excludes progress through journal publication queueOnly=${queueOnly}`, async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(); run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run)); let attempted=false, excluded=false;
+  const result=await changeRun({ref:'17',cwd:f.source,text:'Revise',expectGate:'g1'}, {...f.ports,queueOnly,deliveryFiles:{renameSync:(from,to)=>{
+    if (!attempted && String(to).endsWith('/delivery-journal.json')) {
+      attempted=true; try { updateRun(run.runDir, current=>{current.gate.id='g2'; return current;}); } catch (error) { excluded=(error.cause?.code === 'workflow_run_busy' || error.cause?.message === 'A nested ordinary run save is not allowed'); }
+    }
+    fs.renameSync(from,to);
+  }}});
+  assert.equal(attempted,true); assert.equal(excluded,true); assert.equal(result.exitCode,0,result.message);
+  assert.equal(JSON.parse(readFileSync(join(run.runDir,'delivery-journal.json'))).requests[0].gate.id,'g1');
+  updateRun(run.runDir,current=>{current.gate.id='g2';return current;}); assert.equal(f.record().gate.id,'g2');
+});
+
+test('open excludes progress during fetch through publication', async t => {
+  const {prepared}=await import('./helpers/workflow-prompt-reentry-fixture.mjs');
+  const f=await prepared(t,{realRemote:true,publishCode:false});
+  const run=f.record(); f.git(run.root,'add','value.mjs'); f.git(run.root,'commit','-qm','Code');
+  const execute=f.ports.execFile; let attempted=false, excluded=false, switched=false;
+  const result=await openRun({ref:'17',cwd:f.source,area:'prompt-pr',expectStep:'verify'}, {...f.ports,execFile:async(file,args,options)=>{
+    if (file==='git' && args[0]==='fetch' && !attempted) {
+      attempted=true; try { updateRun(run.runDir,current=>{current.done.verify={summary:'Done',at:10};return current;}); } catch (error) { excluded=(error.cause?.code === 'workflow_run_busy' || error.cause?.message === 'A nested ordinary run save is not allowed'); }
+    }
+    if (file==='git' && args[0]==='switch') { switched=true; assert.throws(()=>updateRun(run.runDir,current=>{current.done.verify={summary:'Done',at:10};return current;}), error=>(error.cause?.code==='workflow_run_busy' || error.cause?.message==='A nested ordinary run save is not allowed')); }
+    return execute(file,args,options);
+  }});
+  assert.equal(attempted,true); assert.equal(excluded,true); assert.equal(switched,true); assert.equal(result.exitCode,0,result.message);
+  assert.equal(f.record().area,1); updateRun(run.runDir,current=>{current.testRelease=true;return current;}); assert.equal(f.record().testRelease,true);
+});
+
+test('parked admission excludes progress through journal publication', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(); run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10}; run.parking={phase:'parked',at:123,blocker:{kind:'person'}};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run)); let attempted=false, excluded=false;
+  const result=await changeRun({ref:'17',cwd:f.source,text:'Revise',expectGate:'g1'}, {...f.ports,deliveryFiles:{renameSync:(from,to)=>{
+    if (!attempted && String(to).endsWith('/delivery-journal.json')) { attempted=true; try { updateRun(run.runDir,current=>{current.gate.id='g2';return current;}); } catch (error) { excluded=(error.cause?.code === 'workflow_run_busy' || error.cause?.message === 'A nested ordinary run save is not allowed'); } }
+    fs.renameSync(from,to);
+  }}});
+  assert.equal(attempted,true); assert.equal(excluded,true); assert.equal(result.exitCode,0,result.message);
+  const entry=JSON.parse(readFileSync(join(run.runDir,'delivery-journal.json'))).requests[0]; assert.equal(entry.gate.id,'g1'); assert.match(entry.key,/^park-reply:123:/);
+  updateRun(run.runDir,current=>{current.gate.id='g2';return current;});
+});
+
+test('admission releases ordinary ownership after journal publication failure', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0); const run=f.record();
+  run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10}; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  let held=false; const result=await changeRun({ref:'17',cwd:f.source,text:'Revise',expectGate:'g1'}, {...f.ports,queueOnly:true,deliveryFiles:{renameSync:(from,to)=>{if (!String(to).endsWith('/delivery-journal.json')) return fs.renameSync(from,to); try { updateRun(run.runDir,current=>current); } catch (error) { held=(error.cause?.code==='workflow_run_busy' || error.cause?.message==='A nested ordinary run save is not allowed'); } throw Error('disk failure');}}});
+  assert.equal(held,true); assert.notEqual(result.exitCode,0); updateRun(run.runDir,current=>{current.gate.id='g2';return current;}); assert.equal(f.record().gate.id,'g2');
 });

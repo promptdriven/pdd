@@ -3929,7 +3929,7 @@ export async function acknowledgeRequest({ requestId, summary, cwd }, ports) {
   } catch (error) { return fail(`Could not acknowledge request ${requestId}: ${oneLine(error.message).slice(0, 300)}. ${hint}`); }
 }
 
-async function deliveryJournal(run, p, action, { recover = true } = {}) {
+async function deliveryJournal(run, p, action, { recover = true, ordinaryOwnership = false } = {}) {
   const fs = { ...nativeDeliveryFiles, ...p.deliveryFiles }, path = join(run.runDir, 'delivery-journal.json');
   const elapsed = p.journalElapsedNow ?? monotonicMs, began = elapsed(); let release;
   while (!release) {
@@ -3940,7 +3940,9 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
       await (p.journalSleep ?? delay)(Math.min(10, left));
     }
   }
+  let releaseOrdinary;
   try {
+    if (ordinaryOwnership) releaseOrdinary = acquireOrdinaryRunOwnership(run.runDir, p);
     const saved = readRun(run.runDir);
     if (saved && runIdentity(saved) !== runIdentity(run)) throw Error('The selected workflow run was replaced');
     const journal = readDeliveryJournal(run, p);
@@ -3968,7 +3970,7 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
     try { fs.writeFileSync(temporary, JSON.stringify(journal, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); fs.renameSync(temporary, path); }
     finally { try { fs.unlinkSync(temporary); } catch { /* Published or never created. */ } }
     return result;
-  } finally { release(); }
+  } finally { try { releaseOrdinary?.(); } finally { release(); } }
 }
 
 // Shared lexical admission for a person's explicit continuation request. Trust belongs to the caller.
@@ -4077,7 +4079,7 @@ Nothing was sent to the chat.` };
       if (entry && p.requestKey && entry.state === 'pending' && !entry.inFlight && entry.area === area.name) entry.paneId = chat.paneId;
       if (!entry) { admitted = true; entry = { ...(p.requestKey ? {key: p.requestKey} : {}), id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), ...(retryRequested ? { personRetry: true } : {}), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
       return { ...entry };
-    });
+    }, {ordinaryOwnership: p.expected?.expectGate !== undefined || p.expected?.expectStep !== undefined});
   } catch (error) { if (error.result) return error.result; return fail(error.code === 'delivery_busy' ? `Another command is saving a request. Wait briefly, then retry. ${retry}` : `Could not save ${what}; it was not sent. Check the run folder and retry. ${retry}`); }
   if (p.queueOnly) return done(kept);
   const owner = { pid: p.ownerPid ?? process.pid, hostname: deliveryHost(p), token: (p.deliveryToken ?? randomUUID)() };
@@ -5024,12 +5026,12 @@ async function integratePromptBase(run,p) {
     await rawGit(p,run.root,'fetch','origin',`refs/heads/${run.baseBranch}:refs/remotes/origin/${run.baseBranch}`);
     source=await git(p,run.root,'rev-parse','--verify',`refs/remotes/origin/${run.baseBranch}^{commit}`);
     if (!commitSha(source)) throw Error('Invalid fetched base');
-  } catch { return `Cannot fetch the saved base ${run.baseBranch}. PR 1 remains current; retry workflow open ${run.number} prompt-pr when the base is available.`; }
+  } catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return `Cannot fetch the saved base ${run.baseBranch}. PR 1 remains current; retry workflow open ${run.number} prompt-pr when the base is available.`; }
   const comparison=await git(p,run.root,'merge-base','HEAD',source);
   if (comparison===source) return null;
   resetPromptChecks(run,p);
   try { await rawGit(p,run.root,'merge','--no-edit',source); return null; }
-  catch { return 'PR 1 is current. Resolve its base merge conflicts, commit the resolution, run prompt checks, then finish with workflow done check.'; }
+  catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return 'PR 1 is current. Resolve its base merge conflicts, commit the resolution, run prompt checks, then finish with workflow done check.'; }
 }
 async function returnToPrompt(run,selected,p) {
   const ownership = await continuationOwnership(run,run.root,p);
@@ -5087,7 +5089,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
     };
     p.acquireRunOwnership = directory => { if (directory !== run.runDir || ordinaryFinished) return acquireOrdinaryRunOwnership(directory, {...p, acquireRunOwnership: originalAcquire}); guard(() => {}); return () => {}; };
     const baseExec = p.execFile;
-    p.execFile = (file, args, options) => file === 'git' && ['add','commit','push','checkout','switch','branch','reset','merge','rebase'].includes(args[0]) ? guard(() => baseExec(file, args, options)) : baseExec(file, args, options);
+    p.execFile = (file, args, options) => file === 'git' && ['add','commit','push','fetch','checkout','switch','branch','reset','merge','rebase'].includes(args[0]) ? guard(() => baseExec(file, args, options)) : baseExec(file, args, options);
     p.commandPorts = {...p.commandPorts, execFile:p.execFile};
     p.guardOpenEffect = guard;
     const baseHerdr = herdrCommand(p);
