@@ -1568,8 +1568,11 @@ Each tick, without AI calls:
    Autopilot files one report that proposes adopting PDD for it. A config or metadata
    file (`package.json`, a lock file, CI settings) needs no prompt, and the review never
    asks for a new prompt for one. The job writes one `Runtime:` line for each changed
-   Story and one `Evidence:` line in the PR body ([RUNBOOK §15, "Autopilot core
-   jobs"](../RUNBOOK.md#autopilot-core-jobs)). It writes no review verdict: only the
+   Story (`Runtime: STORY PASS (batch BATCH_ID)`, `Runtime: STORY FAIL (batch
+   BATCH_ID)` or `Runtime: STORY not run (REASON)`, with the Story file path as STORY)
+   and one `Evidence:` line in the PR body ([RUNBOOK §15, "Autopilot core
+   jobs"](../RUNBOOK.md#autopilot-core-jobs)). A single `Runtime: PASS` line with no
+   Story is accepted only when the PR changes exactly one Story. It writes no review verdict: only the
    fresh reviewer gives one. In `auto` and
    `observe` mode your `pdd autopilot start` is the approval of the job's prompt
    changes: the job records it for each changed prompt with `pdd approve PROMPT --said
@@ -1584,12 +1587,13 @@ Each tick, without AI calls:
 Only a real Runtime FAIL blocks a merge. A failed check is a FAIL, also when its check
 has no verdict because another step had no answer. When Runtime cannot check a change
 (a lint refusal, no interface, no verdict with no failed step, a scenario limit that pdd
-gives no fix for), the job still ships its PR with native tests and `Runtime: not run
-(reason)`, and Autopilot files or counts one report for that cause. A value that is not
+gives no fix for), the job still ships its PR with native tests and `Runtime: STORY not
+run (REASON)`, and Autopilot files or counts one report for that cause. A value that is not
 a safe integer is no such reason: pdd prints its exact Number spelling, and the job
 applies that fix and checks again. During announced maintenance the job does not wait:
-pdd has sent nothing yet, so the job stops it and writes `Runtime: not run (maintenance
-until HH:MM UTC)` with the end time that pdd printed. Autopilot sends the check itself
+pdd has sent nothing yet, so the job stops it and writes `Runtime: STORY not run
+(maintenance until HH:MM UTC)` for each Story that pdd did not send, with the end time
+that pdd printed. Autopilot sends the check itself
 when maintenance ends and rewrites the line. A job never cuts short a check that pdd has
 already sent. "Changed" means changed against the base (`git diff origin/BASE...HEAD`),
 never since the previous PR head: a Story that a merge from the base brought in is not
@@ -1605,8 +1609,8 @@ them in the merge comment. The claims must be true. A Runtime pass (`Runtime: PA
 `runtime=pass` or the result's runtime state) counts only when the saved `pdd test`
 checks cover every changed prompt, Story and Story test at the PR head, compared with a
 clean checkout of that head (files that are not committed never count; the latest check
-of a Story decides; a PASS of other Stories does not count; write `Runtime: not run
-(reason)` for a native-only prompt or a Story with no Runtime test). A repair that only
+of a Story decides; a PASS of other Stories does not count; write `Runtime: STORY not
+run (REASON)` for a native-only prompt or a Story with no Runtime test). A repair that only
 runs `pdd test` again is read again. Autopilot also runs, at the PR head, every changed
 replay (`*.vectors.test.*`) and formal (`*.formal.test.*`) file and every vector file
 that names a changed scenario, if it is a `node:test` JavaScript file (other files are
