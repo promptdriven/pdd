@@ -23,7 +23,7 @@ comments on a known cause at most once a day.
   interpreter-error, server-internal (a server-side internal error: server-internal,
   internal-server, server-error, a 5NN status as its own word, unavailable or
   bad-gateway), server-incompatible, crash,
-  claim-error, not-run, base-check, step-quiet, timeout,
+  claim-error, not-run, base-check, step-quiet, stop-loop, timeout,
   cli-error (matched in this order on the slug), else `other-HASH`: the first 8 hex
   digits of the SHA-256 of `STEP:CODE` (the step and the code slug without digits;
   never the agent's text, paths or numbers). The component becomes one fixed word (`stableComponent`):
@@ -65,7 +65,10 @@ comments on a known cause at most once a day.
   core could not run the replay or formal tests of a PR), it went on with that claim
   marked as not checked, or, for a cause with `stopped: true` (a core step made no
   progress), "Autopilot stopped one of its own steps for one job: it made no progress.
-  The issue gets no strike, and Autopilot tries again later.", or,
+  The issue gets no strike, and Autopilot tries again later." (for the code `stop-loop`:
+  "Autopilot holds one issue: its own steps or a service stopped 3 jobs of it in 24
+  hours. The issue gets no strike; Autopilot takes it again after a new engine version or
+  a person's comment on it."), or,
   for `adopt-pdd`, a fixed request to adopt PDD. Then it has
   only fixed fields: the kind, component, error code, step, the PDD, Node, platform
   and agent versions, how many times this machine saw the cause (1, or the draft's

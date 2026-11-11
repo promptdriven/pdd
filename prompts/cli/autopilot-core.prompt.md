@@ -217,7 +217,8 @@ order. An issue is ready when all hold: it is an open issue (not a PR); it has n
 assignee; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it is not cooling down (no `noResult` history
 line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
-opt-in label when `label` is set; no
+opt-in label when `label` is set; it is not held (the loop guard of
+[Stop owners](#stop-owners)); no
 local job holds it; its author is trusted (`ports.trusted(row)`, the launcher's
 trust rule); no open issue blocks it; and it has no live `pdd:working` claim by
 anyone. Blocking means a GitHub issue dependency (`dependencies/blocked_by`, read
@@ -413,6 +414,23 @@ the cause `{kind: pdd, component: autopilot-core, code, text, stopped: true}`; e
 stop files or counts it, and the dedup keeps one report. A merged PR still finishes as
 merged at the next merge check, also after a wait. A person ends the wait by removing
 `pdd:working`.
+
+**The loop guard** (lead decision, Nov 11): a fault of Autopilot or a service that
+never ends must not loop forever on one issue. Each step stop writes the history line
+`{at, issue, stop: true, owner, code}`; a release with owner `pdd` or `service` has the
+owner in its `released` line. When a stop is the 3rd one owned by `pdd` or `service`
+for the same issue in 24 hours (counting after the issue's latest reset and latest
+hold release), the engine **holds** the issue: one line `{at, issue, hold: true, owner,
+code, text, version}` (version = `ports.version`) and one report (code `stop-loop`,
+`stopped: true`), never an END and never a strike; the stop itself still adds 1 to
+`streak`. A held job in phase `pr` keeps its PR, claim and slot and runs no merge
+check; a released issue is not ready (ready rule). The hold ends with a new engine
+version (`ports.version` differs from the saved one), or with a comment on the issue
+by a trusted person after the hold (not a claim comment and no `<!-- pdd:` marker).
+The issue's comments are read only when the issue changed after the hold, and for a
+held job at most every 30 minutes. Then one line `{at, issue, unhold: true, text}`
+starts the count again, and a held job gets a fresh quiet clock and runs its merge
+check.
 
 **The issue stop** (owner `issue`):
 1. Count the issue's strike lines of the last 7 days after its latest reset. With 2 or
@@ -1042,7 +1060,8 @@ files only: the engine line (mode, repository, folder, base, agent), the slot li
 (`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, `#N ending: …`), one line per step wait
-(`#N waits: OWNER stop CODE: TEXT; next try after TIME (try K)`, with `; report REF` when one was filed), one
+(`#N waits: OWNER stop CODE: TEXT; next try after TIME (try K)`, with `; report REF` when one was filed), one line per
+held issue (`#N held since TIME: TEXT; it goes on after a new engine version or a person's comment on the issue`), one
 line per issue that cools down (`#N cools down until TIME (owner OWNER): TEXT`), the last 5 results (`#N ended TIME: cause`,
 with ` (owner OWNER)` when the line has one; strike lines are not results) and the count
 of local report drafts.

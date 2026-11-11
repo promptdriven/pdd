@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 157398bbbf8c5588bc22e9b15b7c1653db187a22323a227ddf0e2084bf9402a2).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 6d1b958f3fe14b5820cc806b8ac233afd35b07001addc17ab0fd1b3254a14721).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -315,13 +315,15 @@ async function* readyRows(ctx, rows) {
   // An issue with a counted no-result in the last 24 hours (since its latest reset) cools down.
   const history = chronological(ctx.fs, ctx.root);
   const cooling = new Set([...new Set(history.map(row => row.issue))].filter(issue => issueRows(history, issue).some(row => row.noResult && ctx.now() - row.at < DAY)));
+  // The loop guard (Stop owners): only issues with a hold line are checked for a hold.
+  const holding = new Set(history.filter(row => row.hold === true).map(row => row.issue));
   const candidates = rows.filter(row => !row.pull_request && row.state === 'open' && !row.assignees?.length && !row.assignee
     && !labelsOf(row).includes('pdd:stuck') && !labelsOf(row).includes(DECISION) && !labelsOf(row).includes(WOULD_MERGE) && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
     && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number))
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
   for (const row of candidates) {
     try {
-      if (!await ctx.trust(row) || await blocked(ctx, row)) continue;
+      if (!await ctx.trust(row) || await blocked(ctx, row) || holding.has(row.number) && await activeHold(ctx, row.number, { row })) continue;
       if (labelsOf(row).includes('pdd:working')) { const claim = await ctx.readClaim(row.number); if (!claim?.expired || takeoverLimited(claim, self)) continue; }
     } catch (error) { ctx.warn(`Autopilot core skipped #${row.number} this tick: ${error.message}`); continue; }
     yield row;
@@ -2103,7 +2105,51 @@ const HUNG = { after: 15 * MIN, every: 30 * 1000, cpu: 2 };
 const SERVICE_ERROR = /\breturned (?:429|5\d\d|no reply)\b|\bHTTP(?:\/\S+)? (?:429|5\d\d)\b|\b(?:429|5\d\d) (?:too many requests|bad gateway|service unavailable|gateway time-?out|internal server error)\b|\bno reply\b|\btimed? ?out\b|\btime-out\b|\bETIMEDOUT\b|\bECONNRESET\b|\bECONNREFUSED\b|\bEAI_AGAIN\b|\bENOTFOUND\b|\bsocket hang up\b|\bnetwork\b|\brate limit/i;
 const STEP_CODES = { 'base-check': 'base-check', claim: 'claim-error', merge: 'merge-check-tool' };
 const utcTime = at => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-const stepWaiting = (ctx, job) => Number.isFinite(job.stepStop?.until) && job.stepStop.until > ctx.now();
+const stepWaiting = (ctx, job) => Boolean(job.stepStop?.held) || Number.isFinite(job.stepStop?.until) && job.stepStop.until > ctx.now();
+// The loop guard (lead, Nov 11): 3 stops owned by pdd or a service for one issue in 24 hours hold that issue (no END, no
+// strike, one report) until a new engine version or a trusted person's comment after the hold. The machine pause still
+// counts each stop. The rows count after the issue's latest reset or release of a hold.
+const HOLD_STOPS = 3, HOLD_CHECK = 30 * MIN;
+function sinceHold(ctx, issue) {
+  const rows = issueRows(chronological(ctx.fs, ctx.root), issue), last = rows.map(row => row.unhold === true).lastIndexOf(true);
+  return rows.slice(last + 1);
+}
+const ownStops = (ctx, issue) => sinceHold(ctx, issue).filter(row => ['pdd', 'service'].includes(row.owner) && (row.stop === true || row.outcome === 'released') && ctx.now() - row.at < DAY).length;
+// The 3rd pdd or service stop in 24 hours: one hold line and one report. The caller has not yet written this stop.
+async function holdIssue(ctx, job, why) {
+  if (ownStops(ctx, job.issue) + 1 < HOLD_STOPS) return false;
+  const text = `${HOLD_STOPS} stops of Autopilot's own steps or of a service in 24 hours (last: ${why.owner} ${why.code}: ${oneLine(why.text, 300)})`;
+  try { appendHistory(ctx, { at: ctx.now(), issue: job.issue, hold: true, owner: why.owner, code: why.code, text, version: ctx.ports.version ?? null }); } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
+  await stopReport(ctx, job, 'stop-loop', text, 'hold');
+  return true;
+}
+// The latest hold of an issue, or null. A hold ends with a new engine version, or with a comment by a trusted person
+// after it (no pdd marker, no claim comment); then one release line counts the stops from zero. read: false skips the
+// comment read (the hold stays for this look).
+async function activeHold(ctx, issue, { row = null, read = true } = {}) {
+  const hold = sinceHold(ctx, issue).filter(r => r.hold === true).at(-1);
+  if (!hold) return null;
+  let why = (hold.version ?? null) !== (ctx.ports.version ?? null) ? 'a new engine version' : null;
+  if (!why && read && (!row || Date.parse(row.updated_at) > hold.at)) {
+    const comments = await ctx.gh.all(`repos/${ctx.repo}/issues/${issue}/comments?per_page=100`);
+    for (const c of comments) {
+      if (!(Date.parse(c.created_at) > hold.at) || /<!-- pdd:|^Autopilot core claim\./.test(String(c.body ?? ''))) continue;
+      if (await ctx.trust(c)) { why = "a person's comment"; break; }
+    }
+  }
+  if (!why) return hold;
+  try { appendHistory(ctx, { at: ctx.now(), issue, unhold: true, text: `the hold ended: ${why}` }); } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
+  return null;
+}
+// A held job (phase pr) checks its hold at most every 30 minutes; when it ended, the merge check runs again.
+async function heldStep(ctx, job) {
+  if (!job.stepStop?.held) return false;
+  const read = ctx.now() - (job.stepStop.checkedAt ?? 0) >= HOLD_CHECK;
+  if (read) { job.stepStop.checkedAt = ctx.now(); ctx.saveJob(job); }
+  if (await activeHold(ctx, job.issue, { read })) return true;
+  delete job.stepStop; job.progress = { sig: null, at: ctx.now(), running: false }; ctx.saveJob(job);
+  return false;
+}
 // The command a person typed: the text of Claude's eval '…', or the text after -c of a shell.
 function shownCommand(command) {
   const text = String(command ?? '');
@@ -2213,7 +2259,9 @@ async function stepStop(ctx, job, error = null) {
     filed = await stopReport(ctx, job, code, text, job.lastErrorStep ?? 'merge-check') ?? filed;
     const m = ctx.machineState(); m.pending = null; await countStop(ctx, job, m, {}); ctx.saveMachine(m);
   }
-  job.stepStop = { owner, code, text, head: job.head, count, at: ctx.now(), until, report: filed, resumed: false };
+  const held = await holdIssue(ctx, job, { owner, code, text });
+  try { appendHistory(ctx, { at: ctx.now(), issue: job.issue, stop: true, owner, code }); } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
+  job.stepStop = { owner, code, text, head: job.head, count, at: ctx.now(), until, report: filed, resumed: false, ...(held ? { held: true, checkedAt: ctx.now() } : {}) };
   job.progress = { sig: null, at: until, running: false }; delete job.overdue;
   ctx.saveJob(job);
 }
@@ -2231,14 +2279,16 @@ async function overdueStop(ctx, job) {
 }
 // Status words: step waits and issues that cool down, from local files.
 function stopLines(jobs, history, now) {
-  const waits = jobs.filter(job => Number.isFinite(job.stepStop?.until) && job.stepStop.until > now).map(job => { const w = job.stepStop;
+  const waits = jobs.filter(job => !job.stepStop?.held && Number.isFinite(job.stepStop?.until) && job.stepStop.until > now).map(job => { const w = job.stepStop;
     return `#${job.issue} waits: ${w.owner} stop ${w.code}: ${w.text}; next try after ${new Date(w.until).toISOString()} (try ${w.count + 1})${w.report?.ref ? `; report ${w.report.ref}` : ''}`; });
-  const local = new Set(jobs.map(job => job.issue)), rows = history.slice().reverse(), cooling = [];
+  const local = new Set(jobs.map(job => job.issue)), rows = history.slice().reverse(), cooling = [], held = [];
   for (const issue of new Set(rows.map(row => row.issue))) {
-    const row = issueRows(rows, issue).filter(r => r.noResult && now - r.at < DAY).at(-1);
+    const own = issueRows(rows, issue), row = own.filter(r => r.noResult && now - r.at < DAY).at(-1);
     if (row && !local.has(issue)) cooling.push(`#${issue} cools down until ${new Date(row.at + DAY).toISOString()}${row.owner ? ` (owner ${row.owner})` : ''}: ${row.text}`);
+    const hold = own.slice(own.map(r => r.unhold === true).lastIndexOf(true) + 1).filter(r => r.hold === true).at(-1);
+    if (hold) held.push(`#${issue} held since ${new Date(hold.at).toISOString()}: ${hold.text}; it goes on after a new engine version or a person's comment on the issue`);
   }
-  return [...waits, ...cooling];
+  return [...waits, ...held, ...cooling];
 }
 
 // ---- END ------------------------------------------------------------------------------------------------
@@ -2320,6 +2370,7 @@ async function end(ctx, job, why) {
     const counted = owner === 'issue' || m.streak === 0 && !why.service && !['service', 'pdd'].includes(owner);
     const strikes = issueRows(chronological(ctx.fs, ctx.root), job.issue).filter(row => row.strike && ctx.now() - row.at < 7 * DAY).length;
     why = { ...why, ...(owner ? { owner } : {}), release: owner ? true : !(counted && strikes >= NO_RESULT_LIMIT - 1), counted };
+    if (['pdd', 'service'].includes(owner)) await holdIssue(ctx, job, why).catch(error => ctx.warn(`Autopilot core hold of #${job.issue}: ${error.message}`));
     if (owner !== 'issue') {
       m.pending = counted && why.release && !owner ? { issue: job.issue, at: ctx.now() } : null;
       // Machine pause: 3 no-result ends in a row pause new jobs for 1 hour, then 2, 4 and 8 hours at most.
@@ -2517,6 +2568,7 @@ async function advance(ctx, job) {
   if (ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES)
     return end(ctx, job, cause('job', 'claim-expired', `the claim expired: no heartbeat for ${((ctx.now() - job.claim.lastSeen) / HOUR).toFixed(1)} hours (the tick did not run, for example while the machine slept)`));
   // A step wait (Stop owners): no merge check until its end, then a fresh quiet clock.
+  if (job.phase === 'pr' && await heldStep(ctx, job)) return;
   if (job.phase === 'pr' && stepWaiting(ctx, job)) return;
   resumeStep(ctx, job);
   if (job.phase === 'pr') return mergeCheck(ctx, job);

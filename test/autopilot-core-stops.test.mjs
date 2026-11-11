@@ -227,3 +227,51 @@ test('S11 the report owner: a stopped cause has its own public sentence and stab
   await fileReport({ cause: { kind: 'pdd', component: 'autopilot-core', code: 'crash', text: 'x' }, mode: 'draft', root, machine: 'm', versions: { pdd: '0.1.29' }, step: 's' }, {});
   assert.match(listReportDrafts({ root }).find(d => d.code === 'crash').body, /ended one job/);
 });
+
+test('S12 the loop guard: a 3rd pdd stop of one issue in 24 hours holds it (no END, no strike, one stop-loop report) until a person comments', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const { pr } = await greenPr(w);
+  let ok = false, reads = 0;
+  const checkBase = async () => { reads++; return ok ? { exitCode: 0, message: 'Base check ok.' } : { exitCode: 1, message: 'Automatic merge refused: main: could not verify releases; retry the read before merging.' } };
+  await w.tick({ checkBase });
+  for (let i = 0; i < 30 && !jobFile(w, 17)?.stepStop?.held; i++) await quiet(w, 10, { checkBase });
+  const job = jobFile(w, 17);
+  assert.equal(job.stepStop.held, true); assert.equal(job.stepStop.count, 3, 'held at the 3rd stop');
+  assert.equal(history(w).filter(row => row.issue === 17 && row.stop).length, 3);
+  assert.equal(history(w).filter(row => row.issue === 17 && row.hold).length, 1);
+  assert.equal(endComments(w, 17).length, 0); assert.ok(!w.labels(17).includes('pdd:stuck')); assert.equal(history(w).filter(row => row.strike).length, 0);
+  const fingerprints = listReportDrafts({ root: w.reportRoot }).map(d => d.fingerprint).sort();
+  assert.deepEqual(fingerprints, ['pdd.autopilot-core.base-check.0.1', 'pdd.autopilot-core.stop-loop.0.1']);
+  assert.match(listReportDrafts({ root: w.reportRoot }).find(d => d.code === 'stop-loop').body, /Autopilot holds one issue/);
+  assert.ok(machine(w).streak >= 3, 'the machine pause still counts each stop');
+  assert.match(status(w), /#17 held since \S+: 3 stops of Autopilot's own steps or of a service in 24 hours \(last: pdd base-check: .*\); it goes on after a new engine version or a person's comment/);
+  // Held: no merge check for hours, also after the backoff; ok = true changes nothing while held.
+  ok = true; const before = reads;
+  await quiet(w, 180, { checkBase });
+  assert.equal(reads, before); assert.equal(w.github.merges.length, 0); assert.ok(jobFile(w, 17).stepStop.held);
+  // A trusted person's comment ends the hold (read at most every 30 minutes); then the merge check runs and merges.
+  w.github.comment(17, 'The base check is fixed, go on.', 'acme');
+  await quiet(w, 40, { checkBase });
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.ok(history(w).some(row => row.issue === 17 && row.unhold && /a person's comment/.test(row.text)));
+});
+
+test('S13 the loop guard: three service releases of one issue in 24 hours hold it in the ready rule; a new engine version ends the hold', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  const out = () => w.say(17, 'build', JSON.stringify({ type: 'error', message: 'You are out of credits. Add credits to go on.' }));
+  for (let round = 0; round < 3; round++) {
+    for (let i = 0; i < 40 && !(w.job(17, 'build') && w.alive.has(w.job(17, 'build').pid)); i++) await quiet(w, 30);
+    out(); await quiet(w, 50);
+  }
+  const holds = history(w).filter(row => row.issue === 17 && row.hold);
+  assert.equal(holds.length, 1); assert.equal(holds[0].owner, 'service'); assert.equal(holds[0].version, '0.1.27');
+  assert.equal(history(w).filter(row => row.issue === 17 && row.outcome === 'released' && row.owner === 'service').length, 3);
+  assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), [], 'held: not ready');
+  assert.equal(w.comments(17).length, 0, 'no note and no END'); assert.ok(!w.labels(17).includes('pdd:stuck'));
+  // A comment by an untrusted person or an engine marker comment does not end it; a new engine version does.
+  w.github.comment(17, 'please retry', 'stranger');
+  assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), []);
+  assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports({ version: '0.1.28' })), [17]);
+  assert.ok(history(w).some(row => row.issue === 17 && row.unhold && /a new engine version/.test(row.text)));
+});
