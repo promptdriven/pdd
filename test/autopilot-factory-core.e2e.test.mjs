@@ -123,7 +123,7 @@ test('core factory 4: a review FAIL after the last repair ends the job with one 
   assert.match((await f.status()).message, /#17 ended/);
 });
 
-test('core factory 5: needs a person: one question and pdd:needs-decision; the answer and the label removal start the next build', async t => {
+test('core factory 5: needs a person: one question and pdd:needs-decision; a trusted reply alone starts the next build (the engine removes the label)', async t => {
   const f = await factory(t, { label: 'pdd:autopilot' }), { w } = f;
   w.issue(17, { labels: ['pdd:autopilot'] });
   assert.equal((await f.start()).exitCode, 0);
@@ -131,11 +131,11 @@ test('core factory 5: needs a person: one question and pdd:needs-decision; the a
   await f.tick();
   assert.match(w.comments(17).find(body => body.includes('<!-- pdd:autopilot-core:question:17:')), /> Should the total count hyphenated words as one word or two\?/);
   assert.ok(w.labels(17).includes('pdd:needs-decision')); assert.ok(!w.labels(17).includes('pdd:working'));
+  await f.tick();
+  assert.equal(w.started.filter(job => job.issue === 17).length, 1, 'no reply: the issue waits');
   w.github.comment(17, 'One word: "well-known" counts once.', 'acme');
   await f.tick();
-  assert.equal(w.started.filter(job => job.issue === 17).length, 1, 'the label keeps the issue waiting');
-  w.github.unlabel(17, 'pdd:needs-decision');
-  await f.tick();
+  assert.ok(!w.labels(17).includes('pdd:needs-decision'), 'the engine removed the label');
   const next = w.job(17, 'build');
   assert.match(next.input, /Question: Should the total count hyphenated words as one word or two\?/);
   assert.match(next.input, /acme: One word: "well-known" counts once\./);
