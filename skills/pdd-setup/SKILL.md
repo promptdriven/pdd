@@ -16,12 +16,12 @@ The bundled skills also include pdd-product, pdd-autopilot, pdd-check, pdd-merge
 3. If the file already has a `<!-- pdd:start -->` … `<!-- pdd:end -->` block, replace only that block. Otherwise add the block at the end, after one empty line. Keep all other text.
 4. If the block is already the same, change nothing. If only one marker is there, stop and ask the person.
 5. In a Git repo, add the line `.pdd/` at the end of the root `.gitignore` if no line there is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/` (no space at the start). Create the file if needed. Keep all other bytes. If the last such line starts with `!`, or there is no such line but a line starts with `!.pdd` or `!/.pdd` (for example `!.pdd/config.json`), change nothing and tell the person. `pdd test` keeps its local cache in `.pdd/`.
-6. Run `pdd owner` on the product files (source code that people maintain; not generated, vendored or lock files). If some have no prompt, offer to write their prompts from the current code, as drafts. Write them only after the person says yes.
+6. Run `pdd owner` on the product files (source code that people maintain; not generated, vendored or lock files). If some have no prompt, offer to write a prompt for each from its current code: the file's whole behavior today (for a very large file, its public behavior: exports, inputs, outputs, errors). The prompts start as drafts. Write them only after the person says yes.
 
 ```markdown
 <!-- pdd:start -->
 ## PDD
-This project uses PDD. Change the prompt that owns a file before the file. New code starts with its prompt. When no prompt owns source code that people maintain, first write its prompt from the current code. Docs, config, CI, package data and tests get no prompt: change them directly, with a test when behavior changes.
+This project uses PDD. Change the prompt that owns a file before the file. New code starts with its prompt. When no prompt owns source code that people maintain, first write its prompt from the current code: the file's whole behavior today (for a very large file, its public behavior). Docs, config, CI, package data and tests get no prompt: change them directly, with a test when behavior changes.
 Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.
 Full run with PRs: `pdd workflow run NAME ISSUE` (NAME: feature, bug or small-change).
 Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.
