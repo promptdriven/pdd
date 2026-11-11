@@ -26,7 +26,10 @@ import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, project
 import { lintSvgLayouts } from './svg-layout.mjs';
 import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
 
-const localInterfaceProblem = problem => ['interface-missing','interface-kind-invalid','interface-kind-explicit-full','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
+// The preflight owner's local format admission table, shared by lint and files.
+const LOCAL_FORMAT_CODES = new Set(['interface-kind-explicit-full', 'graph-schema-unsupported-keyword']);
+const localFormatProblem = problem => LOCAL_FORMAT_CODES.has(problem.code);
+const localInterfaceProblem = problem => localFormatProblem(problem) || ['interface-missing','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -1850,7 +1853,7 @@ function runFiles(cwd, words, options, ports) {
   const checkedRows = preflight({root,found,selected}).rows;
   const nativeRows = new Map(checkedRows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
   for (const row of rows) {
-    const refusals = checkedRows.find(checked => checked.test === row.test)?.refusals.filter(problem => problem.code === 'interface-kind-explicit-full') ?? [];
+    const refusals = checkedRows.find(checked => checked.test === row.test)?.refusals.filter(localFormatProblem) ?? [];
     if (refusals.length) Object.assign(row, {state:'refused',unsent:true,refusals:[...row.refusals,...refusals]});
   }
   for (const row of rows) {
@@ -1883,7 +1886,7 @@ function runFiles(cwd, words, options, ports) {
 }
 
 // pdd lint: only the server's lint (0 AI calls) on the captured files.
-// Locally the selected prompts' limits gate, SVG advice and privacy/capture checks run; other engine rules are the server's.
+// Locally the selected prompts' limits and interface format gates, SVG advice and privacy/capture checks run.
 async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
   context.excludeFixtureProjects = words.length === 0;
@@ -1918,7 +1921,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     if (finding.length) return finding;
     if (!prompts.has(path)) prompts.set(path, readPrompt(root, found.visible, path, found.workspace));
     return promptSchemaRefusals(root, found, prompts.get(path), prompts, seen).filter(problem =>
-      ['invalid-limits', 'invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'));
+      localInterfaceProblem(problem) || ['invalid-limits', 'invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'));
   };
   const limitRows = rows.map(row => {
     const seen = new Set();
@@ -1943,7 +1946,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
       return printLintResult(context, refusedRows, problems);
     }
     const broken = refusedRows.filter(row=>row.unsent).length;
-    const summary = `Lint refused local Runtime limits.${broken ? ` ${broken} tests could not run.` : ''} 0 AI calls. No files were sent.`;
+    const summary = `Lint refused local Runtime declarations.${broken ? ` ${broken} tests could not run.` : ''} 0 AI calls. No files were sent.`;
     if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
       coverage:context.coverage,problems,rows:refusedRows.map(row => ({...row,...resultOutcome(row)})),warnings:found.warnings}));
     else {
@@ -2652,7 +2655,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
           promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
-        const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
+        const problems = interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, state: problems.length ? 'refused' : 'partial', lint_state: 'partial', ...resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}), rows: [], problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
         return problems.length ? 4 : 0;

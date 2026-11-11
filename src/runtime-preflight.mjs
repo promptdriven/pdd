@@ -446,7 +446,7 @@ function schemaRules(schema, pointer, out) {
   if (Array.isArray(schema.type)) {
     return add('graph-schema-type-list', `has a list of types (${schema.type.map(String).join(', ')}). Use "oneOf" with one schema for each type, for example {"oneOf": [{"type": "string"}, {"type": "null"}]}.`);
   }
-  for (const key of Object.keys(schema)) if (SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `uses "${key}", which the interpreter does not support.`);
+  for (const key of Object.keys(schema)) if (SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `uses "${key}", which the interpreter does not support.${key === 'anyOf' ? ' Use "oneOf" with a complete schema for each alternative.' : ''}`);
   if (Object.hasOwn(schema, 'oneOf')) {
     for (const key of Object.keys(schema)) if (key !== 'oneOf' && !SCHEMA_ANNOTATIONS.has(key) && !SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `has "${key}" next to "oneOf". Put it inside each oneOf schema.`);
     if (!Array.isArray(schema.oneOf) || !schema.oneOf.length) add('graph-schema-invalid', '"oneOf" must be a list of at least one schema.');
