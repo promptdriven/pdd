@@ -8,7 +8,8 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ownerTable, pathRules } from '../src/autopilot-core.mjs';
+import { ownerRead, ownerTable, pathRules } from '../src/autopilot-core.mjs';
+import { listReportDrafts } from '../src/autopilot-reports.mjs';
 import { runOwner } from '../src/file-owner.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 
@@ -24,9 +25,13 @@ const diff = (base, head) => [...new Set([...Object.keys(base), ...Object.keys(h
   .flatMap(path => !(path in base) ? [{ status: 'A', path }] : !(path in head) ? [{ status: 'D', path }] : base[path] === head[path] ? [] : [{ status: 'M', path }]);
 function check(t, { base, head, body, changed = diff(base, head), adopting = false }) {
   const b = tree(t, base), h = tree(t, head);
-  return pathRules({ changed, baseFiles: b.files, before: ownerTable(fs, b.dir, b.files), after: ownerTable(fs, h.dir, h.files), body, adopting });
+  return pathRules({ changed, baseFiles: b.files, before: ownerRead(fs, b.dir, b.files), after: ownerRead(fs, h.dir, h.files), body, adopting });
 }
-const rule = red => red.startsWith('The PR body has no Path line') ? 'R6' : / is new in this PR .* cannot take path e/.test(red) ? 'R7'
+const MIN = 60 * 1000;
+const endComments = (w, n) => w.comments(n).filter(body => body.includes('<!-- pdd:autopilot-core:end:'));
+const jobFile = (w, n) => { const file = join(w.root, 'jobs', `${n}.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; };
+const writeIn = (cwd, path, text) => { fs.mkdirSync(dirname(join(cwd, path)), { recursive: true }); fs.writeFileSync(join(cwd, path), text); };
+const rule = red => red.startsWith('The PR body has no Path line') ? 'R6' : red.startsWith('pdd-bindings.json cannot be read at this head') ? 'R8' : / is new in this PR .* cannot take path e/.test(red) ? 'R7'
   : / is a new prompt that owns no new code file/.test(red) ? 'R3' : / exists on the base with no owner/.test(red) ? 'R4' : / is owned by /.test(red) ? 'R1' : red;
 const R7_TEXT = 'is new in this PR (not on the base), so it cannot take path e (existing code that no prompt owns): a new code file takes path c, with its prompt and a binding or a Generated from header; any other new file takes path d.';
 const R3_TEXT = 'is a new prompt that owns no new code file of this PR by a binding or header (its opening sentence alone is not enough): give the new code file a binding or a Generated from header (path c); a non-code change takes path d, with no new prompt.';
@@ -175,10 +180,25 @@ test('P8 a renamed file keeps the state of its source; a header added on a moved
   assert.deepEqual(check(t, { base, head: headed, changed: [{ status: 'R090', path: 'src/v.js', from: 'src/u.js' }], body: 'Path: e — src/v.js — unowned — no contract change — Test: done check' }).reds.map(rule), ['R4']);
 });
 
-test('P9 an unreadable pdd-bindings.json makes the answer not certain: the file counts as owned by an unknown prompt', async t => {
-  const base = { 'pdd-bindings.json': '{"modules":[{"module":"docs/errors.md","prompt":"prompts/errors.prompt.md"}]}\n', 'prompts/errors.prompt.md': '# Errors\n\nThe table.\n', 'docs/errors.md': '# Errors\n' };
-  const result = check(t, { base, head: { ...base, 'docs/errors.md': '# Errors\n\nMore.\n' }, body: 'Path: d — docs/errors.md — unowned — no contract change — Test: done check' });
-  assert.deepEqual(result.reds, ['docs/errors.md is owned by an unknown prompt (not certain: pdd-bindings.json could not be read, so a binding may be missing), so it cannot take path d: use path a or b.']);
+const UNREADABLE = '{"modules":[{"module":"docs/errors.md","prompt":"prompts/errors.prompt.md"}]}\n';   // no schema_version
+test('P9 decision 1: a pdd-bindings.json that the head broke is red (R8); one that main cannot read is no red, and its files are not checked', async t => {
+  const base = { 'pdd-bindings.json': bindings([['docs/errors.md', 'prompts/errors.prompt.md']]), 'prompts/errors.prompt.md': '# Errors\n\nThe table.\n', 'docs/errors.md': '# Errors\n', 'src/h.js': '// Generated from prompts/errors.prompt.md\n' };
+  const broke = check(t, { base, head: { ...base, 'pdd-bindings.json': UNREADABLE }, body: 'Path: d — pdd-bindings.json — unowned — no contract change — Test: done check' });
+  assert.deepEqual(broke.reds, ['pdd-bindings.json cannot be read at this head: fix it (pdd owner needs valid JSON with schema_version pdd.bindings.v1 and a modules array, at most 64 KiB).']);
+  const behind = check(t, { base, head: { ...base, 'pdd-bindings.json': UNREADABLE, 'README.md': '# R\n' }, changed: [{ status: 'A', path: 'README.md' }], body: 'Path: d — README.md — unowned — no contract change — Test: done check' });
+  assert.deepEqual(behind.reds, [], 'a head that only lacks main\'s fix of pdd-bindings.json (the PR does not change it) gets it at the refresh: no R8');
+  const main = { ...base, 'pdd-bindings.json': UNREADABLE }, b = tree(t, main);
+  const read = ownerRead(fs, b.dir, b.files);
+  assert.equal(read.bindings, false); assert.equal(read.owners.has('docs/errors.md'), false, 'never owned by an unknown prompt');
+  assert.equal(read.unchecked.get('docs/errors.md'), 'pdd-bindings.json unreadable'); assert.equal(read.owners.get('src/h.js')?.how, 'header', 'a header still owns its file');
+  const head = { ...main, 'docs/errors.md': '# Errors\n\nMore.\n', 'src/h.js': '// Generated from prompts/errors.prompt.md\nexport const h = 1;\n', 'src/new.js': 'export const n = 1;\n' };
+  const result = check(t, { base: main, head, body: 'Path: d — docs/errors.md — unowned — no contract change — Test: done check\nPath: e — src/new.js — unowned — no contract change — Test: done check\nPath: b — src/h.js — prompts/errors.prompt.md — no contract change — Test: done check' });
+  assert.deepEqual(result.reds.map(rule), ['R7'], 'main is broken, not this PR: no red for docs/errors.md; a new file is still checked');
+  assert.deepEqual(result.unchecked, ['docs/errors.md']);
+  assert.equal(result.wait, 'pdd-bindings.json cannot be read on main, so the owners of docs/errors.md are not checked');
+  assert.match(result.owners, /^- docs\/errors\.md: not checked \(pdd-bindings\.json unreadable on main\)$/m);
+  assert.doesNotMatch(result.owners, /unknown prompt/);
+  assert.deepEqual(check(t, { base: { ...base }, head: { ...base, 'README.md': '# R\n' }, body: 'Path: d — README.md — unowned — no contract change — Test: done check' }).reds, [], 'a readable or missing file is no red');
 });
 
 test('P11 the reviewer gets the three states, and no ownership must-fix that the engine checks', async t => {
@@ -217,4 +237,72 @@ test('P12 one owner reader: the engine table and `pdd owner` give the same answe
   assert.equal(engine.get('src/split.js'), undefined, 'src/split.js: no owner (its prompt names it after the opening sentence)');
   assert.equal(engine.get('src/ordinal.js')?.how, 'prose');
   assert.equal(engine.get('src/money.js')?.how, 'binding', 'the binding comes first');
+});
+
+test('P14 main cannot read pdd-bindings.json: the merge waits, a quiet period ends the job with one PDD report; a fixed main merges', async t => {
+  const waiting = async () => {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.baseCommit('pdd-bindings.json', UNREADABLE); w.baseCommit('docs/x.md', '# X\n');
+    w.issue(17); await w.tick();
+    writeIn(w.job(17, 'build').cwd, 'docs/x.md', '# X\n\nMore.\n');
+    const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (no prompt changed)\nPath: d — docs/x.md, change-17.txt — unowned — no contract change — Test: done check', result: { promptChanged: false } });
+    await w.tick();
+    assert.equal(w.job(17, 'repair'), undefined, 'no red for the PR');
+    const review = w.job(17, 'review').input;
+    assert.match(review, /^- docs\/x\.md: not checked \(pdd-bindings\.json unreadable on main\)$/m); assert.doesNotMatch(review, /unknown prompt/);
+    w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
+    assert.deepEqual(w.github.merges, [], 'the merge waits');
+    assert.match(jobFile(w, 17).lastError, /^the merge waits: pdd-bindings\.json cannot be read on main, so the owners of docs\/x\.md are not checked$/);
+    return { w, pr };
+  };
+  const { w } = await waiting();
+  for (let i = 0; i < 4 && !endComments(w, 17).length; i++) { w.advance(20 * MIN); await w.tick(); }   // ticks, not one long gap (a gap is sleep)
+  const end = endComments(w, 17);
+  assert.equal(end.length, 1); assert.match(end[0], /the merge waits: pdd-bindings\.json cannot be read on main/); assert.match(end[0], /Cause: pdd \/ bindings-unreadable/);
+  const drafts = listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.'));
+  assert.equal(drafts.length, 1, 'one PDD report for the cause'); assert.match(drafts[0].detail, /pdd-bindings\.json cannot be read on main/);
+  // Main is fixed while the PR waits: the path checks read the new base tip, and the PR merges after the base refresh.
+  const { w: v, pr } = await waiting();
+  v.baseCommit('pdd-bindings.json', bindings([])); await v.tick();
+  const job = jobFile(v, 17);
+  assert.deepEqual(job.paths.unchecked, [], 'read again at the new base tip'); assert.notEqual(job.head, pr.head);
+  await v.tick(); v.github.setChecks(job.head); v.suite(17, 0); await v.tick();
+  assert.deepEqual(v.github.merges, [pr.number]);
+  assert.equal(listReportDrafts({ root: v.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.')).length, 0);
+});
+
+test('P15 the adopt report waits for the final head: a new file on path e never makes a draft; an existing unowned file does at the merge', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('src/old.js', 'export const old = 0;\n');
+  w.issue(17); await w.tick();
+  const cwd = w.job(17, 'build').cwd;
+  writeIn(cwd, 'src/old.js', 'export const old = 1;\n'); writeIn(cwd, 'src/new.js', 'export const n = 1;\n');
+  w.build(17, { body: 'Fixes #17\n\nRuntime: not run (no prompt changed)\nPath: e — src/old.js, src/new.js — unowned — no contract change — Test: done check\nPath: d — change-17.txt — unowned — no contract change — Test: done check', result: { promptChanged: false, adopt: ['src/old.js', 'src/new.js'] } });
+  await w.tick();
+  assert.match(w.job(17, 'repair')?.input ?? '', /src\/new\.js is new in this PR \(not on the base\), so it cannot take path e/);
+  const adoptDrafts = () => listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
+  assert.equal(adoptDrafts().length, 0, 'no draft before the final head');
+  w.build(17, { role: 'repair', body: 'Fixes #17\n\nRuntime: not run (no prompt changed)\nPath: e — src/old.js — unowned — no contract change — Test: done check\nPath: d — src/new.js, change-17.txt — unowned — no contract change — Test: done check', result: { promptChanged: false, adopt: [] } });
+  await w.tick();
+  assert.equal(adoptDrafts().length, 0);
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
+  assert.equal(w.github.merges.length, 1);
+  const drafts = adoptDrafts();
+  assert.equal(drafts.length, 1); assert.match(drafts[0].detail, /src\/old\.js/); assert.doesNotMatch(drafts[0].detail, /src\/new\.js/, 'a new file is never adopted');
+});
+
+test('P16 item 7: when the same path red comes back, the END text quotes the line and the field that the check read', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('pdd-bindings.json', bindings([['src/words.js', 'prompts/words.prompt.md']]));
+  w.baseCommit('prompts/words.prompt.md', '# Words\n\nCount the words.\n'); w.baseCommit('src/words.js', 'export const words = 0;\n');
+  w.issue(17); await w.tick();
+  writeIn(w.job(17, 'build').cwd, 'src/words.js', 'export const words = 1;\n');
+  const body = 'Fixes #17\n\nRuntime: not run (no prompt changed)\nPath: d — src/words.js, change-17.txt — unowned — no contract change — Test: done check';
+  w.build(17, { body, result: { promptChanged: false } }); await w.tick();
+  assert.ok(w.job(17, 'repair'), 'R1');
+  assert.doesNotMatch(w.job(17, 'repair').input, /What the path checks read/, 'the repair gets the red as it is');
+  w.build(17, { role: 'repair', body, result: { promptChanged: false } }); await w.tick();
+  const end = endComments(w, 17);
+  assert.equal(end.length, 1); assert.match(end[0], /a finding of the last round is still there/);
+  assert.match(end[0], /What the path checks read: read "src\/words\.js, change-17\.txt" in the files field of the line "Path: d — src\/words\.js, change-17\.txt — unowned — no contract change — Test: done check"/);
 });

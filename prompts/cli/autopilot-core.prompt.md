@@ -714,8 +714,8 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    code file a binding or a Generated from header (path c); a non-code change takes
    path d, with no new prompt.`); R4 a file of the base with no owner (for a renamed
    file, its source) that the head gives a binding or header, unless the issue asks to
-   adopt PDD; R6 no `Path:` line; R8 the base `pdd-bindings.json` can be read and the
-   head's cannot (`pdd-bindings.json cannot be read at this head: fix it (pdd owner
+   adopt PDD; R6 no `Path:` line; R8 the PR changes `pdd-bindings.json`, the base one
+   can be read and the head's cannot (`pdd-bindings.json cannot be read at this head: fix it (pdd owner
    needs valid JSON with schema_version pdd.bindings.v1 and a modules array, at most 64
    KiB).`). A not-checked file gets no R1, R7 or R4 red: when the base
    `pdd-bindings.json` cannot be read, that is main's problem, not this PR's. Then

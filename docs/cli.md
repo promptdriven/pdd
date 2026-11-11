@@ -1567,8 +1567,10 @@ Each tick, without AI calls:
    Autopilot takes the changed files from Git and checks the lines against the owners
    on the base: an owned file must be on a path a or b line, a file that the PR adds
    never takes path e, and a new prompt needs a binding or a `Generated from` header.
-   Existing code that no prompt owns changes directly with a regression test, and
-   Autopilot files one report that proposes adopting PDD for it. The job writes one
+   When `pdd-bindings.json` on the base branch cannot be read, the PR is not red: its
+   merge waits, and after the quiet period the run ends with one report. Existing code
+   that no prompt owns changes directly with a regression test, and when the PR passed
+   every check, Autopilot files one report that proposes adopting PDD for it. The job writes one
    `Runtime:` line and one `Evidence:` line in the PR
    body. It writes no review verdict: only the fresh reviewer gives one. In `auto` and
    `observe` mode your `pdd autopilot start` is the approval of the job's prompt

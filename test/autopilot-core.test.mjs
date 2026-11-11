@@ -2245,10 +2245,14 @@ test('O4 path e: the job result proposes adopting PDD; the tick files one dedupe
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('change-17.txt', 'old\n'); w.baseCommit('change-18.txt', 'old\n');   // path e is for existing files (R7)
   w.issue(17); w.issue(18); await w.tick();
+  const adoptDrafts = () => listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
   w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: e — change-17.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-17.txt'] } }); await w.tick();
+  assert.equal(adoptDrafts().length, 0, '#3239: the report waits until every check passed at the final head');
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
+  assert.equal(adoptDrafts()[0]?.count, 1);
   w.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: e — change-18.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-18.txt'] } }); await w.tick();
-  const drafts = listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
+  w.review(18, 'PASS'); w.suite(18, 0); await w.tick(); await w.tick();
+  const drafts = adoptDrafts();
   assert.equal(drafts.length, 1); assert.equal(drafts[0].count, 2); assert.match(drafts[0].body, /^Autopilot changed existing code that no prompt owns/);
   assert.match(drafts[0].detail, /change-18\.txt/, 'the module list stays in the local draft'); assert.doesNotMatch(drafts[0].body, /change-18\.txt/);
 });
