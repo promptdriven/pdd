@@ -1,4 +1,5 @@
 import { describeCallPreflight } from './lint-call-preflight.mjs';
+import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: b310ab5b701821ae6b56301e9e34f4fee9f730df55d996f8672f8e5c6d0a51b0).
@@ -891,6 +892,7 @@ async function capacityReady(context, deadline, busyRow = null) {
     const understood = reply.status === 404 || reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance');
     // The interpreter declares what it supports; pdd names the tests to lint only when it says so.
     context.serverFeatures = reply.status === 200 && Array.isArray(reply.json?.features) ? reply.json.features : [];
+    context.serverEngineSha = reply.status === 200 ? reply.json?.engine_sha ?? null : null;
     if (!understood && !context.capacityWarning) {
       context.capacityWarning = true;
       line(context.ports.stderr, 'Warning: interpreter capacity could not be read; continuing with ordinary interpreter admission.');
@@ -1580,6 +1582,48 @@ function pendingLintMessage(context, answer) {
 const waitWord = (answer, read) => read?.kind === 'again' ? `waiting for an answer${read.why ? ` (${read.why})` : ''}`
   : answer?.state === 'queued' ? 'in line' : answer?.state === 'running' ? 'running' : 'waiting for an answer';
 
+function lintReceiptScope(context) {
+  return { root: context.root, origin: context.origin, login: context.identity.login, user_id: context.identity.userId,
+    source_sha256: context.capture.sha256, tests: [...new Set(sentTests(context.rows))].sort(), version: PDD_VERSION,
+    selected_cap: context.lint.selected_cap ?? null };
+}
+const lintReceiptPath = context => join(context.store.folder('lint-receipts'), `${context.store.repoKey(context.root)}.json`);
+function lintReceiptBlocked(context) {
+  const path = lintReceiptPath(context);
+  return readdirSync(dirname(path)).some(name => name.startsWith(`${basename(path)}.unowned.`));
+}
+function lintReceiptTransaction(context, action) {
+  const path = lintReceiptPath(context), lock = `${path}.lock`;
+  const fd = openSync(lock, 'wx', 0o600);
+  try { return action(path, context.store.read(path)); }
+  finally { closeSync(fd); unlinkSync(lock); }
+}
+function passingLintReceipt(context, answer) {
+  return UUID.test(answer?.requestId ?? '') && sameJob(answer, answer.requestId, 'lint') && answer.state === 'passed'
+    && (answer.result?.report?.lint?.complete === true || answer.result?.problems_complete === true)
+    && context.rows.length > 0 && context.rows.every(row => !row.unsent && !row.native_only?.length && lintAdmits(answer, row, context.capture));
+}
+function rememberRecentLint(context, answer) {
+  if (!['check', 'lint-only'].includes(context.intent) || context.reading || context.interrupted) return;
+  try {
+    const scope = lintReceiptScope(context), now = context.ports.now();
+    const receipt = { schema_version: 'pdd.lint-receipt.v1', scope, received_at: now, engine_sha: answer?.engine_sha, answer };
+    if (context.lintReceiptOwner && isRecentLintReceipt({ receipt, scope, now }) && passingLintReceipt(context, answer)) {
+      lintReceiptTransaction(context, (path, current) => {
+        if (current?.pending === context.batch) context.store.write(path, receipt);
+      });
+    }
+  } catch { /* Optional reuse must never prevent a fresh check. */ }
+}
+function readRecentLint(context) {
+  try {
+    if (lintReceiptBlocked(context)) return null;
+    const receipt = context.store.read(lintReceiptPath(context));
+    return isRecentLintReceipt({ receipt, scope: lintReceiptScope(context), now: context.ports.now() })
+      && receipt.engine_sha === receipt.answer?.engine_sha && passingLintReceipt(context, receipt.answer) ? receipt : null;
+  } catch { return null; }
+}
+
 // Every lint asks for complete per-test verdicts: only they can admit a test.
 async function runLint(context) {
   const agent = context.agentLimit ?? !context.ports.interactive;
@@ -1587,7 +1631,6 @@ async function runLint(context) {
     ? context.timeoutMin ? context.startedAt + Math.min(context.timeoutMin * 60_000, context.ports.interactive ? Infinity : AGENT_WAIT_MIN * 60_000) : Infinity
     : context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
   const tick = progressTicker(context.ports.stderr, context.ports.now);
-  line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD interpreter (lint, 0 AI calls)…`);
   let paused = false;
   const stopped = () => ({ kind: 'not_run', note: { code: 'interrupted', message: paused ? stoppedPause(context, context.lint, 'lint')
     : `Stopped before sending.${context.waitCause === 'maintenance' ? ' pdd stopped while waiting for maintenance.' : ''}` } });
@@ -1607,6 +1650,41 @@ async function runLint(context) {
     if (!maintenance) line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
     return waitBudget(context, wait, lintEnd);
   };
+  if (context.intent === 'check') {
+    const receipt = readRecentLint(context);
+    if (receipt) {
+      if (!await capacityReady(context, lintEnd)) return busy();
+      if (isRecentLintReceipt({ receipt, scope: lintReceiptScope(context), now: context.ports.now(), engineSha: context.serverEngineSha ?? null })) {
+        try {
+          const adopted = lintReceiptTransaction(context, (path, current) => {
+            if (lintReceiptBlocked(context) || !isDeepStrictEqual(current, receipt)) return false;
+            saveAnswer(context, receipt.answer.requestId, receipt.answer);
+            context.lint.request_ids.push(receipt.answer.requestId);
+            return true;
+          });
+          if (adopted) {
+            line(context.ports.stderr, 'Reusing recent passing lint for unchanged source.');
+            return { kind: 'answer', answer: receipt.answer };
+          }
+        } catch { /* A missing durable copy falls back to normal lint. */ }
+      }
+    }
+  }
+  line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD interpreter (lint, 0 AI calls)…`);
+  if (['check', 'lint-only'].includes(context.intent)) {
+    try {
+      lintReceiptTransaction(context, path => context.store.write(path, { pending: context.batch }));
+      context.lintReceiptOwner = true;
+    } catch {
+      context.lintReceiptOwner = false;
+      try {
+        const path = `${lintReceiptPath(context)}.unowned.${context.batch}`;
+        context.store.write(path, { batch: context.batch });
+        context.lintReceiptBlocker = path;
+      } catch { /* Unavailable optional state still permits fresh lint. */ }
+    }
+  }
+  try {
   for (;;) {
     if (context.interrupted) return stopped();
     if (context.ports.now() >= lintEnd) return busy();
@@ -1663,7 +1741,18 @@ async function runLint(context) {
       saveBatch(context);
       return { kind: 'pending', answer, note };
     }
+    if (!lost && answer) rememberRecentLint(context, answer);
     return lost || !answer ? { kind: 'unknown' } : { kind: 'answer', answer };
+  }
+  } finally {
+    if (context.lintReceiptBlocker) {
+      try {
+        lintReceiptTransaction(context, path => {
+          context.store.write(path, null);
+          unlinkSync(context.lintReceiptBlocker);
+        });
+      } catch { /* Retain the blocker if cleanup cannot establish ownership. */ }
+    }
   }
 }
 
@@ -1808,6 +1897,10 @@ function printResult(context, rows, extra = {}) {
     ? Object.fromEntries(Object.entries(context.coverage).filter(([key])=>key !== 'runtime')) : context.coverage;
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage, rows, exitCode, summaryLine: context.noFailed ? 'No failed Stories. 0 AI calls.' : summaryLine(rows),
     warnings: [...new Set([...warnings, ...(context.unmatched ?? [])]), ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
+  if (context.intent === 'lint-only') {
+    const id = context.lint?.request_ids?.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
+    summary.report_url = sameJob(answer, id, 'lint') ? validLink(cleanText(answer.report_url, context.secrets), context.origin, 'report') : null;
+  }
   if (context.checkPlan) {
     summary.check_plan = context.checkPlan;
     summary.check_scope = checkPlanResults(context.checkPlan, rows);
@@ -1821,6 +1914,7 @@ function printResult(context, rows, extra = {}) {
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
   else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, coverage: context.coverage, warnings, details: context.details, timeoutMin: context.timeoutMin,
     now: ports.now(), noFailed: context.noFailed, interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
+  if (!context.json && summary.report_url) line(ports.stdout, `Report: ${summary.report_url}`);
   if (!context.json) for (const value of checkPlanResultLines(summary.check_scope)) line(ports.stdout, scrub(value));
   // At the time limit the jobs keep running on the server.
   if (exitCode === 3 && context.batch) line(ports.stderr, context.timedOut ? `Still running. Read the results later with: pdd test --read ${context.batch}`
@@ -2078,7 +2172,8 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   const summary = `Lint: ${passing} of ${rows.length} tests pass.${broken ? ` ${broken} tests could not run.` : ''}${omitted ? ` ${omitted} native-only tests omitted.` : ''}${unchecked ? ` ${unchecked} criteria not checked. The Story is not a full pass.` : ''} 0 AI calls. No checks were sent.`;
   const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
-  const result = { batch, repo: root, exit_code: exitCode, lint_state: resultOverall(rows).state, ...resultOverall(rows), summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
+  const reportUrl = validLink(cleanText(answer?.report_url, context.secrets), context.origin, 'report');
+  const result = { batch, repo: root, exit_code: exitCode, lint_state: resultOverall(rows).state, ...resultOverall(rows), report_url: reportUrl, summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
     rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only,note:row.note} : {}), ...resultOutcome(row), refusals: row.refusals, ...(row.unsent?{unsent:true}:{}), ...(row.not_checked?.length?{not_checked:row.not_checked}:{}), call_preflight: row.call_preflight ?? null, binding_plan: row.binding_plan, ...(row.binding_plan?{binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)}:{}), compatibility: row.compatibility, client_advice: row.client_advice })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
   result.call_preflight_context = answer?.result?.call_preflight_context ?? answer?.result?.report?.lint?.call_preflight_context ?? null;
   result.call_preflight_requested_cap = context.lint?.selected_cap ?? null;
@@ -2103,6 +2198,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   for (const row of rows) out.push(describeCallPreflight({ test: row.test, preflight: row.call_preflight ?? null,
     context: result.call_preflight_context, sourceSha256: context.capture?.sha256, requestedCap: result.call_preflight_requested_cap }).text);
   if (typeof capabilityCoverage === 'boolean') out.push(`Capability inventory complete: ${capabilityCoverage}.`);
+  if (reportUrl) out.push(`Report: ${reportUrl}`);
   out.push(summary, coverageText(context.coverage), ...warnings);
   ports.stdout.write(`${out.join('\n')}\n`);
   return exitCode;

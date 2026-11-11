@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
-import { PLACE, fakeRuntime, filesUnder, harbor, portsFor } from './runtime-fake.mjs';
+import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root } from './runtime-fake.mjs';
 
 const START = Date.parse('2026-10-27T16:27:47Z');
 async function invoke(setup, fake, options = {}, words = ['place-order'], extra = {}) {
@@ -128,6 +130,75 @@ test('capacity engine changes prevent reuse of an older lint build', async t => 
   assert.deepEqual(commands(fake), ['lint', 'lint', 'check']);
 });
 
+test('a newer explicit lint refusal invalidates an earlier pass of the same source', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command !== 'lint' || f.posts.length !== 2) return f.normal(entry);
+    const answer = f.lint(entry.request.requestId);
+    answer.state = 'refused';
+    answer.result.report.lint.tests = [{ path: 'tests/place-order.json', verdict: 'refused' }];
+    return { status: 200, json: answer };
+  });
+  assert.equal((await invoke(setup, fake, { '--lint': true })).code, 0);
+  assert.notEqual((await invoke(setup, fake, { '--lint': true })).code, 0);
+  assert.equal((await invoke(setup, fake)).code, 0);
+  assert.deepEqual(commands(fake), ['lint', 'lint', 'lint', 'check']);
+});
+
+test('an older in-flight lint pass cannot replace a newer refusal', async t => {
+  const setup = harbor(t);
+  let entered, release;
+  const started = new Promise(done => { entered = done; });
+  const held = new Promise(done => { release = done; });
+  const fake = await fakeRuntime(t, async (entry, f) => {
+    if (entry.command === 'lint' && f.posts.length === 1) { entered(); await held; }
+    else if (entry.command === 'lint' && f.posts.length === 2) {
+      const answer = f.lint(entry.request.requestId); answer.state = 'refused';
+      answer.result.report.lint.tests = [{ path: 'tests/place-order.json', verdict: 'refused' }];
+      return { status: 200, json: answer };
+    }
+    return f.normal(entry);
+  });
+  const older = invoke(setup, fake, { '--lint': true });
+  try {
+    await started;
+    assert.notEqual((await invoke(setup, fake, { '--lint': true })).code, 0);
+  } finally { release(); }
+  assert.equal((await older).code, 0);
+  assert.equal((await invoke(setup, fake)).code, 0);
+  assert.deepEqual(commands(fake), ['lint', 'lint', 'lint', 'check']);
+});
+
+test('a pending standalone lint retains its report link in JSON and saved reads', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => ({ status: 200,
+    json: f.job(entry.request?.requestId ?? entry.url.split('/').at(-1), 'lint', 'running') }));
+  const first = await invoke(setup, fake, { '--lint': true, '--timeout': 1 });
+  assert.equal(first.code, 3);
+  const link = fake.job(fake.posts[0].request.requestId, 'lint', 'running').report_url;
+  assert.equal(first.json.report_url, link);
+  assert.equal((await invoke(setup, fake, { '--read': true, '--timeout': 1 }, [first.json.batch])).json.report_url, link);
+  assert.deepEqual(commands(fake), ['lint']);
+});
+
+test('transient receipt lock contention cannot preserve a pass across a newer refusal', async t => {
+  const setup = harbor(t);
+  let lock;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command === 'lint' && f.posts.length === 2) {
+      unlinkSync(lock);
+      const answer = f.lint(entry.request.requestId); answer.state = 'refused';
+      answer.result.report.lint.tests = [{ path: 'tests/place-order.json', verdict: 'refused' }];
+      return { status: 200, json: answer };
+    }
+    return f.normal(entry);
+  });
+  await invoke(setup, fake, { '--lint': true });
+  lock = `${receiptPath(setup)}.lock`; writeFileSync(lock, 'another metadata transaction');
+  assert.notEqual((await invoke(setup, fake, { '--lint': true })).code, 0);
+  assert.equal((await invoke(setup, fake)).code, 0);
+  assert.deepEqual(commands(fake), ['lint', 'lint', 'lint', 'check']);
+});
+
 test('unsafe lint report links are null and valid links are printed in text', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
     const reply = f.normal(entry); reply.json.report_url = 'https://elsewhere.example/r/link'; return reply;
@@ -137,4 +208,32 @@ test('unsafe lint report links are null and valid links are printed in text', as
   const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: normal.origin });
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true } }, ports), 0);
   assert.match(ports.stdout.text, /^Report: http:\/\/127\.0\.0\.1:\d+\/r\/[a-f0-9]+$/m);
+});
+
+test('a lint report link that echoes the account token is never printed', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    const reply = f.normal(entry); reply.json.report_url = `${f.origin}/r/${TOKEN}`; return reply;
+  });
+  const result = await invoke(setup, fake, { '--lint': true });
+  assert.equal(JSON.stringify(result).includes(TOKEN), false);
+  assert.equal(result.json.report_url, null);
+});
+
+test('the documented one-call shell line fills draft hashes, preflights and checks once', async t => {
+  const setup = harbor(t, repo => {
+    const path = join(repo, PLACE);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"status": "approved"', '"status": "draft"').replace(/"prose_sha256": "[a-f0-9]+"/, '"prose_sha256": ""'));
+  });
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const bin = join(setup.sandbox, 'bin'); mkdirSync(bin);
+  const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+  writeFileSync(join(bin, 'pdd'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(join(root, 'bin/pdd.mjs'))} "$@"\n`, { mode: 0o700 });
+  writeFileSync(join(bin, 'gh'), `#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' ${quote(TOKEN)}; else printf 'octo 4242\\n'; fi\n`, { mode: 0o700 });
+  const result = await promisify(execFile)('bash', ['-c', 'pdd test --fill-hash && pdd test --files place-order && pdd test place-order'], {
+    cwd: setup.repo, env: { ...process.env, HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:${process.env.PATH}`, CI: '1' }, timeout: 15_000,
+  });
+  assert.match(result.stdout, /Filled prose_sha256/);
+  assert.match(result.stdout, /files, .*bytes/);
+  assert.match(result.stdout, /Prompt tests \(place-order\) \(DRAFT\): ✓/);
+  assert.deepEqual(commands(fake), ['lint', 'check']);
 });

@@ -33,11 +33,24 @@ the ten-minute window; preserve ordinary check admission at the server.
 Copy the original answer and request ID into the new batch for saved reads and
 restart recovery; do not POST lint again, fabricate a receipt or refresh its
 original received time on reuse. Print `Reusing recent passing lint for unchanged source.`
-on stderr. A newly received passing lint can replace the saved receipt only
+on stderr. Before a fresh lint request, discard the prior optional receipt so a newer
+refusal or unknown cannot leave an older pass reusable. Serialize short receipt
+metadata operations with an exclusive local file lock, never held over network
+or waits. Each fresh lint publishes its batch ownership marker first; only
+that marker's owner can replace it with a passing answer. An older in-flight
+lint cannot supersede a newer attempt. After a capacity wait, recheck the same
+saved candidate under this transaction before adopting it. Lock contention,
+an abandoned lock or any bookkeeping failure falls back to fresh lint without
+blocking or repairing the lock. When a fresh attempt cannot acquire ownership,
+write a separate per-batch blocker before dispatch; any blocker prevents reuse.
+At that attempt's exit, clear the optional receipt and remove only its blocker
+under the metadata lock. If cleanup cannot lock, retain the blocker and run
+fresh lint on later calls. Never remove another attempt's blocker. A newly received passing lint can replace the saved receipt only
 when all selected rows have their own pass and complete evidence. Store no token.
 
-Standalone lint JSON, including saved reads, adds `report_url`: the server's
-report_url validated by the existing same-origin report-link rules, or null
+Standalone lint JSON, including saved reads and pending/unknown lint results, adds `report_url`: the server's
+report_url sanitized against known secrets and validated by the existing
+same-origin report-link rules, or null
 when absent or unsafe. Save the same field in summary.json and print a supplied
 valid link as `Report: <url>` in text. Local lint has no server report link.
 

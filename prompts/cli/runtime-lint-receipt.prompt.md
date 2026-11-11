@@ -10,7 +10,7 @@ caller must validate the actual answer and per-test admission before reuse.
 origin), login, user_id (GitHub numeric identity), source_sha256 (64 lower-case
 hex characters), tests (nonempty sorted unique repository-relative test paths),
 version (package version), selected_cap (null or integer 1 through 1000).
-All path/name/version strings must be nonblank; user_id is a nonblank string.
+All path/name/version strings must be nonblank; user_id is a nonblank string of decimal digits.
 A receipt has schema_version `pdd.lint-receipt.v1`, scope in that shape,
 received_at (finite epoch milliseconds) and engine_sha (nonblank string other
 than case-insensitive `unknown`), plus an answer retained by the caller.
