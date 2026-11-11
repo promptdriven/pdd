@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 5c6aa8ed50bee8d8a4d0f4dc3477b6b0a6eb254714268d42e2b39581d5e725f1).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 7584a927021f8c2d510988792c5a700615c152bd95e6079cd5d001b24ed4e18a).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -11,6 +11,7 @@ import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
 import {runtimeOrigin, checkRuntimeHealth} from './runtime-client.mjs';
 import {ensurePaneBudget} from './workflow-chat.mjs';
+import {packageInstallDiagnostic} from './path-diagnostic.mjs';
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
@@ -102,6 +103,8 @@ export async function runAutopilotDoctor(input, ports = {}) {
   // Only accept a version-shaped value, never arbitrary stdout from another CLI.
   const version = String(pathVersion?.stdout ?? '').trim().match(/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/)?.[0] ?? 'unknown';
   add('path',correct?'pass':'fail',selected?`${selected} (${version}); ${correct?'this install has Autopilot':'PATH must select this install with Autopilot'}`:'pdd missing on PATH',correct?'pdd autopilot doctor':`npm install -g ${quote(input.packageRoot)} && export PATH="$(npm prefix -g)/bin:$PATH" && hash -r && ${retry}`);
+  const update = packageInstallDiagnostic({packageRoot:input.packageRoot}, {files});
+  if (update.kind !== 'none') add('package-update','warn',update.detail,update.fix);
   const parts = node.split('.').map(Number);
   add('node',parts[0]>22 || parts[0]===22 && (parts[1]>20 || parts[1]===20 && parts[2]>=0)?'pass':'fail',`Node ${node}; requires 22.20.0 or newer`,'nvm install 22.20.0 && nvm use 22.20.0');
   add('git',ready(await run('git',['--version']))?'pass':'fail','Git installation',install('git'));

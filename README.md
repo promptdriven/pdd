@@ -19,6 +19,12 @@ PDD is the `pdd` command and a set of skills for your agent. Your agent writes t
 
 You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, you need a supported installed agent ready to use. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
+If your global install uses the name `pdd`, remove it before installing the scoped package so both packages cannot own the command:
+
+```sh
+npm uninstall -g pdd && npm install -g github:promptdriven/pdd
+```
+
 ```sh
 npm install -g github:promptdriven/pdd
 npx skills add promptdriven/pdd -g
@@ -32,10 +38,12 @@ pdd setup
 3. `pdd --version` must print `0.1.28`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
 
-To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
+To update pdd, run `npm install -g github:promptdriven/pdd`, then `pdd setup` again and start a new agent chat. Run `npx skills add promptdriven/pdd -g` again to update your skills. After `npx skills add`, `npx skills update -g` also updates the skills.
 
 > [!IMPORTANT]
-> Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different package with the name `pdd`.
+> Do not run `npm install -g pdd` or use `npm update -g` to update pdd. The npm registry has an unrelated package named `pdd`. Our package name is `@promptdriven/pdd`, and the command stays `pdd`. Until the scoped package is published to npm, install and update from GitHub with the command above.
+
+`pdd setup` and `pdd autopilot doctor` print this migration command when they detect the old package name. They also show the safe update command for the GitHub distribution.
 
 ## Autopilot on your own repository
 
