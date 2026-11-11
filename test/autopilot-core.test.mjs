@@ -338,18 +338,18 @@ test('status shows jobs, slots and the last END causes', async t => {
   assert.match(text, /#18 released .*no result/i);
 });
 
-test('doctor does not require Herdr when the engine is core', async () => {
+test('doctor has no Herdr check and makes no Herdr call', async () => {
   const { runAutopilotDoctor } = await import('../src/autopilot-doctor.mjs');
   const { doctorFixture } = await import('./helpers/doctor-fixture.mjs');
-  const f = doctorFixture();
-  f.paths.set('/project/pdd.json', JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core' } }));
-  const run = f.ports.run;
-  f.ports.run = (file, args, options) => file === 'herdr' ? assert.fail('Herdr must not be called') : run(file, args, options);
-  const result = await runAutopilotDoctor(f.input, f.ports);
-  assert.match(result.message, /PASS herdr: Not needed: autopilot\.engine is core/);
-  assert.doesNotMatch(result.message, /herdr-room/);
-  const full = doctorFixture(), shown = await runAutopilotDoctor(full.input, full.ports);
-  assert.match(shown.message, /PASS herdr: Herdr installation/); assert.match(shown.message, /herdr-room/);
+  for (const engine of ['core', 'full', undefined]) {
+    const f = doctorFixture();
+    f.paths.set('/project/pdd.json', JSON.stringify({ autopilot: { mode: 'auto', trust: [], ...(engine ? { engine } : {}) } }));
+    const run = f.ports.run, programs = [];
+    f.ports.run = (file, args, options) => { programs.push(file); return run(file, args, options); };
+    const result = await runAutopilotDoctor({ ...f.input, engine }, f.ports);
+    assert.doesNotMatch(result.message, /herdr/i);
+    assert.ok(!programs.includes('herdr'), 'Herdr must not be called');
+  }
 });
 
 test('launcher: engine core ticks without Herdr or a coordinator; status and report read local files', async t => {
@@ -358,8 +358,8 @@ test('launcher: engine core ticks without Herdr or a coordinator; status and rep
   const { spawnSync } = await import('node:child_process');
   const { mkdirSync } = await import('node:fs');
   const w = await coreWorld(t);
-  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test' } }));
-  w.issue(17);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test', label: 'pdd:autopilot' } }));
+  w.issue(17, { labels: ['pdd:autopilot'] });
   const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   mkdirSync(stateRoot, { recursive: true });
@@ -860,7 +860,7 @@ test('R14 a machine engine and label saved by start win over pdd.json; status na
   assert.match(result.message, /Autopilot core: 1 started/, 'the machine engine core wins over pdd.json (full)');
   assert.ok(w.job(18, 'build') && !w.job(17), 'the machine label wins over pdd.json (no label)');
   const status = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env }, ports);
-  assert.match(status.message, /engine core \(this machine: pdd autopilot start --engine core\)/);
+  assert.match(status.message, /engine core, mode auto/);
   assert.match(status.message, /only issues with pdd:autopilot \(this machine\)/);
 });
 
@@ -871,7 +871,7 @@ test('F2 start --mode saves a machine mode for the core engine: it wins over pdd
   const w = await coreWorld(t);
   const config = JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test' } });
   writeFileSync(join(w.cwd, 'pdd.json'), config);
-  w.issue(17);
+  w.issue(17, { labels: ['pdd:autopilot'] });
   const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   mkdirSync(stateRoot, { recursive: true });
@@ -886,12 +886,13 @@ test('F2 start --mode saves a machine mode for the core engine: it wins over pdd
     machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const invoke = extra => runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [], ...extra }, ports);
   assert.equal((await invoke({ mode: 'loud' })).exitCode, 2);
+  // A start with no opt-in label asks for one before it saves the mode.
   const refused = await invoke({ mode: 'observe' });
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, /--mode works with the core engine only/);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /opt-in label/);
   assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).mode, undefined, 'nothing saved');
   // With the core engine: the saved mode wins over pdd.json (auto), and status says so.
   const saved = JSON.parse(readFileSync(stateFile, 'utf8'));
-  writeFileSync(stateFile, JSON.stringify({ ...saved, engine: 'core', mode: 'observe' }));
+  writeFileSync(stateFile, JSON.stringify({ ...saved, engine: 'core', mode: 'observe', label: 'pdd:autopilot' }));
   const { tickAutopilot } = await import('../src/autopilot-launcher.mjs');
   const tick = await tickAutopilot(stateFile, ports);
   assert.match(tick.message, /observe: no merge/);
@@ -2435,11 +2436,11 @@ test('S1 a machine report mode saved by start --report wins over pdd.json in the
   const { spawnSync } = await import('node:child_process');
   const w = await coreWorld(t);
   writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test', report: 'file' } }));
-  w.issue(17);
+  w.issue(17, { labels: ['pdd:autopilot'] });
   const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   mkdirSync(stateRoot, { recursive: true });
-  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core', report: 'draft',
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core', report: 'draft', label: 'pdd:autopilot',
     agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
   const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
     run: async (command, args, options = {}) => {

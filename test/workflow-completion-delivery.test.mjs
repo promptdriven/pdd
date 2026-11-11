@@ -182,46 +182,6 @@ function packetNumbers(text) {
 }
 
 
-test('worker completion waits for coordinator then delivers ready work once', async t => {
-  const f = await fixture(t, {name:'bug', agent:'codex'});
-  const h = await launcherHarness(f);
-  const started = await runAutopilotLauncher(h.input, h.ports);
-  assert.equal(started.exitCode, 0, started.message);
-  assert.ok(h.packets.some(packet => packetNumbers(packet).includes(17)), 'initial coordinator packet includes issue 17');
-  console.log('Initial actual packet issue numbers:', h.packets.map(packetNumbers));
-  const state = JSON.parse(readFileSync(h.stateFile, 'utf8'));
-  const origin = {repository, coordinatorId:state.coordinatorId, machine:'machine-a', claim:{commentId:'11',labelEventId:'12'}};
-  const fixturePath=join(f.base,'reader.json'), logPath=join(f.base,'gh.log');
-  writeFileSync(fixturePath,JSON.stringify({labels:['pdd:working'],events:[{id:12,event:'labeled',label:{name:'pdd:working'},actor:{login:'example'}}],comments:[{id:11,user:{login:'example'},body:JSON.stringify({...origin, labelEventId:'12'})}]}));
-  const {execFile: callback}=await import('node:child_process'); const {promisify}=await import('node:util'); const exec=promisify(callback);
-  const original=f.ports.execFile;
-  const execFile=(file,args,opts)=>file==='gh' && args[0]==='api' && args[1]==='--include' ? exec(process.execPath,[join(packageRoot,'test/helpers/continuation-fake-gh.mjs'),...args],{...opts,env:{...process.env,READER_FIXTURE_FILE:fixturePath,READER_GH_LOG:logPath}}) : original(file,args,opts);
-  let workerDone, coordinatorIdle, observation;
-  const workerWait=new Promise(resolve=>workerDone=resolve), coordinatorWait=new Promise(resolve=>coordinatorIdle=resolve);
-  const wait=(_session,_pane,until)=>until.includes('done') && !until.includes('idle') ? workerWait : coordinatorWait;
-  const ports={...f.ports,execFile,autopilotStateRoot:h.stateRoot,
-    checkDependencyStart:(args, readPorts)=>{ const snapshot=structuredClone(h.graph); const subject=snapshot.issues.find(row=>row.key===issueKey(17)); subject.execution='running'; subject.holds=['Claimed']; subject.executionClaim={coordinatorId:origin.coordinatorId,...origin.claim}; const claim={issue:issueKey(17),active:true,owner:origin.coordinatorId,...origin,...origin.claim}; return checkDependencyStart(args,{...readPorts,settings:{read:async()=>({mode:'auto',activation:state.activatedAt})},snapshots:{read:async()=>({snapshot})},owners:{read:async()=>reply({localOwner:origin.coordinatorId,claims:[claim],runs:[],runsKnown:true})}}); },
-    armWorkerCompletion:(identity, options)=>armWorkerCompletion(identity,{...options,spawn:(_cmd,args)=>{observation=waitForWorkerCompletion(JSON.parse(args[1]),{env:options.env,wait,yieldCapacity:(args,observerPorts)=>yieldAutomaticCapacity(args,{...ports,...h.ports,...observerPorts,execFile,herdr:args=>args[2]===state.paneId ? h.ports.herdr(args) : f.herdr.herdr(args)})}); return {on(){},unref(){}};}})};
-  const result=await startRun({name:'bug',issue:'17',agent:'codex',cwd:f.source,packageRoot,coordinator:{...origin,activation:state.activatedAt}},ports);
-  assert.equal(result.exitCode,0,result.message);
-  assert.ok(observation, 'automatic start armed the completion observer');
-  const run=f.record(), chat=run.chats.find(c=>c.area===run.areas[run.area].name);
-  for (const step of ['reproduce','prompt-story']) {f.tick(); const done=await stepDone({step,summary:step,cwd:run.root},{...ports,isTTY:false,env:{...ports.env,PDD_AGENT_SESSION:'1'}}); assert.equal(done.exitCode,0,done.message);}
-  const all=[{...h.oldIssue,labels:[{name:'pdd:working'}]},h.newIssue];
-  const comments=Object.fromEntries(all.map((issue,index)=>[issue.number,[reviewComment(issue,all,String(601+index))]]));
-  h.graph=(await readDependencySnapshot({cwd:f.source,repository},graphPorts({issues:all,comments}))).snapshot;
-  h.issueRows=all.map(issue=>({...issue,assignees:[],author_association:'OWNER'}));
-  f.herdr.paneOf(chat).agent.agent_status='done';
-  h.coordinatorStatus='working';
-  const prior=h.prompts.length; workerDone(); await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(h.prompts.length,prior);
-  h.coordinatorStatus='idle'; coordinatorIdle(); const delivered=await observation;
-  assert.equal(delivered?.exitCode,0,delivered?.message);
-  console.log("completion", delivered, "packet numbers", h.packets.map(packetNumbers));
-  assert.equal(h.prompts.length,prior+1);
-  assert.ok(packetNumbers(h.packets.at(-1)).includes(102));
-});
-
 test('automatic open resume and replacement arm their captured attempts', async t => {
   const {openRun} = await import('../src/workflow-runner.mjs');
   const {updateRun} = await import('../src/workflow-runs.mjs');

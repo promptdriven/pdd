@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: f30921c7014ae044228bcc2dce5d8d98bc9ee6ee7519417712d521d46d8a941e).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 6bc8899a294466088354dd35284f6170c7c6771565554836fea4d1184dda614f).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -107,14 +107,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           payload = Buffer.concat(chunks).toString('utf8');
         }
         const result = await module.runDependencyIntake(plan.local === 'dependencies-prepare' ? {command:'prepare',cwd,issue:plan.options['--issue']} : {command:'complete',cwd,stdin:payload},dependencyIntakePorts);
-        if (plan.local === 'dependencies-complete' && result.exitCode === 0) {
-          let state = 'unknown';
-          try { const launcher = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-            const wake = await launcher.requestAutopilotCompletion({cwd, env}, autopilotLauncherPorts);
-            if (['reconciled', 'inactive', 'busy', 'unknown'].includes(wake?.state)) state = wake.state;
-          } catch { /* Completion intake remains accepted even if the wake fails. */ }
-          if (state === 'busy' || state === 'unknown') line(stderr, 'Autopilot reconciliation was not confirmed.');
-        }
         (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
       } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
     }
@@ -126,10 +118,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch { line(stderr, 'Regression scan failed.'); return 1; }
     }
-    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
+    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {
@@ -344,7 +336,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         // Setup saves a first mode only in this checkout and never writes to GitHub, where the workers read it.
         const saved = savedAutopilot(context?.toplevel)?.mode;
         if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
-          line(stdout, `Setup saved the Autopilot mode only in this checkout. Autopilot workers read pdd.json on GitHub; to update it there, run pdd autopilot ${saved}.`);
+          line(stdout, `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot ${saved} to put the Autopilot mode on GitHub.`);
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });

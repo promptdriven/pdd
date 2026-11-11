@@ -913,7 +913,7 @@ test('E49 (T10) start --decisions ask|decide is saved per machine like --report:
   const w = await coreWorld(t);
   const config = JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test', decisions: 'decide' } });
   writeFileSync(join(w.cwd, 'pdd.json'), config);
-  w.issue(17);
+  w.issue(17, { labels: ['pdd:autopilot'] });
   const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   mkdirSync(stateRoot, { recursive: true });
@@ -929,11 +929,12 @@ test('E49 (T10) start --decisions ask|decide is saved per machine like --report:
   const invoke = extra => runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [], ...extra }, ports);
   const bad = await invoke({ decisions: 'maybe' });
   assert.equal(bad.exitCode, 2); assert.equal(bad.message, 'Use --decisions ask or --decisions decide.');
+  // A start with no opt-in label asks for one before it saves the decision mode.
   const refused = await invoke({ decisions: 'ask' });
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, /--decisions works with the core engine only/);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /opt-in label/);
   assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).decisions, undefined, 'nothing saved');
   const saved = JSON.parse(readFileSync(stateFile, 'utf8'));
-  writeFileSync(stateFile, JSON.stringify({ ...saved, engine: 'core', decisions: 'ask' }));
+  writeFileSync(stateFile, JSON.stringify({ ...saved, engine: 'core', decisions: 'ask', label: 'pdd:autopilot' }));
   await tickAutopilot(stateFile, ports);
   assert.match(w.job(17, 'build').input, /For a big choice, do not choose and open no PR/, 'the machine value wins over pdd.json (decide)');
   const status = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env }, ports);

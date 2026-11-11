@@ -149,7 +149,7 @@ The agents that PDD starts always get the full path of this pdd. They are not af
 
 ## 4. The PDD skills
 
-PDD is nine skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
+PDD is seven skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
 
 | Skill | What it is |
 |---|---|
@@ -159,9 +159,7 @@ PDD is nine skills. A skill is a folder of plain Markdown that your agent reads 
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
-| `pdd-autopilot` | With Autopilot on (`autopilot.mode` is `observe` or `auto` in `pdd.json`), pick ready issues, claim them and run each one |
-| `pdd-check` | A fresh checker's verdict on a PR at its head |
-| `pdd-merge` | Merge a PR that a fresh checker passed, or write "would merge" in `observe` |
+| `pdd-graph` | Read or open the saved issue dependency graph, and say why an issue waits |
 
 Where the skills go:
 
@@ -173,7 +171,7 @@ Where the skills go:
 
 `pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
 
-Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
+Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It also removes a copy with this marker of `pdd-autopilot`, `pdd-check` or `pdd-merge`, because pdd does not ship these skills. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
 `npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.28`.
 
@@ -355,7 +353,7 @@ For all workflows:
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
 - The Details section of the PR has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. Code PRs show a `Tests vs base:` block with removed cases, changed assertions and new skips before any `Prompt tests` lines and report links. Report links expire after 7 days.
 - Agents run tests; `pdd workflow prove` also runs its supplied test command on base and head. Read the test output in the PR before you merge.
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 
 ### 6.8 Check a run
 
@@ -556,16 +554,16 @@ pdd setup
 Uninstall the skills that `npx skills` installed:
 
 ```sh
-npx skills remove pdd-prompting pdd-setup pdd-feature pdd-bug pdd-small-change pdd-product pdd-autopilot pdd-check pdd-merge pdd-graph      # add -g for the global ones
+npx skills remove pdd-prompting pdd-setup pdd-feature pdd-bug pdd-small-change pdd-product pdd-graph      # add -g for the global ones
 ```
 
 Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
 
 ```sh
 npm uninstall -g pdd
-rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change,product,autopilot,check,merge,graph}
-rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change,product,autopilot,check,merge,graph}
-# If you set CLAUDE_CONFIG_DIR, also remove the ten pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
+rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change,product,graph}
+rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change,product,graph}
+# If you set CLAUDE_CONFIG_DIR, also remove the seven pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
 rm -rf ~/.local/state/pdd
 rm -rf ~/.pdd
 ```

@@ -230,7 +230,7 @@ If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` f
 
 The project is the top folder of the Git repo of your current folder. Put your copy where your agent reads it too, or in both folders of a level.
 
-`npx skills add promptdriven/pdd` installs the ten PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`) for Claude Code. After an update of the pdd command, `pdd setup` replaces an older copy that has its `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
+`npx skills add promptdriven/pdd` installs the seven PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`) for Claude Code. After an update of the pdd command, `pdd setup` replaces an older copy that has its `.pdd-skill.json` marker. It also removes a copy with this marker of `pdd-autopilot`, `pdd-check` or `pdd-merge`, because pdd does not ship these skills. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
 
 Give your workflow a new name. A project copy with the same name as a PDD skill (for example `pdd-bug`) works only in Codex:
 
@@ -303,7 +303,7 @@ pdd-mybug/
 
 Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent records only the person's actual approval and merges only by the explicit-request rules above. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
 
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 
 Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
 

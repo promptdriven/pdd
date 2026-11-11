@@ -14,7 +14,6 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 2. prompt-pr: check, try? → approve, then gate: pr, then ask
 3. code: build, verify, formal, review → gate: pr
 
-- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
 - Main chat coordinates; no code or checks.
 - Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Briefs: "the run's main chat"; actual actors/root paths. Wait one long time-out; no small follow-ups. Read §11 once; pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; no code, tests or prompts this run.

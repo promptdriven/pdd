@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: ed93f30904dd70ca6da2d733c2528ac090e4b0847eff439a6a6706509b7b40da).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 791177ff4a1f2df3afeebd08a04d0db564cf6f138a99ccf094e5b6f00761f415).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -937,6 +937,8 @@ async function intake(ctx, rows) {
   let free = settings.runs - busy, tries = 0;
   if (free <= 0) return null;
   if (!['codex', 'claude'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex or Claude agent; run pdd autopilot start from a signed-in Codex or Claude';
+  // The launcher asks for an opt-in label: with none, no issue is claimed (a start without a label starts nothing).
+  if (settings.labelRequired && !settings.label) return 'intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with pdd autopilot add N';
   // The machine pause: no new job starts until it ends; then intake goes on as usual.
   const pausedText = () => { const m = ctx.machineState(); return m.pausedUntil ? `new jobs paused until ${new Date(m.pausedUntil).toISOString()} (${m.pausedHours} h): the agent ended ${STRIKES} or more jobs in a row with no result` : null; };
   if (pausedText()) return pausedText();
@@ -3323,8 +3325,8 @@ const runtimeWords = job => runtimeWaiting(job) ? `; Runtime: waits for the inte
 export function coreStatus({ state, settings, sources = {}, guard = null }, ports) {
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), machine = readMachine(fs, ports.root, null, now);
   const busy = jobs.filter(holdsSlot).length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
-  const from = sources.engine === 'machine' ? 'this machine: pdd autopilot start --engine core' : 'pdd.json autopilot.engine';
-  const lines = [`Autopilot engine core (${from}), mode ${settings.mode}${sources.mode === 'machine' ? ' (this machine)' : ''}${settings.mode === 'observe' ? ' (every check, no merge)' : ''}: ${state.repo ?? 'repository unknown'} in ${state.cwd} · base ${state.baseBranch ?? 'unknown'} · agent ${state.agent?.kind ?? 'none'}`,
+  const from = sources.engine === 'machine' ? ' (this machine: pdd autopilot start --engine core)' : sources.engine === 'pdd.json' ? ' (pdd.json autopilot.engine)' : '';
+  const lines = [`Autopilot engine core${from}, mode ${settings.mode}${sources.mode === 'machine' ? ' (this machine)' : ''}${settings.mode === 'observe' ? ' (every check, no merge)' : ''}: ${state.repo ?? 'repository unknown'} in ${state.cwd} · base ${state.baseBranch ?? 'unknown'} · agent ${state.agent?.kind ?? 'none'}`,
     `Jobs: ${busy} of ${settings.runs} slots busy; no-progress limit ${settings.quietMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${sources.report === 'machine' ? ' (this machine)' : ''}; decisions ${settings.decisions ?? 'decide'}${sources.decisions === 'machine' ? ' (this machine)' : ''}${settings.label ? `; only issues with ${settings.label}${sources.label === 'machine' ? ' (this machine)' : sources.label === 'pdd.json' ? ' (pdd.json)' : ''}` : ''}`];
   if (named(guard)) lines.push(guard);
   lines.push(machine.pausedUntil ? `New jobs paused until ${new Date(machine.pausedUntil).toISOString()} (${machine.pausedHours} h): the agent ended ${machine.streak} jobs in a row with no result; then intake goes on.`
