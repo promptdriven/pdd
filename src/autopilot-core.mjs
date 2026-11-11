@@ -1546,8 +1546,10 @@ function evidenceSummary(ctx, job) {
     `- Record: ${basename(evidencePath(ctx, job))} on this machine`].join('\n');
 }
 const EVIDENCE_START = '<!-- pdd:autopilot-core:evidence:start -->', EVIDENCE_END = '<!-- pdd:autopilot-core:evidence:end -->';
-async function writeEvidenceBlock(ctx, job, pr) {
+async function writeEvidenceBlock(ctx, job) {
   const block = `${EVIDENCE_START}\n### Autopilot evidence for head ${short(job.head)}\n\n${ctx.publicBody(evidenceSummary(ctx, job))}\n${EVIDENCE_END}`;
+  // A fresh read: the review may have written the follow-ups section in this tick.
+  const pr = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${job.pr}`);
   const body = String(pr?.body ?? ''), at = body.indexOf(EVIDENCE_START), end = body.indexOf(EVIDENCE_END);
   const followUps = body.indexOf('Follow-ups from the Autopilot review');
   const next = at >= 0 && end > at ? `${body.slice(0, at)}${block}${body.slice(end + EVIDENCE_END.length)}`
@@ -1717,7 +1719,7 @@ async function mergeCheck(ctx, job) {
       ...(drafts.length ? [`- Prompts that need a person's approval before a merge (strict_approvals): ${drafts.join('; ')}`] : []), '',
       `<!-- pdd:autopilot-core:${observe ? 'would-merge' : 'merge'}:${job.head} -->`].join('\n'));
     job.mergeNote = job.head; ctx.saveJob(job);
-    await writeEvidenceBlock(ctx, job, pr).catch(error => ctx.warn(`Autopilot core could not write the evidence block of PR #${job.pr}: ${error.message}`));
+    await writeEvidenceBlock(ctx, job).catch(error => ctx.warn(`Autopilot core could not write the evidence block of PR #${job.pr}: ${error.message}`));
   }
   if (observe) return wouldMerge(ctx, job, pr);
   if (!await laneStillMine(ctx, job)) return;
