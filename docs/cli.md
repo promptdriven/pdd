@@ -654,8 +654,8 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
 | `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
-| `pdd test --fill-hash` | Fill the hash of draft runtime interfaces. No network |
-| `pdd test --fill-hash --compact` | Fill draft hashes and remove interface JSON formatting whitespace. Preserve values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
+| `pdd test --fill-hash` | Fill draft interface hashes and remove redundant `"kind": "full"` from drafts. Approved prompts stay unchanged. No network |
+| `pdd test --fill-hash --compact` | Fill draft hashes and remove interface JSON formatting whitespace. Remove redundant `"kind": "full"` from drafts; preserve other values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
 | `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
 | `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
@@ -1234,7 +1234,10 @@ Automatic runs use `autopilot.base` in `pdd.json` when set; otherwise they use t
 
 ## Runtime interface kinds and coverage
 
-A block declares `kind: full`, `partial` or `native-only`. An absent kind means full.
+Omit `kind` for a full interface; explicit kinds are `partial` or `native-only`.
+A draft with `"kind": "full"` is refused locally at `/kind`. `pdd test --fill-hash`
+reports and removes that redundant field from drafts, including current drafts.
+Approved prompts stay unchanged.
 Native-only requires a reason that names an effect the bound ports cannot fake
 (RUNBOOK §21). A checker reviews the reason. Approval records it. Checks show
 `not run: <reason>`, with no passing result. Other selected tests can run.

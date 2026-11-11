@@ -9,4 +9,4 @@
 - Test the issue input. Use requirement-based expected results, not code; write cases only for the issue's criteria.
 - Put a precise rule (money, limits, permissions, state order) in the Story under `## Rules to check`, with its forbidden result.
 - PR 1 holds only the prompt, the Story and its PDD test files, under about 200 lines for a small change.
-- Draft `pdd interface draft PROMPT`; show lint/coverage. Gaps: `--refresh --contract FILE`; add: `--extend --contract FILE`.
+- For every new prompt, run `pdd interface draft PROMPT` (required; do not handwrite its block); show lint/coverage. Gaps: `--refresh --contract FILE`; add: `--extend --contract FILE`.

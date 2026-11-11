@@ -8,4 +8,4 @@
 - A page or a screen gets an app map, so the person can try it on the Screen. A page with no mockup gets a `render` operation that returns `{html}` and the facts it shows, checked with `count` or `equals` (such as `/emptyMessage`). It is never "browser-only, no PDD test".
 - Write cases only for the issue's criteria. Put money, limit, permission or state rules under `## Rules to check`; state the forbidden result.
 - PR 1 holds only the prompt, the Story and its PDD test files, under about 200 lines for a small change.
-- Draft `pdd interface draft PROMPT`; show lint/coverage. Gaps: `--refresh --contract FILE`; add: `--extend --contract FILE`.
+- For every new prompt, run `pdd interface draft PROMPT` (required; do not handwrite its block); show lint/coverage. Gaps: `--refresh --contract FILE`; add: `--extend --contract FILE`.
