@@ -26,7 +26,7 @@ import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, project
 import { lintSvgLayouts } from './svg-layout.mjs';
 import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
 
-const localInterfaceProblem = problem => ['interface-missing','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
+const localInterfaceProblem = problem => ['interface-missing','interface-kind-invalid','interface-kind-explicit-full','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -1847,7 +1847,12 @@ function runFiles(cwd, words, options, ports) {
   const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   const rows = selected.map(test => ({test:test.path,story:test.story,state:'ready',refusals:[],
     ...(discoveryRefusal(test) ? {state:'refused',unsent:true,refusals:[discoveryRefusal(test)]} : {})}));
-  const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
+  const checkedRows = preflight({root,found,selected}).rows;
+  const nativeRows = new Map(checkedRows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
+  for (const row of rows) {
+    const refusals = checkedRows.find(checked => checked.test === row.test)?.refusals.filter(problem => problem.code === 'interface-kind-explicit-full') ?? [];
+    if (refusals.length) Object.assign(row, {state:'refused',unsent:true,refusals:[...row.refusals,...refusals]});
+  }
   for (const row of rows) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{native_only:native.native_only,unsent:true,state:native.refusals.length ? 'refused' : 'not_run',

@@ -533,6 +533,7 @@ function limitProblems(iface) {
 export function interfaceKindProblems(iface) {
   if (!isObject(iface)) return [{code:'invalid-interface',pointer:'',rule:'must be an object.'}];
   const kind = Object.hasOwn(iface, 'kind') ? iface.kind : 'full';
+  if (Object.hasOwn(iface, 'kind') && kind === 'full' && iface.status === 'draft') return [{code:'interface-kind-explicit-full',pointer:'/kind',rule:'must omit /kind for a full interface. Run pdd test --fill-hash to remove the redundant field from drafts.'}];
   if (!['full', 'partial', 'native-only'].includes(kind)) return [{code:'interface-kind-invalid',pointer:'/kind',rule:'must be full, partial or native-only.'}];
   if (kind === 'native-only' && (typeof iface.reason !== 'string' || !iface.reason.trim())) return [{code:'native-reason-missing',pointer:'/reason',rule:'must name the native effect that bound ports cannot fake (RUNBOOK §21).'}];
   return [];
@@ -986,7 +987,30 @@ function compactInterface(body) {
   return body.slice(0, start) + compacted + body.slice(end);
 }
 
-// --fill-hash: fill draft hashes; optionally compact safe draft interfaces.
+// Split only root object members, retaining authored token bytes. JSON has
+// already been parsed; quoted commas/braces and nested members stay opaque.
+function omitFullKind(body) {
+  const members = [];
+  let depth = 0, start, end;
+  for (const token of body.matchAll(/"(?:[^"\\]|\\.)*"|[{}[\],:]/g)) {
+    const char = token[0];
+    if (char === '{' || char === '[') {
+      if (depth === 0) start = token.index + 1;
+      depth++;
+    } else if (char === '}' || char === ']') {
+      depth--;
+      if (depth === 0) { members.push(body.slice(start, token.index)); end = token.index; break; }
+    } else if (char === ',' && depth === 1) {
+      members.push(body.slice(start, token.index)); start = token.index + 1;
+    }
+  }
+  const kept = members.filter(member => JSON.parse(member.match(/^\s*("(?:[^"\\]|\\.)*")\s*:/)[1]) !== 'kind');
+  // Keep the root's closing whitespace even if its final member was removed.
+  const trailing = kept.at(-1) === members.at(-1) ? '' : members.at(-1).match(/\s*$/)[0];
+  return body.slice(0, body.indexOf('{') + 1) + kept.join(',') + trailing + body.slice(end);
+}
+
+// --fill-hash: fill draft hashes, omit full kind; optionally compact drafts.
 export function fillHashes({ root, files = gitFiles(root), compact = false,workspace=loadRuntimeWorkspace({root}) }) {
   workspace=boundedWorkspace(root,workspace);
   const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
@@ -1028,6 +1052,14 @@ export function fillHashes({ root, files = gitFiles(root), compact = false,works
       try { same = changed !== null && isDeepStrictEqual(JSON.parse(changed), { ...value, prose_sha256: hash }); } catch { same = false; }
       if (!same) { result.refused.push({ path, message: `pdd could not fill "prose_sha256" in ${path}. Make it one string value, for example "prose_sha256": "".` }); continue; }
     }
+    const normalized = value.kind === 'full';
+    if (normalized) {
+      const expected = { ...value, prose_sha256: hash };
+      delete expected.kind;
+      const omitted = omitFullKind(changed);
+      if (!isDeepStrictEqual(JSON.parse(omitted), expected)) { result.refused.push({ path, message: `pdd could not remove /kind from ${path} safely.` }); continue; }
+      changed = omitted;
+    }
     const compacted = compact === true ? compactInterface(changed) : changed;
     const whitespaceChanged = compacted !== changed;
     changed = compacted;
@@ -1040,6 +1072,7 @@ export function fillHashes({ root, files = gitFiles(root), compact = false,works
       writeFileSync(join(root, path), next);
     }
     (current ? result.current : result.filled).push({ path });
+    if (normalized) result.warnings.push({ path, message: `${path} /kind: removed redundant "kind": "full"; full interfaces omit kind.` });
     if (whitespaceChanged) result.compacted.push({ path });
   }
   return result;
