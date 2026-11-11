@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 5c6aa8ed50bee8d8a4d0f4dc3477b6b0a6eb254714268d42e2b39581d5e725f1).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 7a141e0bf561852efa09fc034963022c4a874ad25d366a721a702d39b7cade9f).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -10,7 +10,6 @@ import {readCodexLimits} from './codex-limits.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
 import {runtimeOrigin, checkRuntimeHealth} from './runtime-client.mjs';
-import {ensurePaneBudget} from './workflow-chat.mjs';
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
@@ -125,6 +124,14 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const ruleReply = named && branch ? await run('gh',['api',`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`]) : null;
   const rules = ready(ruleReply)?json(ruleReply.stdout):null;
   add('merge-rules',Array.isArray(rules)?'pass':'warn',Array.isArray(rules)?`Branch rules: ${rules.map(r=>r.type).filter(x=>typeof x==='string').join(', ') || 'none'}; required reviews and checks still apply`:'Branch rules unavailable; merge eligibility is unproved',named&&branch?`${Array.isArray(rules)?'':'gh auth login && '}gh api ${quote(`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`)}`:'gh auth login');
+  // Autopilot jobs commit: Git needs a name and an email, from config or from the environment as Git reads it.
+  const nonblank = value => typeof value === 'string' && value.trim() !== '';
+  const configured = async key => { const reply = await run('git',['config',key]); return ready(reply) && nonblank(reply.stdout); };
+  const missing = [];
+  if (!(await configured('user.name')) && !(nonblank(env.GIT_AUTHOR_NAME) && nonblank(env.GIT_COMMITTER_NAME))) missing.push('user.name');
+  if (!(await configured('user.email')) && !(nonblank(env.GIT_AUTHOR_EMAIL) && nonblank(env.GIT_COMMITTER_EMAIL) || nonblank(env.EMAIL))) missing.push('user.email');
+  const identityFix = {'user.name':'git config --global user.name "Your Name"','user.email':'git config --global user.email "you@example.com"'};
+  add('git-identity',missing.length?'warn':'pass',missing.length?`Git user.name and user.email are needed for Autopilot commits; missing: ${missing.join(', ')}`:'Git user.name and user.email are set for Autopilot commits',missing.length?missing.map(key=>identityFix[key]).join(' && '):'git config user.name && git config user.email');
 
   let configurationFix;
   if (selection.configurationError) {
@@ -141,38 +148,6 @@ export async function runAutopilotDoctor(input, ports = {}) {
   if (agent?.kind==='codex') { try { usage = await (ports.codexLimits ?? readCodexLimits)({command:agent.command??'codex',cwd,env}, {spawn:ports.spawn}); } catch {} }
   add('agent-usage',usage.state==='healthy'?'pass':'warn',usage.state==='limited'?'Agent usage limit reached; retry after allowance is available':usage.state==='healthy'?'Read-only usage check healthy':`${agent?.kind ?? 'Agent'} usage is unproved${agent?.kind==='claude'?'; run /usage in Claude Code':''}`,agent?.kind==='claude'?quote(agent.command??'claude'):retry);
 
-  // The core engine runs jobs headless: Herdr is not needed.
-  const engine = (['core','full'].includes(input.engine) ? input.engine : json(read(join(cwd,'pdd.json')))?.autopilot?.engine) === 'core' ? 'core' : 'full';
-  const herdr = engine === 'core' ? null : await run('herdr',['--version']);
-  if (engine === 'core') add('herdr','pass','Not needed: autopilot.engine is core, so jobs run headless without Herdr','pdd autopilot status');
-  else add('herdr',ready(herdr)?'pass':'fail','Herdr installation','curl -fsSL https://herdr.dev/install.sh | sh');
-  if (engine === 'core') { /* No coordinator room or workflow panes. */ }
-  else if (input.coordinatorPaneId) {
-    let health;
-    try { health=await ports.coordinatorHealth?.({env}); } catch {}
-    const verified=['working','starting','idle','blocked','done'].includes(health?.state);
-    add('herdr-room',verified?'pass':'warn',verified?'Saved coordinator verified in pdd-autopilot; needs 0 workflow panes':'Saved coordinator recovery is unproved; guarded start decides allocation','pdd autopilot status');
-  } else {
-    const herdrRead=async args=>{
-      const reply=await run('herdr',['--session','pdd',...args]);
-      const body=json(ready(reply)?reply.stdout:reply.stderr||reply.stdout);
-      if (!ready(reply) || body?.error) throw Object.assign(Error('Herdr read failed'),{code:body?.error?.code});
-      return body;
-    };
-    try {
-      let server;
-      try { server=await herdrRead(['status','server','--json']); } catch { /* The native inventory read decides admission. */ }
-      const usage=await ensurePaneBudget(1,{env,herdr:async args=>{
-        if (server?.running===false) throw Object.assign(Error('Herdr stopped'),{code:'server_not_running'});
-        return herdrRead(args);
-      }});
-      add('herdr-room','pass',`${usage.panes} panes; budget ${usage.budget}; needs 1`,'pdd workflow tidy --dry-run');
-    } catch (error) {
-      // Native start owns guarded sweeps, parking and capacity admission.
-      add('herdr-room','warn',error.code==='herdr_pane_budget'?error.message.split('\n')[0]:`Workflow pane admission: ${error.code??'unavailable'}`,error.code==='invalid_pane_budget'?'unset PDD_HERDR_PANE_BUDGET':'pdd workflow tidy --dry-run && pdd workflow tidy');
-    }
-  }
-
   const block = ['CLAUDE.md','AGENTS.md'].some(name=>/<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/.test(read(join(cwd,name))??''));
   add('setup-block',block?'pass':'fail','PDD instructions in AGENTS.md or CLAUDE.md','pdd setup');
   const kind = agent?.kind ?? preferred?.kind ?? 'codex';
@@ -182,6 +157,33 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const config = json(read(join(cwd,'pdd.json'))), auto = config?.autopilot;
   const valid = auto && ['auto','observe'].includes(auto.mode) && (auto.trust===undefined || Array.isArray(auto.trust)&&auto.trust.every(x=>typeof x==='string'&&x.trim()));
   add('setup-mode',valid?'pass':'fail',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode and trust in pdd setup; off does not start work','pdd setup');
+  // Job worktrees and other machines read pdd.json of the default branch on GitHub.
+  // The settings differ as autopilot-github defines: the mode, or the trust names ignoring case and order.
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const modeOf = value => object(value) && ['off','observe','auto'].includes(value.mode) ? value.mode : 'off';
+  const namesOf = value => object(value) && Array.isArray(value.trust) ? value.trust.filter(nonblank) : [];
+  const trustKey = value => [...new Set(namesOf(value).map(name=>name.toLowerCase()))].sort().join('\n');
+  const settingsOf = value => `${modeOf(value)}, trust ${namesOf(value).join(', ') || '(none)'}`;
+  const sameName = (a,b) => a.toLowerCase() === b.toLowerCase();
+  const only = (names,other) => names.filter((name,index)=>!other.some(item=>sameName(item,name)) && names.findIndex(item=>sameName(item,name))===index);
+  const word = value => /^[\w.@/-]+$/.test(value) ? value : quote(value);
+  const contents = named && branch ? `repos/${repo}/contents/pdd.json?ref=${encodeURIComponent(branch)}` : null;
+  const show = contents && `gh api ${quote(contents)} -H 'Accept: application/vnd.github.raw'`;
+  const remoteReply = contents ? await run('gh',['api',contents]) : null;
+  const absent = Boolean(remoteReply) && !ready(remoteReply) && /\(HTTP 404\)/.test(String(remoteReply.stderr ?? ''));
+  const file = ready(remoteReply) ? json(remoteReply.stdout) : null;
+  const remote = object(file) && file.type==='file' && file.encoding==='base64' && typeof file.content==='string' ? json(Buffer.from(file.content,'base64').toString('utf8')) : null;
+  const localText = read(join(cwd,'pdd.json')), ours = auto, theirs = remote?.autopilot;
+  if (!contents || !absent && !object(remote)) add('settings-github','warn','Autopilot settings on GitHub are unproved; doctor could not read pdd.json of the default branch',contents?`gh auth login && ${show}`:'gh auth login');
+  else if (localText!==null && !object(config)) add('settings-github','warn','pdd.json in this checkout is not a JSON object; the GitHub comparison is unproved','vi pdd.json');
+  else if (absent && localText===null) add('settings-github','warn',`pdd.json is missing in this checkout and on GitHub (${branch})`,'pdd setup');
+  else if (absent) add('settings-github','warn',`pdd.json is only in this checkout; GitHub (${branch}) has none, so other machines and Autopilot job worktrees do not see it`,`git add pdd.json && git commit -m "Add PDD settings" && git push${['observe','auto'].includes(modeOf(ours))?` # or pdd autopilot ${modeOf(ours)}`:''}`);
+  else if (localText===null) add('settings-github','warn',`pdd.json is only on GitHub (${branch}): ${settingsOf(theirs)}; this checkout has none`,`git fetch origin && git checkout ${word(`origin/${branch}`)} -- pdd.json`);
+  else if (modeOf(theirs)!==modeOf(ours) || trustKey(theirs)!==trustKey(ours)) {
+    const trust = only(namesOf(ours),namesOf(theirs)), untrust = only(namesOf(theirs),namesOf(ours));
+    const publish = [...(modeOf(theirs)===modeOf(ours)?[]:[`pdd autopilot ${modeOf(ours)}`]),...(trust.length?[`pdd autopilot trust ${trust.map(word).join(' ')}`]:[]),...untrust.map(name=>`pdd autopilot untrust ${word(name)}`)];
+    add('settings-github','warn',`GitHub: ${settingsOf(theirs)}; this checkout: ${settingsOf(ours)}; Autopilot jobs use the GitHub copy`,publish.join(' && '));
+  } else add('settings-github','pass',`GitHub (${branch}) has the same Autopilot settings: ${settingsOf(ours)}`,show);
   const tracked = await run('git',['ls-files','-z','--','*.prompt.md']);
   const drafts = [], unreadable = [];
   for (const path of ready(tracked)?tracked.stdout.split('\0').filter(Boolean):[]) {
@@ -225,7 +227,10 @@ export async function runAutopilotDoctor(input, ports = {}) {
     }
     return false;
   };
-  const bindings=[...names].map(name=>env[name]===undefined?`-u ${name}`:!secret(name)?`${name}=${quote(env[name])}`:`${name}="${'${'}${name}:?Set ${name} for the selected profile}"`);
-  for (const check of checks) check.fix=`env ${bindings.filter(x=>x.startsWith('-u ')).join(' ')} ${bindings.filter(x=>!x.startsWith('-u ')).join(' ')} /bin/sh -c ${quote(check.fix)}`;
-  return {exitCode:checks.some(c=>c.status==='fail')?1:0,message:checks.map(c=>`${c.status.toUpperCase()} ${c.id}: ${c.detail}; fix: ${c.fix}`).join('\n'),checks};
+  // Bind only what differs from the caller's environment, where the person runs the fix.
+  const changed=[...names].filter(name=>env[name]===undefined?callerEnv[name]!==undefined:env[name]!==callerEnv[name]);
+  const unsets=changed.filter(name=>env[name]===undefined).map(name=>`-u ${name}`);
+  const sets=changed.filter(name=>env[name]!==undefined).map(name=>!secret(name)?`${name}=${quote(env[name])}`:`${name}="${'${'}${name}:?Set ${name} for the selected profile}"`);
+  if (changed.length) for (const check of checks) check.fix=`env ${[...unsets,...sets].join(' ')} /bin/sh -c ${quote(check.fix)}`;
+  return {exitCode:checks.some(c=>c.status==='fail')?1:0,message:checks.map(c=>`${c.status.toUpperCase()} ${c.id}: ${c.detail}${c.status==='pass'?'':`; fix: ${c.fix}`}`).join('\n'),checks};
 }

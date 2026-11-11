@@ -131,33 +131,44 @@ only.
 ## Autopilot on this machine
 
 `pdd autopilot doctor` checks the pdd selected by PATH, Node 22.20 or newer,
-Git, gh sign-in, write access, merge methods and effective branch rules, agent
-sign-in and read-only usage, Herdr and pane room, setup instructions and skills,
-mode and trust, draft prompts, authenticated interpreter capacity access, and the
-platform's user scheduler. Linux lingering and macOS sleep are advisory.
+Git, gh sign-in, write access, merge methods and effective branch rules, the Git
+name and email, agent sign-in and read-only usage, setup instructions and skills,
+mode and trust, the `pdd.json` on GitHub, draft prompts, authenticated interpreter
+capacity access, and the platform's user scheduler. Linux lingering and macOS
+sleep are advisory. Doctor needs no Herdr: Autopilot jobs run headless.
 Codex usage uses a read-only account request. Claude usage remains unproved;
 run `claude` and `/usage` to inspect it. No agent prompt is sent.
 Unreadable branch rules are advisory; repository reviews and checks still apply.
-Each line includes a repair or inspection command. PATH repairs name this
-installation, including source checkouts. A required failure refuses start with
-the same report before state files, locks, timers, panes or claims change.
+A PASS line shows the check and its result only. A WARN or FAIL line also shows a
+repair or inspection command after `fix:`. PATH repairs name this installation,
+including source checkouts. A required failure refuses start with the same
+report before state files, locks, timers or claims change.
 Draft and unreadable prompt paths are warnings. Doctor never approves them.
 A successful interpreter access read sends no source and proves no prompt behavior.
 See [the first-start path](../README.md#autopilot-on-your-own-repository).
 
-Doctor uses the saved coordinator profile on restart.
+Autopilot jobs make commits, so Git needs `user.name` and `user.email`. Doctor
+reads both in the repository. `GIT_AUTHOR_NAME` with `GIT_COMMITTER_NAME`, and
+`GIT_AUTHOR_EMAIL` with `GIT_COMMITTER_EMAIL` (or `EMAIL`), also count. A missing
+value is a warning. Its fix sets the value with `git config --global`.
+
+Autopilot jobs and other machines read `pdd.json` of the default branch on
+GitHub, not the copy in this checkout. Doctor reads that file and compares the
+mode and the trust names; case and order do not count. When GitHub has no
+`pdd.json`, the warning gives the commit and push that adds it, or
+`pdd autopilot MODE`. When the settings differ, the warning shows both and gives
+the `pdd autopilot` commands that publish the settings of this checkout. Doctor
+itself writes nothing to GitHub.
+
+Doctor uses the saved agent profile on restart.
 A selected agent's HOME, CODEX_HOME, CLAUDE_CONFIG_DIR and other environment
-settings apply to its checks. Repair commands carry that profile environment.
+settings apply to its checks. A repair command sets only the environment names
+whose values differ from your shell, so most repair commands are plain. A
+secret value is never printed.
 A malformed agents.json report names the file to edit. An invalid
 PDD_RUNTIME_URL report gives the HTTPS-origin or unset repair.
-Pane pressure, unreadable capacity, interpreter health and agent usage limits
-are warnings with fix commands. They never refuse start at preflight. Start can
-sweep, park and wait. It must still prove room through guarded cleanup and admission,
-including cleanup of a finished run shell after its chats have closed.
-Doctor closes no panes. A reused coordinator needs no extra pane.
-Doctor verifies that coordinator in `pdd-autopilot`. A full `pdd` workflow
-session does not block reuse. Fresh allocation uses the native workflow pane
-admission rules. Unavailable saved-target evidence defers to guarded recovery.
+Interpreter health and agent usage limits are warnings with fix commands. They
+never refuse start at preflight.
 Interpreter readiness uses the runtime client's health check, including a JSON
 404 from an interpreter without the optional capacity endpoint.
 
@@ -165,7 +176,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 
 | Command | What it does |
 |---|---|
-| `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
+| `pdd autopilot doctor` | Read-only prerequisite checks, one line per item. A WARN or FAIL line also gives a fix command. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
 | `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off` and `--report file\|draft\|off` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |

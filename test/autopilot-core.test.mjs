@@ -338,18 +338,18 @@ test('status shows jobs, slots and the last END causes', async t => {
   assert.match(text, /#18 released .*no result/i);
 });
 
-test('doctor does not require Herdr when the engine is core', async () => {
+test('doctor has no Herdr check and makes no Herdr call', async () => {
   const { runAutopilotDoctor } = await import('../src/autopilot-doctor.mjs');
   const { doctorFixture } = await import('./helpers/doctor-fixture.mjs');
-  const f = doctorFixture();
-  f.paths.set('/project/pdd.json', JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core' } }));
-  const run = f.ports.run;
-  f.ports.run = (file, args, options) => file === 'herdr' ? assert.fail('Herdr must not be called') : run(file, args, options);
-  const result = await runAutopilotDoctor(f.input, f.ports);
-  assert.match(result.message, /PASS herdr: Not needed: autopilot\.engine is core/);
-  assert.doesNotMatch(result.message, /herdr-room/);
-  const full = doctorFixture(), shown = await runAutopilotDoctor(full.input, full.ports);
-  assert.match(shown.message, /PASS herdr: Herdr installation/); assert.match(shown.message, /herdr-room/);
+  for (const engine of ['core', 'full', undefined]) {
+    const f = doctorFixture();
+    f.paths.set('/project/pdd.json', JSON.stringify({ autopilot: { mode: 'auto', trust: [], ...(engine ? { engine } : {}) } }));
+    const run = f.ports.run, programs = [];
+    f.ports.run = (file, args, options) => { programs.push(file); return run(file, args, options); };
+    const result = await runAutopilotDoctor({ ...f.input, engine }, f.ports);
+    assert.doesNotMatch(result.message, /herdr/i);
+    assert.ok(!programs.includes('herdr'), 'Herdr must not be called');
+  }
 });
 
 test('launcher: engine core ticks without Herdr or a coordinator; status and report read local files', async t => {
