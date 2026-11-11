@@ -1484,7 +1484,9 @@ only (`pdd autopilot observe` changes `pdd.json` instead). The machine values wi
 `pdd.json`, and `pdd autopilot status` says where the engine, the label and the mode
 come from. `--report file|draft|off` sets where this machine's problem reports go,
 the same way. `--mode off` saves the mode and stops the timer of this machine. In
-`observe` mode the core does everything except the merge: when all checks pass, it
+`observe` mode the core does everything except the merge (it also records the
+operator approval of changed prompts, with "in observe mode" in its words; in a
+`strict_approvals` repository it asks no person and lists those prompts in its note): when all checks pass, it
 posts "Autopilot would merge this PR (observe mode)" with the same evidence, keeps
 the PR open and ready for review, releases the issue and adds `pdd:would-merge`, so
 no machine builds it again. Remove the label to have it built again. Comments

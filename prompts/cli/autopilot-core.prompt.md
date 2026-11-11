@@ -370,15 +370,22 @@ any other pdd (for example an older global install).
   the tool error in the result's `runtime` with kind `runtime`. One `Evidence:` line
   in the PR body and the same text as the result's `evidence` (below). No review
   verdict or review claim (for example "Review: no must-fix") in the PR body or a
-  comment: only the core's fresh reviewer gives one. **Approval (auto mode only):**
-  the operator's start is the approval of the job's prompt changes. For each changed
+  comment: only the core's fresh reviewer gives one. **Approval (auto and observe
+  mode):** observe mode does everything that auto mode does except the merge, so the
+  operator's start is the approval of the job's prompt changes in both. For each changed
   `*.prompt.md`, after its checks pass, the job runs `printf '%s' 'WORDS' | pdd approve
   PROMPT --said -` with WORDS exactly `Operator action: pdd autopilot start --engine
-  core in auto mode for REPO on MACHINE-ID at TIME` (the machine id, never the host;
-  TIME = `state.startedAt`, else `state.activatedAt`) and commits the result in the
-  PR. In a repository whose worktree `pdd.json` has `strict_approvals: true` the rule
-  says instead: do not run `pdd approve` and do not edit an interface status; Autopilot
-  asks a person. In observe mode the prompt has no approval rule. Push the job
+  core in MODE mode for REPO on MACHINE-ID at TIME` (MODE is the real mode, `auto` or
+  `observe`, because the words must be true; the machine id, never the host; TIME =
+  `state.startedAt`, else `state.activatedAt`) and commits the result in the PR. The
+  merge check makes an unapproved changed prompt red in both modes, with the same
+  command, so a repair records it. In a repository whose worktree `pdd.json` has
+  `strict_approvals: true` the rule says instead: do not run `pdd approve` and do not
+  edit an interface status; in auto mode "Autopilot asks a person"; in observe mode
+  "Autopilot lists the prompts for a person in its note": observe asks no one (a
+  question only makes sense when a merge would follow), adds no `pdd:needs-decision`,
+  and its would-merge note lists `Prompts that need a person's approval before a merge
+  (strict_approvals): …`. Push the job
   branch and open one PR against BASE with `Fixes #N`; never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
   file is JSON: `outcome` `pr` with `pr`, `head`, `promptChanged` (Boolean),

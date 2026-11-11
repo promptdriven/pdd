@@ -3221,3 +3221,49 @@ test('Z5 (R12 should-fix 7) two short findings at nearby lines that share one wo
   assert.equal(endComments(w, 17).length, 0);
   assert.equal(w.started.filter(job => job.role === 'repair').length, 2);
 });
+
+// ---- 0.1.29 ---------------------------------------------------------------------------------------------------
+test('X7 (T05) observe mode records the operator approval of a changed approved prompt, with the real mode in its words, and never merges; strict observe asks no one', async t => {
+  const prose = 'Count the words of a text.', changed = 'Count the words and the lines of a text.', path = 'prompts/words.prompt.md';
+  const w = await coreWorld(t, { settings: { mode: 'observe', runs: 1 } });
+  w.state.startedAt = '2026-11-11T09:00:00.000Z';
+  w.baseCommit(path, approvedText(prose));
+  w.issue(17); await w.tick();
+  const words = `Operator action: pdd autopilot start --engine core in observe mode for acme/widgets on ${claimOf(w, 17).machine} at 2026-11-11T09:00:00.000Z`;
+  assert.ok(w.job(17, 'build').input.includes(`9. Approval: in observe mode the operator's start is the approval of your prompt changes.`));
+  assert.ok(w.job(17, 'build').input.includes(`printf '%s' '${words}' | pdd approve PROMPT --said -`), 'the real mode in the words');
+  writeIn(w.job(17, 'build').cwd, path, approvedText(changed));
+  const { pr } = w.build(17); await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'an unapproved changed prompt is red in observe mode too');
+  assert.match(repair.input, /Changed prompts are not approved: prompts\/words\.prompt\.md/); assert.ok(repair.input.includes(words));
+  recordApproval(w, path, approvedText(changed));                            // the repair records it with the native command
+  w.build(17, { role: 'repair' }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [], 'observe never merges');
+  assert.ok(pr.comments.some(c => c.body.includes('<!-- pdd:autopilot-core:would-merge:')));
+  assert.ok(w.labels(17).includes('pdd:would-merge'));
+  // Auto mode: the same flow merges, with "auto" in the words.
+  const a = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  a.baseCommit(path, approvedText(prose));
+  a.issue(17); await a.tick();
+  assert.match(a.job(17, 'build').input, /in auto mode for acme\/widgets/);
+  writeIn(a.job(17, 'build').cwd, path, approvedText(changed));
+  a.build(17); await a.tick();
+  assert.ok(a.job(17, 'repair'));
+  recordApproval(a, path, approvedText(changed));
+  a.build(17, { role: 'repair' }); await a.tick(); a.review(17, 'PASS'); a.suite(17, 0); await a.tick();
+  assert.equal(a.github.merges.length, 1);
+  // Strict repository in observe mode: no question, no pdd:needs-decision, the prompts listed in the would-merge note.
+  const s = await coreWorld(t, { settings: { mode: 'observe', runs: 1 } });
+  s.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
+  s.baseCommit(path, approvedText(prose));
+  s.issue(17); await s.tick();
+  assert.match(s.job(17, 'build').input, /Autopilot lists the prompts for a person in its note/);
+  writeIn(s.job(17, 'build').cwd, path, approvedText(changed));
+  const strict = s.build(17); await s.tick(); s.review(17, 'PASS'); s.suite(17, 0); await s.tick();
+  assert.equal(s.job(17, 'repair'), undefined, 'no repair for a person approval');
+  assert.ok(!s.labels(17).includes('pdd:needs-decision')); assert.equal(s.comments(17).filter(body => body.includes('pdd:autopilot-core:question:')).length, 0);
+  const note = strict.pr.comments.map(c => c.body).find(body => body.includes('<!-- pdd:autopilot-core:would-merge:'));
+  assert.match(note ?? '', /Prompts that need a person's approval before a merge \(strict_approvals\): prompts\/words\.prompt\.md/);
+  assert.deepEqual(s.github.merges, []);
+});

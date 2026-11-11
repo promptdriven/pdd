@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 9464ac474b570f1f80dcbf651e21021a92c1aba2f1691c97f442a0ed36febeab).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: aa796511d17b69da37b85091af92c0c26d81a76db15a3d90ada0ee7dda50a690).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -415,9 +415,11 @@ function ownerBrief(ctx, root) {
 }
 
 // ---- Job prompts ----------------------------------------------------------------------------------------
-// In auto mode the operator's start is the approval of the job's prompt changes, recorded with these words.
+// In auto and observe mode the operator's start is the approval of the job's prompt changes, recorded with these
+// words. They name the real mode (they must be true); observe mode does everything that auto mode does except the merge.
 const strictRepo = (ctx, job) => readJson(ctx.fs, join(job.worktree ?? ctx.state.cwd, 'pdd.json'), {})?.strict_approvals === true;
-const approvalWords = ctx => `Operator action: pdd autopilot start --engine core in auto mode for ${ctx.repo} on ${ctx.machineId} at ${ctx.state.startedAt ?? ctx.state.activatedAt ?? 'an unknown time'}`;
+const approving = ctx => ['auto', 'observe'].includes(ctx.settings.mode);
+const approvalWords = ctx => `Operator action: pdd autopilot start --engine core in ${ctx.settings.mode === 'observe' ? 'observe' : 'auto'} mode for ${ctx.repo} on ${ctx.machineId} at ${ctx.state.startedAt ?? ctx.state.activatedAt ?? 'an unknown time'}`;
 
 const RESULT_RULES = result => `Before you exit, write this JSON file: ${result}
 - Success: {"outcome":"pr","pr":<PR number>,"head":"<40-character SHA you pushed>","promptChanged":true|false,"evidence":"<the Evidence line of the PR body>","adopt":["<each existing unowned code file you changed (path e)>"],"runtime":{"state":"pass|fail|not-run","cause":"<exact reason>","kind":"runtime","component":"<tool, for example pdd lint>","code":"<short-error-code>","detail":"<at most 20 lines of the tool's error output, with no code from this repository>"}}. Give kind, component, code and detail when Runtime could not check.
@@ -441,7 +443,8 @@ function workRules(ctx, job) {
 6. If a prompt changed, run \`pdd test\` for the changed Stories (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Put exactly one line in the PR body: "Runtime: PASS", "Runtime: FAIL (short reason)" or "Runtime: not run (exact reason)". Only a real Runtime FAIL verdict (the interpreter checked the Story and said FAIL) is a failure: fix the code until it passes. When Runtime could not check (a lint refusal, no interface or a binding refusal, a scenario limit such as a value that is not a safe integer, no verdict, an interpreter error), do not stop and do not invent an interface: cover the case with native tests, ship the PR with "Runtime: not run (<the exact reason>)", and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it.
 7. Put exactly one Evidence line in the PR body and the same text as "evidence" in the result: "Evidence: runtime=<pass|fail|not-run> (<passed>/<total>); vectors=<pass|fail|not-run> (<passed>/<total>); formal=<proved|bounded|failed|not-run|not-applicable>; tests=<pass|fail> (<passed>/<total>)". runtime is pdd test on the changed Stories, vectors the Story vector replay tests, formal the formal tests, tests your focused tests; give the counts you saw, and leave out a count you did not see.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix" or "Independent review: …") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
-${settings.mode === 'auto' && !strictRepo(ctx, job) ? `9. Approval: in auto mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -
+${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -
+` : settings.mode === 'observe' ? `9. This repository needs a person's approval for prompt changes (strict_approvals). Do not run pdd approve and do not edit an interface status by hand; Autopilot lists the prompts for a person in its note.
 ` : settings.mode === 'auto' ? `9. This repository needs a person's approval for prompt changes (strict_approvals). Do not run pdd approve and do not edit an interface status by hand; Autopilot asks a person.
 ` : ''}10. Commit, push branch ${job.branch} to origin, and use ONE PR against ${state.baseBranch} (gh pr create --base ${state.baseBranch} --head ${job.branch}) with "Fixes #${job.issue}" in its body. Never merge, never push to ${state.baseBranch}, never force-push, never close the issue. Do not assign the issue to anyone and do not change its labels: Autopilot owns them.`;
 }
@@ -1104,8 +1107,9 @@ async function mergeCheck(ctx, job) {
   const reds = runtimeReds(pr.body, job.runtime, job.promptChanged);
   job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
   reds.push(...evidenceReds(job.evidence, runtimeVerdicts(pr.body)[0]?.verdict));
-  // In auto mode a changed prompt must carry a recorded approval. A strict repository needs a person: ask one.
-  // Observe never approves; it lists the problems in its note.
+  // In auto and observe mode a changed prompt must carry a recorded approval (the operator's start, with the real mode
+  // in its words). A strict repository needs a person: auto mode asks one; observe mode asks no one (a question only
+  // makes sense when a merge would follow) and lists the prompts in its would-merge note.
   const gate = await promptGate(ctx, job), drafts = gate.problems;
   if (drafts.length && ctx.settings.mode === 'auto' && gate.strict) {
     stopChecks(ctx, job);
@@ -1113,7 +1117,7 @@ async function mergeCheck(ctx, job) {
       question: `PR #${job.pr} changes prompts that need a person's approval in this repository (strict_approvals): ${drafts.join('; ')}. Please approve the PR on GitHub (or approve each prompt with pdd approve on its branch and push), then remove pdd:needs-decision: Autopilot checks the same PR again, with no new build. To give up on it, close the PR.` });
   }
   reds.push(...(await pathChecks(ctx, job, pr.body)).reds);
-  if (drafts.length && ctx.settings.mode === 'auto') reds.push(`Changed prompts are not approved: ${drafts.join('; ')}. Record the operator approval for each changed prompt with the native command and commit it: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -`);
+  if (drafts.length && approving(ctx) && !gate.strict) reds.push(`Changed prompts are not approved: ${drafts.join('; ')}. Record the operator approval for each changed prompt with the native command and commit it: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -`);
   const ci = reds.length ? null : await ciState(ctx, job.head, job);
   // GitHub runs no pull_request workflow while a PR conflicts with its base, so a head with no check at all may be a
   // conflict: then the agent conflict update starts (debate B, outside the lane), not a 6-hour CI wait.
@@ -1189,7 +1193,7 @@ async function mergeCheck(ctx, job) {
       `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
       '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- ${evidenceText(job.evidence)}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
-      ...(drafts.length ? [`- Prompts not approved (observe mode does not approve): ${drafts.join('; ')}`] : []), '',
+      ...(drafts.length ? [`- Prompts that need a person's approval before a merge (strict_approvals): ${drafts.join('; ')}`] : []), '',
       `<!-- pdd:autopilot-core:${observe ? 'would-merge' : 'merge'}:${job.head} -->`].join('\n'));
     job.mergeNote = job.head; ctx.saveJob(job);
   }
