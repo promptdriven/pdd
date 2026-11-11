@@ -737,7 +737,8 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    that mention a changed unowned file. Then a
    failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass; `ciState`
-   also gives `failedRuns`, the `{id, name, app}` of each failed check run); else
+   also gives `failedRuns`, the `{id, name, app}` of each failed check run, and
+   `running`, the names of its checks that are not completed); else
    a review FAIL or a failed suite. **Base red (#3181):** a red CI goes to `ciVsBase`
    of the [base-red owner](autopilot-base-red.prompt.md) before its red line: one
    rerun per check name and head, then the base tip. Its `pending` waits like pending

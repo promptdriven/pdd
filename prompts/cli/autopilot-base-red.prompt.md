@@ -18,17 +18,21 @@ cannot be read.
 
 `ciVsBase(ctx, job, ci)` takes a red `ci` from the core's `ciState`: `failed` (the
 names of the failed check runs and commit statuses), `failedRuns` (`{id, name, app}`
-of each failed check run, `app` is the app slug) and `sig`. It returns a CI result
-for the merge check.
+of each failed check run, `app` is the app slug), `running` (the names of the head's
+checks that are not completed yet) and `sig`. It returns a CI result for the merge
+check.
 
 1. **Rerun once (B1).** Each failed check run whose name has no rerun at this head
    gets one: `POST repos/REPO/actions/jobs/ID/rerun` when `app` is
-   `github-actions`, else `POST repos/REPO/check-runs/ID/rerequest`. The job saves
-   `ciRerun {head, names, asked}`: `names` are the check names that had their one
-   rerun at this head (a new head starts empty), `asked` the run ids that were
-   rerun, each with its time. A commit status, a run without a safe integer `id`,
-   and a rerun call that returns a status of 300 or more get no rerun; they go to
-   step 2 at once.
+   `github-actions`, else `POST repos/REPO/check-runs/ID/rerequest`. While another
+   check of the head still runs (`running` is not empty) and such a rerun is still
+   due, the result is pending and no rerun is asked yet: GitHub refuses a job rerun
+   while its workflow run still runs (review R1, S2). The job saves `ciRerun {head,
+   names, asked}`: `names` are the check names that had their one rerun at this head
+   (a new head starts empty), each added only after a 2xx answer; `asked` the run ids
+   that were rerun, each with its time. A commit status, a run without a safe integer
+   `id`, and a rerun call that returns a status of 300 or more get no rerun in this
+   call; they go to step 2 at once.
 2. **Wait for the rerun.** The result is pending while a rerun was asked in this
    call, or while the failed run of a name is still an asked run (GitHub does not
    show the new run yet), for at most the quiet period (`ctx.quiet`) after the ask:
@@ -37,9 +41,12 @@ for the merge check.
    red.
 3. **Compare with the base tip (B2).** The base tip is `origin/BASE` after a fetch.
    For each failed name, the check runs and commit statuses of the tip decide (one
-   read per tip and tick): a completed run or a status of that name that is not good
-   (good: `success`, `neutral`, `skipped`) is red; one that is not completed is
-   pending; otherwise (good, or no run of that name) it is green.
+   read per tip and tick; a merge in this tick reads the tip again): a completed run
+   or a status of that name that failed is red; one that is not completed, or that
+   ended with no result (`cancelled`, `stale`, `action_required`: review R1, S4), is
+   pending; otherwise (good: `success`, `neutral`, `skipped`, or no run of that name)
+   it is green. So a run that someone cancelled on the tip is never base-red and
+   files no main-red issue.
    - Any name pending on the tip: `{...ci, state: 'pending', pending: NAMES, sig:
      'SIG|base:TIP'}`. No repair.
    - Names that are not red on the tip are the PR's own red: `{...ci, state: 'red',
@@ -94,9 +101,10 @@ are, the suite wins (it names the tests).
 - Another red finding (`reds` is not empty, or the suite is the PR's own red): no
   hold. The base-red part adds no red line, so the repair gets only the PR's own
   findings; it comes back as `{state: 'base-red'}` (a suite) or is left out (a CI).
-- The review is not `pass` yet, or the job's suite or the replay run (`vectors`) is
-  still `running`: no hold yet; the merge check waits as usual and the job keeps its
-  slot.
+- The review is not `pass` yet, the job's suite or the replay run (`vectors`) is
+  still `running`, or a CI check is still pending (review R1, S1): no hold yet; the
+  merge check waits as usual and the job keeps its slot. So a CI red of the PR's own
+  that comes later still gets its repair.
 - Else the job enters the base-red state and the result is `'wait'`: it leaves the
   merge lane (`tools.leaveLane`), saves `baseRed {what, sha, tip, names, tail,
   fingerprint, since, report}` (`tip` is the base tip at entry, `report` is the
@@ -116,7 +124,11 @@ each tick:
   When the tip is
   not `baseRed.tip` and the issue is closed (or there is no report): clear `baseRed`
   and `ciRerun` and refresh the PR onto the base (`tools.refreshBase`). CI and the
-  suite run again on the new head; a red again compares again.
+  suite run again on the new head; a red again compares again. When the issue is
+  closed and the tip did not move (a person closed it, for example as flaky): clear
+  `baseRed` and run the red check once more at the same head (review R1, S3): a CI
+  red clears `ciRerun` (one more rerun), a suite red clears `suite`. A red again
+  compares again; then a new main-red issue names the closed one.
 - After the quiet period in the base-red state, one `stuck` alert through
   `ctx.ports.alert` (`baseRed.alerted`), as the merge lane's wait alert.
 
@@ -136,7 +148,12 @@ in ISO form), else the empty string.
 - **Fingerprint**: the first 16 hex digits of the SHA-256 of `WHAT` and the sorted
   names, one per line (never the commit), so the same failure on a later base commit
   is the same issue. **Marker**: `<!-- pdd:autopilot-core:base-red:FINGERPRINT -->`.
-- **Dedup**: first read `issues?state=all&labels=pdd:main-red&per_page=100` (at most
+- **This machine first** (review R1): the machine record `ROOT/main-red/FINGERPRINT.json`
+  (`{number, at}`) is written right after a post or a match. When it names an issue
+  that is open (`GET repos/REPO/issues/N`, a consistent read), that issue is the
+  result (`found: true`) and the list is not read: GitHub's label list can lag a
+  write, so several jobs that turn base-red in one tick would each file an issue.
+- **Dedup**: then read `issues?state=all&labels=pdd:main-red&per_page=100` (at most
   5 pages) and look at the issues (not PRs) whose body has the marker. Only an **open**
   match is the result (`found: true`), the one with the lowest number; nothing is
   posted. So a second job with the same base-red files no second issue. A closed match, of any age, means that the
