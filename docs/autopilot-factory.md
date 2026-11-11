@@ -46,3 +46,9 @@ obligation saves its plan before dispatch, keeps the target and baseline results
 apart, and blocks paid dispatch with one named prerequisite when an interface,
 an entry limit, a nested call bound or a recursion bound is missing. After the
 owner repairs the named declaration, a fresh check reaches a verdict.
+
+The same command runs the core factory. It drives each user path of Autopilot
+through the real launcher and the real core tick: start with the opt-in label,
+intake, build, PR, review, full suite and merge; a start with no label; a red
+suite and its repair; a review FAIL that ends the job; a question for a person
+and the answer; a conflict with the base; and stop.
