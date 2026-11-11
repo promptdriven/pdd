@@ -1,14 +1,14 @@
-// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: 7328c0d09c0da639b73b1bb27dc92b7b390843c31f47827810f01e9786319277).
+// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: 13edfd1667a50093646067078d3e60c9f750f0a99f1374541397491aeab86958).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { jobEnvironment } from './agent-job.mjs';
+import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 
 export const INTAKE_MODES = Object.freeze(['off', 'shadow']);
 export const CARD_CLASSES = Object.freeze(['ready', 'improve', 'person', 'duplicate', 'blocked', 'held', 'fixed', 'elsewhere']);
 const STARTS = new Set(['ready', 'improve']);
 const MIN = 60000, HOUR = 60 * MIN;
-export const INTAKE_LIMITS = Object.freeze({ startsPerTick: 2, running: 2, timeout: 20 * MIN, retryAfter: 6 * HOUR, comments: 20, commentChars: 3000, bodyChars: 20000, pool: 200, resultBytes: 64 * 1024, logDays: 7 });
+export const INTAKE_LIMITS = Object.freeze({ startsPerTick: 2, running: 2, timeout: 20 * MIN, retryAfter: 6 * HOUR, comments: 20, commentChars: 3000, bodyChars: 20000, pool: 200, resultBytes: 64 * 1024, logDays: 7, lookups: 40, trustHours: 6 });
 // Labels that the core itself treats as "do not start": an issue with one of them gets a native reason and no card.
 const PARK_LABELS = ['pdd:stuck', 'pdd:needs-decision', 'pdd:would-merge'];
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -25,7 +25,7 @@ export function intakeMode(value) { return INTAKE_MODES.includes(value) ? value 
 
 export function intakeFolders(root) {
   const base = join(root, 'intake');
-  return { base, cards: join(base, 'cards'), jobs: join(base, 'jobs'), logs: join(base, 'logs'), empty: join(base, 'empty'), pick: join(base, 'would-pick.json'), started: join(base, 'started.json'),
+  return { base, cards: join(base, 'cards'), jobs: join(base, 'jobs'), logs: join(base, 'logs'), empty: join(base, 'empty'), trust: join(base, 'trust.json'), pick: join(base, 'would-pick.json'), started: join(base, 'started.json'),
     diff: at => join(base, `diff-${day(at)}.jsonl`) };
 }
 function readJson(fs, file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
@@ -73,9 +73,10 @@ export function issueVersion(row) {
 }
 
 // Machine comments are left out of the card input by content: an HTML comment marker, a JSON block, or a bot author.
+export const isPersonComment = c => object(c) && Boolean(text(c.body).trim())
+  && !/<!--/.test(c.body) && !/^\s*```json/m.test(c.body) && c.user?.type !== 'Bot' && !/\[bot\]$/i.test(c.user?.login ?? '');
 export function personComments(comments) {
-  return (comments ?? []).filter(c => object(c) && text(c.body).trim()
-    && !/<!--/.test(c.body) && !/^\s*```json/m.test(c.body) && c.user?.type !== 'Bot' && !/\[bot\]$/i.test(c.user?.login ?? ''))
+  return (comments ?? []).filter(isPersonComment)
     .slice(-INTAKE_LIMITS.comments)
     .map(c => ({ author: c.user?.login ?? null, at: c.created_at ?? null, body: c.body.length > INTAKE_LIMITS.commentChars ? `${c.body.slice(0, INTAKE_LIMITS.commentChars)} …[cut]` : c.body }));
 }
@@ -86,11 +87,17 @@ export function personComments(comments) {
 const CODEX_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host'];
 export function cardCommand(agent, { model, result } = {}) {
   const extra = model ? ['--model', model] : [];
-  if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--ignore-rules',
-    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', ...CODEX_OFF.flatMap(name => ['-c', `features.${name}=false`]), '--output-last-message', result, ...extra, '-'] };
+  // --ignore-user-config: no MCP servers, profiles or features from the person's config.toml (auth still loads).
+  if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--ignore-rules',
+    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="low"', ...CODEX_OFF.flatMap(name => ['-c', `features.${name}=false`]), '--output-last-message', result, ...extra, '-'] };
   if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--safe-mode', '--tools', '', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
     '--no-session-persistence', '--output-format', 'json', ...extra] };
   throw Error('Intake cards need codex or claude');
+}
+
+// The card job environment: the core's job environment without GitHub tokens; a card needs no GitHub access.
+export function cardEnvironment(env = {}) {
+  return Object.fromEntries(Object.entries(jobEnvironment(env)).filter(([key]) => !/^(GH|GITHUB)_\w*TOKEN$/i.test(key)));
 }
 
 export function cardPrompt({ repo, row, comments, pool }) {
@@ -230,7 +237,21 @@ export async function shadowIntake(ctx, rows) {
   // The agent check can be slow (Codex starts its app server): it runs once, and only when a card would start.
   const canStart = async () => ready ??= ctx.budget?.state !== 'low' && ctx.budget?.state !== 'reserve' && ['codex', 'claude'].includes(agent.kind)
     && (!ctx.ports?.agentReady || await ctx.ports.agentReady().catch(() => false));
-  const trusted = async author => Boolean(ctx.ports?.trusted && await ctx.ports.trusted(author));
+  // Trust lookups (the core's port; one GitHub read per new login) are cached for 6 hours and limited to 40 per pass.
+  // An author that is not looked up yet counts as not trusted for now: untrusted text never reaches a card.
+  const cache = object(readJson(ctx.fs, f.trust)) ? readJson(ctx.fs, f.trust) : {};
+  let lookups = 0, changed = false;
+  const known = user => { const e = cache[String(user?.login ?? '').toLowerCase()]; return object(e) && ctx.now() - e.at < INTAKE_LIMITS.trustHours * HOUR ? e.trusted === true : undefined; };
+  const trustOf = async user => {
+    if (!user?.login || !ctx.ports?.trusted) return false;
+    const seen = known(user);
+    if (seen !== undefined) return seen;
+    if (lookups >= INTAKE_LIMITS.lookups) return undefined;
+    lookups++;
+    const value = Boolean(await ctx.ports.trusted({ user }));
+    cache[user.login.toLowerCase()] = { trusted: value, at: ctx.now() }; changed = true;
+    return value;
+  };
   for (const row of scoped) {
     const n = row.number;
     try {
@@ -242,19 +263,29 @@ export async function shadowIntake(ctx, rows) {
       if (running.has(n) || (card?.version === version && (card.card || card.native?.kind === 'untrusted' || ctx.now() - (card.failedAt ?? 0) < INTAKE_LIMITS.retryAfter))) continue;
       if (started >= INTAKE_LIMITS.startsPerTick || running.size >= INTAKE_LIMITS.running || !await canStart()) continue;
       // Only issues that the core itself would give to an agent: the core's trust check, once per version.
-      if (!await trusted(row)) { const next = { issue: n, version, at: ctx.now(), agent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null }; saveCard(ctx, f, n, next); cards.set(n, next); continue; }
+      const author = await trustOf(row.user);
+      if (author === undefined) continue;
+      if (!author) { const next = { issue: n, version, at: ctx.now(), agent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null }; saveCard(ctx, f, n, next); cards.set(n, next); continue; }
       // The attempt counts before any read or write, so a failure can never start more than the limit.
       started++; running.add(n);
       const all = Number(row.comments) > 0 ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`) : [];
-      // Only trusted people's comments reach the card, as in the core's answer reader.
+      // Only trusted people's comments reach the card: newest first, at most 20, within the lookup limit.
       const comments = [];
-      for (const c of all.filter(object)) if (personComments([c]).length && await trusted({ user: c.user, author_association: c.author_association })) comments.push(c);
-      const pool = scoped.filter(other => other.number !== n).slice(0, INTAKE_LIMITS.pool).map(other => ({ number: other.number, title: other.title }));
+      for (const c of all.filter(isPersonComment).reverse()) {
+        if (comments.length >= INTAKE_LIMITS.comments) break;
+        if (await trustOf(c.user)) comments.unshift(c);
+      }
+      // Only titles by trusted authors reach the card; unknown authors are looked up while the limit allows.
+      const pool = [];
+      for (const other of scoped) {
+        if (other.number === n || pool.length >= INTAKE_LIMITS.pool) continue;
+        if (known(other.user) ?? await trustOf(other.user)) pool.push({ number: other.number, title: other.title });
+      }
       // Codex writes its last message here; the job runner's own result file stays unused, so it never reads a large answer.
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
       const run = cardCommand(ctx.state.agent, { model: agent.model, result: answer });
       const job = ctx.jobs.start({ id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args, input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool }),
-        env: jobEnvironment(ctx.ports?.env ?? process.env), issue: n, role: 'intake' });
+        env: cardEnvironment(ctx.ports?.env ?? process.env), issue: n, role: 'intake' });
       try { writeJson(ctx.fs, join(f.jobs, `${n}.json`), { issue: n, version, startedAt: ctx.now(), agent, job, answer }); }
       catch (error) {
         // A job that cannot be recorded would run with no limit: stop it, and wait 6 hours like any failed card.
@@ -264,6 +295,7 @@ export async function shadowIntake(ctx, rows) {
       }
     } catch (error) { ctx.warn(`Autopilot intake #${n}: ${error.message}`); }
   }
+  if (changed) try { writeJson(ctx.fs, f.trust, Object.fromEntries(Object.entries(cache).filter(([, e]) => object(e) && ctx.now() - e.at < INTAKE_LIMITS.trustHours * HOUR))); } catch (error) { ctx.warn(`Autopilot intake trust cache: ${error.message}`); }
   // The "would pick" list, and the issues that the core really started since the last pass.
   const pick = wouldPick(scoped, cards), lastPick = readJson(ctx.fs, f.pick);
   if (JSON.stringify(lastPick?.issues ?? null) !== JSON.stringify(pick)) { writeJson(ctx.fs, f.pick, { at: ctx.now(), issues: pick }); appendDiff(ctx, f, { kind: 'would-pick', issues: pick }); }
@@ -274,15 +306,24 @@ export async function shadowIntake(ctx, rows) {
   return { cards: cards.size, started, pick };
 }
 
-// The core's one hook. Shadow with an issue list: one pass. Any other mode: stop card jobs that still run (a switch
-// to off, or a stop), with no other file and no GitHub call.
+// Stop the card jobs that still run and remove their job files, with no other file and no GitHub call. The core
+// hook uses it when intake is not shadow; the launcher uses it when the core mode is off and on pdd autopilot stop.
+export function stopCardJobs({ root, fs = nativeFs, jobs = { read: readAgentJob, stop: stopAgentJob }, warn = () => {} }) {
+  const f = intakeFolders(root), ctx = { fs, jobs, warn };
+  let stopped = 0;
+  for (const saved of listJson(fs, f.jobs)) {
+    try { if (jobs.read(saved.job).state === 'running') { jobs.stop(saved.job); stopped++; } fs.rmSync(join(f.jobs, `${saved.issue}.json`), { force: true }); prune(ctx, saved.job, false, saved.answer); }
+    catch (error) { warn(`Autopilot intake #${saved.issue}: ${error.message}`); }
+  }
+  return stopped;
+}
+
+// The core's one hook. Shadow with an issue list: one pass. Any other intake mode: stop card jobs that still run.
+// A tick that ends earlier (core mode off, GitHub reserve) does not reach the hook; the launcher stops the card jobs
+// for mode off and for a stop.
 export async function intakeTick(ctx, rows) {
   if (ctx.settings?.intake === 'shadow') return rows ? shadowIntake(ctx, rows) : null;
-  const f = intakeFolders(ctx.root);
-  for (const saved of listJson(ctx.fs, f.jobs)) {
-    try { if (ctx.jobs.read(saved.job).state === 'running') ctx.jobs.stop(saved.job); ctx.fs.rmSync(join(f.jobs, `${saved.issue}.json`), { force: true }); prune(ctx, saved.job, false, saved.answer); }
-    catch (error) { ctx.warn(`Autopilot intake #${saved.issue}: ${error.message}`); }
-  }
+  stopCardJobs({ root: ctx.root, fs: ctx.fs, jobs: ctx.jobs, warn: ctx.warn });
   return null;
 }
 

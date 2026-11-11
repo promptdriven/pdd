@@ -43,7 +43,7 @@ import { costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { autopilotEngine, readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
-import { intakeMode, readIntake, intakeText } from './autopilot-intake.mjs';
+import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 // The core tick has no AI call and each job phase needs a tick, so the core engine's timer fires every 10 minutes.
@@ -1552,7 +1552,8 @@ async function coreTick(stateFile, state, p, ports) {
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
   core.intake = machineIntake(state);
-  if (core.mode === 'off') return ok('Autopilot is off.');
+  // Card jobs never outlive the core: mode off stops them (a tick that ends here does not reach the core's hook).
+  if (core.mode === 'off') { try { stopCardJobs({ root: coreRoot(stateFile), ...(p.corePorts?.jobs ? { jobs: p.corePorts.jobs } : {}) }); } catch { /* Next tick. */ } return ok('Autopilot is off.'); }
   await automaticBase(state, p);
   let budget = { state: 'normal' };
   try { budget = githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(read(join(state.cwd, 'pdd.json'), {})?.autopilot?.github) }); }
@@ -2589,6 +2590,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }
       await timer('stop', state, p);
+      try { stopCardJobs({ root: coreRoot(stateFile), ...(p.corePorts?.jobs ? { jobs: p.corePorts.jobs } : {}) }); } catch { /* The card jobs end by themselves. */ }
       await releaseCheckCapacity({env:p.env,owner:stateFile}, p.checkCapacityPorts ?? p);
       if (previous) { state.timerInstalled = false; save(stateFile, state); }
       return ok('Autopilot stopped on this machine; the current step can finish.');
