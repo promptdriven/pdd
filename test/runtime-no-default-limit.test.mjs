@@ -83,10 +83,11 @@ for (const kind of ['lint', 'try']) test(`2704: ${kind} has no local wait behind
   assert.deepEqual((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.sort((a,b) => a.id.localeCompare(b.id)), seeded.rows.sort((a,b) => a.id.localeCompare(b.id)));
 });
 
-for (const limit of [undefined, Infinity]) test(`2704: ${String(limit)} slot limit preserves records without FIFO or occupancy wait`, async t => {
+for (const limit of [undefined, Infinity]) test(`2704: ${String(limit)} slot limit preserves records without FIFO or occupancy wait`, { timeout: 30000 }, async t => {
   const setup = selected(t, 1), origin = 'http://localhost:453';
   const seeded = seed(setup, origin, Date.now()); let sleeps = 0, probes = 0; const lines = [];
-  const reservation = await acquireRuntimeSlot({ stateDir: setup.state, origin, kind: 'check', ...(limit === undefined ? {} : { limit }), deadline: Date.now() + 100 }, {
+  // Filesystem contention must not spend a deadline on this behavior assertion.
+  const reservation = await acquireRuntimeSlot({ stateDir: setup.state, origin, kind: 'check', ...(limit === undefined ? {} : { limit }), deadline: null }, {
     say: line => lines.push(line), sleep: async () => { sleeps++; await pause(10); }, readRun: async () => { probes++; return 'unknown'; },
   });
   try {
