@@ -113,8 +113,8 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | `pdd autopilot status [--all] [--json]` | Show this machine's repo, the folder Autopilot works in, selected base, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
 | `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
 | `pdd autopilot report` | List this machine's local Autopilot report drafts ([core engine](#core-engine)). No GitHub call |
-| `pdd autopilot intake [--json]` | Print this machine's [intake cards](#intake-cards-shadow) for this repo, the would-pick list and today's changes. Local files only: no AI call and no GitHub call |
 | `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report |
+| `pdd autopilot intake [--json]` | Print this machine's [intake cards](#intake-cards-shadow) for this repo, the would-pick list and today's changes. Local files only: no AI call and no GitHub call |
 | `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
@@ -1537,11 +1537,15 @@ Runtime cause.
 repo on this machine; `--intake off` (the default) turns them off. A later start
 without `--intake` keeps the saved value. In shadow mode each core tick first
 checks native facts of each open issue in scope (the opt-in label, no report
-issues): an assignee, an open native blocked-by link, open sub-issues, or a label
-`pdd:stuck`, `pdd:needs-decision`, `pdd:would-merge` or `pdd:working` gives a
-native reason and no AI call. For every other issue, one headless job of this
-machine's agent writes one card per issue version, from the title, the body, the
-labels, the person comments and the titles of the other open issues: ready,
+issues): an assignee, an open native blocked-by link, open sub-issues, a label
+`pdd:stuck`, `pdd:needs-decision`, `pdd:would-merge` or `pdd:working`, or a job of
+this machine gives a native reason and no AI call. An issue whose author the core
+does not trust gets `untrusted` and no AI call. For every other issue, one headless
+job of this machine's agent (Codex or Claude) writes one card per issue version,
+from the title, the body, the labels, the trusted person comments and the titles of
+the other open issues. The card agent runs in an empty folder with no tools and no
+write access (Codex: a read-only sandbox with its tools off; Claude: no tools, plan
+mode), never with the bypass flags of build jobs. A card says ready,
 improve, person, duplicate, blocked, held, fixed or elsewhere, with a reason and a
 confidence. A new title, body, label, assignee, native link or comment makes a new
 version. At most 2 card jobs start per tick and 2 run at once; a card job that ends
@@ -1550,8 +1554,11 @@ Each card names the agent and the model. Cards live in the `intake` folder of th
 core state; one file a day (UTC) lists the class changes, the "would pick" list
 (ready cards, issues that unblock others first, then the oldest) and the issues
 that the core really started. Shadow cards never write to GitHub and never change
-which issue starts. A failure skips only that issue or that tick. `pdd autopilot
-intake` prints the cards and today's changes; `--json` prints them as JSON.
+which issue starts. A failure skips only that issue or that tick. After a switch to
+`--intake off`, the next tick stops card jobs that still run. The cards cover every
+open issue in scope: unlike the core, they do not skip issues that cool down after a
+no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
+the cards and today's changes; `--json` prints them as JSON.
 
 ## Post-merge audit settings
 
