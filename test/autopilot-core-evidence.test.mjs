@@ -1095,3 +1095,25 @@ test('E58 (#3227 fix 4) a red suite names its failed tests', async t => {
   w.review(17, 'PASS'); w.suite(17, 1); await w.tick();
   assert.match(w.job(17, 'repair')?.input ?? '', /The full test suite failed for head [0-9a-f]{7} \(exit 1\): N3: merged former draft PR1 \(draft\.vectors\.test\.mjs\)\./);
 });
+
+// ---- #3227 fix 3: one engine record per head ---------------------------------------------------------------
+test('E59 (#3227 fix 3) the engine writes one evidence record per head; the reviewer gets it; the note and the PR block come from it; it stays after the merge', async t => {
+  const { w, pr, head } = await t04World(t, { base: { 'test/a.vectors.test.mjs': nodeTest('a') }, change: { 'test/a.vectors.test.mjs': nodeTest('a2') }, evidence: 'vectors=pass (1/1); formal=not-applicable' });
+  const file = join(w.root, 'logs', `17-evidence-${head}.json`);
+  assert.ok(existsSync(file), 'the record of this head');
+  assert.match(w.job(17, 'review').input, new RegExp(`Autopilot's evidence record of this head \\(written by the engine; the PR's Runtime and Evidence lines are claims that it checks\\): ${file.replaceAll('/', '\\/').replaceAll('.', '\\.')}`));
+  w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  const record = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(record.schema, 'pdd.core-evidence.v1'); assert.equal(record.head, head);
+  assert.deepEqual(record.vectors.kinds.vectors.files.map(f => [f.file, f.state, f.pass, f.tests]), [['test/a.vectors.test.mjs', 'pass', 1, 1]]);
+  assert.equal(record.suite.state, 'pass'); assert.equal(record.review.state, 'pass');
+  assert.equal(record.claimed.vectors.state, 'pass'); assert.equal(record.evidence.vectors.state, 'pass');
+  assert.match(mergeNote(pr), new RegExp(`- Evidence record: 17-evidence-${head}\\.json on this machine`));
+  // The PR body has one engine block; it never reads as a Runtime or Evidence line, so the claims stay the agent's.
+  const body = w.github.prs.get(pr.number).body;
+  assert.match(body, /<!-- pdd:autopilot-core:evidence:start -->\n### Autopilot evidence for head [0-9a-f]{7}\n\n- Saved pdd test checks of this source:[\s\S]*- Record: 17-evidence-[0-9a-f]{40}\.json on this machine\n<!-- pdd:autopilot-core:evidence:end -->/);
+  const block = body.slice(body.indexOf('<!-- pdd:autopilot-core:evidence:start -->'));
+  assert.doesNotMatch(block, /^\s*(?:-\s*)?(?:runtime|evidence|path)\s*:/im);
+  assert.ok(existsSync(file), 'the record stays after the merge (worktrees and job files go)');
+});
