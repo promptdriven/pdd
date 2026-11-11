@@ -51,9 +51,9 @@ function runtimeVerdicts(body) {
     // verdict first ("Runtime: PASS (STORY, 19/19 checks)").
     // The Story path is read from the raw line (the marks that normalLine removes, such as "_", are path characters).
     const rawAt = raw.search(/\bruntime\b/i), rawValue = rawAt < 0 ? '' : raw.slice(rawAt).replace(/^runtime\b\s*[:\-\u2013\u2014]?\s*/i, '').replace(/^[\s`*>|]+/, '');
-    const first = /^`?([^\s()`]+\.md)`?\s+(.*)$/i.exec(rawValue);
+    const first = /^`?([^\s()`]+(?<!\.prompt)\.md)`?\s+(.*)$/i.exec(rawValue);
     if (first) value = normalLine(first[2]).replace(/^[^a-z0-9]+/i, '');
-    const story = first?.[1] ?? /\(\s*`?([^\s(),:`]+\.md)\b/i.exec(rawValue)?.[1] ?? null;
+    const story = first?.[1] ?? /\(\s*`?([^\s(),:`]+(?<!\.prompt)\.md)\b/i.exec(rawValue)?.[1] ?? null;   // a prompt is not a Story
     found.push({ line: raw.trim().slice(0, 200), story, verdict: /^pass(?:ed)?\b/i.test(value) ? 'pass' : /^not[\s-]+run\b/i.test(value) ? 'not-run' : 'other' });
   }
   return found;
@@ -1226,7 +1226,7 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   const head = job.agentHead ?? job.head, sig = JSON.stringify([claims, lines.map(l => [l.story, l.verdict])]);
   if (job.coverage?.head === head && (job.coverage.sig ?? sig) === sig) return job.coverage;
   const done = coverage => { job.coverage = { head, sig, ...coverage }; ctx.saveJob(job); return job.coverage; };
-  const claim = upperFirst(claims.join(' and ') || 'the Runtime lines of the PR body');
+  const claim = upperFirst(claims.join(' and ') || "the PR body's Runtime lines");
   const changed = await changedFiles(ctx, job, head), prompts = changed.filter(file => file.endsWith('.prompt.md'));
   let evidence;
   try { const tree = await treeAt(ctx, job, 'agent', head); evidence = await (ctx.ports.runtimeEvidence ?? savedRuntime)({ root: job.worktree, tree, head }, ctx); }
