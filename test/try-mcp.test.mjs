@@ -296,7 +296,7 @@ test('failed owner result reads block another run regardless of error wording', 
 });
 
 test('door snapshots use the matching immutable B1 action, never the latest world or another run', async t => {
-  const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
+  const { harbor, fakeRuntime, portsFor, PLACE } = await import('./runtime-fake.mjs');
   const { runDoorCall } = await import('../src/runtime-client.mjs');
   for (const available of [true, false]) {
     const setup = harbor(t); let id, dispatched = 0;
@@ -317,7 +317,7 @@ test('door snapshots use the matching immutable B1 action, never the latest worl
       }) };
     });
     const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
-    const answer = await runDoorCall({ root: setup.repo, origin: fake.origin, sessionId: 'try-id', login: 'octo', prompt: 'prompts/bm.prompt.md', operation: 'main' }, { argv: [] }, ports);
+    const answer = await runDoorCall({ root: setup.repo, origin: fake.origin, sessionId: 'try-id', login: 'octo', prompt: PLACE, operation: 'place_order' }, { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 2 }] }, ports);
     assert.equal(answer.result.stdout, 'exact\n');
     assert.deepEqual(answer.inputWorld, available ? before : undefined);
     assert.deepEqual(answer.world, available ? after : undefined);

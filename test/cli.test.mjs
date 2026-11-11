@@ -17,7 +17,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['interface.draft', 'metrics', 'metrics.export', 'metrics.import', 'metrics.record', 'autopilot.regressions', 'autopilot.doctor', 'autopilot.start', 'autopilot.audit', 'autopilot.check-base', 'autopilot.stop', 'autopilot.status', 'autopilot.report', 'autopilot.intake', 'autopilot.add', 'autopilot.release', 'autopilot.alert', 'autopilot.alerts', 'graph', 'dependencies.prepare', 'dependencies.complete', 'workflow.suite', 'workflow.park', 'workflow.yield', 'product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.resend', 'workflow.card', 'workflow.changes', 'workflow.tidy', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'files', 'owner', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['interface.draft', 'metrics', 'metrics.export', 'metrics.import', 'metrics.record', 'autopilot.regressions', 'autopilot.doctor', 'autopilot.start', 'autopilot.audit', 'autopilot.check-base', 'autopilot.stop', 'autopilot.status', 'autopilot.report', 'autopilot.intake', 'autopilot.add', 'autopilot.release', 'autopilot.alert', 'autopilot.alerts', 'graph', 'dependencies.prepare', 'dependencies.complete', 'workflow.suite', 'workflow.park', 'workflow.yield', 'product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.resend', 'workflow.card', 'workflow.changes', 'workflow.tidy', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'files', 'owner', 'approve', 'try', 'run.save-last', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -70,8 +70,9 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
     { cwd, env, encoding: 'utf8', timeout: 5000 });
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
-    assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|doctor|phone)\b/);
+    assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run\b(?! --save-last STORY\b)|verify\b|runtime\b|doctor\b|phone\b)/);
   }
+  assert.match(run(['--help']).stdout, /pdd run --save-last STORY\b/);
   // help-teaches-pdd: root help and the prompting topic name the guide files of the installed package, not of the cwd.
   for (const argv of [['help'], ['help', 'prompting']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
@@ -115,7 +116,11 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['agy','claude','codex','gemini']);
     }
   }
-  for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown']) {
+  for (const args of [['run', '--help'], ['run', '-h']]) {
+    const answer = run(args); assert.equal(answer.status, 0, answer.stderr); assert.match(answer.stdout, /pdd run --save-last STORY/);
+  }
+  const bareRun = run(['run']); assert.equal(bareRun.status, 2); assert.equal(bareRun.stdout, ''); assert.ok(bareRun.stderr.trim());
+  for (const word of ['verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown']) {
     for (const args of [[word], [word, '--help'], [word, '-h']]) {
       const result = run(args); assert.equal(result.status, 2, JSON.stringify(args)); assert.equal(result.stdout, ''); assert.ok(result.stderr.trim());
     }
