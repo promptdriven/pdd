@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: bd5041422b55080d2c20f36c41930b249fd9c361952503d4c18b3311fdd15e6f).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: da72903fa15d679b31aee8a3af6f041ac59a718e97072d30c73d165095bbf0fa).
 import { createRequire } from 'node:module';
 
 export {
@@ -81,6 +81,15 @@ export function productTapCallBound(map, ports) {
 
 export function selectJourneys(tests, selector) {
   return loadProductComposition().selectJourneys(tests, selector);
+}
+
+let agentGuideModule = null;
+function loadAgentGuide() {
+  return (agentGuideModule ??= createRequire(import.meta.url)('./agent-guide.mjs'));
+}
+
+export function createTryGuide(options) {
+  return loadAgentGuide().createTryGuide(options);
 }
 
 export async function runJobs(input, ports) {

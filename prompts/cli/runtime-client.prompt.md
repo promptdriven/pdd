@@ -1,6 +1,6 @@
 # Runtime client
 
-Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
+Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login (recording read tokens through `ports.redaction.remember` or `ports.rememberSecrets`, falling back to the standalone package redactor only when no redaction port is supplied, and forwarding `ports.redaction` to `createAgentBridge`). Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
 
 ## Runtime interface refusal diagnostics
 

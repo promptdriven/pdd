@@ -1,6 +1,6 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: fa202c9aba70712508abc0a2048566fb396ced4083a4aa033ae843ea4726e28d).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: b890166fd0946479e59379f81ac62660f723e669b9fe67fc39d1a12a52c07b61).
 import {createTryGuide} from './agent-guide.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
@@ -20,7 +20,7 @@ function scrub(value,secrets){
 export async function createAgentBridge(context,test,tryId,options={},link,seamPorts={}){
  const workspace=loadRuntimeWorkspace({root:context.root});
  if(workspace.configured){captureSource(context.root,{tests:[test.path]});throw Error('Bounded agent connection is unavailable: native controls cannot establish packet-only context.');}
- const ports={...seamPorts,...context.ports,guidePorts:{evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility,...seamPorts.guidePorts,...context.ports?.guidePorts}};
+ const ports={...seamPorts,...context.ports,guidePorts:{redaction:context.ports?.redaction??seamPorts.redaction,redactSecrets:context.ports?.redactSecrets??seamPorts.redactSecrets,evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility,...seamPorts.guidePorts,...context.ports?.guidePorts}};
  const loadDefinitions=context.ports?.loadAgentDefinitions??context.ports?.agents?.loadDefinitions??seamPorts.loadAgentDefinitions??seamPorts.agents?.loadDefinitions;
  const definitions=context.agentDefinitions??(loadDefinitions?loadDefinitions({cwd:context.root,env:ports.env}):[]);
  if(!definitions.length)throw Error('No agents are configured. Add an agent or enable defaults in agents.json.');

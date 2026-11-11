@@ -96,6 +96,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const arg = process.argv[2];
     const identity = JSON.parse(arg.trimStart().startsWith('{') ? arg : readFileSync(arg, 'utf8'));
-    await waitForWorkerCompletion(identity);
+    waitForWorkerCompletion(identity).catch(() => {});
   } catch { /* An unavailable listener is not completion. */ }
 }

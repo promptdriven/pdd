@@ -29,6 +29,7 @@ Load each owner module only when the exported function is called:
 |---|---|---|
 | `src/runtime/runtime-check-plan.mjs` | `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults` | Load synchronously on first call via `createRequire(import.meta.url)` |
 | `src/runtime/product-composition.mjs` | `composeProductTry`, `productTapCallBound`, `selectJourneys` | Load synchronously on first call via `createRequire(import.meta.url)` |
+| `src/runtime/agent-guide.mjs` | `createTryGuide` | Load synchronously on first call via `createRequire(import.meta.url)` |
 | `src/runtime/contracts.mjs` | `runContracts` | `await import('./contracts.mjs')` when called |
 | `src/runtime/runtime-slots.mjs` | `runJobs` | `await import('./runtime-slots.mjs')` when called |
 | `src/runtime/interface-draft.mjs` | `loadInterfaceDraft`, `runAutomaticApproval`, `runInterfaceDraft` | `await import('./interface-draft.mjs')` when called (`loadInterfaceDraft` resolves to `{ contractCoverage, coverageView, missingInterfaces }`) |
@@ -53,7 +54,7 @@ Load each owner module only when the exported function is called:
 - [Runtime slots](runtime-slots.prompt.md): required generation context for `runJobs`.
 - [Shared contracts](contracts.prompt.md): required generation context for `runContracts`.
 - [Interface drafting](interface-draft.prompt.md): required generation context for `contractCoverage`, `coverageView`, `missingInterfaces`, `runAutomaticApproval`, and `runInterfaceDraft`.
-- [Agent chat](agent-chat.prompt.md): required generation context for `createAgentBridge`.
+- [Agent chat](agent-chat.prompt.md) and [Try guide](agent-guide.prompt.md): required generation context for `createAgentBridge` and `createTryGuide`.
 - [Workspace migration](runtime-workspace-migration.prompt.md): required generation context for `migrateRuntimeWorkspace`.
 - [Try MCP server](try-mcp.prompt.md): required generation context for `runMcp`.
 - [Try doors](try-doors.prompt.md): required generation context for `runShim` and `tryLauncherUrl` forwarding.
@@ -62,6 +63,6 @@ Load each owner module only when the exported function is called:
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"2988cd2b1a79fc40ab6cfe41e8a19a7f1c75ebaaa0ee2da736d4fad29d9f4a6a","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "f70fd2f60d2484be74dde576ba0fca8784f67ed8e25617d5984d8fefe8d80d97","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
 ```
 </details>

@@ -1,7 +1,7 @@
-import {redactSecrets} from './secret-redaction.mjs';
+import {redactSecrets as fallbackRedactSecrets} from './secret-redaction.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-guide.prompt.md (sha256: 8fa6f82da595f762dcf680e548a5d010c1a737a662722ae78a37af30c013df9c).
+// Generated from prompts/cli/agent-guide.prompt.md (sha256: 93a631df6d9672a3ccea80de80960158b74035c50fa30fba6a0f520abe49398d).
 import {createHash} from 'node:crypto';
 import {buildProjectCard,readAgentScenarios} from './agent-project.mjs';
 import {createRunJudge,compareExpectation} from './agent-judge.mjs';
@@ -17,12 +17,12 @@ const entryId=e=>typeof e==='string'?e:object(e)&&typeof e.entry_path==='string'
 const rank=states=>['fail','differs','tried'].find(s=>states.includes(s))??(states.length&&states.every(s=>s==='pass')?'pass':'todo');
 function progress(items){const marks={pass:'✓',fail:'✗',differs:'~',tried:'~',todo:'·'};return{line:clip(`Story progress: ${items.filter(x=>x.state==='pass').length} of ${items.length} pass · ${items.map(x=>`${x.id}${marks[x.state]??'·'}${x.check_passed?' (check ✓)':''}`).join(' ')}`,300),items:items.slice(0,64)};}
 const SECRET=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
-function clean(value,secrets){
+function clean(value,secrets,redact=fallbackRedactSecrets){
  if(typeof value==='string'){
-  return redactSecrets(value,secrets);
+  return redact(value,secrets);
  }
- if(Array.isArray(value))return value.map(x=>clean(x,secrets));
- if(object(value)){let path=value.path;try{path=decodeURIComponent(path);}catch{}const secretPath=typeof path==='string'&&SECRET.test(path);return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,SECRET.test(k)||(secretPath&&['expected','got','actual'].includes(k))?'[redacted]':clean(v,secrets)]));}
+ if(Array.isArray(value))return value.map(x=>clean(x,secrets,redact));
+ if(object(value)){let path=value.path;try{path=decodeURIComponent(path);}catch{}const secretPath=typeof path==='string'&&SECRET.test(path);return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,SECRET.test(k)||(secretPath&&['expected','got','actual'].includes(k))?'[redacted]':clean(v,secrets,redact)]));}
  return value;
 }
 function normalizeScenarios(found){
@@ -71,7 +71,8 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
  let modelStories=(Array.isArray(model.stories)?model.stories:Object.values(model.stories??{})).filter(s=>allowsRuntimePath(workspace,s.path));
  const currentStory=()=>storyPath??scenarios.find(s=>s.path===test.path)?.doc.story_path??modelStories[0]?.path??null;
  const validFill=fill=>{if(!object(fill)||!object(fill.input))return false;const e=entries.find(e=>e.entry===fill.entry);if(!e)return false;const checked=checkInput(fill.input,e.input_schema,0);return !checked.refusals.length&&!checked.warnings.length;};
- const safe=x=>clean(x,secrets);
+ const redact=ports.redaction?.redact??ports.redactSecrets??fallbackRedactSecrets;
+ const safe=x=>clean(x,secrets,redact);
  const finalFills=value=>{if(own(value,'run')&&(typeof value.run!=='boolean'||!features.includes('run')||!features.includes('apply')||!['chat','own','walk'].includes(requestKind)||(value.run===true&&(value.apply!==true||!validFill(value.fill)))))delete value.run;if(own(value,'fill')&&!validFill(value.fill)){value.fill=null;if(value.apply===true)delete value.apply;}if(object(value.next)&&own(value.next,'fill')&&!validFill(value.next.fill))delete value.next.fill;return value;};
  function refresh(){
   const fresh=loadRuntimeWorkspace({root}),key=JSON.stringify(fresh);

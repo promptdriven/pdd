@@ -496,3 +496,74 @@ test('SEAM7: inward detector catches static, dynamic, require, package.json URL,
     [],
   );
 });
+
+test('SEAM8 (R2-1): host and Runtime share one secret-redaction registry through the seam without touching fallback copy', async t => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const hostRedaction = await import('../src/secret-redaction.mjs');
+  const packageFallback = await import('../src/runtime/secret-redaction.mjs');
+  const { createTryGuide: createStandaloneGuide } = await import('../src/runtime/agent-guide.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-r2-1-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const markerBefore = 'zzOpaqueHostBefore987654321';
+  const markerAfter = 'zzOpaqueHostAfter987654321';
+  const markerFromRuntime = 'zzOpaqueRuntimeToken987654321';
+  const markerStandalone = 'zzOpaqueStandalone987654321';
+
+  hostRedaction.rememberSecrets(markerBefore);
+  const guide = seam.createTryGuide({
+    root: dir,
+    env: {},
+    model: { entries: [], stories: [] },
+    test: {},
+    features: [],
+    secrets: [],
+    ports: {
+      readAgentScenarios: () => [],
+      buildProjectCard: () => ({ fingerprint: 'fp', sourceFingerprint: 'fp', text: 'Card', productRules: [] }),
+    },
+  });
+  assert.equal(guide.wire({ say: `the agent said ${markerBefore}`, fill: null }).say, 'the agent said [redacted]');
+
+  // Values remembered on the host after guide creation are immediately redacted too.
+  hostRedaction.rememberSecrets(markerAfter);
+  assert.equal(guide.wire({ say: `later ${markerAfter}`, fill: null }).say, 'later [redacted]');
+
+  // Values remembered by Runtime through the seam reach the host registry.
+  await seam.checkRuntimeHealth(
+    { env: { PDD_RUNTIME_URL: 'https://runtime.example.test' } },
+    {
+      gh: () => ({ status: 0, stdout: `${markerFromRuntime}\n`, stderr: '' }),
+      fetch: async () => { throw new Error('network disabled'); },
+      timeoutMs: 50,
+    },
+  );
+  assert.ok(hostRedaction.knownSecretValues({}).includes(markerFromRuntime));
+  assert.equal(hostRedaction.redactSecrets(`echo ${markerFromRuntime}`), 'echo [redacted]');
+  assert.equal(guide.wire({ say: `runtime ${markerFromRuntime}`, fill: null }).say, 'runtime [redacted]');
+
+  // Seam calls never populate the standalone fallback Set in src/runtime/secret-redaction.mjs.
+  const fallbackKnown = packageFallback.knownSecretValues({});
+  assert.ok(!fallbackKnown.includes(markerBefore));
+  assert.ok(!fallbackKnown.includes(markerAfter));
+  assert.ok(!fallbackKnown.includes(markerFromRuntime));
+
+  // Direct standalone callers without ports.redaction still get the package fallback copy.
+  packageFallback.rememberSecrets(markerStandalone);
+  const standaloneGuide = createStandaloneGuide({
+    root: dir,
+    env: {},
+    model: { entries: [], stories: [] },
+    test: {},
+    features: [],
+    secrets: [],
+    ports: {
+      readAgentScenarios: () => [],
+      buildProjectCard: () => ({ fingerprint: 'fp', sourceFingerprint: 'fp', text: 'Card', productRules: [] }),
+    },
+  });
+  assert.equal(standaloneGuide.wire({ say: `standalone ${markerStandalone}`, fill: null }).say, 'standalone [redacted]');
+});

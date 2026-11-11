@@ -1,9 +1,9 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21becfcf6be955bfb6cfcc0631c9fdd2570d964ed84ff0d4b434adb5b9b76261).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1f691fd32d194e63fc84516550f5d869816434bb0dc0aed44812a6be8f84902a).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
-import { rememberSecrets } from './secret-redaction.mjs';
+import { rememberSecrets as fallbackRememberSecrets } from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
@@ -108,7 +108,7 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   return {
-    env, tryLauncherUrl: ports.tryLauncherUrl, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, tryLauncherUrl: ports.tryLauncherUrl, redaction: ports.redaction, redactSecrets: ports.redactSecrets, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -439,13 +439,19 @@ async function ownBatch(context, name) {
   }
 }
 
+function recordSecret(ports, ...values) {
+  const remember = ports?.redaction?.remember;
+  if (remember) remember(...values);
+  if (ports?.rememberSecrets && ports.rememberSecrets !== remember) ports.rememberSecrets(...values);
+  if (!remember && !ports?.rememberSecrets) fallbackRememberSecrets(...values);
+}
+
 function signIn(gh, store, ports) {
   const token = gh(['auth', 'token']);
   if (token.error?.code === 'ENOENT') throw new Stop(5, 'Install the GitHub CLI, then run gh auth login');
   const value = token.status === 0 ? String(token.stdout ?? '').trim() : '';
   if (!value) throw new Stop(5, 'Run gh auth login');
-  rememberSecrets(value);
-  ports?.rememberSecrets?.(value);
+  recordSecret(ports, value);
   if (store) store.secrets = [value];
   const user = gh(['api', 'user', '--jq', '.login + " " + (.id|tostring)']);
   const [login, id] = user.status === 0 ? String(user.stdout ?? '').trim().split(' ') : [];
@@ -536,8 +542,7 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   try { origin = runtimeOrigin(env); } catch { return { state: 'access', detail: 'PDD_RUNTIME_URL is not an HTTPS origin', fix: HEALTH_ADDRESS }; }
   let token = '';
   try { const reply = ports.gh(['auth', 'token']); token = reply.status === 0 ? String(reply.stdout ?? '').trim() : ''; } catch { token = ''; }
-  rememberSecrets(token);
-  ports.rememberSecrets?.(token);
+  recordSecret(ports, token);
   if (!token) return { state: 'access', detail: 'no gh sign-in', fix: HEALTH_SIGN_IN };
   const reply = await new Runtime({ origin, token, ports }).send('/v1/capacity', { method: 'GET' }, givenPorts.timeoutMs ?? 10_000);
   if (reply.lost) return { state: 'unavailable', detail: reply.unreachable ? 'not reached' : 'no answer' };
@@ -4021,6 +4026,8 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
       context.agentFinalSend = finalRuntime.send.bind(finalRuntime);
       try {
         const seamPorts = {
+          redaction: ports.redaction,
+          redactSecrets: ports.redactSecrets,
           loadAgentDefinitions: ports.loadAgentDefinitions,
           discoverAgents: ports.discoverAgents,
           askAgent: ports.askAgent,

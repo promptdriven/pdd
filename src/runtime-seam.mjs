@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 72e979750c678311b499988efbb5605974e4b6e0f7df6cfde228c40d856df4a5).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: eda9c8d03d871d6de695d5a0ac9a0d3e0a4592aa8431a40b156efc94f3abc57a).
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -9,6 +9,7 @@ import {
   checkRuntimeHealth as runtimeCheckHealth,
   composeProductTry as runtimeComposeProductTry,
   createAgentBridge as runtimeCreateAgentBridge,
+  createTryGuide as runtimeCreateTryGuide,
   loadRuntimeClient as runtimeLoadClient,
   migrateRuntimeWorkspace as runtimeMigrateWorkspace,
   readTryOwner as runtimeReadTryOwner,
@@ -28,6 +29,26 @@ const NON_BATCH_MODES = ['--read', '--retry', '--fill-hash', '--files', '--expla
 let cachedVersion = null;
 function clientVersion() {
   return (cachedVersion ??= req('../package.json').version);
+}
+
+let cachedRedaction = null;
+function hostRedaction() {
+  if (!cachedRedaction) {
+    const { knownSecretValues, redactSecrets, rememberSecrets } = req('./secret-redaction.mjs');
+    cachedRedaction = Object.freeze({ remember: rememberSecrets, redact: redactSecrets, known: knownSecretValues });
+  }
+  return cachedRedaction;
+}
+
+function seamRedaction(ports = {}) {
+  if (ports.redaction !== undefined) return ports.redaction;
+  const host = hostRedaction();
+  if (ports.rememberSecrets === undefined && ports.redactSecrets === undefined) return host;
+  return Object.freeze({
+    remember: ports.rememberSecrets ?? host.remember,
+    redact: ports.redactSecrets ?? host.redact,
+    known: host.known,
+  });
 }
 
 function resolveWorkflowBaseSha(cwd = process.cwd(), env = process.env) {
@@ -54,6 +75,20 @@ export function composeProductTry(input, ports = {}) {
   return runtimeComposeProductTry(input, { parseProductDocuments, parseProductWorldWriters, ...ports });
 }
 
+export function createTryGuide(options = {}) {
+  const givenPorts = options.ports ?? {};
+  return runtimeCreateTryGuide({
+    ...options,
+    ports: {
+      ...givenPorts,
+      redaction: seamRedaction(givenPorts),
+      ...(givenPorts.evidenceEligibility === undefined && givenPorts.readEvidenceEligibility === undefined
+        ? { evidenceEligibility: (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args) }
+        : {}),
+    },
+  });
+}
+
 export async function runContracts(input, ports = {}) {
   const { readEvidenceEligibility } = await import('./workflow-runner.mjs');
   return runtimeRunContracts(input, { evidenceEligibility: readEvidenceEligibility, ...ports });
@@ -65,19 +100,19 @@ export async function runJobs(input = {}, ports = {}) {
 }
 
 export async function checkRuntimeHealth(input, ports = {}) {
-  const { rememberSecrets } = await import('./secret-redaction.mjs');
-  return runtimeCheckHealth(input, { rememberSecrets, ...ports });
+  await import('./secret-redaction.mjs');
+  return runtimeCheckHealth(input, { ...ports, redaction: seamRedaction(ports) });
 }
 
 export async function loadRuntimeClient() {
-  const [{ DEFAULT_RUNTIME_URL, checkRuntimeHealth: rawCheckHealth, runtimeOrigin }, { rememberSecrets }] = await Promise.all([
+  const [{ DEFAULT_RUNTIME_URL, checkRuntimeHealth: rawCheckHealth, runtimeOrigin }] = await Promise.all([
     runtimeLoadClient(),
     import('./secret-redaction.mjs'),
   ]);
   return {
     DEFAULT_RUNTIME_URL,
     runtimeOrigin,
-    checkRuntimeHealth: (input, ports = {}) => rawCheckHealth(input, { rememberSecrets, ...ports }),
+    checkRuntimeHealth: (input, ports = {}) => rawCheckHealth(input, { ...ports, redaction: seamRedaction(ports) }),
   };
 }
 
@@ -85,7 +120,7 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
   const [
     { approvalActor, readApprovalPolicy, readPromptApprovals, recordPromptApproval },
     { approvePromptText, promptPath },
-    { rememberSecrets },
+    ,
     { headerPrompts },
     { lintSvgLayouts },
   ] = await Promise.all([
@@ -105,18 +140,18 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
     recordPromptApproval,
     approvePromptText,
     promptPath,
-    rememberSecrets,
     headerPrompts,
     lintSvgLayouts,
     client,
     workflow,
     ...ports,
+    redaction: seamRedaction(ports),
   });
 }
 
 export async function runCheck(input = {}, ports = {}) {
   const [
-    { rememberSecrets },
+    ,
     { headerPrompts },
     { readEvidenceEligibility },
     { allRuns },
@@ -144,7 +179,6 @@ export async function runCheck(input = {}, ports = {}) {
       ...(workflow !== undefined ? { workflow } : {}),
     },
     {
-      rememberSecrets,
       headerPrompts,
       evidenceEligibility: readEvidenceEligibility,
       allRuns,
@@ -155,13 +189,14 @@ export async function runCheck(input = {}, ports = {}) {
       compareScreen,
       formatScreenComparison,
       ...ports,
+      redaction: seamRedaction(ports),
     },
   );
 }
 
 export async function runTry(input = {}, ports = {}) {
   const [
-    { rememberSecrets },
+    ,
     { loadAgentDefinitions },
     { readEvidenceEligibility },
     { parseProductDocuments, parseProductWorldWriters },
@@ -175,7 +210,6 @@ export async function runTry(input = {}, ports = {}) {
   ]);
   return runtimeRunTry(input, {
     tryLauncherUrl: TRY_LAUNCHER_URL,
-    rememberSecrets,
     loadAgentDefinitions,
     discoverAgents: async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args),
     askAgent: async (...args) => (await import('./agent-adapters.mjs')).askAgent(...args),
@@ -186,15 +220,18 @@ export async function runTry(input = {}, ports = {}) {
     lineReader,
     promptPath,
     ...ports,
+    redaction: seamRedaction(ports),
   });
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts = {}) {
   const [
+    ,
     { loadAgentDefinitions },
     { askAgent, discoverAgents },
     { readEvidenceEligibility },
   ] = await Promise.all([
+    import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./agent-adapters.mjs'),
     import('./workflow-runner.mjs'),
@@ -205,20 +242,21 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
     askAgent,
     evidenceEligibility: readEvidenceEligibility,
     ...seamPorts,
+    redaction: seamRedaction(seamPorts),
   });
 }
 
 export async function runShim(descriptorPath, argv, ports = {}) {
-  const [{ rememberSecrets }, { lineReader }] = await Promise.all([
+  const [, { lineReader }] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./prompt-approve.mjs'),
   ]);
-  return runtimeRunShim(descriptorPath, argv, { rememberSecrets, lineReader, ...ports });
+  return runtimeRunShim(descriptorPath, argv, { lineReader, ...ports, redaction: ports.redaction ?? hostRedaction() });
 }
 
 export async function readTryOwner(input = {}, ports = {}) {
   const [
-    { rememberSecrets },
+    ,
     { readEvidenceEligibility },
     { parseProductDocuments, parseProductWorldWriters },
   ] = await Promise.all([
@@ -228,17 +266,17 @@ export async function readTryOwner(input = {}, ports = {}) {
   ]);
   return runtimeReadTryOwner(input, {
     tryLauncherUrl: TRY_LAUNCHER_URL,
-    rememberSecrets,
     evidenceEligibility: readEvidenceEligibility,
     parseProductDocuments,
     parseProductWorldWriters,
     ...ports,
+    redaction: seamRedaction(ports),
   });
 }
 
 export async function runMcp(input, ports = {}) {
   const [
-    { rememberSecrets },
+    ,
     { readEvidenceEligibility },
     { parseProductDocuments, parseProductWorldWriters },
   ] = await Promise.all([
@@ -248,11 +286,11 @@ export async function runMcp(input, ports = {}) {
   ]);
   return runtimeRunMcp(input, {
     tryLauncherUrl: TRY_LAUNCHER_URL,
-    rememberSecrets,
     evidenceEligibility: readEvidenceEligibility,
     parseProductDocuments,
     parseProductWorldWriters,
     ...ports,
+    redaction: seamRedaction(ports),
   });
 }
 
