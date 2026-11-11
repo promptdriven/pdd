@@ -1,6 +1,6 @@
 # Local Try run judge
 
-Own `src/agent-judge.mjs`: deterministically compare a Try run against the person's local scenario, preserving exact JSON values and string newlines. This new module never executes a program, contacts a model, reads files or treats official Check results as Try evidence. It uses only supplied JSON data and keeps evidence in RAM.
+Own `src/runtime/agent-judge.mjs`: deterministically compare a Try run against the person's local scenario, preserving exact JSON values and string newlines. This new module never executes a program, contacts a model, reads files or treats official Check results as Try evidence. It uses only supplied JSON data and keeps evidence in RAM.
 
 Export `createRunJudge({scenario,checkPassed=[]})`. `scenario` has local test `criteria`, `steps` and optional `initial_world`. Return methods `record(run)`, `snapshot()` and `bindings()`. A normalized run has `{id,entry,input,result,world_before?,world_after?,lossless}`; entry is `entry_path#operation`. IDs deduplicate events: repeated IDs return the original verdict without updating progress. Missing IDs are independently judged. `lossless:true` is required for exact stdout comparisons; false or absent means ledger output, whose newlines are untrustworthy. The bridge owns normalization, authentication, bounds and secret scrubbing.
 

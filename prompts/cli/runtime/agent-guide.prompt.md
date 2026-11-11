@@ -1,6 +1,6 @@
 # Try guide memory and preparation
 
-Own `src/agent-guide.mjs`. Export `createTryGuide({root,env,model,test,features=[],secrets=[],ports={}})`, returning `prepare(message)`, `decorate(reply)`, `delivered(message,reply)`, `wire(reply)`, `saved(record)` and `close()`. This read-only coordinator owns one bridge's RAM memory and the private-to-public boundary. It never calls an agent, invokes a program, changes project files, approves or saves a case, or chooses a model. The bridge still owns authenticated transport, cancellation, exactly-once delivery and when a reply was accepted.
+Own `src/runtime/agent-guide.mjs`. Export `createTryGuide({root,env,model,test,features=[],secrets=[],ports={}})`, returning `prepare(message)`, `decorate(reply)`, `delivered(message,reply)`, `wire(reply)`, `saved(record)` and `close()`. This read-only coordinator owns one bridge's RAM memory and the private-to-public boundary. It never calls an agent, invokes a program, changes project files, approves or saves a case, or chooses a model. The bridge still owns authenticated transport, cancellation, exactly-once delivery and when a reply was accepted.
 
 ## Workspace refresh
 
@@ -42,7 +42,7 @@ saved accepts `{id,name,story_path,result}` only after collectSavedTests actuall
 
 ## Dependencies
 
-- [Secret redaction](secret-redaction.prompt.md): required shared string-sanitizing
+- [Secret redaction](../secret-redaction.prompt.md): required shared string-sanitizing
   rules, extracted from this module; object/path scrubbing remains local.
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.

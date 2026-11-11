@@ -12,4 +12,4 @@ As a person whose Simulator setup stopped before its outcome was clear, I want t
 
 ## Native cases
 
-The [client contract](../prompts/cli/runtime-client.prompt.md#pdd-simulate) owns the recovery decision. [Public client regressions](../test/runtime-try-recovery.test.mjs) exercise retained private state and actual HTTP requests through the existing injected transport. Real provider validation uses a separate disposable setup; it never replays the historical uncertain operation.
+The [client contract](../prompts/cli/runtime/runtime-client.prompt.md#pdd-simulate) owns the recovery decision. [Public client regressions](../test/runtime-try-recovery.test.mjs) exercise retained private state and actual HTTP requests through the existing injected transport. Real provider validation uses a separate disposable setup; it never replays the historical uncertain operation.

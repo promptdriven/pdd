@@ -1,6 +1,6 @@
 # Recent lint receipt eligibility
 
-Own `src/runtime-lint-receipt.mjs`. New behavior authorized by issue #3208;
+Own `src/runtime/runtime-lint-receipt.mjs`. New behavior authorized by issue #3208;
 existing command semantics and lint verdict policy remain with runtime-client.
 Export module function `isRecentLintReceipt({receipt,scope,now,engineSha=null})`
 returning a Boolean. This pure hook decides metadata eligibility only; its
@@ -34,6 +34,6 @@ invalid JSON returns false. Native callers use the object signature above.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"","entries":[{"operation":"isRecentLintReceipt","input_schema":{"type":"object","properties":{"receipt_json":{"type":"string"},"scope_json":{"type":"string"},"now":{"type":"number"},"engineSha":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["receipt_json","scope_json","now","engineSha"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"eligible":{"type":"boolean"}},"required":["eligible"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":4},"conventions":[]}
+{"status":"draft","prose_sha256":"f6c728f5aad722bf83570a11f898cb2e03fc25c297bdf3c18827087714d79481","entries":[{"operation":"isRecentLintReceipt","input_schema":{"type":"object","properties":{"receipt_json":{"type":"string"},"scope_json":{"type":"string"},"now":{"type":"number"},"engineSha":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["receipt_json","scope_json","now","engineSha"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"eligible":{"type":"boolean"}},"required":["eligible"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":4},"conventions":[]}
 ```
 </details>

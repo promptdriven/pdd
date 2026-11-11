@@ -1,6 +1,6 @@
 # Try tools for the person's agent
 
-Own `src/try-mcp.mjs`. Export `runMcp({cwd, words}={}, ports={})`, a newline-delimited stdio JSON-RPC MCP server returning exit code 0 after input closes and outstanding work finishes. Export `createTryTools({cwd,words}={}, ports={})` returning a `call(name,args)` interface for embedding and verification. This new interface preserves the existing Try, door and judge behavior.
+Own `src/runtime/try-mcp.mjs`. Export `runMcp({cwd, words}={}, ports={})`, a newline-delimited stdio JSON-RPC MCP server returning exit code 0 after input closes and outstanding work finishes. Export `createTryTools({cwd,words}={}, ports={})` returning a `call(name,args)` interface for embedding and verification. This new interface preserves the existing Try, door and judge behavior.
 
 The five tools are `try_open`, `try_state`, `try_run`, `try_check`, and `try_save_case`. Select the Git repository containing cwd and exactly one discovered Story test; optional `story` selects by the existing Story selection rules. Without it prefer the only open Try, otherwise the only test. If a Story matches multiple tests, prefer its only open Try; otherwise require the exact test path. Ambiguity names the choices and sends nothing. Open a missing or ended Try through runTry with no waiting or agent bridge. Reuse its private identity, session and source hashes. Refuse changed prompt or Story identity; never label uploaded old behavior as current source.
 
@@ -81,4 +81,4 @@ Preserve the current isolated observed-world save operation. It still uses the n
 - [Runtime client](runtime-client.prompt.md): required generation/runtime/verification context for selection, owner identity, opening, current owner reads, door execution, safe case append and local retained-case application through `applyPendingCaseWithHandoff`.
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for Story selection.
 - [Agent judge](agent-judge.prompt.md): required generation/runtime context for per-run comparison and progress.
-- [Prompting guide](../../docs/prompting-guide.md): required authoring context.
+- [Prompting guide](../../../docs/prompting-guide.md): required authoring context.

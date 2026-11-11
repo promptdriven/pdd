@@ -14,7 +14,7 @@ I can leave a command waiting during announced maintenance and continue afterwar
 
 ## Rules to check
 
-The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
+The [slots prompt](../prompts/cli/runtime/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
 ## Native cases for the code step
 

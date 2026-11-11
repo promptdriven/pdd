@@ -1,6 +1,6 @@
 # Call preflight display
 
-Own `src/lint-call-preflight.mjs`; export pure module function
+Own `src/runtime/lint-call-preflight.mjs`; export pure module function
 `describeCallPreflight({test, preflight, context, sourceSha256, requestedCap})`, returning a fresh `{text}`.
 This display lets a person inspect the Runtime's call estimate before paid work.
 Preserve supplied data without mutation. It never computes a cost or changes a cap.
@@ -47,7 +47,7 @@ None. This pure formatter uses only its explicit input and standard string forma
 ```json
 {
   "status": "draft",
-  "prose_sha256": "2d650d58934e1160ed534f7af5cb32b7510da8e69b4e338c1294dc44f237f443",
+  "prose_sha256": "96a95f7713295c3ebb4d1f52911b428788783935bcd636901f3eac4cc58e4cd5",
   "entries": [
     {
       "operation": "describeCallPreflight",

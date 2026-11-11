@@ -1,6 +1,6 @@
 # Draft missing Runtime interfaces
 
-Own `src/interface-draft.mjs`. Preserve prompt prose. Leave existing blocks unchanged unless an explicit extension or refresh is requested. Export `runInterfaceDraft({words,all,json,cwd,contract,extend,refresh}, ports)`, `interfaceFindings({root,paths})`, `runtimeCoverage({root,paths})`, `missingInterfaces(root)`, `contractCoverage({root,path,text?,iface?})`, `coverageView(coverage)` and `runAutomaticApproval({path,root,tests}, ports)`.
+Own `src/runtime/interface-draft.mjs`. Preserve prompt prose. Leave existing blocks unchanged unless an explicit extension or refresh is requested. Export `runInterfaceDraft({words,all,json,cwd,contract,extend,refresh}, ports)`, `interfaceFindings({root,paths})`, `runtimeCoverage({root,paths})`, `missingInterfaces(root)`, `contractCoverage({root,path,text?,iface?})`, `coverageView(coverage)` and `runAutomaticApproval({path,root,tests}, ports)`.
 
 Draft only Git-visible regular in-repository prompt files in the runtime workspace. Resolve explicit paths from cwd. Refuse unsafe paths, malformed blocks, unknown paths and --all combined with paths before any write. With --all select all workspace prompts, excluding nested fixture projects. Without --all require at least one path. Continue across independent draft failures and report each result. Never choose native-only for the user. With contract, extend or refresh, require one explicit prompt, not --all. Extend requires contract and cannot combine with refresh. Validate the contract path through the same regular Git-visible workspace file boundary before writes.
 
@@ -35,8 +35,8 @@ Native test commands for automatic approval are `node --test TEST...`, `npm test
 - [Preflight](runtime-preflight.prompt.md): required for block discovery, source hashing, schemas and test discovery.
 - [Contract references](contract-refs.prompt.md): required for expanding declared schema references.
 - [Runtime client](runtime-client.prompt.md): required for complete prompt-check evidence.
-- [Prompt approval](prompt-approve.prompt.md): required for safe status editing and path validation.
-- [Approval policy](approval-policy.prompt.md): required for strict mode and evidence recording.
+- [Prompt approval](../prompt-approve.prompt.md): required for safe status editing and path validation.
+- [Approval policy](../approval-policy.prompt.md): required for strict mode and evidence recording.
 - [Runtime workspace](runtime-workspace.prompt.md): required for selecting project source and excluding fixtures.
 
 Use “Runtime interface” when naming the declaration in user messages, including its global approval status.

@@ -72,7 +72,7 @@ Do not import operational captures as fixtures.
 
 ## Dependencies
 
-- [Workflow state](../cli/workflow-runs.prompt.md), [interpreter client](../cli/runtime-client.prompt.md), [skills](../cli/skills-install.prompt.md) and [Herdr layout](../cli/workflow-herdr-layout.prompt.md): required path-selection context for authoring and native verification.
+- [Workflow state](../cli/workflow-runs.prompt.md), [interpreter client](../cli/runtime/runtime-client.prompt.md), [skills](../cli/skills-install.prompt.md) and [Herdr layout](../cli/workflow-herdr-layout.prompt.md): required path-selection context for authoring and native verification.
 - [Prompting guide](../../docs/prompting-guide.md): required authoring context.
 
 ## Native boundary
@@ -83,7 +83,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"35f830d16449e7f44e261cfad857f187c79cca5d13db236d0b9a58c7f534602e","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"0a7cb22ccba75ff2104c1004a55d40e9e1ef73e49fb92ed4f1ba844f6dbc51af","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>

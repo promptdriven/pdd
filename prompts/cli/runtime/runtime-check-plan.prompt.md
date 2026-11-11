@@ -1,6 +1,6 @@
 # Check scope and interpreter call plan
 
-Own `src/runtime-check-plan.mjs`. Before a full Check, explain its scope and
+Own `src/runtime/runtime-check-plan.mjs`. Before a full Check, explain its scope and
 bounded work so an owner can distinguish target work from baseline obligations.
 Preserve the selected full batch, its exit code and required full-pass gates.
 This is local planning, not approval or proof of a baseline defect's age or owner.
@@ -16,7 +16,7 @@ Story's captured upload closure with changed paths. Capture via `ports.capture`
 (default the canonical capture owner), grouping every selected test variant.
 Changed tests, Stories and transitive dependencies affect that Story. Translate
 changed implementation paths to their owning prompts through every Generated-from
-header that the shared [header reader](file-owner.prompt.md#generated-from-header)
+header that the shared [header reader](../file-owner.prompt.md#generated-from-header)
 finds, and through the binding inventory when declared. For a deleted
 implementation, read the same owner headers from the comparison base revision. Apply workspace
 exclusions before reading base metadata; excluded paths cannot affect ownership.
@@ -79,13 +79,13 @@ native-test obligations. The partial surface supplies no proof of those effects.
 - [Workspace authority](runtime-workspace.prompt.md): required for permitted
   ownership metadata reads, including deleted paths in the comparison base.
 - [Result outcome](runtime-outcome.prompt.md): required for public row states.
-- [File owner lookup](file-owner.prompt.md#generated-from-header): required for
+- [File owner lookup](../file-owner.prompt.md#generated-from-header): required for
   the header rule.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"baa3e9498d38a70803668ea0da26c3fcf7440f1151a1c9e5d3c074e09cfda16b","kind":"partial","entries":[{"operation":"checkPlanResults","input_schema":{"type":"object","properties":{"plan":{"type":"object","properties":{"schema_version":{"type":"string","enum":["pdd.check-plan.v1"]},"stories":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["target","baseline"]},"tests":{"type":"array","items":{"type":"string"}}},"required":["role","tests"],"additionalProperties":false}}},"required":["schema_version","stories"],"additionalProperties":false},"rows":{"type":"array","items":{"type":"object","properties":{"test":{"type":"string"},"state":{"type":"string","enum":["passed","failed","refused","not_run","unknown","running"]}},"required":["test","state"],"additionalProperties":false}}},"required":["plan","rows"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"target":{"type":"object","properties":{"tests":{"type":"array","items":{"type":"string"}},"passed":{"type":"array","items":{"type":"string"}},"failures":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}},"state":{"type":"string","enum":["passed","failed","not_run","none"]}},"required":["tests","passed","failures","unresolved","state"],"additionalProperties":false},"baseline":{"type":"object","properties":{"tests":{"type":"array","items":{"type":"string"}},"passed":{"type":"array","items":{"type":"string"}},"failures":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}},"state":{"type":"string","enum":["passed","failed","not_run","none"]}},"required":["tests","passed","failures","unresolved","state"],"additionalProperties":false},"guidance":{"type":"string"}},"required":["target","baseline","guidance"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"64079bfd67cc5f2124b4ea5cb731a36dd451f66cf4472a975d5c1ef1ba59432b","kind":"partial","entries":[{"operation":"checkPlanResults","input_schema":{"type":"object","properties":{"plan":{"type":"object","properties":{"schema_version":{"type":"string","enum":["pdd.check-plan.v1"]},"stories":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["target","baseline"]},"tests":{"type":"array","items":{"type":"string"}}},"required":["role","tests"],"additionalProperties":false}}},"required":["schema_version","stories"],"additionalProperties":false},"rows":{"type":"array","items":{"type":"object","properties":{"test":{"type":"string"},"state":{"type":"string","enum":["passed","failed","refused","not_run","unknown","running"]}},"required":["test","state"],"additionalProperties":false}}},"required":["plan","rows"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"target":{"type":"object","properties":{"tests":{"type":"array","items":{"type":"string"}},"passed":{"type":"array","items":{"type":"string"}},"failures":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}},"state":{"type":"string","enum":["passed","failed","not_run","none"]}},"required":["tests","passed","failures","unresolved","state"],"additionalProperties":false},"baseline":{"type":"object","properties":{"tests":{"type":"array","items":{"type":"string"}},"passed":{"type":"array","items":{"type":"string"}},"failures":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}},"state":{"type":"string","enum":["passed","failed","not_run","none"]}},"required":["tests","passed","failures","unresolved","state"],"additionalProperties":false},"guidance":{"type":"string"}},"required":["target","baseline","guidance"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 
 </details>

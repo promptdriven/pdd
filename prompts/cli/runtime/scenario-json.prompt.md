@@ -1,6 +1,6 @@
 # Exact scenario numbers
 
-Own `src/scenario-json.mjs`. This module is the one owner of how pdd reads and
+Own `src/runtime/scenario-json.mjs`. This module is the one owner of how pdd reads and
 writes numbers in Runtime scenario files (`prompt-runtime.program-scenario.v1`
 test vectors), so that a whole number is never rounded on its way through pdd.
 

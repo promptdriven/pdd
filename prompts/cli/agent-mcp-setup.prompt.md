@@ -33,6 +33,6 @@ Home defaults to os.homedir(). Detection honors the selected agent home and also
 
 ## Dependencies
 
-Read the [Prompting guide](../../docs/prompting-guide.md) for authoring. [CLI](pdd-cli.prompt.md) owns sequencing with existing setup actions; [Try MCP](try-mcp.prompt.md) owns tool execution. Runtime uses Node filesystem/path/os/readline and the BSD-3-Clause `smol-toml` 1.9.1 parser vendored with its license under `src/vendor/smol-toml/`. Official registration references: [Codex](https://developers.openai.com/codex/mcp/), [Claude Code](https://code.claude.com/docs/en/mcp), [Gemini](https://geminicli.com/docs/tools/mcp-server/).
+Read the [Prompting guide](../../docs/prompting-guide.md) for authoring. [CLI](pdd-cli.prompt.md) owns sequencing with existing setup actions; [Try MCP](runtime/try-mcp.prompt.md) owns tool execution. Runtime uses Node filesystem/path/os/readline and the BSD-3-Clause `smol-toml` 1.9.1 parser vendored with its license under `src/vendor/smol-toml/`. Official registration references: [Codex](https://developers.openai.com/codex/mcp/), [Claude Code](https://code.claude.com/docs/en/mcp), [Gemini](https://geminicli.com/docs/tools/mcp-server/).
 
 NODE is the absolute running Node executable; ABSOLUTE_ENTRY is the absolute package-root bin/pdd.mjs path. Default packageRoot comes from this module’s own package location when omitted. TOML strings use valid escaped basic-string literals for both paths.

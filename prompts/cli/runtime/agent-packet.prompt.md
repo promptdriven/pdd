@@ -1,6 +1,6 @@
 # Try guide input packet
 
-Own `src/agent-packet.mjs`. Export `buildAgentInput({context={},entries=[],supportsApply=false,supportsRun=false})`, returning complete stdin for one fresh own-agent turn, including the system instructions and one JSON data packet, at most 24576 UTF-8 bytes. The module does not run agents, change models/effort, read files or scrub secrets; adapters scrub before calling and own subprocess safety and reply validation.
+Own `src/runtime/agent-packet.mjs`. Export `buildAgentInput({context={},entries=[],supportsApply=false,supportsRun=false})`, returning complete stdin for one fresh own-agent turn, including the system instructions and one JSON data packet, at most 24576 UTF-8 bytes. The module does not run agents, change models/effort, read files or scrub secrets; adapters scrub before calling and own subprocess safety and reply validation.
 
 ## The Try guide role
 

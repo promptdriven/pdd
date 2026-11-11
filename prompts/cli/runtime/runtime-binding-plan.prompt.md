@@ -1,6 +1,6 @@
 # Local runtime binding plan
 
-Own `src/runtime-binding-plan.mjs`. Explain resource selection before service
+Own `src/runtime/runtime-binding-plan.mjs`. Explain resource selection before service
 admission without evaluating the program or claiming compatibility. #3135
 authorizes additive public exports and Story boundary syntax. Preserve existing
 fixtures and expectations; fixtures win by exact `resource.operation` key after
@@ -90,6 +90,6 @@ path arithmetic; all filesystem, Git and service access belongs to callers.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"bb9a8d823855b1132b96aabea1925d4a7919f44f9e8672242ce4b88e6f727a7a","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"8dbc097fecca311868b24fc2d33fe7ef01e9a8b190c804da6a4fcce292a0ff06","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

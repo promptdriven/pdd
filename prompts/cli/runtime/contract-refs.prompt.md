@@ -1,6 +1,6 @@
 # Shared contract references
 
-Own `src/contract-refs.mjs`: resolve shared schema records and starting worlds,
+Own `src/runtime/contract-refs.mjs`: resolve shared schema records and starting worlds,
 retain their provenance, and compare inline schemas with the catalog. Callers
 supply UTF-8 source and synchronous file ports. This module has no filesystem,
 network, history or approval effects. Existing source without an applicable
@@ -231,7 +231,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "approved", "prose_sha256": "3a84aa203ba844948e320226a44f28c86e4392bd60bb6a2f13aa3e0fd973a585",
+  "status": "draft", "prose_sha256": "068d5d1949770264b8c76e2a76b755c61b828ec992f9ee8f53769d76b5894244",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

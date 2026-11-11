@@ -16,7 +16,7 @@ tracked file [path,"missing"]. Include uncommitted and untracked non-ignored fil
 
 pinReplayVectors receives the prompt area's selected original scenario paths at approved publication. Return
 an anchor containing version pdd.replay-vectors.v1, each raw file SHA256, parsed scenario snapshot and original step/check identity,
-read with the [exact scenario number](scenario-json.prompt.md) rules. The snapshot stays the ordinary JSON value. A vector
+read with the [exact scenario number](runtime/scenario-json.prompt.md) rules. The snapshot stays the ordinary JSON value. A vector
 with a whole number above 2^53 adds `exact_integers`: its `{pointer, value}` digit rows, so the saved anchor keeps them exactly;
 a vector without one has no such field,
 or an explicit blocked anchor with a reason. No paths or no checks is not_replayed. Paths must be unique,
@@ -375,18 +375,18 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 ## Dependencies
 
-- [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for gitFiles(root).
-- [Runtime output](runtime-output.prompt.md): required generation/runtime context for safe diagnostic text.
+- [Runtime preflight](runtime/runtime-preflight.prompt.md): required generation/runtime context for gitFiles(root).
+- [Runtime output](runtime/runtime-output.prompt.md): required generation/runtime context for safe diagnostic text.
 - [File owner lookup](file-owner.prompt.md#generated-from-header): required generation context for the header rule.
-- [Exact scenario numbers](scenario-json.prompt.md): required generation context for reading, saving and comparing scenario values.
+- [Exact scenario numbers](runtime/scenario-json.prompt.md): required generation context for reading, saving and comparing scenario values.
 
 <details>
 <summary>Runtime interface</summary>
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "5177102bd022915a457a31ad9c1f3665edb83147605edaa2ff8426c2564b1118",
+  "status": "draft",
+  "prose_sha256": "3bbba6fe4bea066a54677e47b40009dc4bd503352fffa5c0a89ff235d45ce463",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

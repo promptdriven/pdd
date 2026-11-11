@@ -1,6 +1,6 @@
 {
   "schema_version": "pdd.native-cases.v1",
-  "owner_prompt": "prompts/cli/runtime-preflight.prompt.md",
+  "owner_prompt": "prompts/cli/runtime/runtime-preflight.prompt.md",
   "cases": [
     {
       "id": "guide-exact-image-example",

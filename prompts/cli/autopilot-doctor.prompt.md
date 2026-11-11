@@ -116,7 +116,7 @@ Check these boundaries in order and continue after failures:
 - [Workflow worktree](workflow-worktree.prompt.md): canonical GitHub origin normalization.
 - [Workflow agents](workflow-agents.prompt.md): read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
-- [Runtime client](runtime-client.prompt.md#free-interpreter-health-check): required health classification and runtimeOrigin address rules.
+- [Runtime client](runtime/runtime-client.prompt.md#free-interpreter-health-check): required health classification and runtimeOrigin address rules.
 - [Workflow chat](workflow-chat.prompt.md): required ensurePaneBudget admission and pane inventory rules; doctor disables all cleanup.
 
 All program, file, network, environment/platform/version/uid and account reads
@@ -136,8 +136,8 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 ```json
 {
   "kind": "partial",
-  "status": "approved",
-  "prose_sha256": "18dae0f1a37855d569abe401be94c190e22b505c46127437f79e3ef7f04040fd",
+  "status": "draft",
+  "prose_sha256": "e5e6f15bf920652925fa5f42cec64fb5fbfc20e46d4e2a11bf799ec8cd85fb8f",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

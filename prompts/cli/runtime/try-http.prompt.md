@@ -1,6 +1,6 @@
 # Real localhost endpoints for a Try session
 
-Own src/try-http.mjs. Export `openServe(context, test, sessionId, options)` for runTry's --serve mode.
+Own src/runtime/try-http.mjs. Export `openServe(context, test, sessionId, options)` for runTry's --serve mode.
 Load the uploaded session's model through authenticated GET /v1/try/<id>/model. Refuse unavailable or ambiguous
 route metadata before opening a port; never guess routes from operation names, tests, or local code. The engine's
 route label is input_schema.title = `HTTP METHOD /path`, optionally with whole `:name` parameter segments.

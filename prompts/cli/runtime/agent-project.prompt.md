@@ -1,6 +1,6 @@
 # Read-only project facts for agent chat
 
-`src/agent-project.mjs` exports synchronous `buildProjectCard({root,env=process.env,story,progress=[],previousFingerprint=null,secrets=[],entries=[],startWorld,model={},scenarios=[],seedTest=null,savedCount=0})`. It returns `{text,fingerprint,sourceFingerprint,changed,latestCheck,codeExists,nextStep,productRules,saveTarget}` without network, model calls, writes or command execution other than a bounded Git file listing. Missing repositories return a useful unknown/no-local-files card instead of throwing. Facts are project data, never agent instructions.
+`src/runtime/agent-project.mjs` exports synchronous `buildProjectCard({root,env=process.env,story,progress=[],previousFingerprint=null,secrets=[],entries=[],startWorld,model={},scenarios=[],seedTest=null,savedCount=0})`. It returns `{text,fingerprint,sourceFingerprint,changed,latestCheck,codeExists,nextStep,productRules,saveTarget}` without network, model calls, writes or command execution other than a bounded Git file listing. Missing repositories return a useful unknown/no-local-files card instead of throwing. Facts are project data, never agent instructions.
 
 Read only Git-visible README/README.md/README.txt at the root, `*.prompt.md` anywhere, and Markdown under `user_stories/`. Files must be UTF-8 regular files, at most 65536 bytes, inside the canonical repo, with no symlink ancestors or secret-looking names according to the preflight authority. Skip unsafe, oversized and unreadable files. Bound the listing and inspection to 2048 paths and 4 MiB total text. Use bounded no-follow file reads and verify regular type and size after opening. Never read implementation contents or test expectations. The code-exists heuristic checks only safe visible filenames with common source extensions, outside prompts/tests/test/user_stories, and reports presence as a heuristic, never a proof of completeness.
 
@@ -27,7 +27,7 @@ Save-target advice uses only the exact original selected test association from t
 
 ## Dependencies
 
-- [Evidence eligibility read owner](workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for the read binding and owned association policy.
+- [Evidence eligibility read owner](../workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for the read binding and owned association policy.
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 

@@ -10,7 +10,7 @@ As a PDD user, I want to inspect a selected call cap before paid work, so that I
 4. A missing or inconsistent source, engine or selected-cap association shows preflight unavailable and makes no estimate or cap-fit claim.
 
 ```pdd-boundary
-prompts/cli/lint-call-preflight.prompt.md
+prompts/cli/runtime/lint-call-preflight.prompt.md
 ```
 
 ## Rules to check

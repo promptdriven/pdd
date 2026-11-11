@@ -244,7 +244,7 @@
   "steps": [
     {
       "step_id": "absent",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -269,7 +269,7 @@
     },
     {
       "step_id": "exact-policy",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -293,7 +293,7 @@
     },
     {
       "step_id": "empty",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -314,7 +314,7 @@
     },
     {
       "step_id": "malformed",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -333,7 +333,7 @@
     },
     {
       "step_id": "unknown-key",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -352,7 +352,7 @@
     },
     {
       "step_id": "traversal",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -371,7 +371,7 @@
     },
     {
       "step_id": "glob",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -390,7 +390,7 @@
     },
     {
       "step_id": "absolute",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -409,7 +409,7 @@
     },
     {
       "step_id": "wrong-type",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -428,7 +428,7 @@
     },
     {
       "step_id": "linked-control",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"
@@ -454,7 +454,7 @@
     },
     {
       "step_id": "oversized-control",
-      "entry_path": "prompts/cli/runtime-workspace.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-workspace.prompt.md",
       "operation": "loadRuntimeWorkspace",
       "input": {
         "root": "/synthetic/repo"

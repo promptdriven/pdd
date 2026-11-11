@@ -528,7 +528,7 @@
     },
     {
       "step_id": "criterion-coverage-passed",
-      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-output.prompt.md",
       "operation": "renderJson",
       "input": {
         "repo": "/synthetic/repo",
@@ -671,7 +671,7 @@
     },
     {
       "step_id": "criterion-coverage-failed",
-      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-output.prompt.md",
       "operation": "renderJson",
       "input": {
         "repo": "/synthetic/repo",
@@ -814,7 +814,7 @@
     },
     {
       "step_id": "criterion-coverage-unknown",
-      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-output.prompt.md",
       "operation": "renderJson",
       "input": {
         "repo": "/synthetic/repo",

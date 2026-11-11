@@ -62,7 +62,7 @@
   "steps": [
     {
       "step_id": "local-snapshot",
-      "entry_path": "prompts/cli/runtime-slots.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-slots.prompt.md",
       "operation": "listRuntimeJobs",
       "input": {
         "stateDir": "/state",

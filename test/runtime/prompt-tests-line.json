@@ -11,7 +11,7 @@
   "steps": [
     {
       "step_id": "one-story-passed",
-      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-output.prompt.md",
       "operation": "renderJson",
       "input": {"rows": [{"story": "place-order", "title": "Place an order", "test": "test/runtime/place-order.json", "state": "passed"}], "repo": "example/coffee", "exitCode": 0},
       "checks": [
@@ -25,7 +25,7 @@
     },
     {
       "step_id": "two-stories",
-      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "entry_path": "prompts/cli/runtime/runtime-output.prompt.md",
       "operation": "renderJson",
       "input": {"rows": [{"story": "place-order", "title": "Place an order", "test": "test/runtime/place-order.json", "state": "passed"}, {"story": "split-bill", "title": "Split the bill", "test": "test/runtime/split-bill.json", "state": "failed"}], "repo": "example/coffee", "exitCode": 1},
       "checks": [

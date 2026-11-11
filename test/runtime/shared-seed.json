@@ -71,7 +71,7 @@
   "steps": [
     {
       "step_id": "patched-world",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -106,7 +106,7 @@
     },
     {
       "step_id": "independent-world",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -126,7 +126,7 @@
     },
     {
       "step_id": "root-then-child",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -146,7 +146,7 @@
     },
     {
       "step_id": "child-then-parent",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -166,7 +166,7 @@
     },
     {
       "step_id": "missing-parent",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -187,7 +187,7 @@
     },
     {
       "step_id": "array-outside",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -208,7 +208,7 @@
     },
     {
       "step_id": "literal-step-data",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -228,7 +228,7 @@
     },
     {
       "step_id": "exact-numbers-and-own-world-keys",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -270,7 +270,7 @@
     },
     {
       "step_id": "inherited-parent-is-missing",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/shop.json",
@@ -291,7 +291,7 @@
     },
     {
       "step_id": "ordered-world-and-reference-snapshot",
-      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "test/sequence.json",

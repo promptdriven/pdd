@@ -6,7 +6,7 @@ Export asynchronous `discoverAgents({cwd,env,run,definitions})` and `askAgent({a
 
 ## Bounded workspace invocation
 
-When a [workspace policy](runtime-workspace.prompt.md) is configured, `askAgent` receives that native capability as an additive `workspace` option. Only packet-supplied project context is permitted. Read-only sandbox, small stdin and disabled write tools do not bound reads. Suppress repository read/search/glob tools, automatic project/instruction discovery and every configured context injection path before starting a model process. Apply this to configured commands and all fallback invocations; a retry cannot remove a control needed for the boundary.
+When a [workspace policy](runtime/runtime-workspace.prompt.md) is configured, `askAgent` receives that native capability as an additive `workspace` option. Only packet-supplied project context is permitted. Read-only sandbox, small stdin and disabled write tools do not bound reads. Suppress repository read/search/glob tools, automatic project/instruction discovery and every configured context injection path before starting a model process. Apply this to configured commands and all fallback invocations; a retry cannot remove a control needed for the boundary.
 
 Current unconfigured Claude Read/Grep/Glob permissions remain unchanged. They are insufficient in bounded mode. Current Codex read-only/ignore-rules/feature settings and Gemini deny-all overlay are also not proof that all automatic context loads are disabled. Establish supported native controls per installed CLI before bounded connection. If those controls cannot establish packet-only context, return a clear local unsupported-connection error before authentication/model invocation; never claim isolation from flags alone. No new OS sandbox is promised. Preserve the person's model/authentication and existing failure/secret handling.
 
@@ -37,13 +37,13 @@ Drop invalid optional fields independently while keeping a valid say; an invalid
 
 ## Dependencies
 
-- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
+- [Workspace authority](runtime/runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
-- [Agent packet](agent-packet.prompt.md), required during generation and verification: bounded stdin and v8 system/legacy wording.
+- [Agent packet](runtime/agent-packet.prompt.md), required during generation and verification: bounded stdin and v8 system/legacy wording.
 
 - [Local agent configuration](agent-config.prompt.md), required during generation and verification: `loadAgentDefinitions` owns trusted local definitions, precedence and validation.
 
-- [Runtime preflight](runtime-preflight.prompt.md), required during generation and verification: exported `checkInput` owns input-schema validation. Adapter rejects warnings and unresolved references because a suggested fill must be complete.
+- [Runtime preflight](runtime/runtime-preflight.prompt.md), required during generation and verification: exported `checkInput` owns input-schema validation. Adapter rejects warnings and unresolved references because a suggested fill must be complete.
 
 Gemini's merged admin settings may be replaced by its remote admin defaults. Do not rely on the
 local admin overlay for effect suppression: CLI --extensions none independently disables extensions,
