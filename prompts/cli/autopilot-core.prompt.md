@@ -462,7 +462,9 @@ any other pdd (for example an older global install).
   with a binding or header, which the reviewer never asks to remove; must-fixes: a
   new prompt for a non-code file, owned code that disagrees with its prompt; the
   reviewer does not report what the path checks (below) already check (R1, R3, R4, R6
-  and R7); never a new
+  and R7); a config or metadata file (package.json, a lock file, CI settings) needs no
+  prompt and no Story, so never a new prompt for it, and a test only when the change
+  alters a result that users see (#3227 fix 5, rule 8); never a new
   prompt for an unowned file; never commit order; a missing test is a must-fix only
   with the surface and the result named; no test that only copies a value from the
   diff); an honest Runtime line and no unrelated or unsafe change; and (6) **no choice
