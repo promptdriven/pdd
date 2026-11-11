@@ -1249,8 +1249,10 @@ async function fix2World(t, { base, change, evidence = 'vectors=not-run; formal=
   w.issue(17); await w.tick();
   const cwd = w.job(17, 'build').cwd;
   for (const [file, text] of Object.entries(change)) writeIn(cwd, file, text);
-  const line = `Evidence: runtime=not-run; ${evidence}; tests=pass (3/3)`, code = Object.keys(change).filter(file => file.startsWith('src/'));
-  const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\n${line}\nPath: ${path} — ${code.join(', ')} — unowned — no contract change — Test: ${REPLAY}`, result: { promptChanged: false, evidence: line, adopt: path === 'e' ? code : [] } });
+  const line = `Evidence: runtime=not-run; ${evidence}; tests=pass (3/3)`, code = Object.keys(change).filter(file => file.startsWith('src/') && file in base);
+  // A new file takes path d here (#3239 R7: never path e); the changed base file takes the given path.
+  const added = Object.keys(change).filter(file => file.startsWith('src/') && !(file in base)), more = added.length ? `\nPath: d — ${added.join(', ')} — unowned — no contract change — Test: done check` : '';
+  const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\n${line}\nPath: ${path} — ${code.join(', ')} — unowned — no contract change — Test: ${REPLAY}${more}`, result: { promptChanged: false, evidence: line, adopt: path === 'e' ? code : [] } });
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   return { w, pr, head, cwd };
 }

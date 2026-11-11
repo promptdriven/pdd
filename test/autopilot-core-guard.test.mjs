@@ -17,11 +17,12 @@ const room = reason => ({ room: reason ? { ok: false, reason } : { ok: true, rea
 test('T2 the machine --runs reaches a core tick through the launcher: 3 ready issues, runs 1, one claim', async t => {
   const w = await coreWorld(t);
   writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test' } }));
-  for (const n of [17, 18, 19]) w.issue(n);
+  // The opt-in label (#3242): a launcher tick takes only labeled issues.
+  for (const n of [17, 18, 19]) w.issue(n, { labels: ['pdd:autopilot'] });
   const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   mkdirSync(stateRoot, { recursive: true });
-  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', runs: 1, share: 70,
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', runs: 1, share: 70, label: 'pdd:autopilot',
     agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
   // A big machine (4 automatic slots at the default share of 50%) whose start said --runs 1 and --share 70.
   const server = { cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null }, disk: { available: 500 * GiB, total: 1000 * GiB },
@@ -105,11 +106,11 @@ test('the share is for the whole machine: with 2 repositories the jobs of both c
   for (const [other, started, held] of [[3, 1, null], [4, 0, /intake held: 4 of 4 Autopilot jobs on this machine run \(all repositories, 50% share\)/]]) {
     const w = await coreWorld(t);
     writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test' } }));
-    for (const n of [17, 18, 19]) w.issue(n);
+    for (const n of [17, 18, 19]) w.issue(n, { labels: ['pdd:autopilot'] });
     const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
     const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
     mkdirSync(stateRoot, { recursive: true });
-    writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a',
+    writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', label: 'pdd:autopilot',
       agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
     // A second enabled repository on this machine (the sandbox beside pdd) with OTHER jobs that hold a slot, and a
     // stopped one whose leftover job file does not count.
