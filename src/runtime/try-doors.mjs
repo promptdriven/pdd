@@ -99,7 +99,7 @@ export async function openCli(context, test, sessionId, options) {
     criterion: step.checks[0]?.criterion_id, storyHash: hash(readFileSync(join(root, test.doc.story_path))),
     promptHash: hash(prompt.text), stateDir: store.dir, repoState: join(store.folder('repos'), `${store.repoKey(root)}.json`) };
   writePrivate(descriptorPath, descriptor);
-  const moduleUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
+  const moduleUrl = ports.tryLauncherUrl ?? pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
   const script = `import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write('pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\\n'); process.exitCode = 125; });`;
   const code = `#!/bin/sh\n# PDD Try launcher v1\nexec ${quote(process.execPath)} --input-type=commonjs -e ${quote(script)} -- ${quote(moduleUrl)} ${quote(descriptorPath)} \"$@\"\n`;
   const fd = openSync(shim, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o700);

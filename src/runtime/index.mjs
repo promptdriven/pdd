@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 552e93e93ae93e898f42fbcd63e98e5666b000d0376ab2a6aef1f9537f571677).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: ea66ae160a596d7c4a4f106605d6ae98153db8441358671e3a7d7c05bf38096c).
 
 export {
   exactIntegerLeaves,
@@ -66,6 +66,8 @@ export {
 } from './interface-draft.mjs';
 
 export { runMcp } from './try-mcp.mjs';
+
+export { runShim } from './try-doors.mjs';
 
 export {
   DEFAULT_RUNTIME_URL,

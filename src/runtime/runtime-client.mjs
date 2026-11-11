@@ -105,7 +105,7 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   return {
-    env, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, tryLauncherUrl: ports.tryLauncherUrl, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })

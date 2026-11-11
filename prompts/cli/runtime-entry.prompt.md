@@ -19,7 +19,10 @@ Re-export each binding directly from its canonical module in `src/runtime/` with
 | `src/runtime/contracts.mjs` | `runContracts` |
 | `src/runtime/interface-draft.mjs` | `contractCoverage`, `coverageView`, `missingInterfaces`, `runAutomaticApproval`, `runInterfaceDraft` |
 | `src/runtime/try-mcp.mjs` | `runMcp` |
+| `src/runtime/try-doors.mjs` | `runShim` |
 | `src/runtime/runtime-client.mjs` | `DEFAULT_RUNTIME_URL`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `runCheck`, `runTry`, `runtimeOrigin` |
+
+`runTry(input, ports)` forwards `ports.tryLauncherUrl` to `openCli` when supplied so the host CLI can pin a stable launcher module URL outside `src/runtime/`; when omitted, `openCli` falls back to `src/runtime/try-doors.mjs`.
 
 ## Evaluation order
 
@@ -38,11 +41,12 @@ Re-export pure leaf readers and constants (`scenario-json.mjs`, `runtime-workspa
 - [Shared contracts](contracts.prompt.md): required generation context for `runContracts`.
 - [Interface drafting](interface-draft.prompt.md): required generation context for `contractCoverage`, `coverageView`, `missingInterfaces`, `runAutomaticApproval`, and `runInterfaceDraft`.
 - [Try MCP server](try-mcp.prompt.md): required generation context for `runMcp`.
+- [Try doors](try-doors.prompt.md): required generation context for `runShim` and `tryLauncherUrl` forwarding.
 - [Runtime client](runtime-client.prompt.md): required generation context for `DEFAULT_RUNTIME_URL`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `runCheck`, `runTry`, and `runtimeOrigin`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"077f3f0a835ed9fda342ca1c7f7911f2634b614ffa916873af101a1dde744a3e","reason":"Re-exports live JavaScript ESM module bindings and preserves module evaluation order across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256":"bc6ba6e88723e137794ec461997ce778a04a5bcb382f429ec045b3cc6dd53887","reason":"Re-exports live JavaScript ESM module bindings and preserves module evaluation order across src/runtime/ submodules, which bound Runtime ports cannot fake."}
 ```
 </details>

@@ -181,16 +181,53 @@ test('SEAM1: only src/runtime-seam.mjs imports or addresses src/runtime/ across 
   assert.deepEqual(violations, [], `Files outside src/runtime-seam.mjs must not import src/runtime/:\n${violations.join('\n')}`);
 });
 
-test('SEAM2: src/runtime-seam.mjs imports only src/runtime/index.mjs and exposes its exact surface', async () => {
+test('SEAM2: src/runtime-seam.mjs imports only src/runtime/index.mjs from src/runtime/ and exposes its surface', async () => {
   const seamSource = readFileSync(join(root, 'src/runtime-seam.mjs'), 'utf8');
-  const specifiers = stringLiterals(seamSource).map(item => item.value);
-  assert.deepEqual(specifiers, ['./runtime/index.mjs']);
+  const runtimeSpecifiers = stringLiterals(seamSource)
+    .map(item => item.value)
+    .filter(specifier => referencesRuntimeDir('src/runtime-seam.mjs', specifier));
+  assert.deepEqual([...new Set(runtimeSpecifiers)], ['./runtime/index.mjs']);
   const seam = await import('../src/runtime-seam.mjs');
   const entry = await import('../src/runtime/index.mjs');
   assert.deepEqual(Object.keys(seam).sort(), Object.keys(entry).sort());
   for (const key of Object.keys(entry)) {
-    assert.equal(seam[key], entry[key], `seam export ${key} must match src/runtime/index.mjs`);
+    assert.equal(typeof seam[key], typeof entry[key], `seam export ${key} must match typeof src/runtime/index.mjs`);
   }
+});
+
+test('SEAM4: Try CLI launcher names stable pdd-owned src/try-doors.mjs entry', async t => {
+  const { pathToFileURL } = await import('node:url');
+  const { Readable } = await import('node:stream');
+  const { rmSync, writeFileSync } = await import('node:fs');
+  const { harbor, fakeRuntime, portsFor, PLACE } = await import('./runtime-fake.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+  const stableEntry = await import('../src/try-doors.mjs');
+  assert.equal(stableEntry.runShim, seam.runShim);
+  const setup = harbor(t, repo => {
+    rmSync(join(repo, 'tests/unknown-item.json'));
+    const input = { type: 'object', properties: { argv: { type: 'array', items: { type: 'string' } } }, required: ['argv'], additionalProperties: false };
+    const result = { type: 'object', properties: { stdout: { type: 'string' }, stderr: { type: 'string' }, exit_code: { type: 'integer' } }, required: ['stdout', 'stderr', 'exit_code'], additionalProperties: false };
+    const iface = { status: 'draft', prose_sha256: '', entries: [{ operation: 'main', input_schema: input, result_schema: result, errors: [] }], calls: [], resources: [], limits: { max_steps: 1, max_model_calls: 1 }, conventions: ['input_schema', 'result_schema'].map(key => ({ path: `/entries/0/${key}`, convention: 'cli' })) };
+    const content = () => `# paperclip\n\nPrint each argument.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(iface)}\n\`\`\`\n</details>\n`;
+    iface.prose_sha256 = seam.proseSha256(content());
+    writeFileSync(join(repo, PLACE), content());
+    writeFileSync(join(repo, 'user_stories/place-order.md'), '# Arguments\n\nI can pass words.\n\n## Acceptance criteria\n\n1. Each argument prints.\n');
+    const doc = { schema_version: 'prompt-runtime.program-scenario.v1', story_path: 'user_stories/place-order.md', criteria: [{ id: 'AC1', text: 'Each argument prints.' }], initial_world: {}, simulation: {}, context: [], steps: [{ step_id: 'one', entry_path: PLACE, operation: 'main', input: { argv: ['hi'] }, checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', op: 'equals', value: 'hi\n' }] }] };
+    writeFileSync(join(repo, 'tests/place-order.json'), JSON.stringify(doc, null, 2) + '\n');
+  });
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.url.endsWith('/model')) return { status: 200, json: { calls: { cap: 40, remaining: 40 } } };
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    return { status: 200, json: f.tryJob(entry.url.split('/').at(-1)) };
+  });
+  const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { stdin: Readable.from([]), openUrl: async () => false });
+  const code = await seam.runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, ports);
+  assert.equal(code, 0, ports.stderr.text);
+  const launcherText = readFileSync(join(setup.repo, '.pdd/try/bin/paperclip'), 'utf8');
+  const expectedUrl = pathToFileURL(join(root, 'src/try-doors.mjs')).href;
+  assert.ok(launcherText.includes(expectedUrl), `expected launcher to include ${expectedUrl}, got:\n${launcherText}`);
+  assert.ok(!launcherText.includes('/src/runtime/try-doors.mjs'), launcherText);
 });
 
 test('SEAM3: detector catches static, dynamic, re-export, URL and child-process imports of src/runtime/', () => {

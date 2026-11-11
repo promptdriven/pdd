@@ -1,4 +1,13 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 1e3981da29b1c1ffb2b556f09b36f8b92ede9d4afac4229c09789acbc4c318fa).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: b167fbb9bebf73b0aecf8c406e6a9158155c362ffa874359f822d57d0cec3ee1).
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runTry as runtimeRunTry } from './runtime/index.mjs';
+
+const TRY_LAUNCHER_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
+
+export function runTry(input, ports = {}) {
+  return runtimeRunTry(input, { tryLauncherUrl: TRY_LAUNCHER_URL, ...ports });
+}
 
 export {
   DEFAULT_RUNTIME_URL,
@@ -42,7 +51,7 @@ export {
   runInterfaceDraft,
   runJobs,
   runMcp,
-  runTry,
+  runShim,
   runtimeOrigin,
   sha256,
   sourceFilePort,
