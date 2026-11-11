@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-base-red.prompt.md (sha256: f02761211d328ef15544c3dd869db66efa0ee0572d53211ae73b2b26ab31260f).
+// Generated from prompts/cli/autopilot-base-red.prompt.md (sha256: 31592681d27b0f25f8452b95407e31f6ea8cae041147240f6108a0913423290d).
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -24,35 +24,46 @@ function save(fs, file, value) {
 export const mainRedRoute = (settings = {}) => (void settings, 'file');
 
 // ---- Failing test names ---------------------------------------------------------------------------------
-// Top-level TAP lines of node:test. An indented line is a subtest (its parent's line names the failure); a TODO or
-// SKIP directive is no failure. The checkout root goes, so one test in two checkouts has one name.
-const NOT_OK = /^not ok \d+ - (.*)$/;
-const DIRECTIVE = /\s#\s*(?:todo|skip)\b/i;
-export function failingTestNames(text, { root } = {}) {
-  const names = [];
-  let more = false;
-  for (const raw of String(text ?? '').split('\n')) {
-    const m = NOT_OK.exec(raw.replace(/\r$/, ''));
-    if (!m || DIRECTIVE.test(m[1])) continue;
-    let name = m[1];
-    if (typeof root === 'string' && root.length > 1) name = name.split(`file://${root}/`).join('').split(`${root}/`).join('');
-    name = name.trim().slice(0, 200);
-    if (!name || names.includes(name)) continue;
-    if (names.length >= MAX_NAMES) { more = true; continue; }
-    names.push(name);
-  }
-  return { names, more };
+// The shape of the core's failingTests (#3227 fix 4), so a later swap is one import: [{name, file}] at any depth.
+// node --test TAP: `not ok N - NAME` (its `location:` line gives the file); the spec reporter: `✖ NAME (DURATION)`
+// (a `test at FILE:L:C` line before it in the summary gives the file). A TODO or SKIP directive is no failure. One
+// test is one entry: the same name with the same file, or with no file on one side.
+const ANSI = /\x1b\[[0-9;]*m/g;
+const NOT_OK = /^\s*not ok \d+ - (.*)$/, SPEC = /^\s*\u2716 (.*?)(?: \([\d.]+m?s\))?(\s+#\s*(?:todo|skip)\b.*)?$/i, SPEC_AT = /^\s*test at (.+?):\d+:\d+\s*$/;
+const LOCATION = /^\s*location: '(.+?):\d+:\d+'\s*$/, DIRECTIVE = /\s#\s*(?:todo|skip)\b/i;
+export const sameTest = (a, b) => a.name === b.name && (!a.file || !b.file || a.file === b.file);
+function addTest(found, limit, name, file) {
+  name = String(name ?? '').trim().slice(0, 200);
+  if (!name) return null;
+  const same = found.find(t => sameTest(t, { name, file }));
+  if (same) { same.file ??= file; return same; }
+  if (found.length >= limit) return null;
+  const test = { name, file: file ?? null };
+  found.push(test);
+  return test;
 }
-// A log in 1 MB parts, whole lines only (an over-long line without an end is dropped), so it never sits in memory at once.
-function readNames(fs, file, root) {
+export function failingTests(text, limit = MAX_NAMES) {
+  const found = [];
+  let last = null, look = 0, at = null;
+  for (const raw of String(text ?? '').split('\n')) {
+    const line = raw.replace(/\r$/, '').replace(ANSI, '');
+    let m;
+    if (/^\s*ok \d+ /.test(line)) { last = null; look = 0; at = null; continue; }
+    if ((m = NOT_OK.exec(line))) { last = DIRECTIVE.test(m[1]) ? null : addTest(found, limit, m[1], null); look = last ? 12 : 0; at = null; continue; }
+    if (look > 0) { look--; if ((m = LOCATION.exec(line)) && last && !last.file) { last.file = m[1]; look = 0; } continue; }
+    if ((m = SPEC_AT.exec(line))) { at = m[1]; continue; }
+    if ((m = SPEC.exec(line))) { if (!m[2] && m[1].trim() !== 'failing tests:') addTest(found, limit, m[1], at); at = null; }
+  }
+  return found;
+}
+// A log in 1 MB parts, whole lines only (an over-long line without an end is dropped), so it never sits in memory at
+// once. The checkout root goes from names and files, so one test in two checkouts is one test. `more`: over 50.
+function readFailing(fs, file, root) {
   if (!file) return null;
-  const names = [], decoder = new StringDecoder('utf8');
-  let more = false, carry = '', skipping = false, fd;
-  const take = text => {
-    const found = failingTestNames(text, { root });
-    more ||= found.more;
-    for (const name of found.names) if (!names.includes(name)) { if (names.length < MAX_NAMES) names.push(name); else more = true; }
-  };
+  const tests = [], decoder = new StringDecoder('utf8');
+  let carry = '', skipping = false, fd;
+  const local = value => value && typeof root === 'string' && root.length > 1 ? value.split(`file://${root}/`).join('').split(`${root}/`).join('') : value;
+  const take = text => { for (const t of failingTests(text, MAX_NAMES + 1)) addTest(tests, MAX_NAMES + 1, local(t.name), local(t.file)); };
   try {
     fd = fs.openSync(file, 'r');
     const buffer = Buffer.alloc(1024 * 1024);
@@ -66,8 +77,9 @@ function readNames(fs, file, root) {
     }
     if (!skipping) take(carry + decoder.end());
   } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* Closed. */ } }
-  return { names, more };
+  return { tests: tests.slice(0, MAX_NAMES), more: tests.length > MAX_NAMES };
 }
+const testText = t => `${t.name}${t.file ? ` (${t.file})` : ''}`;
 const redactedTail = log => redactSecrets(String(log ?? '')).split('\n').map(line => line.replace(/\s+$/, '')).filter(Boolean).slice(-TAIL_LINES).join('\n');
 
 // ---- Shared words ---------------------------------------------------------------------------------------
@@ -197,8 +209,8 @@ async function baseSuite(ctx, job, sha, tools) {
   const log = tools.readTail(ctx.fs, rec.agent.log);
   if (seen.state === 'dead' || seen.exit?.signal || [86, 127].includes(seen.exit?.code) || tools.runnerLine.test(log) || !log.trim())
     return again(ctx, job, rec, tools, { deaths: seen.state === 'dead' ? 1 : 0, why: seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}` });
-  const found = readNames(ctx.fs, rec.agent.log, rec.cwd) ?? { names: [], more: false };
-  return finish(ctx, rec, 'fail', tools, { tests: found.names, more: found.more, tail: redactedTail(log) });
+  const found = readFailing(ctx.fs, rec.agent.log, rec.cwd) ?? { tests: [], more: false };
+  return finish(ctx, rec, 'fail', tools, { tests: found.tests, more: found.more, tail: redactedTail(log) });
 }
 async function mergeBase(ctx, job) {
   const base = ctx.state.baseBranch;
@@ -216,15 +228,16 @@ export async function suiteVsBase(ctx, job, { ci = null, review = null, suite, v
     }
     if (job.baseSuite) { delete job.baseSuite; ctx.saveJob(job); }
     if (base.state !== 'fail') return suite;
-    const head = readNames(ctx.fs, job.suite?.agent?.log, job.suite?.cwd);
-    const known = side => Boolean(side?.names?.length) && !side.more;
-    const fresh = known(head) && known({ names: base.tests, more: base.more }) ? head.names.filter(name => !base.tests.includes(name)) : [];
+    const head = readFailing(ctx.fs, job.suite?.agent?.log, job.suite?.cwd), onBase = (Array.isArray(base.tests) ? base.tests : []).filter(t => object(t) && typeof t.name === 'string');
+    const known = side => Boolean(side?.tests?.length) && !side.more, red0 = t => onBase.some(b => sameTest(t, b));
+    const fresh = known(head) && known({ tests: onBase, more: base.more }) ? head.tests.filter(t => !red0(t)) : [];
     if (fresh.length) {
-      const also = head.names.filter(name => base.tests.includes(name)), [first, ...rest] = String(suite.text ?? '').split('\n');
-      return { ...suite, text: [first, `Failing tests from this change: ${fresh.join('; ')}.`,
-        ...(also.length ? [`Also red on the base (${short(sha)}), not from this change: ${also.join('; ')}.`] : []), ...rest].join('\n') };
+      const also = head.tests.filter(red0), [first, ...rest] = String(suite.text ?? '').split('\n');
+      return { ...suite, text: [first, `Failing tests from this change: ${fresh.map(testText).join('; ')}.`,
+        ...(also.length ? [`Also red on the base (${short(sha)}), not from this change: ${also.map(testText).join('; ')}.`] : []), ...rest].join('\n') };
     }
-    red = { what: 'suite', sha, names: known(head) ? head.names : Array.isArray(base.tests) ? base.tests : [], tail: base.tail ?? '' };
+    const tests = known(head) ? head.tests : onBase;
+    red = { what: 'suite', sha, names: tests.map(t => t.name), tests, tail: base.tail ?? '' };
     suite = { state: 'base-red', head: suite.head, text: suite.text };
   }
   // The hold: only when the base-red part is the only red, and nothing else of the job still runs.
@@ -232,7 +245,7 @@ export async function suiteVsBase(ctx, job, { ci = null, review = null, suite, v
   await tools.leaveLane(ctx, job);
   const tip = red.what === 'ci' ? red.sha : await baseTip(ctx), names = (red.names ?? []).slice(0, MAX_NAMES);
   job.lane = null;
-  job.baseRed = { what: red.what, sha: red.sha, tip, names, tail: red.tail ?? '', fingerprint: baseRedFingerprint(red.what, names), since: ctx.now(), report: null };
+  job.baseRed = { what: red.what, sha: red.sha, tip, names, ...(red.tests ? { tests: red.tests.slice(0, MAX_NAMES) } : {}), tail: red.tail ?? '', fingerprint: baseRedFingerprint(red.what, names), since: ctx.now(), report: null };
   job.progress = { ...(job.progress ?? {}), at: ctx.now(), running: true }; ctx.saveJob(job);
   job.baseRed.report = await fileMainRed(ctx, job, job.baseRed).catch(error => { ctx.warn(`Autopilot core could not file the main-red issue for #${job.issue}: ${error.message}`); return null; });
   ctx.saveJob(job);
@@ -271,27 +284,32 @@ export async function baseRedWait(ctx, job, tools) {
 export async function fileMainRed(ctx, job, red) {
   if (mainRedRoute(ctx.settings) !== 'file') return null;
   const names = Array.isArray(red?.names) ? red.names : [], fingerprint = red.fingerprint ?? baseRedFingerprint(red.what, names), marker = markerOf(fingerprint);
-  let endpoint = `repos/${ctx.repo}/issues?state=all&labels=${encodeURIComponent(MAIN_RED_LABEL)}&per_page=100`;
+  // Only an open match dedups. A closed match of any age is the same red come back: a new issue that names it.
+  let endpoint = `repos/${ctx.repo}/issues?state=all&labels=${encodeURIComponent(MAIN_RED_LABEL)}&per_page=100`, earlier = null;
   for (let page = 0; endpoint && page < 5; page++) {
     const r = await ctx.gh.call('GET', endpoint);
     if (r.status !== 200 || !Array.isArray(r.value)) throw Error(`GitHub GET issues returned ${r.status || 'no reply'}`);
-    const hit = r.value.find(row => !row.pull_request && String(row.body ?? '').includes(marker) && (row.state === 'open' || ctx.now() - Date.parse(row.closed_at) < RECENT));
-    if (hit) return { number: hit.number, ref: `${ctx.repo}#${hit.number}`, found: true };
+    const same = r.value.filter(row => !row.pull_request && Number.isSafeInteger(row.number) && String(row.body ?? '').includes(marker));
+    const hit = same.find(row => row.state === 'open');
+    if (hit) return { number: hit.number, ref: `${ctx.repo}#${hit.number}`, found: true, earlier: null };
+    for (const row of same) earlier = Math.max(earlier ?? 0, row.number);
     endpoint = r.next;
   }
   const base = ctx.state.baseBranch, ci = red.what === 'ci';
   const title = oneLine(ctx.publicBody(`Main is red: ${names.length ? `${names[0]}${names.length > 1 ? ` (and ${names.length - 1} more)` : ''}` : ci ? 'a CI check' : 'the full test suite'}`), 200);
-  const listed = names.slice(0, ISSUE_NAMES).map(name => `  - ${oneLine(name, 200)}`);
+  const listed = (Array.isArray(red.tests) ? red.tests.map(testText) : names).slice(0, ISSUE_NAMES).map(name => `  - ${oneLine(name, 300)}`);
   const body = [`Autopilot found ${ci ? 'a CI check' : 'a full test suite'} failure on the base branch \`${base}\`. PR #${job.pr} (issue #${job.issue}) has the same failure, but it did not cause it.`, '',
     `- Base branch: \`${base}\` at ${red.sha}`,
     ci ? `- Failing check(s): ${names.map(name => oneLine(name, 200)).join(', ') || 'unknown'}` : `- Failing tests: ${names.length ? '' : 'the names could not be read'}`,
     ...(ci ? [] : listed), ...(!ci && names.length > ISSUE_NAMES ? [`  - and ${names.length - ISSUE_NAMES} more`] : []),
-    `- Seen on: PR #${job.pr} for issue #${job.issue}`, '',
+    `- Seen on: PR #${job.pr} for issue #${job.issue}`, ...(earlier ? [`- Earlier: #${earlier} (closed; the same failure came back)`] : []), '',
     'While this is red, Autopilot does not repair PRs for this failure. They stay open and wait with no slot. When this issue is closed and the base moves, they update onto the base and run their checks again.', '',
     'Fix the failing or flaky test on the base branch itself, then close this issue.',
     ...(red.tail ? ['', 'Last lines of the base suite log (redacted):', '', '```', redactSecrets(red.tail).replaceAll('```', "'''"), '```'] : []), '', marker].join('\n');
-  const issue = await ctx.gh.ok('POST', `repos/${ctx.repo}/issues`, { title, body: ctx.publicBody(body), labels: [MAIN_RED_LABEL, ...(ctx.settings.label ? [ctx.settings.label] : [])] });
-  return { number: issue.number, ref: `${ctx.repo}#${issue.number}`, found: false };
+  // The opt-in label only in auto mode, so that Autopilot takes the issue as its own work; observe mode builds nothing.
+  const labels = [MAIN_RED_LABEL, ...(ctx.settings.mode === 'auto' && ctx.settings.label ? [ctx.settings.label] : [])];
+  const issue = await ctx.gh.ok('POST', `repos/${ctx.repo}/issues`, { title, body: ctx.publicBody(body), labels });
+  return { number: issue.number, ref: `${ctx.repo}#${issue.number}`, found: false, earlier };
 }
 
 // ---- Stop (with the core's stopChecks) ------------------------------------------------------------------
